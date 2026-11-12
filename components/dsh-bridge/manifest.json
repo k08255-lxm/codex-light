@@ -1,0 +1,10 @@
+{
+  "component": "codex-light-dsh-bridge",
+  "version": "0.8.0-light.1",
+  "entry": "src/light-entry.mjs",
+  "dshRuntime": "0.2.2",
+  "nodeRuntime": "DSH bundled Node 22.15+ with SQLite",
+  "dependencyCount": 96,
+  "lockSha256": "3ee8139f0ea9fd8030f6a1e900e2129f0781b4c0a87294f13e00f1fcfef796f7",
+  "licenses": "licenses/manifest.json"
+}

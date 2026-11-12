@@ -1,0 +1,75 @@
+**/bin/
+**/obj/
+**/dist/
+node_modules/
+*.exe
+*.dll
+*.pdb
+*.zip
+*.log
+.env
+.env.*
+!*.example
+*.local.*
+artifacts/
+docs/legacy-repair-v7-evidence.json
+
+# Local investigations, temporary tools and personal handoff records.
+/.repair-review/
+/.tmp/
+/.tools/
+/.interface-design/
+/HANDOFF.md
+/HANDOFF-TEST-RESULT.txt
+/Windows桌面应用规范.md
+
+# Public docs are deliberately allowlisted; work plans and acceptance records
+# stay local even when new agents add more files later.
+/docs/*
+!/docs/ARCHITECTURE.md
+!/docs/THIRD-PARTY-NOTICES.md
+!/docs/assets/
+/docs/assets/*
+!/docs/assets/conversation-demo.png
+!/docs/assets/file-diff-demo.png
+!/docs/assets/narrow-layout-demo.png
+
+# Generated installers, inspections and previews.
+/desktop/**/out*/
+/desktop/**/offscreen-previews*/
+/desktop/**/.wix/
+**/__pycache__/
+**/build-receipt.json
+**/payload-manifest.json
+**/verification.json
+*.msi
+*.wixpdb
+*.cab
+*.nupkg
+*.tgz
+*.tar.gz
+*.bak
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+
+# Historical engineering notes; their source files remain available.
+/desktop/bootstrap/README.md
+/desktop/installer/README.md
+
+# Generated layout reports and payload ownership lists.
+**/layout-report.json
+/desktop/installer/payload-install.nsh
+/desktop/installer/payload-uninstall.nsh
+/desktop/**/Product.wxs
+/desktop/**/decompiled.wxs
+/desktop/**/inspect-*.wxs
+/desktop/**/inspect-*/
+*.pyc
+
+# Private signing material and local certificate containers.
+*.pem
+*.key
+*.pfx
+*.p12

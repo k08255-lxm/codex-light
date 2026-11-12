@@ -1,0 +1,49 @@
+{
+  "name": "dsh-subagent-mcp",
+  "version": "0.8.0",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "ws": "^8.21.3",
+    "yaml": "2.9.0",
+    "zod": "^3.25.76"
+  },
+  "description": "DSH MCP bridge bundled with Codex Light; DSH itself remains optional",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.15"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dqtz5vpvj9-create/dsh-subagent-mcp.git"
+  },
+  "bin": {
+    "codex-light-dsh-bridge": "src/light-entry.mjs"
+  },
+  "files": [
+    "src/",
+    "assets/",
+    "LICENSE",
+    "THIRD-PARTY-NOTICES.md",
+    "README.md"
+  ],
+  "keywords": [
+    "dsh",
+    "deepseek",
+    "deepseek-harness",
+    "mcp",
+    "mcp-server",
+    "codex",
+    "subagents",
+    "ai-agents"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "private": true,
+  "codexLightIntegrationVersion": 1
+}

@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Codex Light</title>
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/activity-feed.css">
+<link rel="stylesheet" href="/ui/views.css">
+<link rel="stylesheet" href="/vendor/xterm.css">
+</head>
+<body>
+<!-- Native host bridges (MainWindow.cs clicks these ids); hidden, the host owns its caption menu. -->
+<div class="window-bar hidden" aria-hidden="true"><button id="menu-file" title="本地文件菜单" aria-haspopup="menu" aria-expanded="false">文件</button><button id="menu-view" title="本地视图菜单" aria-haspopup="menu" aria-expanded="false">视图</button><button id="menu-help" title="查看 Codex Light 功能说明">帮助</button></div>
+<div id="window-menu" class="menu hidden" role="menu" aria-label="本地客户端菜单"></div>
+
+<div id="app" class="app" data-view="chat">
+  <!-- Rail: brand + primary destinations. One persistent control toggles the thread list. -->
+  <nav class="rail" aria-label="主导航">
+    <span class="rail-brand" aria-hidden="true"><span data-icon="brand"></span></span>
+    <button id="rail-sidebar" class="rail-btn" title="收起侧栏" aria-label="收起侧栏" aria-controls="sidebar" aria-expanded="true"><span data-icon="panel"></span></button>
+    <div class="rail-group">
+      <button id="rail-home" class="rail-btn active" data-route="chat" title="对话" aria-label="对话"><span data-icon="home"></span></button>
+      <button id="rail-usage" class="rail-btn" data-route="usage" title="用量与性能" aria-label="用量与性能"><span data-icon="chart"></span></button>
+      <button id="rail-terminal" class="rail-btn" data-route="terminal" title="终端与 Git" aria-label="终端与 Git"><span data-icon="terminal"></span></button>
+      <button id="rail-dsh" class="rail-btn" title="DSH 子代理" aria-label="DSH 子代理"><span data-icon="branch"></span></button>
+      <button id="rail-plugins" class="rail-btn" data-route="settings" title="插件" aria-label="插件"><span data-icon="plug"></span></button>
+    </div>
+    <div class="rail-spacer"></div>
+    <button id="rail-account" class="rail-btn" data-route="account" title="账户" aria-label="账户"><span data-icon="user"></span></button>
+    <button id="rail-settings" class="rail-btn" data-route="settings" title="设置" aria-label="设置"><span data-icon="settings"></span></button>
+  </nav>
+
+  <button id="sidebar-overlay" class="sidebar-overlay hidden" type="button" tabindex="-1" aria-label="关闭侧栏"></button>
+  <aside id="sidebar" class="sidebar" aria-label="项目与对话">
+    <div id="chat-sidebar" class="side-pane">
+      <div class="side-head">
+        <span class="side-title"><strong>Codex Light</strong></span>
+        <button id="menu-app" class="btn icon-only ghost" title="应用菜单" aria-label="应用菜单" aria-haspopup="menu" aria-expanded="false"><span data-icon="more"></span></button>
+        <button id="close-sidebar" class="btn icon-only ghost side-close" title="收起侧栏" aria-label="收起侧栏" aria-controls="sidebar"><span data-icon="close"></span></button>
+      </div>
+      <button id="new-thread" class="new-chat"><span data-icon="compose"></span><span>新对话</span><kbd>Ctrl N</kbd></button>
+      <label class="side-search"><span data-icon="search"></span><input id="search" placeholder="搜索对话" aria-label="搜索对话"></label>
+      <div class="side-section"><span>项目</span><span class="side-actions"><button id="add-project" class="btn icon-only ghost" title="添加项目" aria-label="添加项目"><span data-icon="plus"></span></button><button id="refresh" class="btn icon-only ghost" title="刷新对话列表" aria-label="刷新对话列表"><span data-icon="refresh"></span></button></span></div>
+      <nav id="thread-list" class="thread-list" aria-label="项目与对话"><p class="muted empty-list">正在连接…</p></nav>
+      <button id="more-threads" class="btn ghost hidden">加载更多对话</button>
+      <div class="side-foot"><span class="conn"><i id="connection-dot"></i><span id="connection-text">连接中</span></span><button id="settings" class="btn ghost small" title="连接与设置">设置</button></div>
+    </div>
+    <div id="settings-sidebar" class="side-pane hidden">
+      <div class="side-head"><strong class="side-title">设置</strong><button id="settings-sidebar-close" class="btn icon-only ghost side-close" title="收起侧栏" aria-label="收起侧栏" aria-controls="sidebar"><span data-icon="close"></span></button></div>
+      <label class="side-search"><span data-icon="search"></span><input id="settings-search" placeholder="搜索设置" aria-label="搜索设置"></label>
+      <nav id="settings-nav" class="settings-nav">
+        <div class="side-section"><span>应用</span></div>
+        <button class="settings-nav-item active" data-settings-section="general"><span data-icon="computer"></span><span>连接与运行</span></button>
+        <button class="settings-nav-item" data-settings-section="appearance"><span data-icon="spark"></span><span>外观</span></button>
+        <button class="settings-nav-item" data-settings-section="notifications"><span data-icon="bell"></span><span>通知</span></button>
+        <button class="settings-nav-item" data-settings-section="shortcuts"><span data-icon="keyboard"></span><span>快捷键</span></button>
+        <div class="side-section"><span>Codex</span></div>
+        <button class="settings-nav-item" data-settings-section="configuration"><span data-icon="settings"></span><span>配置</span></button>
+        <button class="settings-nav-item" data-settings-section="archived"><span data-icon="archive"></span><span>已归档</span></button>
+        <button class="settings-nav-item" data-settings-section="dsh"><span data-icon="branch"></span><span>DSH 与 MCP</span></button>
+        <button class="settings-nav-item" data-settings-section="plugins"><span data-icon="plug"></span><span>插件</span></button>
+        <button class="settings-nav-item" data-settings-section="remote"><span data-icon="remote"></span><span>远程控制</span></button>
+        <button class="settings-nav-item local-only" data-settings-section="lan"><span data-icon="globe"></span><span>局域网访问</span></button>
+      </nav>
+    </div>
+  </aside>
+
+  <!-- ===== Chat ===== -->
+  <main id="chat-page" class="stage chat">
+    <header class="stage-bar">
+      <div class="crumbs"><span id="project-name" class="crumb-project">工作区</span><span class="crumb-sep" aria-hidden="true">/</span><strong id="thread-title">新对话</strong></div>
+      <div class="stage-actions">
+        <button id="open-dsh" class="btn ghost small" aria-pressed="false" title="DSH 子代理"><span data-icon="branch"></span><span class="label">DSH</span></button>
+        <button id="toggle-details" class="btn ghost small" aria-pressed="false" title="工具活动"><span data-icon="panel"></span><span class="label">活动</span></button>
+        <button id="thread-menu-button" class="btn icon-only ghost" aria-label="对话操作" aria-haspopup="menu" aria-expanded="false" title="对话操作"><span data-icon="more"></span></button>
+      </div>
+      <div id="thread-menu" class="menu hidden" role="menu" aria-label="对话操作"><button id="rename-thread" role="menuitem">重命名</button><button id="fork-thread" role="menuitem">创建分支</button><button id="review-thread" role="menuitem">代码审查…</button><button id="archive-thread" role="menuitem">归档</button></div>
+    </header>
+    <div id="notice" class="notice hidden" role="status"><span></span><button id="dismiss-notice" class="btn icon-only ghost" aria-label="关闭提示"><span data-icon="close"></span></button></div>
+    <section id="conversation" class="conversation" aria-label="对话内容" tabindex="0">
+      <button id="earlier" class="btn ghost small earlier hidden">加载更早的内容</button>
+      <div id="welcome" class="welcome"><span class="welcome-mark"><span data-icon="brand"></span></span><h1>今天要做什么？</h1><p>描述任务，或输入 <kbd>/</kbd> 查看命令与技能</p></div>
+      <div id="messages"></div>
+    </section>
+    <section id="pending-submissions" class="tray pending-submissions hidden" aria-label="待确认的任务请求" aria-live="polite"></section>
+    <section id="approvals" class="tray approvals" aria-label="待处理请求" aria-live="polite"></section>
+    <footer class="composer-dock">
+      <section id="cwd-setup" class="cwd-setup hidden" aria-label="选择工作目录"><label for="cwd-inline-input">项目文件夹的绝对路径</label><div><input id="cwd-inline-input" placeholder="例如 C:\Users\USER\Projects\my-app" autocomplete="off"><button id="cwd-inline-save" type="button" class="btn primary">使用此目录</button><button id="cwd-inline-cancel" type="button" class="btn">取消</button></div></section>
+      <div id="send-state" class="send-state hidden" role="status"><span id="send-state-text"></span><button id="send-state-action" type="button" class="btn small hidden"></button></div>
+      <div id="activity" class="activity" role="status"></div>
+      <div id="live-changes" class="live-changes hidden"></div>
+      <section id="queue" class="queue hidden" aria-label="排队消息" aria-live="polite"></section>
+      <div id="attachment-tray" class="attachment-tray hidden" aria-label="待发送附件（图片和文件合计最多 5 个）"></div>
+      <form id="compose" class="composer">
+        <div id="slash-menu" class="slash-menu hidden" role="listbox" aria-label="命令与技能"></div>
+        <textarea id="prompt" rows="1" placeholder="描述要完成的任务" aria-label="消息" maxlength="100000" role="combobox" aria-autocomplete="list" aria-controls="slash-menu" aria-expanded="false"></textarea>
+        <div class="composer-row">
+          <div class="composer-tools">
+            <button id="add-attachment" type="button" class="tool" title="添加图片" aria-label="添加图片"><span data-icon="image"></span></button>
+            <button id="add-file" type="button" class="tool" title="添加文件（发送路径引用）" aria-label="添加文件"><span data-icon="file"></span></button>
+            <input id="file-attachment-input" class="sr-only" type="file" multiple tabindex="-1"><input id="attachment-input" class="sr-only" type="file" accept="image/png,image/jpeg,image/webp,image/gif,.png,.jpg,.jpeg,.webp,.gif" multiple tabindex="-1">
+            <button type="button" id="permissions-info" class="tool" title="权限策略：继承 Codex 当前配置"><span data-icon="shield"></span><span class="label">权限</span></button>
+          </div>
+          <div class="selectors native-model-selectors"><label><span class="sr-only">模型</span><select id="model"><option value="">使用 Codex 默认模型</option></select></label><label><span class="sr-only">思考强度</span><select id="effort"><option value="">默认思考强度</option></select></label></div>
+          <button id="context-meter" type="button" class="context-meter hidden" data-known="false" aria-label="上下文未知"><span class="context-ring" aria-hidden="true"></span><span id="context-label">—</span></button>
+          <div class="model-control"><button type="button" id="model-trigger" aria-haspopup="dialog" aria-expanded="false" aria-controls="reasoning-popover">默认模型<span data-icon="down"></span></button><section id="reasoning-popover" class="reasoning-popover hidden" role="dialog" aria-label="模型与思考强度"><div id="reasoning-controls"><div class="reasoning-heading"><span aria-hidden="true"><span data-icon="bolt"></span></span><output id="reasoning-label" for="reasoning-range">默认</output><button type="button" id="reasoning-reset" aria-label="恢复模型默认思考强度" title="恢复模型默认思考强度"><span data-icon="reset"></span></button></div><button type="button" id="model-list-open" aria-label="选择模型"><span id="reasoning-model-name">默认模型</span><span><span data-icon="right"></span></span></button><div id="reasoning-track" class="reasoning-track"><div id="reasoning-ticks" aria-hidden="true"></div><input id="reasoning-range" type="range" min="0" max="0" step="1" value="0" aria-label="思考强度"></div></div><div id="reasoning-model-list" class="reasoning-model-list hidden" role="group" aria-label="可用模型"><div class="model-list-head"><button type="button" id="model-list-back" aria-label="返回思考强度"><span data-icon="left"></span></button><strong>选择模型</strong></div><div id="model-options"></div></div></section></div>
+          <button id="queue-send" type="button" class="queue-send hidden" title="排队到当前任务完成后发送 (Tab)"><span data-icon="queue"></span><span>排队</span></button>
+          <button id="stop" type="button" class="stop hidden" title="停止当前任务" aria-label="停止当前任务"><span data-icon="stop"></span></button>
+          <button id="send" type="submit" class="send" aria-label="发送消息" title="发送 (Enter)"><span data-icon="up"></span></button>
+        </div>
+      </form>
+      <div class="composer-foot">
+        <button id="cwd-button" type="button" class="foot-btn" title="设置工作目录"><span data-icon="folder"></span><span id="cwd-label">设置工作目录</span><span data-icon="down"></span></button>
+        <span class="foot-chip" title="任务在此计算机的工作目录中运行，可能直接修改项目文件"><span data-icon="computer"></span>本地</span>
+        <span id="composer-hint" class="composer-hint">Enter 发送 · Shift Enter 换行 · / 命令</span>
+      </div>
+    </footer>
+  </main>
+
+  <!-- ===== Usage & performance ===== -->
+  <main id="usage-page" class="stage page hidden" aria-label="用量与性能"><div id="stats-root" class="page-body wide"></div></main>
+
+  <!-- ===== Account ===== -->
+  <main id="account-page" class="stage page hidden" aria-label="账户"><div id="account-root" class="page-body"></div>
+    <div class="hidden"><div id="account-pending" class="account-pending hidden"></div><div id="account-login-controls" class="account-login-panel"></div></div>
+  </main>
+
+  <!-- ===== Terminal & Git ===== -->
+  <main id="terminal-page" class="stage page hidden" aria-label="终端与 Git">
+    <header class="stage-bar"><div class="crumbs"><strong>终端与 Git</strong><span class="crumb-sep" aria-hidden="true">·</span><span id="terminal-cwd" class="crumb-project">尚未打开</span></div>
+      <div class="stage-actions"><div class="segmented" role="tablist" aria-label="工作台视图"><button id="terminal-tab-shell" type="button" role="tab" aria-selected="true" aria-controls="terminal-shell-workspace">终端</button><button id="terminal-tab-git" type="button" role="tab" aria-selected="false" aria-controls="terminal-git-workspace">Git</button></div><button id="terminal-back" class="btn ghost small" type="button"><span data-icon="back"></span><span class="label">返回对话</span></button></div></header>
+    <section id="terminal-shell-workspace" class="work" role="tabpanel">
+      <div class="work-bar"><button id="terminal-open" class="btn primary" type="button"><span data-icon="terminal"></span>打开当前目录终端</button><button id="terminal-restore" type="button" class="btn" disabled>恢复连接</button><button id="terminal-interrupt" class="btn" type="button" disabled>Ctrl+C</button><button id="terminal-close" class="btn danger" type="button" disabled>结束终端</button><p id="terminal-status" class="work-status" role="status">尚未启动 shell。点击打开才会创建本地终端，不会调用模型。</p></div>
+      <div id="terminal-container" class="terminal-container"><div id="terminal-empty" class="terminal-empty"><span data-icon="terminal"></span><h2>在工作目录中直接操作</h2><p>命令由本地 shell 执行，可能修改项目文件。终端固定使用打开时的目录；返回对话不会结束它。</p></div></div>
+    </section>
+    <section id="terminal-git-workspace" class="work git-work hidden" role="tabpanel">
+      <div class="work-bar"><button id="git-status-read" type="button" class="btn">刷新状态</button><button id="git-diff-read" type="button" class="btn">未暂存差异</button><button id="git-staged-read" type="button" class="btn">已暂存差异</button><p id="git-status" class="work-status" role="status">只在点击后读取，不暂存、提交或推送。</p></div>
+      <div class="git-split">
+        <div id="git-output" class="git-output"><p class="muted">尚未读取 Git 信息。</p></div>
+        <section id="git-write" class="git-write" aria-label="Git 写操作">
+          <h2 class="section-title">暂存与提交</h2>
+          <div class="work-row"><button id="git-stage-plan" type="button" class="btn">暂存所选…</button><button id="git-unstage-plan" type="button" class="btn">取消暂存所选…</button></div>
+          <label for="git-commit-message">提交信息（只提交已暂存内容）</label><textarea id="git-commit-message" rows="3" maxlength="10000"></textarea>
+          <div class="work-row"><button id="git-commit-plan" type="button" class="btn">检查提交计划…</button><button id="git-push-plan" type="button" class="btn">检查推送计划…</button></div>
+          <p id="git-action-status" class="work-status" role="status">先读取状态并勾选路径。每个写操作都会先展示计划再确认。</p>
+          <div id="git-action-pending"></div>
+          <section id="git-plan" class="git-plan hidden"><h2 class="section-title">核对计划</h2><pre id="git-plan-summary"></pre><div class="work-row"><button id="git-plan-apply" type="button" class="btn primary">确认执行</button><button id="git-plan-cancel" type="button" class="btn">取消</button></div></section>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <!-- ===== Review ===== -->
+  <main id="review-view" class="stage page hidden" aria-label="代码审查">
+    <header class="stage-bar"><div class="crumbs"><strong>代码审查</strong></div><div class="stage-actions"><button id="review-back" type="button" class="btn ghost small"><span data-icon="back"></span><span class="label">返回对话</span></button></div></header>
+    <div class="page-body review-body">
+      <section class="review-local"><div><h2 class="section-title">审查本地未提交改动</h2><p class="fine">使用当前对话的模型审查工作目录改动，会消耗额度。</p></div><button id="review-local-action" type="button" class="btn primary">开始审查…</button></section>
+      <section id="pr-review-panel"></section>
+    </div>
+  </main>
+
+  <!-- ===== Settings ===== -->
+  <main id="settings-dialog" class="stage page settings hidden" aria-label="设置">
+    <header class="stage-bar"><div class="crumbs"><strong>设置</strong></div><div class="stage-actions"><button id="settings-back" class="btn ghost small"><span data-icon="back"></span><span class="label">返回对话</span></button></div></header>
+    <div class="page-body settings-content">
+      <div id="settings-notice" class="notice hidden" role="status"><span></span></div>
+      <section id="settings-general" class="settings-section">
+        <h1>连接与运行</h1>
+        <section id="desktop-receipts" class="panel warn hidden"><h2 class="section-title">上次操作需要核对</h2><p id="desktop-receipts-status" class="fine" role="status"></p><div id="desktop-receipts-list"></div><div class="work-row"><button id="desktop-receipts-refresh" type="button" class="btn">刷新记录</button><button id="desktop-receipts-ack" type="button" class="btn">确认已核对所选记录</button></div></section>
+        <form id="settings-form">
+          <div class="panel">
+            <dl class="kv">
+              <dt>连接状态</dt><dd id="status-info">检查中</dd>
+              <dt>运行模式</dt><dd id="mode-info">未连接</dd>
+              <dt>CLI 版本</dt><dd id="version-info">未知</dd>
+              <dt>Codex 命令</dt><dd><code id="command-info">codex</code></dd>
+              <dt>安全重开</dt><dd id="reopen-info">未知</dd>
+            </dl>
+            <label class="field">工作目录<input id="cwd-input" placeholder="C:\Users\USER\project" autocomplete="off" spellcheck="false"><small>Codex 与 DSH 在此目录工作，修改会直接影响源文件。</small></label>
+            <div class="work-row end"><button id="settings-cancel" type="button" class="btn">取消</button><button id="save-settings" type="submit" class="btn primary">保存工作目录</button></div>
+          </div>
+          <div id="runtime-panel"></div>
+          <h2 id="settings-dsh-heading" class="section-title">DSH 与 MCP</h2>
+          <div class="panel row-panel"><div><strong id="dsh-settings-label">尚未检查 DSH 连接</strong><small id="dsh-settings-details" class="fine">只读检查，不发送任务。</small></div><button id="refresh-dsh-settings" type="button" class="btn"><span data-icon="refresh"></span>检查</button></div>
+          <div id="dsh-connection-root" class="local-only"></div>
+<div id="dsh-config-root" class="local-only"></div>
+          <h2 class="section-title">服务</h2>
+          <div class="panel row-panel"><p id="runtime-close-info" class="fine">关闭窗口不等于停止服务。</p><button id="shutdown" type="button" class="btn danger">停止服务</button></div>
+        </form>
+      </section>
+      <section id="settings-appearance" class="settings-section hidden">
+        <h1>外观</h1>
+        <div class="panel">
+          <div class="pref-row"><div><strong>界面风格</strong><small class="fine">只影响本应用</small></div><div class="style-cards" role="group" aria-label="界面风格"><button type="button" data-style-choice="codex" aria-pressed="true"><span class="style-preview style-preview-codex" aria-hidden="true"></span><span class="style-choice-copy"><strong>Codex</strong><small>中性、克制</small></span></button><button type="button" data-style-choice="claude" aria-pressed="false"><span class="style-preview style-preview-claude" aria-hidden="true"></span><span class="style-choice-copy"><strong>Claude</strong><small>暖白、沉稳</small></span></button></div></div>
+          <div class="pref-row"><div><strong>主题</strong></div><div class="theme-cards segmented" role="group" aria-label="主题"><button type="button" data-theme-choice="system">系统</button><button type="button" data-theme-choice="light">浅色</button><button type="button" data-theme-choice="dark">深色</button></div></div>
+          <label class="pref-row" for="preference-font"><div><strong>文字大小</strong><small class="fine">不影响系统缩放</small></div><select id="preference-font"><option value="90">90%</option><option value="100">100%</option><option value="110">110%</option><option value="125">125%</option></select></label>
+          <label class="pref-row" for="preference-motion"><div><strong>减少动画</strong></div><select id="preference-motion"><option value="system">跟随系统</option><option value="on">开启</option><option value="off">关闭</option></select></label>
+        </div>
+        <p id="preference-status" class="fine" role="status"></p>
+        <button id="preference-native-reload" type="button" class="btn hidden">重新读取本机偏好</button>
+      </section>
+      <section id="settings-notifications" class="settings-section hidden">
+        <h1>通知</h1>
+        <div class="panel"><label class="pref-row"><div><strong>任务结束提示</strong><small class="fine">应用内提示，不请求系统通知</small></div><input id="preference-completion" type="checkbox" class="switch"></label><label class="pref-row"><div><strong>待审批提示</strong><small class="fine">提示不会自动批准</small></div><input id="preference-approval" type="checkbox" class="switch"></label></div>
+      </section>
+      <section id="settings-shortcuts" class="settings-section hidden">
+        <h1>快捷键</h1>
+        <div class="panel"><dl class="kv keys"><dt>新对话</dt><dd><kbd>Ctrl N</kbd></dd><dt>模型与思考强度</dt><dd><kbd>Ctrl Shift M</kbd></dd><dt>发送 / 运行中立即补充</dt><dd><kbd>Enter</kbd></dd><dt>运行中排队</dt><dd><kbd>Tab</kbd></dd><dt>换行</dt><dd><kbd>Shift Enter</kbd></dd><dt>命令与技能</dt><dd><kbd>/</kbd></dd><dt>关闭弹层</dt><dd><kbd>Esc</kbd></dd><dt>原生应用菜单</dt><dd><kbd>Alt M</kbd> / <kbd>F10</kbd></dd></dl></div>
+      </section>
+      <section id="settings-configuration" class="settings-section hidden"><h1>配置</h1><div id="config-pending"></div><div id="config-panel"></div></section>
+      <section id="settings-archived" class="settings-section hidden"><div class="section-head"><h1>已归档</h1><button id="refresh-archived" class="btn small">刷新</button></div><div id="archived-list" class="panel list-panel"><p class="fine">尚未读取。</p></div><button id="more-archived" class="btn hidden">加载更多</button></section>
+      <section id="settings-remote" class="settings-section hidden">
+        <h1>远程控制</h1>
+        <p class="fine">使用本机 Codex 的官方远控协议。连接或配对成功不等于手机端已验证可用。</p>
+        <div class="panel"><div class="work-row"><button id="remote-refresh" type="button" class="btn">刷新</button><button id="remote-enable" type="button" class="btn">本次会话启用</button><button id="remote-disable" type="button" class="btn">持久停用</button></div><div id="remote-status" role="status">尚未读取。</div></div>
+        <h2 class="section-title">设备</h2><div id="remote-devices" class="panel list-panel"><p class="fine">尚未读取。</p></div>
+        <h2 class="section-title">配对</h2>
+        <div class="panel"><p class="fine">配对码到期只结束本次配对流程，已授权设备不会自动撤销。</p><button id="remote-pair" type="button" class="btn">创建配对码</button><div id="remote-pairing" class="hidden"><code id="remote-pair-code"></code><p id="remote-pair-expiry" class="fine"></p><div class="work-row"><button id="remote-pair-check" type="button" class="btn">查询状态</button><button id="remote-pair-hide" type="button" class="btn">隐藏</button></div></div><p id="remote-pair-status" class="fine" role="status"></p></div>
+      </section>
+      <section id="settings-plugins" class="settings-section hidden"></section>
+      <section id="settings-lan" class="settings-section hidden"><h1>局域网访问</h1><div id="lan-root"></div></section>
+    </div>
+  </main>
+
+  <!-- ===== Inspector: tool activity and DSH ===== -->
+  <aside id="details" class="inspector hidden" aria-label="活动">
+    <div class="inspector-head"><div class="segmented" role="tablist"><button id="tab-tools" class="active" aria-pressed="true">工具活动</button><button id="tab-dsh" aria-pressed="false">DSH</button></div><strong id="details-title" class="sr-only">工具活动</strong><button id="close-details" class="btn icon-only ghost" aria-label="关闭"><span data-icon="close"></span></button></div>
+    <div id="tools-panel" class="inspector-body"><div id="tool-list"><p class="muted">暂无工具活动</p></div></div>
+    <div id="dsh-panel" class="inspector-body hidden">
+      <section class="dsh-connection"><div class="dsh-connection-head"><strong id="dsh-status-label">尚未检查 DSH 连接</strong><button id="refresh-dsh" class="btn small"><span data-icon="refresh"></span>检查</button></div><p id="dsh-status-details" class="fine">只读取 MCP 连接状态。</p></section>
+      <section class="dsh-live" aria-labelledby="dsh-live-heading"><div class="dsh-live-head"><div class="dsh-live-title"><strong id="dsh-live-heading">当前目录 Agent</strong><span id="dsh-live-state" class="dsh-live-state">等待对话</span></div><button id="dsh-live-refresh" class="btn small" type="button"><span data-icon="refresh"></span>刷新</button></div><p id="dsh-live-meta" class="dsh-live-meta">请先打开或开始一个对话。</p><p id="dsh-live-warning" class="dsh-live-warning dsh-error hidden" role="status"></p><div id="dsh-tasks" class="dsh-task-list"><p class="muted">当前对话尚未观察到 DSH 任务。</p></div><p class="dsh-live-footnote fine">只读，不创建、继续或停止 agent。</p></section>
+    </div>
+  </aside>
+</div>
+
+<dialog id="project-dialog" aria-labelledby="project-heading"><div class="dialog-header"><h2 id="project-heading">打开项目</h2><button id="project-close" type="button" class="btn icon-only ghost" aria-label="关闭"><span data-icon="close"></span></button></div><div id="project-choices" class="project-choices"></div><button id="project-browse" class="btn project-browse" type="button"><span data-icon="folder"></span>选择文件夹…</button><details id="project-manual"><summary>输入文件夹路径</summary><form id="project-form"><label class="field" for="project-path">项目文件夹<input id="project-path" maxlength="4096" autocomplete="off" required placeholder="例如 C:\Users\USER\Projects\my-app"></label><div class="work-row end"><button id="project-save" type="submit" class="btn primary">打开项目</button></div></form></details><p id="project-status" role="status"></p></dialog>
+<dialog id="rename-dialog" aria-labelledby="rename-heading"><form id="rename-form"><div class="dialog-header"><h2 id="rename-heading">重命名对话</h2><button id="rename-close" type="button" class="btn icon-only ghost" aria-label="取消重命名"><span data-icon="close"></span></button></div><label class="field">名称<input id="rename-input" maxlength="200" required autocomplete="off"></label><div class="work-row end"><button id="rename-cancel" type="button" class="btn">取消</button><button id="rename-save" type="submit" class="btn primary">保存</button></div></form></dialog>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

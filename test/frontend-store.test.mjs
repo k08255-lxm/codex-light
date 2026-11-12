@@ -1,0 +1,10 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { ItemStore, MAX_TEXT, boundedText, displaySnapshot, itemText } from '../public/store.js';
+test('100-item bounded window preserves latest arrival order',()=>{const s=new ItemStore();for(let i=0;i<10000;i++)s.upsert({id:String(i),type:'agentMessage',text:String(i)});assert.equal(s.items.size,100);assert.equal(s.values()[0].id,'9900');assert.equal(s.values().at(-1).id,'9999');assert.equal(s.trimmed,true);assert.equal(s.dirty.size,100);});
+test('5000 deltas merge into one item, with no data loss below cap',()=>{const s=new ItemStore();for(let i=0;i<5000;i++)s.delta('x','字');assert.equal(s.items.size,1);assert.equal(s.items.get('x').text,'字'.repeat(5000));});
+test('long streaming bodies keep their full text and the final value replaces them',()=>{const s=new ItemStore();s.delta('x','a'.repeat(1000000));s.delta('x','b'.repeat(1000000));assert.equal(s.items.get('x').text,'a'.repeat(1000000)+'b'.repeat(1000000));assert.equal(s.items.get('x')._omitted,undefined);s.upsert({id:'x',text:'final'});assert.equal(s.items.get('x').text,'final');assert.equal(s.textChars,5);});
+test('nested tool payloads are retained only as bounded display snapshots',()=>{const s=new ItemStore();const payload=Array.from({length:10000},()=>({data:'x'.repeat(50000)}));s.upsert({id:'tool',type:'mcpToolCall',result:payload,changes:payload});assert.ok(JSON.stringify(s.values()).length<80000);});
+test('snapshot depth handles cyclic objects without recursion overflow',()=>{const obj={id:'x'};obj.self=obj;const snapshot=displaySnapshot(obj);assert.ok(JSON.stringify(snapshot).length<500);});
+test('user messages preserve text and image markers; content stays text',()=>{assert.equal(itemText({type:'userMessage',content:[{type:'text',text:'<script>x</script>'},{type:'image'}]}),'<script>x</script>\n[图片]');assert.equal(boundedText(null),'');});
+test('clear resets the window and dirty state',()=>{const s=new ItemStore(1);s.upsert({id:'a'});s.upsert({id:'b'});s.clear();assert.equal(s.items.size,0);assert.equal(s.dirty.size,0);assert.equal(s.trimmed,false);});

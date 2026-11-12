@@ -1,0 +1,68 @@
+.project-navigation { min-width: 0; overscroll-behavior: contain; }
+.project-navigation .project-group { min-width: 0; margin: 0 0 4px; }
+.project-navigation .project-group-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  min-height: 32px;
+  padding-inline: 2px;
+  color: var(--tertiary);
+}
+.project-navigation .project-group-toggle,
+.project-navigation .project-group-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 24px;
+  height: 28px;
+  padding: 4px;
+  color: var(--tertiary);
+  border-radius: var(--radius-control);
+}
+.project-navigation .project-group-toggle > .ui-icon { width: 12px; height: 12px; }
+.project-navigation .project-group-remove > .ui-icon { width: 13px; height: 13px; }
+.project-navigation .project-group[data-open="true"] .project-group-toggle > .ui-icon { transform: rotate(90deg); }
+.project-navigation .project-group-folder { display: inline-flex; flex: none; align-items: center; }
+.project-navigation .project-group-folder > .ui-icon { width: 15px; height: 15px; }
+.project-navigation .project-group-select,
+.project-navigation .project-group-unknown {
+  flex: 1;
+  display: block;
+  min-width: 0;
+  padding: 5px 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: start;
+  font-size: .8125rem;
+  line-height: 1.5;
+  color: var(--secondary);
+  border-radius: var(--radius-control);
+}
+.project-navigation .project-group.selected .project-group-select { color: var(--text); }
+.project-navigation .project-group-threads { min-width: 0; padding-inline-start: 24px; }
+.project-navigation .project-group-thread {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  height: var(--sidebar-row-height);
+  margin-bottom: 2px;
+  padding: 7px 8px;
+  text-align: start;
+  border-radius: var(--radius-row);
+}
+.project-navigation .project-group-thread.active { background: var(--selected); }
+.project-navigation .project-group-thread.active .thread-name { color: var(--text); }
+.project-navigation .project-navigation-empty,
+.project-navigation .project-navigation-error {
+  margin: 4px 8px 8px;
+  font-size: .8125rem;
+  line-height: 1.5;
+  color: var(--tertiary);
+}
+.project-navigation .project-navigation-error { color: var(--error); overflow-wrap: anywhere; }
+.project-navigation button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+/* Scoped display rules must retain native hidden semantics for unknown/removed rows. */
+.project-navigation [hidden] { display: none; }

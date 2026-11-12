@@ -1,0 +1,614 @@
+// Conversation view: one keyed DOM tree per turn built from state.buildTurns().
+// Running turns show live elapsed time and expanded steps; finished turns collapse
+// commentary/reasoning/tools behind "用时 …" while answers stay visible.
+import { boundedText, itemText } from './store.js';
+import { icon } from './icons.js';
+import { renderMarkdown } from './markdown.js';
+import { formatDuration } from './state.js';
+import { nativeAgents, renderNativeAgent } from './ui/agents.js';
+import { artifactCandidates, markdownImageRefs } from './ui/artifacts.js';
+
+const DETAIL_LIMIT = 16000;
+const DIFF_LINE_LIMIT = 1500;
+const FILE_PREVIEW = 3;
+
+function el(document, tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined && text !== null) node.textContent = text;
+  return node;
+}
+function setText(node, value) { const text = String(value ?? ''); if (node.textContent !== text) node.textContent = text; }
+function reconcile(parent, nodes) {
+  const keep = new Set(nodes);
+  for (const child of [...parent.children]) if (!keep.has(child)) child.remove();
+  nodes.forEach((node, index) => { if (parent.children[index] !== node) parent.insertBefore(node, parent.children[index] || null); });
+}
+const firstLine = value => typeof value === 'string' ? value.slice(0, 400).split(/\r?\n/).find(line => line.trim())?.trim() || '' : '';
+function listText(value) {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(part => typeof part === 'string' ? part : part?.text || '').filter(Boolean).join('\n');
+  return '';
+}
+
+// ---------- Item descriptions ----------
+
+export function itemState(item) {
+  const raw = typeof item.status === 'string' ? item.status : '';
+  if (['failed', 'error'].includes(raw) || item.error || item.success === false || item.result?.isError === true || (typeof item.exitCode === 'number' && item.exitCode !== 0)) return 'failed';
+  if (['declined'].includes(raw)) return 'declined';
+  if (['interrupted', 'cancelled', 'canceled'].includes(raw)) return 'stopped';
+  if (['inProgress', 'in_progress', 'running', 'pending'].includes(raw) || item._complete === false) return 'running';
+  return 'done';
+}
+const STATE_TEXT = { failed: '失败', declined: '已拒绝', stopped: '已停止', running: '进行中', done: '' };
+
+export function describeItem(item) {
+  const done = itemState(item) !== 'running';
+  const read = Array.isArray(item.commandActions) ? item.commandActions.find(action => action?.type === 'read' && action.path) : null;
+  switch (item.type) {
+    case 'commandExecution':
+      if (read) return { icon: 'file', verb: done ? '已读取' : '读取', target: firstLine(read.name || read.path) };
+      return { icon: 'terminal', verb: done ? '已运行' : '运行', target: firstLine(item.command), code: true };
+    case 'fileChange': {
+      const paths = (item.changes || []).map(change => change?.path).filter(Boolean);
+      const name = paths.length === 1 ? paths[0].split(/[\\/]/).at(-1) : paths.length ? `${paths.length} 个文件` : '';
+      return { icon: 'file', verb: done ? '已编辑' : '编辑', target: name };
+    }
+    case 'mcpToolCall': return { icon: 'plug', verb: done ? '已调用' : '调用', target: [firstLine(item.server), firstLine(item.tool)].filter(Boolean).join(' / ') };
+    case 'dynamicToolCall': return { icon: 'plug', verb: done ? '已调用' : '调用', target: firstLine(item.tool) || '工具' };
+    case 'webSearch': return { icon: 'globe', verb: done ? '已搜索' : '搜索', target: firstLine(item.query) };
+    case 'reasoning': return { icon: 'spark', verb: '思考', target: firstLine(listText(item.summary)) || firstLine(listText(item.content)) };
+    case 'plan': return { icon: 'review', verb: '更新计划', target: firstLine(item.text) };
+    case 'collabAgentToolCall': case 'subAgentActivity': return { icon: 'branch', verb: '子代理', target: firstLine(item.tool || item.prompt || item.kind) };
+    case 'contextCompaction': return { icon: 'archive', verb: done ? '已压缩上下文' : '正在压缩上下文', target: '' };
+    case 'imageView': case 'imageGeneration': return { icon: 'image', verb: '图片', target: firstLine(item.path || item.prompt) };
+    case 'enteredReviewMode': return { icon: 'review', verb: '进入审查', target: '' };
+    case 'exitedReviewMode': return { icon: 'review', verb: '审查结束', target: '' };
+    default: return { icon: 'info', verb: typeof item.type === 'string' ? item.type : '活动', target: '' };
+  }
+}
+
+function detailText(item) {
+  const parts = []; let remaining = DETAIL_LIMIT;
+  const add = (label, value) => {
+    if (value == null || value === '' || remaining <= 0) return;
+    const body = boundedText(typeof value === 'string' ? value : JSON.stringify(value, null, 2), Math.max(0, remaining - 80));
+    const chunk = label ? `${label}\n${body}` : body; parts.push(chunk); remaining -= chunk.length + 2;
+  };
+  if (item.type === 'commandExecution') {
+    add('', item.command ? '$ ' + item.command : '');
+    if (typeof item.exitCode === 'number') add('', `退出码 ${item.exitCode}${typeof item.durationMs === 'number' ? ' · ' + formatDuration(item.durationMs) : ''}`);
+    add('', item.aggregatedOutput);
+  } else if (item.type === 'reasoning') {
+    add('', listText(item.summary) || listText(item.content));
+  } else if (item.type === 'fileChange') {
+    for (const change of item.changes || []) add(change?.path || '', change?.diff);
+  } else if (item.type === 'plan') {
+    add('', item.text);
+    if (Array.isArray(item.content)) add('', item.content.map(step => `${step.status === 'completed' ? '✓' : step.status === 'inProgress' ? '›' : '·'} ${step.step || ''}`).join('\n'));
+  } else {
+    add('参数', item.arguments ?? item.input);
+    add('错误', item.error);
+    add('', itemText(item));
+  }
+  return parts.join('\n\n') || '此步骤没有可显示的详细内容。';
+}
+
+// ---------- Diff rendering ----------
+
+export function renderDiff(document, source) {
+  const pre = el(document, 'pre', 'diff-view');
+  const lines = String(source || '').replace(/\r\n?/g, '\n').split('\n');
+  const shown = lines.slice(0, DIFF_LINE_LIMIT);
+  for (const line of shown) {
+    const kind = line.startsWith('@@') ? 'hunk' : line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff ') || line.startsWith('index ') ? 'meta' : line.startsWith('+') ? 'add' : line.startsWith('-') ? 'del' : 'ctx';
+    const row = el(document, 'span', `diff-line diff-${kind}`, line + '\n'); pre.append(row);
+  }
+  if (lines.length > shown.length) pre.append(el(document, 'span', 'diff-line diff-meta', `… 另有 ${lines.length - shown.length} 行未显示`));
+  return pre;
+}
+
+function statsNode(document, added, removed) {
+  const span = el(document, 'span', 'diff-stats');
+  if (added === null || removed === null) { span.append(el(document, 'span', 'diff-unknown', '行数未知')); return span; }
+  span.append(el(document, 'span', 'diff-added', `+${added}`), el(document, 'span', 'diff-removed', `-${removed}`));
+  return span;
+}
+
+// ---------- Long bodies ----------
+// A long body is split into ordered segments at paragraph boundaries. Only a small window of segments
+// is in the DOM at once; the rest stays in the store and is reachable through the segment navigator.
+
+export const LONG_TEXT = Object.freeze({ segment: 12000, window: 3 });
+const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})[^\n]*/;
+const lowSurrogate = (text, index) => { const code = text.charCodeAt(index); return code >= 0xdc00 && code <= 0xdfff; };
+/**
+ * Splits `text` into segments `{start, end, fence}` (`fence`: the code-fence line open at `start`, so a
+ * segment cut inside a fenced block can be shown with its fence reopened). Cuts at a blank line outside a
+ * fence once a segment reaches `size`, at any line end outside a fence at 2×size, at any line end at 3×size,
+ * and inside a single over-long line at 3×size. `previous` (an earlier result for a prefix of `text`)
+ * lets streaming re-split only the last, still-open segment. Segments cover the text exactly, in order.
+ */
+export function splitSegments(text, { size = LONG_TEXT.segment, previous = null } = {}) {
+  const source = typeof text === 'string' ? text : '';
+  const reuse = previous?.segments?.length > 0 && source.length >= previous.length && source.startsWith(previous.text);
+  const segments = reuse ? previous.segments.slice(0, -1) : [];
+  const last = reuse ? previous.segments.at(-1) : null;
+  let segStart = last ? last.start : 0; let fence = last ? last.fence : null; let midLine = last ? last.mid : false;
+  let startFence = fence; let startMid = midLine; let pos = segStart;
+  const cut = at => { segments.push({ start: segStart, end: at, fence: startFence, mid: startMid }); segStart = at; startFence = fence; startMid = midLine; };
+  while (pos < source.length) {
+    const newline = source.indexOf('\n', pos); const lineEnd = newline < 0 ? source.length : newline + 1;
+    if (lineEnd - segStart > 3 * size) {
+      let at = segStart + 3 * size; if (lowSurrogate(source, at)) at--;
+      if (at <= pos) at = Math.min(lineEnd, pos + size);
+      if (at < lineEnd) { pos = at; midLine = true; cut(at); continue; }
+    }
+    const line = source.slice(pos, lineEnd);
+    if (!midLine) {
+      if (!fence) { const open = FENCE_OPEN.exec(line); if (open) fence = { line: open[0].replace(/\s+$/, ''), char: open[1][0], length: open[1].length }; }
+      else if (new RegExp(`^ {0,3}${fence.char === '`' ? '`' : '~'}{${fence.length},}\\s*$`).test(line)) fence = null;
+    }
+    midLine = newline < 0; pos = lineEnd;
+    if (newline < 0) break;
+    const length = pos - segStart;
+    if ((length >= size && !fence && !line.trim()) || (length >= 2 * size && !fence) || length >= 3 * size) cut(pos);
+  }
+  if (segStart < source.length || !segments.length) segments.push({ start: segStart, end: source.length, fence: startFence, mid: startMid });
+  // `appended`: `text` extends `previous.text` unchanged, so segments before the last are identical.
+  return { text: source, length: source.length, segments, appended: reuse };
+}
+/** Display text of one segment (a fence opened in an earlier segment is reopened). */
+export function segmentSource(split, index) {
+  const row = split.segments[index]; if (!row) return '';
+  const body = split.text.slice(row.start, row.end);
+  return row.fence ? row.fence.line + '\n' + body : body;
+}
+const fenceKey = fence => fence ? fence.line : '';
+/** Length of the common prefix of two strings (compared in chunks, then refined). */
+export function commonPrefix(a, b) {
+  const limit = Math.min(a.length, b.length); let at = 0; const step = 4096;
+  while (at + step <= limit && a.slice(at, at + step) === b.slice(at, at + step)) at += step;
+  while (at < limit && a.charCodeAt(at) === b.charCodeAt(at)) at++;
+  return at;
+}
+
+/**
+ * Body view with a bounded DOM. `render(source, index)` → node for one segment.
+ * Completed bodies open at the beginning; a streaming body follows its latest tail until the user
+ * navigates away. Segment nodes outside the window are released.
+ * Rendered segments are reused only while the body grows by appending; any replacement, edit,
+ * deletion or rolling trim discards them so the new content is rendered.
+ * `retention` (from the store) says whether this is the complete original body; the copy action and
+ * the status line state exactly what is copied.
+ */
+export function retentionOf(item, keys) {
+  let omitted = 0; let released = 0;
+  for (const key of keys) { omitted += item?._omitted?.[key] || 0; released += item?._released?.[key] || 0; }
+  return { complete: !omitted && !released, omitted, released };
+}
+function longTextView(document, { render, label = '正文', onCopy }) {
+  const node = el(document, 'div', 'long-text');
+  const bar = el(document, 'div', 'long-text-bar'); bar.setAttribute('role', 'group'); bar.setAttribute('aria-label', label + '分段浏览');
+  const position = el(document, 'span', 'long-text-position'); position.setAttribute('aria-live', 'polite');
+  const status = el(document, 'span', 'long-text-status');
+  const button = (text, title, action) => { const b = el(document, 'button', 'btn ghost small long-text-nav', text); b.type = 'button'; b.title = title; b.addEventListener('click', action); return b; };
+  const first = button('开头', '跳到第一段', () => go(0, false));
+  const prev = button('上一段', '显示前一段', () => go(start - 1, false));
+  const next = button('下一段', '显示后一段', () => go(start + 1, false));
+  const last = button('最新', '跳到最后一段，运行中时继续跟随最新内容', () => go(Infinity, true));
+  const copy = button('复制全文', '', async () => {
+    const text = split.text;
+    try { if (onCopy) await onCopy(text); else await document.defaultView.navigator.clipboard.writeText(text); copy.textContent = retention.complete ? '已复制全文' : '已复制保留部分'; }
+    catch { copy.textContent = '复制失败'; }
+  });
+  copy.classList.add('long-text-copy');
+  bar.append(position, status, first, prev, next, last, copy);
+  const body = el(document, 'div', 'long-text-body');
+  const more = button('继续阅读下一段', '显示后一段', () => go(start + 1, false)); more.classList.add('long-text-more');
+  node.append(body);
+  let split = splitSegments(''); let start = 0; let follow = true; let streaming = false; let seen = false;
+  let retention = { complete: true, omitted: 0, released: 0 };
+  const cache = new Map(); // index -> {start, end, open, fence, windowed, node}
+  const copyLabel = () => retention.complete ? '复制全文' : '复制保留部分';
+  function go(target, tail) {
+    const max = Math.max(0, split.segments.length - LONG_TEXT.window);
+    start = Math.max(0, Math.min(max, target === Infinity ? max : target));
+    follow = !!tail;
+    paint(); copy.textContent = copyLabel();
+    node.scrollIntoView?.({ block: 'start' });
+  }
+  function paintRetention() {
+    const chars = split.length.toLocaleString('zh-CN');
+    if (retention.complete) {
+      status.textContent = ''; status.hidden = true; delete node.dataset.retention;
+      copy.title = `复制此条完整正文（${chars} 字符）`;
+    } else {
+      const parts = [];
+      if (retention.omitted) parts.push(`中间 ${retention.omitted.toLocaleString('zh-CN')} 字符超过单条保留上限，未保留`);
+      if (retention.released) parts.push(`原 ${retention.released.toLocaleString('zh-CN')} 字符的正文已从当前窗口释放，只保留开头`);
+      status.textContent = '未完整保留：' + parts.join('；'); status.hidden = false; node.dataset.retention = 'partial';
+      copy.title = `界面没有此条的完整原文：将复制当前保留的 ${chars} 字符（含省略提示），不是原始全文。完整内容由 Codex 保存${retention.released ? '，重新打开对话可再次读取' : ''}。`;
+    }
+    copy.setAttribute('aria-label', copy.title);
+    if (!/^已复制|^复制失败/.test(copy.textContent)) copy.textContent = copyLabel();
+  }
+  function paint() {
+    const count = split.segments.length; const windowed = count > LONG_TEXT.window;
+    const end = Math.min(count, start + LONG_TEXT.window); const nodes = [];
+    for (let index = start; index < end; index++) {
+      const row = split.segments[index]; const open = index === count - 1 && streaming;
+      let entry = cache.get(index);
+      if (!entry || entry.start !== row.start || entry.end !== row.end || entry.open || fenceKey(entry.fence) !== fenceKey(row.fence) || entry.windowed !== windowed) {
+        const segment = render(segmentSource(split, index), index);
+        if (windowed) { const wrap = el(document, 'section', 'long-text-segment'); wrap.dataset.segment = String(index + 1); wrap.append(segment); entry = { node: wrap }; }
+        else entry = { node: segment };
+        Object.assign(entry, { start: row.start, end: row.end, open, fence: row.fence, windowed }); cache.set(index, entry);
+      }
+      nodes.push(entry.node);
+    }
+    for (const index of [...cache.keys()]) if (index < start || index >= end) cache.delete(index);
+    paintRetention();
+    // Short complete bodies keep the plain structure: just the rendered content, no navigator.
+    // An incomplete body always shows its status and the accurately labelled copy action.
+    if (!windowed && retention.complete) { body.replaceChildren(...nodes); bar.remove(); more.remove(); node.dataset.long = 'false'; return; }
+    node.dataset.long = String(windowed);
+    if (bar.parentElement !== node) node.insertBefore(bar, body);
+    for (const control of [first, prev, next, last]) control.hidden = !windowed;
+    position.hidden = !windowed;
+    if (windowed) reconcile(body, nodes); else body.replaceChildren(...nodes);
+    position.textContent = `第 ${start + 1}${end - start > 1 ? '–' + end : ''} 段 / 共 ${count} 段 · ${split.length.toLocaleString('zh-CN')} 字符${streaming && follow ? ' · 跟随最新' : ''}`;
+    first.disabled = start === 0; prev.disabled = start === 0;
+    next.disabled = end >= count; last.disabled = end >= count && (!streaming || follow);
+    last.textContent = streaming && !follow ? '跟随最新' : '最新';
+    if (end < count) { if (more.parentElement !== node) node.append(more); } else more.remove();
+  }
+  function update(text, { streaming: live = false, retention: kept = null } = {}) {
+    const source = typeof text === 'string' ? text : '';
+    const before = split.text;
+    split = splitSegments(source, { previous: split });
+    // Not an append (replacement, edit, deletion, rolling trim): a segment's rendered node is reused only
+    // if its whole range lies inside the unchanged common prefix, so new content is always rendered.
+    if (!split.appended) {
+      const same = commonPrefix(before, source);
+      for (const [index, entry] of cache) if (entry.end >= same) cache.delete(index);
+    }
+    const nextRetention = kept && !kept.complete ? kept : { complete: true, omitted: 0, released: 0 };
+    if (nextRetention.complete !== retention.complete) copy.textContent = nextRetention.complete ? '复制全文' : '复制保留部分';
+    retention = nextRetention;
+    const wasStreaming = streaming; streaming = live;
+    const max = Math.max(0, split.segments.length - LONG_TEXT.window);
+    if (!seen) { start = live ? max : 0; follow = live; seen = true; }
+    else if (live && follow) start = max;
+    else if (!live && wasStreaming && follow) start = max; // finished while watching the tail: stay there
+    start = Math.min(start, max);
+    // The open (last) segment is re-rendered each update; a finished body re-renders it once.
+    if (wasStreaming !== live) for (const entry of cache.values()) entry.open = true;
+    paint();
+  }
+  return { node, update, get window() { return { start, end: Math.min(split.segments.length, start + LONG_TEXT.window), count: split.segments.length, follow, rendered: cache.size }; }, release() { cache.clear(); body.replaceChildren(); } };
+}
+
+// ---------- View ----------
+
+export function mountConversation(host, { onLocalLink, getCwd = () => '', onCopy, artifacts = null } = {}) {
+  const document = host.ownerDocument;
+  const turns = new Map(); // turn id -> view
+  const userOpen = new Map(); // process key -> boolean chosen by the user
+  const fileState = new Map(); // turn id -> {expanded, openPaths:Set, all:boolean}
+  const imageRefs = new Map(); // answer id -> {text, refs}
+  let runningClocks = [];
+
+  const markdownSegment = source => {
+    const box = el(document, 'div', 'markdown-segment');
+    box.append(renderMarkdown(document, source, { onLocalLink, onCopy, cwd: getCwd(), complete: true }));
+    return box;
+  };
+  const answerRefs = answer => {
+    const cached = imageRefs.get(answer.id);
+    if (cached && cached.text === answer.text) return cached.refs;
+    const refs = markdownImageRefs(answer.text); imageRefs.set(answer.id, { text: answer.text, refs }); return refs;
+  };
+
+  function messageView(item) {
+    const isUser = item.type === 'userMessage';
+    const node = el(document, 'article', `message ${isUser ? 'userMessage' : 'agentMessage'}`);
+    node.dataset.itemId = item.id;
+    const body = el(document, 'div', 'message-text');
+    node.append(body);
+    return { node, body, item: null, steer: null, text: null, complete: null, content: null, kept: null, long: null };
+  }
+  function updateMessage(view, item, { steer = false } = {}) {
+    if (item.type === 'userMessage') {
+      const content = JSON.stringify((item.content || []).map(part => part?.type === 'text' ? { type: 'text', size: part.text?.length } : part));
+      const text = (item.content || []).filter(part => part?.type === 'text').map(part => part.text).join('\n');
+      const retention = retentionOf(item, (item.content || []).map((part, index) => part?.type === 'text' ? 'content.' + index : null).filter(Boolean));
+      const kept = JSON.stringify(retention);
+      if (view.item && view.steer === steer && view.content === content && view.text === text && view.kept === kept) return;
+      view.item = item; view.steer = steer; view.content = content; view.text = text; view.kept = kept;
+      view.node.classList.toggle('steer', steer);
+      const parts = [];
+      if (steer) parts.push(el(document, 'span', 'message-tag', '运行中补充'));
+      const media = (item.content || []).filter(part => ['image', 'localImage'].includes(part?.type));
+      const bubble = el(document, 'div', 'message-bubble');
+      if (text) {
+        view.long ||= longTextView(document, { render: source => document.createTextNode(source), label: '消息', onCopy });
+        view.long.update(text, { retention }); bubble.append(view.long.node);
+      }
+      parts.push(bubble);
+      if (media.length) {
+        const row = el(document, 'div', 'message-media');
+        for (const part of media) { const chip = el(document, 'span', 'media-chip'); chip.append(icon(document, 'image', { size: 14 }), el(document, 'span', '', (part.path || part.url || '图片').split(/[\\/]/).at(-1).slice(0, 80))); row.append(chip); }
+        parts.push(row);
+      }
+      view.body.replaceChildren(...parts);
+      return;
+    }
+    // Full body: equal-length corrections repaint because the strings differ.
+    const text = String(itemText(item) ?? '');
+    const retention = retentionOf(item, ['text']); const kept = JSON.stringify(retention);
+    if (view.item && view.text === text && view.complete === item._complete && view.kept === kept) return;
+    view.item = item; view.text = text; view.complete = item._complete; view.kept = kept;
+    view.body.classList.add('markdown-body');
+    view.node.classList.toggle('streaming', item._complete === false);
+    if (!view.long) { view.long = longTextView(document, { render: markdownSegment, label: '答复', onCopy }); view.body.replaceChildren(view.long.node); }
+    view.long.update(text, { streaming: item._complete === false, retention });
+  }
+
+  function rowView(item) {
+    const node = el(document, 'details', 'step');
+    node.dataset.itemId = item.id;
+    const summary = el(document, 'summary', 'step-summary');
+    const symbol = el(document, 'span', 'step-icon');
+    const verb = el(document, 'span', 'step-verb');
+    const target = el(document, 'span', 'step-target');
+    const state = el(document, 'span', 'step-state');
+    summary.append(symbol, verb, target, state);
+    node.append(summary);
+    const view = { node, symbol, verb, target, state, iconName: '', item, pre: null, output: null };
+    node.addEventListener('toggle', () => renderRowDetail(view));
+    return view;
+  }
+  function renderRowDetail(view) {
+    if (!view.node.open) return;
+    if (view.item.type === 'fileChange') {
+      const box = el(document, 'div', 'step-detail');
+      for (const change of view.item.changes || []) { box.append(el(document, 'div', 'diff-file-name', change?.path || '')); box.append(renderDiff(document, change?.diff)); }
+      if (view.pre) view.pre.remove(); view.pre = box; view.node.append(box); return;
+    }
+    if (view.item.type === 'commandExecution') {
+      // Full output (head, tail and everything retained) in bounded segments; the latest tail while running.
+      if (!view.output) {
+        view.pre?.remove();
+        const box = el(document, 'div', 'step-detail step-command');
+        const head = el(document, 'pre', 'step-output-head');
+        view.output = { box, head, long: longTextView(document, { render: source => el(document, 'pre', 'step-output', source), label: '输出', onCopy }) };
+        box.append(head, view.output.long.node); view.pre = box; view.node.append(box);
+      }
+      const item = view.item; const meta = [item.command ? '$ ' + item.command : '', typeof item.exitCode === 'number' ? `退出码 ${item.exitCode}${typeof item.durationMs === 'number' ? ' · ' + formatDuration(item.durationMs) : ''}` : ''].filter(Boolean).join('\n');
+      setText(view.output.head, meta); view.output.head.hidden = !meta;
+      const output = typeof item.aggregatedOutput === 'string' ? item.aggregatedOutput : '';
+      view.output.long.update(output || (meta ? '' : '此步骤没有可显示的详细内容。'), { streaming: itemState(item) === 'running', retention: retentionOf(item, ['aggregatedOutput']) });
+      return;
+    }
+    if (!view.pre) { view.pre = el(document, 'pre', 'step-detail'); view.node.append(view.pre); }
+    setText(view.pre, detailText(view.item));
+  }
+  function updateRow(view, item) {
+    view.item = item;
+    const info = describeItem(item); const state = itemState(item);
+    if (view.iconName !== info.icon) { view.symbol.replaceChildren(icon(document, info.icon, { size: 14 })); view.iconName = info.icon; }
+    setText(view.verb, info.verb);
+    setText(view.target, info.target);
+    view.target.classList.toggle('code', !!info.code);
+    setText(view.state, STATE_TEXT[state]);
+    view.state.hidden = !STATE_TEXT[state];
+    view.node.dataset.state = state;
+    if (view.node.open) renderRowDetail(view);
+  }
+
+  function processView(key) {
+    const node = el(document, 'details', 'turn-process');
+    const summary = el(document, 'summary', 'turn-process-summary');
+    const label = el(document, 'span', 'turn-process-label');
+    const chevron = icon(document, 'down', { size: 14 });
+    summary.append(label, chevron);
+    const list = el(document, 'div', 'turn-process-items');
+    node.append(summary, list);
+    // `toggle` is queued and coalesced by browsers, so a flag around `.open =` cannot identify our own changes.
+    // Only a state that differs from the last automatic state is a user choice.
+    const view = { key, node, summary, label, list, rows: new Map(), notes: new Map(), autoOpen: null };
+    node.addEventListener('toggle', () => {
+      if (node.open === view.autoOpen) return;
+      view.autoOpen = node.open;
+      userOpen.set(key, node.open);
+      if (node.open) for (const row of view.rows.values()) renderRowDetail(row);
+    });
+    return view;
+  }
+  function updateProcess(view, items, { running, label, first }) {
+    const nodes = [];
+    for (const item of items) {
+      if (item.type === 'agentMessage') {
+        let note = view.notes.get(item.id);
+        if (!note) { note = messageView(item); note.node.classList.add('process-note'); view.notes.set(item.id, note); }
+        updateMessage(note, item); nodes.push(note.node);
+      } else {
+        let row = view.rows.get(item.id);
+        if (!row) { row = rowView(item); view.rows.set(item.id, row); }
+        updateRow(row, item); nodes.push(row.node);
+      }
+    }
+    const ids = new Set(items.map(item => item.id));
+    for (const id of view.rows.keys()) if (!ids.has(id)) view.rows.delete(id);
+    for (const id of view.notes.keys()) if (!ids.has(id)) view.notes.delete(id);
+    reconcile(view.list, nodes);
+    setText(view.label, label);
+    view.node.dataset.running = String(running);
+    view.node.classList.toggle('first', first);
+    view.node.classList.toggle('empty', !items.length);
+    // Running work stays open; once finished it collapses unless the user chose otherwise.
+    const wanted = userOpen.has(view.key) ? userOpen.get(view.key) : running;
+    view.autoOpen = wanted;
+    if (view.node.open !== wanted) view.node.open = wanted;
+  }
+
+  function filesView(turnId) {
+    const node = el(document, 'section', 'files-card');
+    const head = el(document, 'div', 'files-head');
+    const symbol = el(document, 'span', 'files-icon'); symbol.append(icon(document, 'file', { size: 16 }));
+    const titles = el(document, 'div', 'files-titles');
+    const title = el(document, 'strong', 'files-title');
+    const stats = el(document, 'span', 'files-stats');
+    titles.append(title, stats);
+    const toggleAll = el(document, 'button', 'files-view', '查看变更'); toggleAll.type = 'button';
+    head.append(symbol, titles, toggleAll);
+    const list = el(document, 'ul', 'files-list');
+    const more = el(document, 'button', 'files-more'); more.type = 'button';
+    node.append(head, list, more);
+    const view = { node, title, stats, toggleAll, list, more, rows: new Map(), summary: null };
+    const ui = () => { if (!fileState.has(turnId)) fileState.set(turnId, { expanded: false, all: false, open: new Set() }); return fileState.get(turnId); };
+    toggleAll.addEventListener('click', () => { const s = ui(); s.all = !s.all; s.open = new Set(s.all ? view.summary.rows.map(row => row.path) : []); if (s.all) s.expanded = true; updateFiles(view, view.summary, turnId); });
+    more.addEventListener('click', () => { const s = ui(); s.expanded = !s.expanded; updateFiles(view, view.summary, turnId); });
+    view.ui = ui;
+    return view;
+  }
+  function fileRow(path) {
+    const node = el(document, 'li', 'file-row');
+    const button = el(document, 'button', 'file-row-head'); button.type = 'button';
+    const name = el(document, 'span', 'file-name');
+    const stats = el(document, 'span', 'file-stats');
+    button.append(name, stats); node.append(button);
+    return { node, button, name, stats, path, diffNode: null, signature: null };
+  }
+  function updateFiles(view, summary, turnId) {
+    view.summary = summary;
+    const s = view.ui();
+    setText(view.title, summary.running ? `正在编辑 ${summary.count} 个文件` : `已编辑 ${summary.count} 个文件`);
+    view.stats.replaceChildren(statsNode(document, summary.added, summary.removed));
+    setText(view.toggleAll, s.all ? '收起变更' : '查看变更');
+    view.toggleAll.setAttribute('aria-expanded', String(s.all));
+    const visible = s.expanded ? summary.rows : summary.rows.slice(0, FILE_PREVIEW);
+    const nodes = [];
+    for (const file of visible) {
+      let row = view.rows.get(file.path);
+      if (!row) {
+        row = fileRow(file.path); view.rows.set(file.path, row);
+        row.button.addEventListener('click', () => { const st = view.ui(); if (st.open.has(row.path)) st.open.delete(row.path); else st.open.add(row.path); updateFiles(view, view.summary, turnId); });
+      }
+      const slash = file.path.lastIndexOf('/');
+      row.name.replaceChildren(el(document, 'span', 'file-dir', slash >= 0 ? file.path.slice(0, slash + 1) : ''), el(document, 'span', 'file-base', slash >= 0 ? file.path.slice(slash + 1) : file.path));
+      row.button.title = file.fullPath;
+      row.stats.replaceChildren(statsNode(document, file.added, file.removed));
+      const open = s.open.has(file.path);
+      row.button.setAttribute('aria-expanded', String(open));
+      row.node.classList.toggle('open', open);
+      const signature = open ? file.diffs.join('\n\u0000') : null;
+      if (row.signature !== signature) {
+        row.diffNode?.remove(); row.diffNode = null;
+        if (open) { row.diffNode = file.diffs.length ? renderDiff(document, file.diffs.join('\n')) : el(document, 'p', 'diff-empty', '没有可显示的差异内容。'); row.node.append(row.diffNode); }
+        row.signature = signature;
+      }
+      nodes.push(row.node);
+    }
+    const shownPaths = new Set(visible.map(file => file.path));
+    for (const path of view.rows.keys()) if (!shownPaths.has(path)) view.rows.delete(path);
+    reconcile(view.list, nodes);
+    const hidden = summary.rows.length - FILE_PREVIEW;
+    view.more.hidden = hidden <= 0;
+    view.more.replaceChildren(el(document, 'span', '', s.expanded ? '收起' : `再显示 ${hidden} 个文件`), icon(document, s.expanded ? 'up' : 'down', { size: 14 }));
+    view.more.setAttribute('aria-expanded', String(s.expanded));
+  }
+
+  function turnView(id) {
+    const node = el(document, 'section', 'turn');
+    node.dataset.turnId = id;
+    const footer = el(document, 'p', 'turn-footer');
+    return { node, footer, segments: new Map(), messages: new Map(), files: null, agents: null, agentsSig: null, art: null, artSig: null };
+  }
+
+  function timingLabel(turn, now) {
+    const t = turn.timing;
+    if (t.kind === 'running') return t.startMs !== null ? `正在工作 · ${formatDuration(Math.max(0, now - t.startMs))}` : '正在工作';
+    if (t.durationMs !== null) return `用时${t.approximate ? '约' : ''} ${formatDuration(t.durationMs)}`;
+    return turn.processCount ? `已处理 ${turn.processCount} 步` : '';
+  }
+
+  function render(list, { now = Date.now() } = {}) {
+    const keep = new Set(); const nodes = []; runningClocks = [];
+    for (const turn of list) {
+      keep.add(turn.id);
+      let view = turns.get(turn.id);
+      if (!view) { view = turnView(turn.id); turns.set(turn.id, view); }
+      view.node.dataset.state = turn.status;
+      const children = []; const segmentKeys = new Set(); const messageIds = new Set();
+      turn.segments.forEach((segment, index) => {
+        segmentKeys.add(segment.key);
+        if (segment.user) {
+          let message = view.messages.get(segment.user.id);
+          if (!message) { message = messageView(segment.user); view.messages.set(segment.user.id, message); }
+          messageIds.add(segment.user.id);
+          updateMessage(message, segment.user, { steer: segment.steer }); children.push(message.node);
+        }
+        const first = index === 0 || (index === 1 && !turn.segments[0].process.length && !turn.segments[0].answers.length && !turn.segments[0].user);
+        const label = first ? timingLabel(turn, now) : `继续处理 · ${segment.process.length} 步`;
+        if (segment.process.length || (first && label)) {
+          let process = view.segments.get(segment.key);
+          if (!process) { process = processView(segment.key); view.segments.set(segment.key, process); }
+          updateProcess(process, segment.process, { running: !turn.finished, label, first });
+          if (first && turn.timing.kind === 'running') runningClocks.push({ label: process.label, turn });
+          children.push(process.node);
+        }
+        for (const answer of segment.answers) {
+          let message = view.messages.get(answer.id);
+          if (!message) { message = messageView(answer); view.messages.set(answer.id, message); }
+          messageIds.add(answer.id);
+          updateMessage(message, answer); children.push(message.node);
+        }
+      });
+      for (const key of view.segments.keys()) if (!segmentKeys.has(key)) view.segments.delete(key);
+      for (const id of view.messages.keys()) if (!messageIds.has(id)) view.messages.delete(id);
+      // Native subagents of this turn: typed lifecycle, outside the collapsed process.
+      const turnItems = turn.segments.flatMap(segment => [...segment.process, ...segment.answers]);
+      const agents = nativeAgents(turnItems);
+      if (agents.length) {
+        const sig = JSON.stringify(agents);
+        if (view.agentsSig !== sig) { const box = el(document, 'section', 'agent-list'); box.setAttribute('aria-label', '子代理'); for (const agent of agents) box.append(renderNativeAgent(document, agent, { now })); view.agents = box; view.agentsSig = sig; }
+        children.push(view.agents);
+      }
+      // Generated / referenced images: only explicit native paths and markdown image refs in answers.
+      if (artifacts) {
+        const candidates = turnItems.flatMap(artifactCandidates);
+        for (const answer of turn.segments.flatMap(segment => segment.answers)) for (const ref of answerRefs(answer)) candidates.push({ key: answer.id + ':' + ref.path, kind: 'referenced', path: ref.path, status: answer._complete === false ? 'running' : 'done', caption: ref.alt, reason: '' });
+        const unique = [...new Map(candidates.map(row => [row.key, row])).values()].slice(0, 12);
+        if (unique.length) {
+          const sig = JSON.stringify(unique);
+          if (view.artSig !== sig) { view.art?.release?.(); view.art = artifacts.strip(unique); view.artSig = sig; }
+          children.push(view.art);
+        }
+      }
+      if (turn.files.count) {
+        if (!view.files) view.files = filesView(turn.id);
+        updateFiles(view.files, turn.files, turn.id); children.push(view.files.node);
+      }
+      const footer = turn.status === 'interrupted' ? '已停止' : turn.status === 'failed' ? `任务失败${turn.error ? '：' + turn.error : ''}` : '';
+      setText(view.footer, footer);
+      view.footer.dataset.kind = turn.status;
+      if (footer) children.push(view.footer);
+      reconcile(view.node, children);
+      nodes.push(view.node);
+    }
+    for (const [id, view] of turns) if (!keep.has(id)) { view.art?.release?.(); turns.delete(id); }
+    const liveAnswers = new Set(list.flatMap(turn => turn.segments.flatMap(segment => segment.answers.map(answer => answer.id))));
+    for (const id of imageRefs.keys()) if (!liveAnswers.has(id)) imageRefs.delete(id);
+    const focused = document.activeElement; const keepFocus = focused && host.contains(focused);
+    reconcile(host, nodes);
+    if (keepFocus && host.contains(focused) && document.activeElement !== focused) focused.focus?.({ preventScroll: true });
+  }
+
+  /** Updates live elapsed labels without rebuilding the tree. */
+  function tick(now = Date.now()) { for (const clock of runningClocks) setText(clock.label, timingLabel(clock.turn, now)); }
+  function clear() { turns.clear(); userOpen.clear(); fileState.clear(); imageRefs.clear(); runningClocks = []; host.replaceChildren(); artifacts?.clear(); }
+  return { render, tick, clear, hasRunningClock: () => runningClocks.length > 0 };
+}

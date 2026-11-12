@@ -1,0 +1,21 @@
+# Normalize ordinary text consistently across Windows and Unix checkouts.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Preserve upstream redistribution bytes and intentional original whitespace.
+# Keep textual diffs available; these are not binary-file declarations.
+/public/vendor/** -text -whitespace
+/licenses/xterm/** -text -whitespace
+/components/dsh-bridge/LICENSE -text -whitespace
+/components/dsh-bridge/assets/** -text -whitespace
+/components/dsh-bridge/licenses/** -text -whitespace
+
+# These exact bytes are recorded in the bundled component's SHA-256 manifests.
+/components/dsh-bridge/package-lock.json -text
+/components/dsh-bridge/src/config.mjs -text whitespace=trailing-space,space-before-tab,cr-at-eol
+/components/dsh-bridge/src/manager.mjs -text whitespace=trailing-space,space-before-tab,cr-at-eol
+/components/dsh-bridge/src/server.mjs -text whitespace=trailing-space,space-before-tab,cr-at-eol
+/components/dsh-bridge/src/provider-sources.mjs -text whitespace=trailing-space,space-before-tab,cr-at-eol
+# Keep the application core byte-identical to its adapter-manifest-covered copy.
+/src/dsh-provider-sources.mjs -text whitespace=trailing-space,space-before-tab,cr-at-eol

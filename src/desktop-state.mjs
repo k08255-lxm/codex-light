@@ -1,0 +1,21 @@
+import {lstat,mkdir,open,rename,unlink} from 'node:fs/promises';
+import path from 'node:path';
+import {randomBytes} from 'node:crypto';
+import {DEFAULT_PREFERENCES,validatePreferences} from '../public/preferences.js';
+import {MUTATING_METHODS} from './operations.mjs';
+const MAX=256*1024;
+const methods=new Set([...MUTATING_METHODS,'config/apply','plugin/apply','git/apply','account/start','account/cancel','account/logout','terminal/open','runtime/upgrade']);
+const error=()=>new Error('本机状态无法安全读取或保存；未使用替代存储。');
+async function noLinks(file){for(let p=path.resolve(file);;p=path.dirname(p)){try{if((await lstat(p)).isSymbolicLink())throw error();}catch(e){if(e.code!=='ENOENT')throw e;}if(path.dirname(p)===p)break;}}
+function receipt(v){if(!v||typeof v!=='object'||Array.isArray(v)||Object.keys(v).sort().join(',')!=='createdAt,method,outcome,requestId,state'||typeof v.requestId!=='string'||! /^[a-f0-9]{32}:\d{13}:[A-Za-z0-9_-]{8,100}$/.test(v.requestId)||!methods.has(v.method)||!Number.isSafeInteger(v.createdAt)||v.createdAt<0||!['pending','succeeded','failed','unknown','inspection'].includes(v.state)||!['pending','succeeded','failed','unknown','notExecuted','inspection'].includes(v.outcome))throw error();return {...v};}
+function validate(v){if(!v||typeof v!=='object'||Object.keys(v).sort().join(',')!=='preferences,receipts,version'||v.version!==1||!Array.isArray(v.receipts)||v.receipts.length>1000)throw error();const receipts=v.receipts.map(receipt);if(new Set(receipts.map(x=>x.requestId)).size!==receipts.length)throw error();return{version:1,preferences:validatePreferences(v.preferences),receipts};}
+export class DesktopState{
+ constructor({root=process.platform==='win32'&&process.env.LOCALAPPDATA?path.join(process.env.LOCALAPPDATA,'CodexLight','state'):null}={}){if(!root||!path.isAbsolute(root))throw error();this.root=root;this.file=path.join(root,'state.json');this.queue=Promise.resolve();this.persistenceWarning=null;}
+ async read(){await noLinks(this.file);let h;try{h=await open(this.file,'r');const s=await h.stat();if(!s.isFile()||s.size>MAX)throw error();const buf=Buffer.alloc(MAX+1);let count=0;while(count<=MAX){const r=await h.read(buf,count,MAX+1-count,null);if(!r.bytesRead)break;count+=r.bytesRead;}if(count>MAX)throw error();return validate(JSON.parse(buf.subarray(0,count).toString('utf8')));}catch(e){if(e.code==='ENOENT')return{version:1,preferences:{...DEFAULT_PREFERENCES},receipts:[]};throw error();}finally{await h?.close();}}
+ update(fn){const job=this.queue.then(async()=>{const value=await this.read();await fn(value);const bytes=Buffer.from(JSON.stringify(validate(value)));if(bytes.length>MAX)throw error();await noLinks(this.root);await mkdir(this.root,{recursive:true,mode:0o700});await noLinks(this.file);const temp=path.join(this.root,'.state-'+randomBytes(16).toString('hex'));let h;try{h=await open(temp,'wx',0o600);await h.writeFile(bytes);await h.sync();await h.close();h=null;await noLinks(this.file);await rename(temp,this.file);}finally{await h?.close();await unlink(temp).catch(e=>{if(e.code!=='ENOENT')throw e;});}return value;});this.queue=job.catch(()=>{});return job;}
+ async preferences(value){if(value===undefined)return (await this.read()).preferences;return (await this.update(s=>{s.preferences=validatePreferences(value);})).preferences;}
+ async list(){return(await this.read()).receipts;}
+ async ack(ids){if(!Array.isArray(ids)||!ids.length||ids.length>1000||new Set(ids).size!==ids.length||ids.some(x=>typeof x!=='string'))throw error();await this.update(s=>{if(ids.some(id=>!s.receipts.some(r=>r.requestId===id)))throw error();s.receipts=s.receipts.filter(r=>!ids.includes(r.requestId));});}
+ async before(r){try{await this.update(s=>{if(s.receipts.length>=1000||s.receipts.some(x=>x.requestId===r.requestId))throw error();s.receipts.push(receipt({...r,state:'pending',outcome:'pending'}));});}catch{throw Object.assign(error(),{outcome:'notExecuted',code:'PERSISTENCE_WRITE_FAILED'});}}
+ async after(r){try{await this.update(s=>{const index=s.receipts.findIndex(x=>x.requestId===r.requestId);if(index<0)throw error();s.receipts[index]=receipt(r);});}catch{this.persistenceWarning='操作可能已经执行，但最终状态未保存。保留此前待核对记录，不能自动重发。';throw error();}}
+}
