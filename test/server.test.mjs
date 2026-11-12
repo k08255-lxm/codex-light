@@ -21,10 +21,11 @@ test('SSE delivers events and disconnect cleans up',async t=>{
  const reader=response.body.getReader();await reader.read();a.rpc.emit('event',{method:'test/event',params:{value:1}});const result=await reader.read();assert.match(new TextDecoder().decode(result.value),/test\/event/);abort.abort();
 });
 test('missing or stale approval is rejected',async t=>{
- const a=await fixture(t);assert.equal((await post(a,'/api/respond',{id:123,result:{decision:'accept'}})).status,400);
+ const a=await fixture(t);assert.equal((await post(a,'/api/respond',{id:123,result:{decision:'accept'}})).status,409);
  a.rpc.requests.set('12',{id:12,method:'item/commandExecution/requestApproval',params:{}});
- assert.equal((await post(a,'/api/respond',{id:12,result:{decision:'acceptForSession'}})).status,400);
- assert.equal((await post(a,'/api/respond',{id:12,result:{decision:'decline'}})).status,200);
+ const {pendingRequests}=await(await fetch(a.origin+'/api/status',{headers:{Authorization:`Bearer ${a.token}`}})).json();const bridgeRequestToken=pendingRequests[0].bridgeRequestToken;
+ assert.equal((await post(a,'/api/respond',{id:12,bridgeRequestToken,result:{decision:'acceptForSession'}})).status,400);
+ assert.equal((await post(a,'/api/respond',{id:12,bridgeRequestToken,result:{decision:'decline'}})).status,200);
 });
 test('all entry HTML assets and JavaScript imports are locally served',async t=>{
  const a=await fixture(t);const htmlResponse=await fetch(a.origin+'/');assert.equal(htmlResponse.status,200);const html=await htmlResponse.text();

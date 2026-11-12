@@ -52,6 +52,6 @@ export class DemoClient extends EventEmitter {
    default:throw Object.assign(new Error('演示不支持该方法'),{code:-32601});
   }
  }
- respond(id){this.requests.delete(String(id));}
- close(){for(const timers of this.timers.values())for(const timer of timers)clearTimeout(timer);this.timers.clear();this.connected=false;}
+ respond(id){for(const [key,request]of this.requests)if(request.id===id){this.requests.delete(key);this.emit('event',{method:'serverRequest/resolved',params:{requestId:id,threadId:request.params?.threadId??request.params?.conversationId}});return;}throw Object.assign(new Error('该审批已结束或不存在'),{code:'STALE_APPROVAL'});}
+ close(){for(const timers of this.timers.values())for(const timer of timers)clearTimeout(timer);this.timers.clear();this.connected=false;for(const request of this.requests.values())this.emit('event',{method:'serverRequest/resolved',params:{requestId:request.id,threadId:request.params?.threadId??request.params?.conversationId}});this.requests.clear();this.emit('event',{method:'bridge/status',params:{connected:false}});}
 }

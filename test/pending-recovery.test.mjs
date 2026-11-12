@@ -26,13 +26,13 @@ async function harness(method,params={},options={}){
  const original=new PendingMutations(storage,{now:()=>NOW,uuid:()=> '00000000-0000-4000-8000-000000000001'});
  const envelope=original.begin(INSTANCE,method,params);original.mark(envelope.requestId,'unknown');
  const ledger=options.restored?new PendingMutations(storage):original;
- const marker=ledger.values()[0],calls={draft:[],history:[],lists:0,restored:[],created:[],notices:[],reasoning:[]};
+ const marker=ledger.values()[0],calls={draft:[],history:[],lists:0,restored:[],created:[],notices:[],reasoning:[],requestRenders:0};
  const state={connected:true,serverInstance:INSTANCE,thread:null,cwd:'/project',loadingThread:false,openGeneration:0,busy:false,turnId:null,terminalTurns:new Set(),dshReadErrors:new Map(),dshOpenDetails:new Set(),settingsPage:'general',ledger:{merge(){},activate(){}},...options.state};
  const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,{textContent:'',classList:{contains:()=>id==='terminal-page'&&options.hidden!==false,add(){} }});return nodes.get(id);};
  const view={restore:async id=>{calls.restored.push(id);if(options.restoreError)throw Error('snapshot offline');},dispose:()=>calls.disposed=true};
  const contexts=new Map();if(options.context)contexts.set(marker.requestId,options.context);
  const deps={state,pendingMutations:ledger,allPendingRecords:()=>ledger.values(),mutationContexts:contexts,pendingReadGeneration:0,pendingReconcileErrors:new Map(),lookupDecision,pendingLedgerSignature:()=>'',pendingReconcilerSignature:'',renderPendingMutations(){},updateControls(){},noteLedgerChanged(){},notice:(...args)=>calls.notices.push(args),runtimePanel:{refresh(){}},refreshAccount:async()=>{},remoteControls(){},terminalControls(){},$,
-  workbench:await recoveryWorkbench({processId:options.processId||null,view:options.view?view:null,$,createTerminalView:cwd=>{calls.created.push(cwd);return view;},openedOnVisiblePage:options.openedView===true}),clearSubmittedDraft:value=>calls.draft.push(value),restoreThreadReasoning:value=>calls.reasoning.push(value),dshTasks:{reset(){}},renderDshConnection(){},syncDshLiveContext(){},renderDshTasks(){},activity(){},
+  workbench:await recoveryWorkbench({processId:options.processId||null,view:options.view?view:null,$,createTerminalView:cwd=>{calls.created.push(cwd);return view;},openedOnVisiblePage:options.openedView===true}),clearSubmittedDraft:value=>calls.draft.push(value),restoreThreadReasoning:value=>calls.reasoning.push(value),dshTasks:{reset(){}},renderDshConnection(){},syncDshLiveContext(){},renderDshTasks(){},renderRequests(){calls.requestRenders++;},activity(){},
   loadThreads:async()=>{calls.lists++;if(options.loadThreads)await options.loadThreads();},loadItems:async(...args)=>{calls.history.push(args);if(options.loadItems)await options.loadItems();}};
  const start=app.indexOf('function pendingMarkerExists('),end=app.indexOf('function handlePendingReconcileError(',start);assert.ok(start>=0&&end>start);
  const functions=new Function(...Object.keys(deps),`${app.slice(start,end)};return {handle:handlePendingReconcileResult,invalidate(){pendingReadGeneration++;},terminal(){return workbench.snapshot();}};`)(...Object.values(deps));
@@ -41,9 +41,9 @@ async function harness(method,params={},options={}){
 }
 test('new thread recovery adopts only the matching unassigned page and never sends its draft',async()=>{
  const h=await harness('thread/start',{cwd:'/project'});const thread={id:'created',cwd:'/project'};
- await h.handle(h.marker,h.response({thread,model:'configured'}));assert.equal(h.state.thread,thread);assert.equal(h.calls.reasoning[0].model,'configured');assert.equal(h.calls.lists,1);assert.equal(h.calls.history.length,0);assert.equal(h.calls.draft.length,0);assert.equal(h.ledger.values().length,0);
+ await h.handle(h.marker,h.response({thread,model:'configured'}));assert.equal(h.state.thread,thread);assert.equal(h.calls.reasoning[0].model,'configured');assert.equal(h.calls.lists,1);assert.equal(h.calls.history.length,0);assert.equal(h.calls.draft.length,0);assert.equal(h.calls.requestRenders,1);assert.equal(h.ledger.values().length,0);
  for(const options of [{state:{thread:{id:'other'}}},{state:{cwd:'/other'}},{context:{openGeneration:0},state:{openGeneration:1}}]){
-  const h=await harness('thread/start',{cwd:'/project'},options);const before=h.state.thread;await h.handle(h.marker,h.response({thread}));assert.equal(h.state.thread,before);assert.equal(h.calls.lists,1);assert.equal(h.calls.reasoning.length,0);assert.equal(h.ledger.values().length,0);
+  const h=await harness('thread/start',{cwd:'/project'},options);const before=h.state.thread;await h.handle(h.marker,h.response({thread}));assert.equal(h.state.thread,before);assert.equal(h.calls.lists,1);assert.equal(h.calls.reasoning.length,0);assert.equal(h.calls.requestRenders,0);assert.equal(h.ledger.values().length,0);
  }
 });
 test('malformed successful results remain pending rather than unlocking a duplicate operation',async()=>{

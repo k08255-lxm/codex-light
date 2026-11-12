@@ -1,6 +1,8 @@
 import { EventEmitter } from 'node:events';
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { isDeepStrictEqual } from 'node:util';
+import {validServerRequestId,serverRequestKey,findServerRequest,removeServerRequest,serverRequestThread} from './server-requests.mjs';
 
 const appVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const failure = (message, code) => Object.assign(new Error(message), { code });
@@ -20,7 +22,7 @@ export class RpcClient extends EventEmitter {
       child.on('error', error => this.fail(failure(`无法启动 Codex：${error.code || error.message}`, 'SPAWN_FAILED')));
       child.on('exit', (code,signal) => this.fail(failure(`Codex 连接已结束（${code ?? signal}）。请重启 GUI；不会自动重发任务。`, 'PROCESS_EXITED')));
       child.stdin.on('error', error => this.fail(error));
-      const result = await this.call('initialize', { clientInfo:{name:'codex_light_local',title:'Codex Light (unofficial)',version:appVersion}, capabilities:{experimentalApi:true,requestAttestation:false} });
+      const result = await this.call('initialize', { clientInfo:{name:'codex_light_local',title:'Codex Light (unofficial)',version:appVersion}, capabilities:{experimentalApi:true,requestAttestation:false,requiredHumanApproval:true} });
       this.write({method:'initialized',params:{}}); this.connected = true; this.version = result?.userAgent || null;
       this.emit('event',{method:'bridge/status',params:{connected:true}}); return result;
     } catch (error) { this.fail(error); await this.terminate(); throw error; }
@@ -55,29 +57,34 @@ export class RpcClient extends EventEmitter {
         if(msg.error){const error=failure(msg.error.message || 'Codex RPC 错误',msg.error.code);p.reject(error);}else p.resolve(msg.result);
       }else if(typeof msg.method==='string'){
         if(msg.id!==undefined) {
-          if(this.requests.size>=256 && !this.requests.has(String(msg.id))) { this.fail(failure('待处理授权请求过多，连接已停止','TOO_MANY_APPROVALS'));this.child?.kill();return; }
-          this.requests.set(String(msg.id),msg);
+          if(!validServerRequestId(msg.id)){this.fail(failure('Codex 请求标识无效，连接已停止','INVALID_SERVER_REQUEST'));this.child?.kill();return;}
+          const previous=findServerRequest(this.requests,msg.id);
+          if(previous){if(isDeepStrictEqual(previous,msg))continue;this.fail(failure('Codex 重复使用待处理请求标识，连接已停止','DUPLICATE_SERVER_REQUEST'));this.child?.kill();return;}
+          if(this.requests.size>=256) { this.fail(failure('待处理授权请求过多，连接已停止','TOO_MANY_APPROVALS'));this.child?.kill();return; }
+          this.requests.set(serverRequestKey(msg.id),msg);
         }
-        if(msg.method==='serverRequest/resolved')this.requests.delete(String(msg.params?.requestId));
+        if(msg.method==='serverRequest/resolved')removeServerRequest(this.requests,msg.params?.requestId);
         if(msg.method==='turn/completed') {
           const threadId=msg.params?.threadId, turnId=msg.params?.turn?.id;
-          for(const [id,req] of this.requests) if(threadId && req.params?.threadId===threadId && (!req.params.turnId || (turnId && req.params.turnId===turnId))) {
+          for(const [id,req] of this.requests) if(threadId && serverRequestThread(req)===threadId && (req.params.turnId ? turnId && req.params.turnId===turnId : req.method!=='mcpServer/elicitation/request')) {
             this.requests.delete(id);
             this.emit('event',{method:'serverRequest/resolved',params:{requestId:req.id,threadId}});
           }
         }
+        if(msg.method==='thread/closed'&&typeof msg.params?.threadId==='string'&&msg.params.threadId)for(const [key,request]of this.requests)if(serverRequestThread(request)===msg.params.threadId){this.requests.delete(key);this.emit('event',{method:'serverRequest/resolved',params:{requestId:request.id,threadId:msg.params.threadId}});}
         this.emit('event',msg);
       }
     }
   }
   respond(id,result,error) {
-    const request=this.requests.get(String(id));if(!request)throw failure('该审批已结束或不存在','STALE_APPROVAL');
-    this.write(error?{id:request.id,error}:{id:request.id,result});this.requests.delete(String(id));
-    this.emit('event',{method:'serverRequest/resolved',params:{requestId:request.id,threadId:request.params?.threadId}});
+    const request=findServerRequest(this.requests,id);if(!request)throw failure('该审批已结束或不存在','STALE_APPROVAL');
+    this.write(error?{id:request.id,error}:{id:request.id,result});removeServerRequest(this.requests,id);
+    this.emit('event',{method:'serverRequest/resolved',params:{requestId:request.id,threadId:serverRequestThread(request)}});
   }
   fail(error) {
     if(this.closed)return;this.lastError=error.message;this.closed=true;this.connected=false;this.buffer='';
-    for(const p of this.pending.values()){clearTimeout(p.timer);p.reject(error);}this.pending.clear();this.requests.clear();
+    for(const p of this.pending.values()){clearTimeout(p.timer);p.reject(error);}this.pending.clear();
+    for(const request of this.requests.values())this.emit('event',{method:'serverRequest/resolved',params:{requestId:request.id,threadId:serverRequestThread(request)}});this.requests.clear();
     this.emit('event',{method:'bridge/status',params:{connected:false,error:error.message}});
   }
   terminate() {

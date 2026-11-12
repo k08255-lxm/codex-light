@@ -97,26 +97,38 @@ export function validateResponse(request,result) {
    if(!['accept','decline','cancel'].includes(result.decision)||Object.keys(result).length!==1)throw new Error('仅支持本次批准或拒绝');
    const allowed=request.params?.availableDecisions;
    if(Array.isArray(allowed) && !allowed.includes(result.decision))throw new Error('该请求不允许此决定');
+ }else if(['execCommandApproval','applyPatchApproval'].includes(method)){
+   if(Object.keys(result).length!==1)throw new Error('旧版审批结果包含未知字段');
+   const decision=result.decision;
+   if(decision!=='approved'&&decision!=='abort'&&!(plainObject(decision)&&Object.keys(decision).length===1&&plainObject(decision.denied)&&Object.keys(decision.denied).length===1&&typeof decision.denied.rejection==='string'&&decision.denied.rejection.length<=20000))throw new Error('旧版审批仅支持本次批准、拒绝或取消');
  }else if(method==='item/permissions/requestApproval'){
    if(result.scope!=='turn'||!plainObject(result.permissions)||Object.keys(result).some(k=>!['scope','permissions'].includes(k)))throw new Error('权限响应仅支持本次 turn 范围');
    // Empty permissions remain a safe refusal even when the requested schema is unsupported.
    if(Object.keys(result.permissions).length){
     const definition=permissionOptions(request.params);if(!definition.supported)throw new Error(definition.reason);
-    const selected=definition.options.filter(option=>option.kind==='network'?result.permissions.network?.enabled===true:Array.isArray(result.permissions.fileSystem?.[option.kind])&&result.permissions.fileSystem[option.kind].includes(option.path)).map(option=>option.id);
+    // Derive each grant from the shared canonical builder, including modern entries.
+    const subset=(wanted,actual)=>Array.isArray(wanted)?Array.isArray(actual)&&wanted.every(value=>actual.some(entry=>isDeepStrictEqual(value,entry))):plainObject(wanted)?plainObject(actual)&&Object.entries(wanted).every(([key,value])=>Object.hasOwn(actual,key)&&subset(value,actual[key])):isDeepStrictEqual(wanted,actual);
+    const selected=definition.options.filter(option=>subset(permissionResponse(request.params,[option.id]).permissions,result.permissions)).map(option=>option.id);
     const expected=permissionResponse(request.params,selected);
     if(!isDeepStrictEqual(expected,result))throw new Error('只能授予原请求中明确选择的权限子集，不能扩大或变更结构');
+    if(result.permissions.fileSystem){const denied=request.params?.permissions?.fileSystem?.entries?.filter(entry=>entry.access==='deny')||[];if(denied.some(entry=>!result.permissions.fileSystem.entries?.some(value=>isDeepStrictEqual(value,entry))))throw new Error('文件权限授予必须保留原请求的全部 deny 限制');}
     return expected;
    }
  }else if(method==='mcpServer/elicitation/request'){
    if(Object.keys(result).some(k=>!['action','content','_meta'].includes(k))||(result._meta!==undefined&&result._meta!==null))throw new Error('MCP 响应包含未知字段或元数据');
-   if(result.action==='accept')return formResponse(request.params,result.content);
-   if(!['decline','cancel'].includes(result.action)||result.content!==null)throw new Error('拒绝或取消时不能携带表单内容');
+   if(result.action==='accept'){
+    const kind=request.params?._meta?.codex_approval_kind;
+    if(kind!==undefined&&kind!=='mcp_tool_call')throw new Error('此 MCP 审批类型需要专用验证流程，不能作为普通表单批准');
+    return formResponse(request.params,result.content);
+   }
+   if(!['decline','cancel'].includes(result.action)||(result.content!==undefined&&result.content!==null))throw new Error('拒绝或取消时不能携带表单内容');
    return {action:result.action,content:null,_meta:null};
  }else if(method==='item/tool/requestUserInput' || method==='tool/requestUserInput'){
    if(!plainObject(result.answers)||Object.keys(result).length!==1)throw new Error('用户输入格式无效');
-   const questions=request.params?.questions || [];
+   const questions=request.params?.questions;
+   if(!Array.isArray(questions)||questions.some(q=>!plainObject(q)||typeof q.id!=='string')||new Set(questions.map(q=>q.id)).size!==questions.length)throw new Error('问题定义无效');
    if(questions.some(q=>!Object.hasOwn(result.answers,q.id)))throw new Error('请回答全部问题');
-   for(const [id,answer] of Object.entries(result.answers))if(!questions.some(q=>q.id===id)||!plainObject(answer)||Object.keys(answer).some(k=>k!=='answers')||!Array.isArray(answer?.answers)||answer.answers.length<1||answer.answers.length>20||answer.answers.some(a=>typeof a!=='string'||!a.trim()||a.length>20000))throw new Error('用户输入字段无效');
+   for(const [id,answer] of Object.entries(result.answers))if(!questions.some(q=>q.id===id)||!plainObject(answer)||Object.keys(answer).some(k=>k!=='answers')||!Array.isArray(answer?.answers)||answer.answers.length>20||answer.answers.some(a=>typeof a!=='string'||a.length>20000))throw new Error('用户输入字段无效');
  }else throw new Error('尚不支持此请求，不能批准');
  return result;
 }

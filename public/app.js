@@ -18,7 +18,7 @@ import { mountDshConnection } from './ui/dsh-connection-view.js';
 import { mountLanAccess } from './ui/lan-view.js';
 import { watchKeyboard } from './ui/viewport.js';
 import { mountPluginsPanel } from './plugins.js';
-import { permissionOptions, permissionResponse, formDefinition, formResponse } from './approval-schemas.js';
+import { requestKey, requestThread, validRequestId } from './approval-schemas.js';
 import { icon, hydrateIcons } from './icons.js';
 import { reasoningChoices, effortLabel, effortAccessibleLabel, restoredReasoning, resetReasoning, switchedReasoning, reasoningParameter, configuredReasoningView, defaultModelView, activeModelId } from './reasoning.js';
 import { ItemStore, boundedText, itemText } from './store.js';
@@ -261,7 +261,7 @@ async function recoverPendingResult(marker,result,current){
   if(!recoveredId(result?.thread?.id)||typeof result.thread.cwd!=='string'||!result.thread.cwd)throw new Error('原新对话结果缺少有效标识或工作目录，继续保留待同步记录。');
   const adopt=!state.thread&&!state.loadingThread&&state.cwd===result.thread.cwd&&(!context||context.openGeneration===state.openGeneration);
   if(adopt){
-   state.thread=result.thread;restoreThreadReasoning(result);dshTasks.reset(state.thread.id);state.dshReadErrors.clear();state.dshOpenDetails.clear();state.dshConnection=null;renderDshConnection();syncDshLiveContext();renderDshTasks();$('thread-title').textContent=result.thread.name||result.thread.preview||'新对话';$('welcome').classList.add('hidden');
+   state.thread=result.thread;restoreThreadReasoning(result);dshTasks.reset(state.thread.id);state.dshReadErrors.clear();state.dshOpenDetails.clear();state.dshConnection=null;renderDshConnection();syncDshLiveContext();renderDshTasks();$('thread-title').textContent=result.thread.name||result.thread.preview||'新对话';$('welcome').classList.add('hidden');renderRequests();
   }
   await loadThreads(false,current);
   return;
@@ -382,7 +382,7 @@ function newThread() {
   const previous = state.thread?.id || null;
   if (state.busy) notice('原任务继续在后台运行，完成后会出现在对话列表。');
   // A new chat is only a draft; thread/start happens on first send.
-  state.openGeneration++; state.loadingThread = false; state.thread = null; state.reasoning = restoredReasoning(null); populateEfforts(); dshTasks.reset(); state.dshReadErrors.clear(); state.dshOpenDetails.clear(); state.dshConnection = null; renderDshConnection(); syncDshLiveContext(); renderDshTasks(); state.turnId = null; state.busy = false; resetThreadView(); $('tool-list').replaceChildren(el('p', 'muted', '暂无工具活动')); $('thread-title').textContent = '新对话'; $('welcome').classList.remove('hidden'); $('earlier').classList.add('hidden'); activity(''); renderContext(); renderQueue(); updateControls(); renderThreads(); $('prompt').focus();
+  state.openGeneration++; state.loadingThread = false; state.thread = null; state.reasoning = restoredReasoning(null); populateEfforts(); dshTasks.reset(); state.dshReadErrors.clear(); state.dshOpenDetails.clear(); state.dshConnection = null; renderDshConnection(); syncDshLiveContext(); renderDshTasks(); state.turnId = null; state.busy = false; resetThreadView(); $('tool-list').replaceChildren(el('p', 'muted', '暂无工具活动')); $('thread-title').textContent = '新对话'; $('welcome').classList.remove('hidden'); $('earlier').classList.add('hidden'); activity(''); renderContext(); renderQueue(); updateControls(); renderThreads(); renderRequests(); $('prompt').focus();
   releaseThread(previous);
 }
 function renderThreads() {
@@ -464,13 +464,14 @@ async function openThread(thread) {
     // History is read-only: never resume or subscribe just to look at a conversation.
     const result = await rpc('thread/read', { threadId: thread.id });
     if (generation !== state.openGeneration) return;
-    state.thread = result.thread || thread; dshTasks.reset(state.thread.id); state.dshReadErrors.clear(); state.dshOpenDetails.clear(); state.dshConnection = null; renderDshConnection(); syncDshLiveContext(); renderDshTasks(); restoreThreadReasoning({ model: state.thread.model, reasoningEffort: state.thread.reasoningEffort }); resetThreadView(); state.busy = false; state.turnId = null;
+    state.thread = result.thread || thread; dshTasks.reset(state.thread.id); state.dshReadErrors.clear(); state.dshOpenDetails.clear(); state.dshConnection = null; renderDshConnection(); syncDshLiveContext(); renderDshTasks(); restoreThreadReasoning({ model: state.thread.model, reasoningEffort: state.thread.reasoningEffort }); resetThreadView(); state.busy = false; state.turnId = null; renderRequests();
     if (state.thread.cwd) setCwd(state.thread.cwd); $('thread-title').textContent = state.thread.name || state.thread.preview || '对话'; $('welcome').classList.add('hidden'); renderThreads(); renderContext(); renderQueue();
     let running = null;
     try { running = await loadTurns(false, generation); } catch (e) { if (!/method|not found|unsupported|unknown|32601/i.test(e.message)) notice('无法读取任务状态：' + e.message, true); }
     if (generation !== state.openGeneration) return;
     await loadItems(false, generation);
     if (generation !== state.openGeneration) return;
+    if (fileApprovalPending()) renderRequests();
     const activeId = state.activeTurns.get(thread.id) || sessionFor(thread.id)?.activeTurnId || running?.id;
     if (activeId) { state.busy = true; state.turnId = activeId; state.ledger.activate(activeId); renderMessages(false); watchExternalTurn(); }
     activity(''); const wasOverlay=sidebarController.isOverlayOpen(); sidebarController.closeForNavigation(); if(wasOverlay)$('conversation').focus();
@@ -699,7 +700,8 @@ async function performMutation(method, params, extras = {}) {
   } finally { renderPendingMutations(); updateControls(); }
 }
 // ---------- Composer: send, steer, queue ----------
-function resetThreadDsh(threadId) { dshTasks.reset(threadId); state.dshReadErrors.clear(); state.dshOpenDetails.clear(); state.dshConnection = null; renderDshConnection(); syncDshLiveContext(); renderDshTasks(); }
+// Also runs whenever a newly created conversation becomes current: request cards re-scope (drafts kept).
+function resetThreadDsh(threadId) { dshTasks.reset(threadId); state.dshReadErrors.clear(); state.dshOpenDetails.clear(); state.dshConnection = null; renderDshConnection(); syncDshLiveContext(); renderDshTasks(); renderRequests(); }
 const composer = createComposer({ document,
   session: { state, followUps, sessionFor },
   drafts: { attachmentDraft, fileAttachmentDraft, attachmentPreviews, queuedPreviews, clearSubmittedDraft, renderAttachments, autosizePrompt: () => autosizePrompt() },
@@ -803,8 +805,27 @@ async function loadModels(current=()=>true) {
 }
 // model-loader:end
 function renderRequests() {
-  renderApprovals($('approvals'), { document, requests: state.requests, currentThreadId: state.thread?.id || null, api, notice, confirm: text => confirm(text), el, boundedText, permissionOptions, permissionResponse, formDefinition, formResponse, rerender: renderRequests });
+  renderApprovals($('approvals'), { document, requests: state.requests, currentThreadId: state.thread?.id || null, api, notice, el, boundedText, lookupFileChange, rerender: renderRequests });
 }
+// Files/diff for a modern fileChange approval come from its correlated item (loaded only for the open conversation).
+function lookupFileChange(threadId, itemId) {
+  if (typeof itemId !== 'string' || !itemId) return null;
+  if (!state.thread || threadId !== state.thread.id) return { reason: '该请求来自未打开的对话' };
+  const item = state.store.items.get(itemId);
+  if (!item || item.type !== 'fileChange' || !Array.isArray(item.changes) || !item.changes.length) return { reason: '对话中还没有收到这次修改' };
+  // The item store keeps a bounded display projection; say so instead of presenting a cut diff as complete.
+  const truncated = item.changes.length >= 50 || item.changes.some(change => typeof change?.diff === 'string' && /〔界面显示已截断|\[显示摘要已截断\]/.test(change.diff));
+  return { changes: item.changes, truncated, partial: item._complete === false };
+}
+function fileApprovalPending() { for (const request of state.requests.values()) if (request.method === 'item/fileChange/requestApproval') return true; return false; }
+// Server requests are keyed by native id type+value; a repeated instance (same token) is not a new prompt.
+function trackRequest(message) {
+  if (!validRequestId(message.id)) return false;
+  const key = requestKey(message.id), previous = state.requests.get(key);
+  if (previous && previous.bridgeRequestToken === message.bridgeRequestToken) return false;
+  state.requests.set(key, message); return true;
+}
+function dropRequests(match) { let changed = false; for (const [key, request] of state.requests) if (match(request)) { state.requests.delete(key); changed = true; } if (changed) renderRequests(); }
 function onEvent(message) {
   for(const handler of eventSubscribers){try{handler(message);}catch{notice('工具面板未能处理此事件；不会自动重发请求。',true);}}
   if(message.method==='account/updated'){resetAccountScopedViews('账户已更新');return;}
@@ -814,14 +835,15 @@ function onEvent(message) {
   if(message.method==='skills/changed'){slashMenu.invalidateSkills();return;}
   if (message.method === 'remoteControl/status/changed') { applyRemoteStatus(message.params); return; }
   if (message.method === 'bridge/dshSnapshot') { ingestDshSnapshot(message.params); return; }
-  if (message.method === 'bridge/status') { const connected=!!message.params?.connected;setConnected(connected);if(connected&&!state.serverInstance)syncStatus().catch(error=>notice('连接已建立，但本地服务标识读取失败：'+error.message+'。目录尚未加载；可点击重新检查连接。',true)); if (message.params?.error) notice(message.params.error, true); return; }
+  if (message.method === 'bridge/status') { const connected=!!message.params?.connected;if(!connected)dropRequests(()=>true);setConnected(connected);if(connected&&!state.serverInstance)syncStatus().catch(error=>notice('连接已建立，但本地服务标识读取失败：'+error.message+'。目录尚未加载；可点击重新检查连接。',true)); if (message.params?.error) notice(message.params.error, true); return; }
   if (message.method === 'bridge/warning') { notice(message.params?.message || '本地桥接警告'); return; }
-  if (message.id !== undefined && message.method) { state.requests.set(String(message.id), message); renderRequests(); if(preferencesView.current().approvalNotice)notice('收到待审批请求；请核对具体内容后选择，不会自动批准。'); return; }
+  if (message.id !== undefined && message.method) { if (trackRequest(message)) { renderRequests(); if(preferencesView.current().approvalNotice)notice('有一个请求等待你处理。'); } return; }
   const p = message.params || {};
-  if (message.method === 'serverRequest/resolved') { state.requests.delete(String(p.requestId)); renderRequests(); return; }
+  if (message.method === 'serverRequest/resolved') { if (validRequestId(p.requestId)) { state.requests.delete(requestKey(p.requestId)); renderRequests(); } return; }
+  if (message.method === 'thread/closed' && typeof p.threadId === 'string' && p.threadId) dropRequests(request => requestThread(request) === p.threadId);
   if (message.method === 'error' && (!p.threadId || p.threadId === state.thread?.id)) { notice(p.error?.message || p.message || 'Codex 返回错误', true); return; }
   if (message.method === 'turn/started') { state.activeTurns.set(p.threadId, p.turn?.id); }
-  if (message.method === 'turn/completed') { if(preferencesView.current().completionNotice&&!state.terminalTurns.has(p.turn?.id))notice('任务'+(p.turn?.status==='completed'?'已完成':p.turn?.status==='interrupted'?'已停止':'已结束，请查看结果')+'。'); for (const [key, request] of state.requests) if (request.params?.threadId === p.threadId && (!request.params?.turnId || request.params.turnId === p.turn?.id)) state.requests.delete(key); renderRequests(); state.activeTurns.delete(p.threadId); state.interruptingTurns.delete(p.turn?.id); state.terminalTurns.add(p.turn?.id); if (state.terminalTurns.size > 100) state.terminalTurns.delete(state.terminalTurns.values().next().value);
+  if (message.method === 'turn/completed') { if(preferencesView.current().completionNotice&&!state.terminalTurns.has(p.turn?.id))notice('任务'+(p.turn?.status==='completed'?'已完成':p.turn?.status==='interrupted'?'已停止':'已结束，请查看结果')+'。'); dropRequests(request => p.threadId && requestThread(request) === p.threadId && (request.params?.turnId ? request.params.turnId === p.turn?.id : request.method !== 'mcpServer/elicitation/request')); state.activeTurns.delete(p.threadId); state.interruptingTurns.delete(p.turn?.id); state.terminalTurns.add(p.turn?.id); if (state.terminalTurns.size > 100) state.terminalTurns.delete(state.terminalTurns.values().next().value);
     // The queue only advances after a normal completion; anything else waits for the user.
     if (p.turn?.status !== 'completed') followUps.pause(p.threadId, p.turn?.status === 'interrupted' ? '任务已停止' : '任务未正常完成');
     setTimeout(() => drainQueue(p.threadId), 0); }
@@ -834,11 +856,11 @@ function onEvent(message) {
     if (Number.isFinite(p.completedAtMs)) extra._completedAtMs = p.completedAtMs;
     // A confirmed steer was shown locally; the native user item replaces it.
     if (p.item?.type === 'userMessage') { const text = itemText(p.item).trim(); for (const local of state.store.values()) if (local._local && local._turnId === turnId && itemText(local).trim() === text) state.store.delete(local.id); }
-    state.store.upsert({ ...p.item, ...extra }); dshTasks.ingest(p.threadId, p.item); scheduleRender();
+    state.store.upsert({ ...p.item, ...extra }); dshTasks.ingest(p.threadId, p.item); scheduleRender(); if (p.item?.type === 'fileChange' && fileApprovalPending()) renderRequests();
   }
   else if (message.method === 'item/mcpToolCall/progress') { if (dshTasks.progress(p.threadId, p.itemId, p.message)) scheduleRender(); }
   else if (message.method === 'turn/diff/updated') { state.ledger.setDiff(p.turnId, p.diff); scheduleRender(); }
-  else if (message.method === 'item/fileChange/patchUpdated') { const item = state.store.items.get(p.itemId); state.store.upsert({ ...(item || { id: p.itemId, type: 'fileChange', status: 'inProgress' }), changes: p.changes, _turnId: p.turnId, _complete: false }); scheduleRender(); }
+  else if (message.method === 'item/fileChange/patchUpdated') { const item = state.store.items.get(p.itemId); state.store.upsert({ ...(item || { id: p.itemId, type: 'fileChange', status: 'inProgress' }), changes: p.changes, _turnId: p.turnId, _complete: false }); scheduleRender(); if (fileApprovalPending()) renderRequests(); }
   else if (message.method === 'item/agentMessage/delta') { state.store.delta(p.itemId, p.delta); tagTurn(p.itemId, turnId); scheduleRender(); }
   else if (message.method === 'item/reasoning/summaryTextDelta') { const item = state.store.items.get(p.itemId) || { id: p.itemId, type: 'reasoning', summary: [] }; const summary = Array.isArray(item.summary) ? [...item.summary] : []; const index = Number.isSafeInteger(p.summaryIndex) && p.summaryIndex >= 0 && p.summaryIndex < 64 ? p.summaryIndex : summary.length; summary[index] = boundedText((summary[index] || '') + p.delta, 16000); state.store.upsert({ ...item, summary, _turnId: item._turnId || turnId, _complete: false }); scheduleRender(); }
   else if (message.method === 'item/commandExecution/outputDelta') { state.store.delta(p.itemId, p.delta, 'commandExecution', 'aggregatedOutput'); tagTurn(p.itemId, turnId); scheduleRender(); }
@@ -856,7 +878,8 @@ function applyThreadSessions(params) {
 }
 async function syncStatus() {
   const status = await api('/api/status'); applyAccessMode(state.lan || status.access === 'lan'); state.cliVersion = typeof status.version==='string'&&status.version ? boundedText(status.version,300) : null; state.desktop = status.desktop === true; if($('version-info'))$('version-info').textContent=state.cliVersion||'未知'; document.body.classList.toggle('native-desktop',state.desktop); $('runtime-close-info').textContent = state.desktop ? '关闭窗口时可选择退出并停止本应用后台、转入托盘继续运行或取消。托盘菜单可以重新打开或退出；退出可能中断本应用任务，独立 DSH 任务可能继续。' : '关闭窗口不等于停止服务。需要结束本次 GUI 服务时使用下面的按钮；正在运行的任务可能中断，独立 DSH 任务可能继续。'; $('reopen-info').textContent = state.desktop ? '再次启动会建立新连接并读取官方对话历史；不保存浏览器配置文件，不承诺无缝恢复。' : status.reopenAvailable === true ? '可安全重新打开本地 GUI' : status.reopenAvailable === false ? '当前不可用。关闭窗口后可能需要恢复原窗口或重新运行启动器；不会承诺能无缝重开。' : '未知（服务未提供重开状态）'; if (!state.desktop && status.reopenError) $('reopen-info').textContent += ' ' + boundedText(status.reopenError, 800); if(state.serverInstance !== (status.serverInstance || null)){deactivatePendingReconciler();historyCaps.unsupported.clear();pluginPanel.reset();configPanel.reset();resetUsage();prReviewPanel?.reset();resetRuntimePanel();dshLive.reset();remoteReset({statusMessage:'本地服务实例已变化，请重新读取远控状态。',pairMessage:'本地服务实例已变化，本机配对码显示已清除；不会撤销旧环境设备。',devicesMessage:'本地服务实例已变化，旧设备显示已清除；不会撤销旧环境设备。'});}state.serverInstance = status.serverInstance || null; state.demo = !!status.demo; setConnected(status.connected, status.demo ? '演示模式 · 不调用模型' : undefined); if(state.desktop){await loadDesktopState();preferencesView.syncHostTheme();} $('mode-info').textContent = status.demo ? '演示模式，不消耗额度' : '本地 Codex app-server';
-  applyThreadSessions(status.threadSessions); state.requests.clear(); for (const request of status.pendingRequests || []) state.requests.set(String(request.id), request); renderRequests();
+  // Replace with the server's current set; unchanged instances keep their card and draft.
+  applyThreadSessions(status.threadSessions); const pending = new Map(); for (const request of status.pendingRequests || []) if (validRequestId(request?.id)) { const key = requestKey(request.id), known = state.requests.get(key); pending.set(key, known && known.bridgeRequestToken === request.bridgeRequestToken ? known : request); } state.requests = pending; renderRequests();
   if (status.demo) notice('当前是演示模式：仅测试界面和协议，不会调用真实模型。'); return status;
 }
 async function events() {

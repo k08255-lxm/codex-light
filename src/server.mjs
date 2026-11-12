@@ -21,6 +21,7 @@ import {LanAccess} from './lan-access.mjs';
 import {GitService} from './git.mjs';
 import {TerminalService} from './terminal.mjs';
 import { RpcClient } from './rpc.mjs';
+import {validServerRequestId,findServerRequest} from './server-requests.mjs';
 import {ThreadSessions} from './thread-sessions.mjs';
 import { DemoClient } from './demo.mjs';
 import { validateRpc, validateResponse } from './security.mjs';
@@ -64,6 +65,8 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
  const sessionDefaults=new SessionDefaultsService({rpc,demo});
  const dshConfigSources=dshConfigSourcesService||new DshConfigSourcesService({demo});
  const dshConnection=dshConnectionService||new DshConnectionService({rpc,demo});
+ const requestTokens=new WeakMap();
+ function presentRequest(request){let bridgeRequestToken=requestTokens.get(request);if(!bridgeRequestToken){bridgeRequestToken=randomBytes(24).toString('hex');requestTokens.set(request,bridgeRequestToken);}return {...request,bridgeRequestToken};}
  const prReview=prReviewService||new PrReviewService();
  const fileUploads=new FileAttachmentStore(fileAttachmentRoot?{root:fileAttachmentRoot}:{});
  const loginTimers=new Set();
@@ -90,7 +93,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      const heartbeat=setInterval(()=>{if(res.writableLength>4*1024*1024)res.destroy();else res.write(': keepalive\n\n');},15000);
      req.on('close',()=>{streams.delete(res);clearInterval(heartbeat);});return;
     }
-    if(url.pathname==='/api/status' && req.method==='GET'){json(res,200,{connected:rpc.connected,demo,desktop:requestDesktop,access:requestAccess,stopping,engineStopped,shutdownError,threadSessions:sessions.snapshot(),persistenceWarning:operations.persistenceWarning||desktopState?.persistenceWarning||null,version:rpc.version||null,error:rpc.lastError||null,pendingRequests:[...rpc.requests.values()],serverInstance:operations.serverInstance,operationRetentionMs:operations.retentionMs,reopenAvailable:requestAccess==='local'&&!!reopener,reopenError:requestAccess==='local'?reopenError:null});return;}
+    if(url.pathname==='/api/status' && req.method==='GET'){json(res,200,{connected:rpc.connected,demo,desktop:requestDesktop,access:requestAccess,stopping,engineStopped,shutdownError,threadSessions:sessions.snapshot(),persistenceWarning:operations.persistenceWarning||desktopState?.persistenceWarning||null,version:rpc.version||null,error:rpc.lastError||null,pendingRequests:[...rpc.requests.values()].map(presentRequest),serverInstance:operations.serverInstance,operationRetentionMs:operations.retentionMs,reopenAvailable:requestAccess==='local'&&!!reopener,reopenError:requestAccess==='local'?reopenError:null});return;}
     if(url.pathname==='/api/operations' && req.method==='GET'){json(res,200,operations.get(url.searchParams.get('requestId')));return;}
     if(url.pathname==='/api/config' && req.method==='GET'){json(res,200,{cwd,codexCommand:command});return;}
     if(url.pathname==='/api/projects'&&req.method==='GET'){json(res,200,{...await projects.list(),canPickFolder:requestDesktop&&typeof onDesktopPickFolder==='function'});return;}
@@ -291,8 +294,9 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      broadcast({method:'bridge/dshSnapshot',params:snapshot});json(res,200,snapshot);return;
     }
     if(url.pathname==='/api/respond'){
-     const request=rpc.requests.get(String(input.id));if(!request)throw new Error('该审批已结束或不存在');
-     if(input.error){if(input.error.code!==-32601)throw new Error('仅支持拒绝未知请求');rpc.respond(input.id,null,{code:-32601,message:'This GUI does not support this request.'});}
+     if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['id','bridgeRequestToken','result','error'].includes(key))||!validServerRequestId(input.id)||Object.hasOwn(input,'error')===Object.hasOwn(input,'result'))throw new Error('审批响应参数无效');
+     const request=findServerRequest(rpc.requests,input.id);if(!request||typeof input.bridgeRequestToken!=='string'||input.bridgeRequestToken!==presentRequest(request).bridgeRequestToken)throw Object.assign(new Error('该审批已结束或已更新，请刷新待处理请求'),{code:'STALE_APPROVAL',status:409});
+     if(input.error){if(typeof input.error!=='object'||Array.isArray(input.error)||Object.keys(input.error).some(key=>!['code','message'].includes(key))||input.error.code!==-32601||(input.error.message!==undefined&&typeof input.error.message!=='string'))throw new Error('仅支持拒绝未知请求');rpc.respond(input.id,null,{code:-32601,message:'This GUI does not support this request.'});}
      else rpc.respond(input.id,validateResponse(request,input.result));
      json(res,200,{ok:true});return;
     }
@@ -325,7 +329,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
   }
   if(method==='remoteControl/pairing/status'&&result?.claimed)clearPairing();
  }
- function broadcast(message){const event=`data: ${JSON.stringify(message)}\n\n`;for(const res of streams){if(res.destroyed){streams.delete(res);continue;}if(res.writableLength>4*1024*1024){streams.delete(res);res.destroy();}else res.write(event);}}
+ function broadcast(message){const exposed=message.id!==undefined&&typeof message.method==='string'?presentRequest(message):message;const event=`data: ${JSON.stringify(exposed)}\n\n`;for(const res of streams){if(res.destroyed){streams.delete(res);continue;}if(res.writableLength>4*1024*1024){streams.delete(res);res.destroy();}else res.write(event);}}
  accountLogin.on('event',event=>{if(['completed','failed','canceled','loggedOut','unknown','closed'].includes(event.params.state)){for(const entry of operations.entries.values())if(entry.method==='account/start'&&entry.result){delete entry.result.authUrl;delete entry.result.verificationUrl;delete entry.result.userCode;entry.result.redacted=true;}}broadcast(event);});
  terminal.on('event',broadcast);
  rpc.on('event',message=>{statistics.observe(message);sessions.observe(message);if(message.method==='account/updated'||(message.method==='bridge/status'&&message.params?.connected===false)){pluginActions.clear();configSettings.clear();dsh.clear();}accountLogin.observe(message);if(message.method==='account/login/completed'){dsh.clear();return;}terminal.observe(message);if(message.method==='bridge/status'&&message.params?.connected===false)terminal.disconnected();if(message.method==='remoteControl/status/changed')observeRemote('remoteControl/status/read',{},message.params);if(['item/started','item/completed'].includes(message.method))dsh.observe(message.params?.threadId,message.params?.item);broadcast(message);});

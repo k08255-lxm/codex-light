@@ -37,7 +37,8 @@ test('Windows cwd must include a drive or full UNC share, not drive-relative roo
 test('malformed approval payloads and incomplete user input fail closed',()=>{
  assert.throws(()=>validateResponse({method:'item/permissions/requestApproval'},{scope:'turn',permissions:[]}));
  const question={method:'item/tool/requestUserInput',params:{questions:[{id:'a'},{id:'b'}]}};
- for(const answers of [{},{a:{answers:['x']}},{a:{answers:['']},b:{answers:['y']}},{a:{answers:['x']},b:{answers:[]}}])assert.throws(()=>validateResponse(question,{answers}));
+ for(const answers of [{},{a:{answers:['x']}},{a:{answers:['x']},b:{answers:[1]}}])assert.throws(()=>validateResponse(question,{answers}));
+ assert.doesNotThrow(()=>validateResponse(question,{answers:{a:{answers:[]},b:{answers:['  ']}}}));
  assert.throws(()=>validateRpc('turn/interrupt',{threadId:'a'}));
 });
 test('metadata operations retain explicit scope and account reads cannot mutate login',()=>{
