@@ -24,6 +24,7 @@ export function statisticsQuery(ui, now = ui.anchor ?? Date.now()) {
   if (range[2]) { body.from = new Date(now - range[2]).toISOString(); body.to = new Date(now + 60e3).toISOString(); }
   if (ui.model) body.model = ui.model;
   if (ui.provider) body.provider = ui.provider;
+  if (ui.account) body.account = ui.account;
   if (ui.cursor) body.cursor = ui.cursor;
   return body;
 }
@@ -32,12 +33,12 @@ export function statisticsQuery(ui, now = ui.anchor ?? Date.now()) {
 export function costCoverage(cost) {
   if (!cost || typeof cost.totalRows !== 'number') return '价格覆盖未知';
   if (!cost.totalRows) return '无可计价记录';
-  return `已计价 ${cost.pricedRows} · 未计价 ${cost.unpricedRows??cost.totalRows-cost.pricedRows}${cost.complete?'':' · 部分估算'}`;
+  return `已计价 ${cost.pricedRows} · 未计价 ${cost.unpricedRows??cost.totalRows-cost.pricedRows}${cost.complete?'':` · 部分估算${cost.partialRows?' '+cost.partialRows+' 条':''}`}`;
 }
 
 export function mountStatistics(host, { api, notice = () => {}, onPickFolder = null }) {
   const document = host.ownerDocument;
-  const ui = { scope: 'light', range: '30d', metric: 'tokens', tab: 'details', model: '', provider: '', cursor: null, history: [], sort: null, anchor: null };
+  const ui = { scope: 'light', range: '30d', metric: 'tokens', tab: 'details', model: '', provider: '', account: '', cursor: null, history: [], sort: null, anchor: null };
   let data = null, dataBucket='day', loading = false, generation = 0, active = false, importing = false, discovered = false, localImported = false, importingPrices=false;
 
   host.classList.add('stats');
@@ -46,7 +47,7 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
   titles.append(el(document, 'h1', '', '用量与性能'), el(document, 'p', 'page-sub', ''));
   const controls = el(document, 'div', 'page-controls');
   const scope = segmented([['light', '本应用观测'], ['local', 'Codex 日志']], ui.scope, value => {
-    ui.scope = value; ui.model = ''; ui.provider = ''; resetPaging();
+    ui.scope = value; ui.model = ''; ui.provider = ''; ui.account=''; resetPaging();
     if (value === 'local' && !localImported) discoverAndImport(); else load();
   });
   const range = segmented(RANGES.map(row => [row[0], row[1]]), ui.range, value => { ui.range = value; resetPaging(); load(); });
@@ -55,11 +56,13 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
   const priceImport=el(document,'button','btn small','导入 models.dev 价格');priceImport.type='button';priceImport.title='显式获取公共参考单价，不发送对话或账户信息';
   priceImport.addEventListener('click',async()=>{
     if(importingPrices)return;importingPrices=true;priceImport.disabled=true;priceImport.setAttribute('aria-busy','true');
-    try{const result=await api('/api/pricing/refresh',{});resetPaging();await load();setStatus(`已导入 ${integer(result.modelCount)} 个模型的参考价格；按供应商与模型精确匹配，手工价格优先。`);}
+    try{const result=await api('/api/pricing/refresh',{});resetPaging();await load();setStatus(`已导入 ${integer(result.modelCount)} 个模型参考价格${result.persistenceWarning?'；'+result.persistenceWarning:''}`);}
     catch(error){setStatus('价格导入失败：'+error.message,true);}
     finally{importingPrices=false;priceImport.disabled=false;priceImport.removeAttribute('aria-busy');}
   });
-  controls.append(scope.node, range.node, priceImport, refresh);
+  const priceSettings=el(document,'button','btn small','价格设置');priceSettings.type='button';
+  priceSettings.addEventListener('click',()=>{pricePanel.open=!pricePanel.open;if(pricePanel.open)priceModel.focus();});
+  controls.append(scope.node, range.node, priceImport, priceSettings, refresh);
   header.append(titles, controls);
 
   const importBar = el(document, 'form', 'import-bar hidden');
@@ -93,7 +96,7 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
       const result = await api('/api/statistics/import', { directory });
       localImported = true;
       if (mine !== generation || !active) return;
-      ui.scope = 'local'; ui.range = 'all'; ui.model = ''; ui.provider = ''; ui.sort = null;
+      ui.scope = 'local'; ui.range = 'all'; ui.model = ''; ui.provider = ''; ui.account=''; ui.sort = null;
       scope.set('local'); range.set('all'); resetPaging();
       // Show the actual imported snapshot, without stale filters hiding the result.
       data = result.statistics;dataBucket='day'; render();
@@ -126,9 +129,12 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
   const filters = el(document, 'div', 'table-filters');
   const modelFilter = el(document, 'select'); modelFilter.setAttribute('aria-label', '按模型筛选');
   const providerFilter = el(document, 'select'); providerFilter.setAttribute('aria-label', '按供应商筛选');
+  providerFilter.setAttribute('aria-label','按路由筛选');
+  const accountFilter=el(document,'select');accountFilter.setAttribute('aria-label','按登录账户筛选');
+  accountFilter.addEventListener('change',()=>{ui.account=accountFilter.value;resetPaging();load();});
   modelFilter.addEventListener('change', () => { ui.model = modelFilter.value; resetPaging(); load(); });
   providerFilter.addEventListener('change', () => { ui.provider = providerFilter.value; resetPaging(); load(); });
-  filters.append(icon(document, 'search', { size: 14 }), providerFilter, modelFilter);
+  filters.append(icon(document, 'search', { size: 14 }), accountFilter, providerFilter, modelFilter);
   const tableHead = el(document, 'div', 'table-head'); tableHead.append(tabs, filters);
   const scroller = el(document, 'div', 'table-scroll');
   const pager = el(document, 'div', 'table-pager');
@@ -139,7 +145,44 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
   const scopeBody = el(document, 'div', 'scope-body');
   scopeNote.append(scopeSummary, scopeBody);
 
-  host.replaceChildren(header, importBar, status, overview, perf, table, scopeNote);
+  const pricePanel=el(document,'details','scope-note pricing-settings');pricePanel.append(el(document,'summary','','参考价格设置'));
+  const priceForm=el(document,'form','pricing-form');
+  const field=(label,node)=>{const wrap=el(document,'label','pricing-field');wrap.append(el(document,'span','',label),node);return wrap;};
+  const priceProvider=el(document,'input');priceProvider.placeholder='custom';priceProvider.setAttribute('aria-label','价格对应路由');
+  const priceModel=el(document,'input');priceModel.placeholder='精确模型 ID';priceModel.setAttribute('aria-label','价格对应模型');
+  const lookup=el(document,'button','btn','查找价格源');lookup.type='button';
+  const source=el(document,'select');source.setAttribute('aria-label','参考价格源');
+  const option=(label,value)=>{const node=el(document,'option','',label);node.value=value;return node;};
+  source.append(option('请选择价格源',''));
+  const mode=el(document,'select');mode.setAttribute('aria-label','价格模式');mode.append(option('选择 models.dev 参考源','catalog'),option('手填参考单价','manual'),option('恢复自动匹配','automatic'));
+  const manual=el(document,'div','pricing-manual'),rates={};
+  for(const [key,label]of [['input','输入'],['output','输出'],['cacheRead','缓存读取'],['cacheWrite','缓存写入'],['reasoning','推理输出']]){const input=el(document,'input');input.type='number';input.min='0';input.step='any';input.placeholder='未知';input.setAttribute('aria-label',label+'单价');rates[key]=input;manual.append(field(label,input));}
+  const savePrice=el(document,'button','btn primary','保存参考价');savePrice.type='submit';
+  const priceState=el(document,'p','page-status');priceState.setAttribute('role','status');
+  const updateMode=()=>{manual.hidden=mode.value!=='manual';source.hidden=mode.value!=='catalog';lookup.hidden=mode.value==='automatic';};mode.addEventListener('change',updateMode);updateMode();
+  priceForm.append(field('路由',priceProvider),field('模型',priceModel),lookup,field('计价方式',mode),field('价格源 / USD 每百万 tokens',source),manual,savePrice);
+  pricePanel.append(priceForm,el(document,'p','page-sub','基础参考档按所选基础单价估算；不推断每次调用的上下文档位。空白单价保留未知。'),priceState);
+  let priceLookupGeneration=0,candidates=[],candidateIdentity=null;
+  async function lookupPrices(){
+    const mine=++priceLookupGeneration;const provider=priceProvider.value.trim(),model=priceModel.value.trim();lookup.disabled=true;savePrice.disabled=true;candidateIdentity=null;priceState.textContent='正在查找…';
+    try{const result=await api('/api/pricing/model',{provider,model});if(mine!==priceLookupGeneration)return;candidates=result.candidates||[];candidateIdentity=JSON.stringify([provider,model]);source.replaceChildren(option('请选择价格源',''),...candidates.map((row,index)=>option(`${row.catalogProvider} · ${row.input??'未知'} / ${row.output??'未知'}${row.segmented?' · 基础参考档':''}`,String(index))));
+      for(const [key,input]of Object.entries(rates))input.value=result.matchedBy==='manual'?result[key]??'':'';
+      if(result.matchedBy==='manual')mode.value='manual';
+      priceState.textContent=result.unsupportedReason||(result.catalogProvider?`当前参考：${result.catalogProvider}${result.referenceTier==='base'?' · 基础参考档':''}`:'手工参考单价');updateMode();
+    }catch(error){if(mine===priceLookupGeneration)priceState.textContent=error.message;}
+    finally{if(mine===priceLookupGeneration){lookup.disabled=false;savePrice.disabled=false;}}
+  }
+  lookup.addEventListener('click',lookupPrices);
+  priceForm.addEventListener('submit',async event=>{
+    event.preventDefault();if(savePrice.disabled)return;savePrice.disabled=true;
+    try{const entry={mode:mode.value,provider:priceProvider.value.trim(),model:priceModel.value.trim()};
+      if(entry.mode==='catalog'){const selected=candidateIdentity===JSON.stringify([entry.provider,entry.model])&&source.value!==''?candidates[Number(source.value)]:null;if(!selected)throw new Error('请先查找并选择价格源');Object.assign(entry,{catalogProvider:selected.catalogProvider,catalogModel:selected.catalogModel,referenceTier:selected.segmented?'base':'standard'});}
+      if(entry.mode==='manual')for(const [key,input]of Object.entries(rates))entry[key]=input.value.trim()===''?null:Number(input.value);
+      const result=await api('/api/pricing/configure',entry);resetPaging();await load();priceState.textContent=result.persistenceWarning||result.unsupportedReason||'已保存参考价';
+    }catch(error){priceState.textContent=error.message;}finally{savePrice.disabled=false;}
+  });
+  function openPrice(row){pricePanel.open=true;priceProvider.value=row.provider||'';priceModel.value=row.model||'';mode.value='catalog';updateMode();lookupPrices();}
+  host.replaceChildren(header, importBar, status, pricePanel, overview, perf, table, scopeNote);
 
   function segmented(options, value, onChange) {
     const node = el(document, 'div', 'segmented'); node.setAttribute('role', 'radiogroup');
@@ -174,7 +217,7 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
 
   function render() {
     const totals = data?.totals || null;
-    titles.querySelector('.page-sub').textContent = data ? `${ui.scope === 'local' ? '导入日志' : '本应用观测'} · ${localTime(data.generatedAt)} 更新` : '';
+    titles.querySelector('.page-sub').textContent = data ? `${data.currentAccount?.label||'登录账户未读取'}${data.currentAccount?.planType?' · '+data.currentAccount.planType:''} · ${ui.scope === 'local' ? '导入日志' : '本应用观测'} · ${localTime(data.generatedAt)} 更新` : '';
     renderKpis(totals); renderChart(); renderPerf(totals); renderTable(); renderScope();
     importBar.classList.toggle('hidden', ui.scope !== 'local');
   }
@@ -194,7 +237,7 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
     kpis.replaceChildren(
       kpi('tokens', 'Tokens', compact(t.totalTokens), io, '总 tokens（输入含缓存 + 输出）'),
       kpi('turns', '回合', integer(t.turnCount), `${integer(t.submissionCount)} 次提交 · 成功 ${percent(t.successRate)}`, '观测到的回合与提交（包括立即补充）；上游 API 请求次数不公开'),
-      kpi('cost', '估算总成本', usd(t.estimatedCost?.usd), costCoverage(t.estimatedCost), '当前筛选范围已计价记录之和；未计价项不作零，非账单或实际扣款'),
+      kpi('cost', t.estimatedCost?.complete?'参考成本':'已知分项参考小计', usd(t.estimatedCost?.usd), costCoverage(t.estimatedCost), '仅合计可确认的参考计费分项；缺失计数或单价不补零，非账单或实际扣款'),
       kpi('cache', '缓存命中', percent(t.cacheHitRate), `缓存 ${compact(t.cachedInputTokens)} / 输入 ${compact(t.inputTokens)}`, '缓存输入 ÷ 输入'),
     );
   }
@@ -236,7 +279,8 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
   const DETAIL_COLUMNS = [
     ['time', '时间', row => localTime(row.timestamp || row.completedAt || row.startedAt), row => Date.parse(row.timestamp || row.completedAt || row.startedAt || '') || 0],
     ['model', '模型', row => row.model || '未知模型', row => row.model || ''],
-    ['provider', '供应商', row => row.provider || '未知', row => row.provider || ''],
+    ['account', '登录账户', row => row.account?.label || '历史账户未知', row => row.account?.label || ''],
+    ['provider', '路由', row => row.provider || '未知', row => row.provider || ''],
     ['status', '结果', row => STATUS[row.status] || row.status, row => row.status || ''],
     ['input', '输入', row => compact(row.tokens?.inputTokens), row => row.tokens?.inputTokens ?? -1, 'num'],
     ['cached', '缓存', row => compact(row.tokens?.cachedInputTokens), row => row.tokens?.cachedInputTokens ?? -1, 'num'],
@@ -252,14 +296,14 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
     ['input', '输入', row => compact(row.inputTokens), row => row.inputTokens ?? -1, 'num'],
     ['output', '输出', row => compact(row.outputTokens), row => row.outputTokens ?? -1, 'num'],
     ['cache', '缓存命中', row => percent(row.cacheHitRate), row => row.cacheHitRate ?? -1, 'num'],
-    ['cost', '估算成本', row => usd(row.estimatedCost?.usd), row => row.estimatedCost?.usd ?? -1, 'num'],
+    ['cost', '参考小计', row => `${usd(row.estimatedCost?.usd)}${row.estimatedCost?.usd!=null&&!row.estimatedCost?.complete?' · 部分':''}`, row => row.estimatedCost?.usd ?? -1, 'num'],
     ['success', '成功率', row => percent(row.successRate), row => row.successRate ?? -1, 'num'],
     ['p50', '耗时 p50', row => seconds(row.performance?.durationMs?.p50), row => row.performance?.durationMs?.p50 ?? -1, 'num'],
     ['tps', '回合 tok/s p50', row => rate(row.performance?.turnOutputTokensPerSecond?.p50, 'tok/s'), row => row.performance?.turnOutputTokensPerSecond?.p50 ?? -1, 'num'],
   ];
   function renderTabs() {
-    const counts = { details: data?.details?.total, models: data?.models?.length, providers: data?.providers?.length };
-    tabs.replaceChildren(...[['details', '明细'], ['models', '模型'], ['providers', '供应商']].map(([key, label]) => {
+    const counts = { details: data?.details?.total, models: data?.models?.length, providers: data?.providers?.length,accounts:data?.accounts?.length };
+    tabs.replaceChildren(...[['details', '明细'], ['models', '模型'], ['accounts','登录账户'], ['providers', '路由']].map(([key, label]) => {
       const tab = el(document, 'button', 'tab'); tab.type = 'button'; tab.setAttribute('role', 'tab'); tab.setAttribute('aria-selected', String(ui.tab === key));
       tab.append(el(document, 'span', '', label), el(document, 'span', 'count', Number.isFinite(counts[key]) ? integer(counts[key]) : ''));
       tab.addEventListener('click', () => { ui.tab = key; ui.sort = null; renderTable(); });
@@ -273,13 +317,15 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
       select.value = current;
     };
     options(modelFilter, data?.models, 'model', ui.model, '全部模型');
-    options(providerFilter, data?.providers, 'provider', ui.provider, '全部供应商');
+    options(providerFilter, data?.providers, 'provider', ui.provider, '全部路由');
+    accountFilter.replaceChildren(option('全部账户',''),...(data?.accounts||[]).map(row=>option(row.label,row.account)));accountFilter.value=ui.account;
   }
   function renderTable() {
     renderTabs();
     const detail = ui.tab === 'details';
-    const columns = detail ? DETAIL_COLUMNS : [[ui.tab === 'models' ? 'model' : 'provider', ui.tab === 'models' ? '模型' : '供应商', row => row[ui.tab === 'models' ? 'model' : 'provider'] || '未知', row => row[ui.tab === 'models' ? 'model' : 'provider'] || ''], ...GROUP_COLUMNS];
-    let rows = detail ? data?.details?.data || [] : (ui.tab === 'models' ? data?.models : data?.providers) || [];
+    const groupKey=ui.tab==='models'?'model':ui.tab==='accounts'?'label':'provider';
+    const columns = detail ? DETAIL_COLUMNS : [[groupKey,ui.tab==='models'?'模型':ui.tab==='accounts'?'登录账户':'路由',row=>row[groupKey]||'未知',row=>row[groupKey]||''],...GROUP_COLUMNS];
+    let rows = detail ? data?.details?.data || [] : data?.[ui.tab] || [];
     if (ui.sort) { const column = columns.find(c => c[0] === ui.sort.key); if (column) rows = [...rows].sort((a, b) => { const x = column[3](a), y = column[3](b); return (x > y ? 1 : x < y ? -1 : 0) * ui.sort.dir; }); }
     const tableNode = el(document, 'table', 'data-table');
     const head = el(document, 'thead'); const tr = el(document, 'tr');
@@ -299,11 +345,13 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
       for (const [key, , text, , kind] of columns) {
         const td = el(document, 'td', [kind, key === 'model' ? 'mono' : ''].filter(Boolean).join(' '), text(row));
         if(detail&&key==='cost'){
-          const cost=row.estimatedCost,details=el(document,'details'),summary=el(document,'summary','',cost?.usd===null?'未计价':usd(cost?.usd));summary.title='展开该回合参考成本分项；不是底层每次模型 API 请求成本';details.append(summary);
+          const cost=row.estimatedCost,details=el(document,'details'),summary=el(document,'summary','',cost?.usd===null?'未计价':`${usd(cost?.usd)}${cost?.complete?'':' · 部分'}`);summary.title='展开该回合参考成本分项；不是底层每次模型 API 请求成本';details.append(summary);
           const labels={input:'未缓存输入',cacheRead:'缓存读取',cacheWrite:'缓存写入',output:'输出',reasoning:'推理输出'};
           for(const part of cost?.components||[])details.append(el(document,'p','',`${labels[part.kind]||part.kind}：${compact(part.tokens)} tokens × ${usd(part.pricePerMillion)} / 百万 = ${usd(part.usd)}`));
-          if(cost?.usd!==null&&!cost?.complete)details.append(el(document,'p','','仅估算已观测的 Token 片段，可能不是完整回合成本。'));
+          if(cost?.usd!==null&&!cost?.complete)details.append(el(document,'p','','已知分项参考小计；缺失计数或单价的分项未计入，不是完整回合成本。'));
           if(cost?.reason)details.append(el(document,'p','',cost.reason));td.replaceChildren(details);
+          if(cost?.reference){const ref=cost.reference;details.append(el(document,'p','',ref.source==='manual'?'手填参考价':`${ref.catalogProvider||'未选择价格源'} / ${ref.catalogModel||row.model}${ref.referenceTier==='base'?' · 基础参考档':''}${ref.matchedBy==='consistent-model-reference'?' · 同名一致价参考':''}`));}
+          if(row.provider&&row.model){const configure=el(document,'button','btn small','设置参考价');configure.type='button';configure.addEventListener('click',()=>openPrice(row));details.append(configure);}
         }
         line.append(td);
       }
@@ -329,6 +377,7 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
     lines.push('两个范围可能重叠，界面不会相加。官方账户用量见“账户”。');
     lines.push('“首次可见输出等待”包含思考与工具时间，不是 API 首 token。“回合平均输出 tok/s”= 已完成回合输出 tokens ÷ 整轮耗时（含思考、工具与等待），不是纯模型生成速度；当前协议不提供纯推理耗时，因此纯生成速度与 TTFT 不显示。');
     if (pricing) lines.push(`价格：${pricing.available ? `${pricing.source || '参考价格'}${pricing.fetchedAt ? '，' + localTime(pricing.fetchedAt) + ' 获取' : ''}` : '未获取参考价格，成本不可估算'}。估算不是账单。`);
+    if(pricing?.persistenceWarning)lines.push(pricing.persistenceWarning);
     if (c?.partial) lines.push('覆盖不完整：部分记录被排除或截断。');
     if(Number.isFinite(c?.knownModelRows))lines.push(`模型已确认 ${integer(c.knownModelRows)} 条，未知 ${integer(c.unknownModelRows)} 条。历史未知仅按相同对话与回合的日志上下文恢复，不套用当前默认模型。`);
     if (c?.excludedOverlappingThreads || c?.excludedAmbiguousSessions) lines.push(`Token 归属暂缓：重叠对话 ${integer(c.excludedOverlappingThreads)}，歧义会话 ${integer(c.excludedAmbiguousSessions)}；可确认的回合仍保留。`);

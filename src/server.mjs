@@ -17,6 +17,7 @@ import {FileAttachmentStore} from './file-attachments.mjs';
 import {AccountLoginService} from './account-login.mjs';
 import {scanLocalCodexUsage,discoverLocalCodexUsageDirectories} from './local-usage-scan.mjs';
 import {PricingService} from './pricing.mjs';
+import {TitleSummaryService} from './title-summary.mjs';
 import {StatisticsService,defaultStatisticsRoot} from './statistics.mjs';
 import {ArtifactPreviewService} from './artifacts.mjs';
 import {LanAccess} from './lan-access.mjs';
@@ -43,8 +44,15 @@ publicFiles['/session-controls.js']='session-controls.js';publicFiles['/session-
 publicFiles['/ui/agent-inspector.js']='ui/agent-inspector.js';
 publicFiles['/account-quota.js']='account-quota.js';publicFiles['/ui/account-view.css']='ui/account-view.css';
 publicFiles['/delegated-changes.js']='delegated-changes.js';publicFiles['/agent-changes.js']='agent-changes.js';publicFiles['/ui/tool-activity.js']='ui/tool-activity.js';
+publicFiles['/change-stats.js']='change-stats.js';
 publicFiles['/delegation-monitor.js']='delegation-monitor.js';
 publicFiles['/agent-history.js']='agent-history.js';
+publicFiles['/reasoning-timing.js']='reasoning-timing.js';
+publicFiles['/async-answer.js']='async-answer.js';
+publicFiles['/ui/async-input.js']='ui/async-input.js';
+publicFiles['/ui/agent-avatar.js']='ui/agent-avatar.js';
+publicFiles['/account-identity.js']='account-identity.js';
+publicFiles['/ui/title-settings.js']='ui/title-settings.js';
 for(const file of ['about-view.js','about-view.css','notifications.js'])publicFiles['/ui/'+file]='ui/'+file;
 publicFiles['/ui/panel-resize.js']='ui/panel-resize.js';publicFiles['/ui/panel-resize.css']='ui/panel-resize.css';publicFiles['/project-name-dialog.js']='project-name-dialog.js';
 for(const file of ['format.js','chart.js','stats-view.js','account-view.js','live-changes.js','views.css','paste.js','artifacts.js','agents.js','access.js','lan-view.js','viewport.js','approvals-view.js','composer.js','dsh-view.js','preferences-view.js','remote-view.js','slash-menu.js','workbench-view.js','dsh-config-view.js','dsh-connection-view.js'])publicFiles['/ui/'+file]='ui/'+file;
@@ -65,8 +73,19 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
  const artifacts=new ArtifactPreviewService({projects});
  const git=new GitService();
  const gitActions=new GitCommandActions();
- const pricing=new PricingService();
- const statistics=new StatisticsService({pricing,root:statisticsRoot??(!demo&&!client?defaultStatisticsRoot():null)});await statistics.load();
+ const metadataRoot=statisticsRoot??(!demo&&!client?defaultStatisticsRoot():null);
+ const pricing=new PricingService({root:metadataRoot});await pricing.load();
+ const statistics=new StatisticsService({pricing,root:metadataRoot});await statistics.load();
+ const titleSummary=new TitleSummaryService(rpc,{root:metadataRoot,demo,onEvent:message=>broadcast(message)});await titleSummary.load();
+ let accountIdentityGeneration=0,accountIdentityPending=null;
+ function clearStatisticsAccount(){accountIdentityGeneration++;statistics.setAccount(null);accountIdentityPending=null;}
+ async function readStatisticsAccount(){
+  if(demo||!rpc.connected)return;
+  if(accountIdentityPending)return accountIdentityPending;
+  const generation=accountIdentityGeneration;
+  const task=(async()=>{try{const result=await rpc.call('account/read',{refreshToken:false});if(generation===accountIdentityGeneration)statistics.setAccount(result);}catch{if(generation===accountIdentityGeneration)statistics.setAccount(null);}})();
+  accountIdentityPending=task;try{await task;}finally{if(accountIdentityPending===task)accountIdentityPending=null;}
+ }
  let usageScan=null,usageScanPromise=null,usageScanDirectory=null,modelRecovery=null,modelRecoveryError=null,dshResetError=null;
  function importUsageDirectory(directory){
   if(usageScanPromise){
@@ -262,6 +281,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      res.writeHead(200,{'Content-Type':image.mime,'Content-Length':image.bytes.length,'Content-Disposition':'attachment; filename="artifact.'+({'image/png':'png','image/jpeg':'jpg','image/webp':'webp','image/gif':'gif','image/vnd.microsoft.icon':'ico','image/svg+xml':'svg'})[image.mime]+'"','X-Artifact-Width':String(image.width),'X-Artifact-Height':String(image.height)});res.end(image.bytes);return;
     }
     if(url.pathname==='/api/statistics/query'){
+     await readStatisticsAccount();
      let result=statistics.query(input);
      if(!demo&&requestAccess==='local'&&input.scope!=='local'&&result.coverage?.unknownModelRows>0){
       if(!modelRecovery)modelRecovery=(async()=>{
@@ -286,7 +306,14 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
     }
     if(url.pathname==='/api/pricing/status'){if(Object.keys(input).length)throw new Error('价格参数无效');json(res,200,pricing.status());return;}
     if(url.pathname==='/api/pricing/refresh'){if(Object.keys(input).length)throw new Error('价格参数无效');if(demo)throw new Error('演示模式不请求真实价格服务');json(res,200,await pricing.refresh());return;}
-    if(url.pathname==='/api/pricing/model'){if(Object.keys(input).some(k=>k!=='model'))throw new Error('价格参数无效');json(res,200,pricing.get(input.model));return;}
+    if(url.pathname==='/api/pricing/model'){if(Object.keys(input).some(k=>!['model','provider'].includes(k)))throw new Error('价格参数无效');json(res,200,{...pricing.get(input.model,input.provider),candidates:pricing.candidates(input.model)});return;}
+    if(url.pathname==='/api/pricing/configure'){json(res,200,await pricing.configure(input));return;}
+    if(url.pathname.startsWith('/api/title-summary/')){
+     if(requestAccess!=='local')throw Object.assign(new Error('标题设置仅限本机访问'),{status:403});
+     const action=url.pathname.slice('/api/title-summary/'.length);if(!['status','models','configure'].includes(action))throw new Error('未知标题设置操作');
+     if(action!=='configure'&&Object.keys(input).length)throw new Error('标题设置参数无效');
+     json(res,200,action==='status'?titleSummary.status():action==='models'?await titleSummary.models():await titleSummary.configure(input));return;
+    }
     if(url.pathname.startsWith('/api/runtime/')){
      if(demo)throw new Error('演示模式不读取真实运行引擎，也不联网或升级');
      const action=url.pathname.slice('/api/runtime/'.length);
@@ -323,7 +350,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      if(stopping)throw Object.assign(new Error('Light 正在关闭，此请求未发送'),{code:'CLIENT_CLOSING',outcome:'notExecuted',status:409});
      if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['method','params','requestId','attachmentIds','fileAttachmentIds','confirmedFileAttachmentIds','confirmed'].includes(key)))throw new Error('RPC 请求格式无效');
      if(MUTATING_METHODS.has(input.method))operations.validate(input.requestId);
-     let params;
+     let params,titleInput;
      try {
       if((input.attachmentIds!==undefined||input.fileAttachmentIds!==undefined||input.confirmedFileAttachmentIds!==undefined) && !['turn/start','turn/steer'].includes(input.method))throw new Error('此操作不接受附件');
       const attachmentInputs=input.attachmentIds===undefined?[]:uploads.resolve(input.attachmentIds);
@@ -333,6 +360,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
       if(files.some(file=>file.riskWarning&&!accepted.includes(file.id)))throw new Error('请确认未知或压缩附件仅作为本地引用，不自动执行或解包');
       for(const file of files)attachmentInputs.push({type:'text',text:`用户选择的本地附件（仅路径引用，内容尚未读取；请按当前权限读取，不执行或自动解包）：${JSON.stringify({name:file.name,path:file.path,category:file.category,size:file.size})}`,text_elements:[]});
       params=REMOTE_METHODS.has(input.method)?validateRemote(input.method,input.params||{},{confirmed:input.confirmed,activeEnvironmentId:remoteEnvironment,allowedClientIds:remoteClients}):validateRpc(input.method,input.params||{},{hasAttachments:attachmentInputs.length>0});
+      if(input.method==='turn/start')titleInput=params.input.filter(item=>item.type==='text').map(item=>({type:'text',text:item.text}));
       if(input.method==='remoteControl/pairing/status'&&(!remotePairing||!Object.entries(params).some(([key,value])=>value&&remotePairing[key]===value)))throw new Error('配对码不属于本界面当前请求或已过期，请重新创建配对码');
       if(attachmentInputs.length)params={...params,input:[...params.input.filter(item=>item.text.trim()),...attachmentInputs]};
      } catch(error) {
@@ -343,7 +371,10 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
       if(params.cwd){try{const info=await stat(params.cwd);if(!info.isDirectory())throw new Error('工作目录不是文件夹');}catch(error){error.outcome='notExecuted';throw error;}}
       if(!rpc.connected)throw Object.assign(new Error(rpc.lastError || 'Codex 正在连接，请稍后重试'),{code:'NOT_CONNECTED',outcome:'notExecuted'});
       if(input.method==='remoteControl/pairing/start')clearPairing();
+      if(['turn/start','review/start','thread/compact/start'].includes(input.method))await readStatisticsAccount();
+      await titleSummary.beforeRpc(input.method,titleInput?{...params,input:titleInput}:params);
       const output=await sessions.call(input.method,params);statistics.acknowledge(input.method,params,output);if(output?.thread)artifacts.bindThread(output.thread);
+      titleSummary.acknowledge(input.method,params,output);
       if(['turn/start','turn/steer'].includes(input.method))artifacts.observe(params.threadId,{type:'userMessage',content:params.input});
       observeRemote(input.method,params,output);return output;
      };
@@ -407,10 +438,12 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
   if(method==='remoteControl/pairing/status'&&result?.claimed)clearPairing();
  }
  function broadcast(message){const exposed=message.id!==undefined&&typeof message.method==='string'?presentRequest(message):message;const event=`data: ${JSON.stringify(exposed)}\n\n`;for(const res of streams){if(res.destroyed){streams.delete(res);continue;}if(res.writableLength>4*1024*1024){streams.delete(res);res.destroy();}else res.write(event);}}
- accountLogin.on('event',event=>{if(['completed','failed','canceled','loggedOut','unknown','closed'].includes(event.params.state)){for(const entry of operations.entries.values())if(entry.method==='account/start'&&entry.result){delete entry.result.authUrl;delete entry.result.verificationUrl;delete entry.result.userCode;entry.result.redacted=true;}}broadcast(event);});
+ accountLogin.on('event',event=>{if(['starting','loggingOut','completed','loggedOut','unknown','closed'].includes(event.params.state))clearStatisticsAccount();if(['completed','failed','canceled','loggedOut','unknown','closed'].includes(event.params.state)){for(const entry of operations.entries.values())if(entry.method==='account/start'&&entry.result){delete entry.result.authUrl;delete entry.result.verificationUrl;delete entry.result.userCode;entry.result.redacted=true;}}broadcast(event);});
  terminal.on('event',broadcast);
  function clearDsh(){dsh.clear().then(()=>{dshResetError=null;},error=>{dshResetError=error?.message||'子代理读取会话清理失败';});}
  rpc.on('event',message=>{
+  if(titleSummary.observe(message))return;
+  if(message.method==='account/updated'||(message.method==='bridge/status'&&message.params?.connected===false))clearStatisticsAccount();
   const threadId=message.params?.threadId||message.params?.thread?.id;
   if(threadId&&dsh.isReaderThread(threadId))return;
   statistics.observe(message);sessions.observe(message);
@@ -431,9 +464,9 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
   if(serviceShutdown)return serviceShutdown;
   stopping=true;configSettings.clear();gitActions.plans.clear();pluginActions.clear();
   for(const timer of loginTimers)clearTimeout(timer);loginTimers.clear();usageScan?.abort();clearPairing();
-  const stopEngine=(async()=>{try{await Promise.all([sessions.close(),dsh.close()]);}finally{await rpc.close();engineStopped=true;}})();
+  const stopEngine=(async()=>{try{await Promise.all([sessions.close(),dsh.close(),titleSummary.close()]);}finally{await rpc.close();engineStopped=true;}})();
   serviceShutdown=Promise.all([lan.close(),terminal.close(),accountLogin.close(),Promise.resolve(runtime.close?.()),Promise.resolve(appUpdates.close?.()),stopEngine]).then(async()=>{
-   await Promise.all([uploads.close(),fileUploads.close(),statistics.close(),artifacts.close()]);
+   await Promise.all([uploads.close(),fileUploads.close(),statistics.close(),pricing.close(),artifacts.close()]);
    await desktopState?.queue;await projects.queue;
    if(temporaryState)await rm(temporaryState,{recursive:true,force:true});
    if(temporaryProjects)await rm(temporaryProjects,{recursive:true,force:true});

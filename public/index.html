@@ -69,7 +69,6 @@
         <button class="settings-nav-item" data-settings-section="dsh"><span data-icon="branch"></span><span>DSH 与 MCP</span></button>
         <button class="settings-nav-item" data-settings-section="plugins"><span data-icon="plug"></span><span>插件</span></button>
         <button class="settings-nav-item" data-settings-section="remote"><span data-icon="remote"></span><span>远程控制</span></button>
-        <button class="settings-nav-item local-only" data-settings-section="lan"><span data-icon="globe"></span><span>局域网访问</span></button>
         <button class="settings-nav-item local-only" data-settings-section="about"><span data-icon="info"></span><span>关于</span></button>
       </nav>
     </div>
@@ -80,8 +79,7 @@
     <header class="stage-bar">
       <div class="crumbs"><span id="project-name" class="crumb-project">工作区</span><span class="crumb-sep" aria-hidden="true">/</span><strong id="thread-title">新对话</strong></div>
       <div class="stage-actions">
-        <button id="open-dsh" class="btn ghost small" aria-pressed="false" title="子代理"><span data-icon="branch"></span><span class="label">子代理</span></button>
-        <button id="toggle-details" class="btn ghost small" aria-pressed="false" title="工具活动"><span data-icon="panel"></span><span class="label">活动</span></button>
+        <button id="toggle-details" class="btn ghost small" aria-pressed="false" aria-controls="details" title="活动"><span data-icon="panel"></span><span class="label">活动</span></button>
         <button id="thread-menu-button" class="btn icon-only ghost" aria-label="对话操作" aria-haspopup="menu" aria-expanded="false" title="对话操作"><span data-icon="more"></span></button>
       </div>
       <div id="thread-menu" class="menu hidden" role="menu" aria-label="对话操作"><button id="rename-thread" role="menuitem">重命名</button><button id="fork-thread" role="menuitem">创建分支</button><button id="review-thread" role="menuitem">代码审查…</button><button id="archive-thread" role="menuitem">归档</button></div>
@@ -98,9 +96,11 @@
       <section id="cwd-setup" class="cwd-setup hidden" aria-label="选择工作目录"><label for="cwd-inline-input">项目文件夹的绝对路径</label><div><input id="cwd-inline-input" placeholder="例如 C:\Users\USER\Projects\my-app" autocomplete="off"><button id="cwd-inline-save" type="button" class="btn primary">使用此目录</button><button id="cwd-inline-cancel" type="button" class="btn">取消</button></div></section>
       <div id="send-state" class="send-state hidden" role="status"><span id="send-state-text"></span><button id="send-state-action" type="button" class="btn small hidden"></button></div>
       <div id="activity" class="activity" role="status"></div>
-      <div id="live-changes" class="live-changes hidden"></div>
       <section id="queue" class="queue hidden" aria-label="排队消息" aria-live="polite"></section>
-      <div id="attachment-tray" class="attachment-tray hidden" aria-label="待发送附件（图片和文件合计最多 5 个）"></div>
+      <div class="composer-overlays">
+        <div id="live-changes" class="live-changes hidden"></div>
+        <div id="attachment-tray" class="attachment-tray hidden" aria-label="待发送附件（图片和文件合计最多 5 个）"></div>
+      </div>
       <form id="compose" class="composer">
         <div id="slash-menu" class="slash-menu hidden" role="listbox" aria-label="命令与技能"></div>
         <textarea id="prompt" rows="1" placeholder="描述要完成的任务" aria-label="消息" maxlength="100000" role="combobox" aria-autocomplete="list" aria-controls="slash-menu" aria-expanded="false"></textarea>
@@ -177,7 +177,6 @@
       <div id="settings-notice" class="notice hidden" role="status"><span></span></div>
       <section id="settings-general" class="settings-section">
         <h1>连接与运行</h1>
-        <section id="desktop-receipts" class="panel warn hidden"><h2 class="section-title">上次操作需要核对</h2><p id="desktop-receipts-status" class="fine" role="status"></p><div id="desktop-receipts-list"></div><div class="work-row"><button id="desktop-receipts-refresh" type="button" class="btn">刷新记录</button><button id="desktop-receipts-ack" type="button" class="btn">确认已核对所选记录</button></div></section>
         <form id="settings-form">
           <div class="panel">
             <dl class="kv">
@@ -209,6 +208,7 @@
         </div>
         <p id="preference-status" class="fine" role="status"></p>
         <button id="preference-native-reload" type="button" class="btn hidden">重新读取本机偏好</button>
+        <div id="title-settings-root" class="local-only"></div>
       </section>
       <section id="settings-notifications" class="settings-section hidden">
         <h1>通知</h1>
@@ -227,9 +227,9 @@
         <h2 class="section-title">设备</h2><div id="remote-devices" class="panel list-panel"><p class="fine">尚未读取。</p></div>
         <h2 class="section-title">配对</h2>
         <div class="panel"><p class="fine">配对码到期只结束本次配对流程，已授权设备不会自动撤销。</p><button id="remote-pair" type="button" class="btn">创建配对码</button><div id="remote-pairing" class="hidden"><code id="remote-pair-code"></code><p id="remote-pair-expiry" class="fine"></p><div class="work-row"><button id="remote-pair-check" type="button" class="btn">查询状态</button><button id="remote-pair-hide" type="button" class="btn">隐藏</button></div></div><p id="remote-pair-status" class="fine" role="status"></p></div>
+        <section id="settings-lan" class="local-only remote-lan-section"><h2 class="section-title">局域网访问</h2><div id="lan-root"></div></section>
       </section>
       <section id="settings-plugins" class="settings-section hidden"></section>
-      <section id="settings-lan" class="settings-section hidden"><h1>局域网访问</h1><div id="lan-root"></div></section>
       <section id="settings-about" class="settings-section hidden"><div id="about-root"></div></section>
     </div>
   </main>

@@ -5,6 +5,7 @@ import { mountStatistics } from './ui/stats-view.js';
 import { mountAccount } from './ui/account-view.js';
 import { mountAbout } from './ui/about-view.js';
 import { mountAccountQuota } from './account-quota.js';
+import { createAccountIdentityController } from './account-identity.js';
 import { mountArtifacts, mountLightbox } from './ui/artifacts.js';
 import { pastedFiles, classifyPaste } from './ui/paste.js';
 import { bootstrapToken } from './ui/access.js';
@@ -14,7 +15,9 @@ import { createRemoteView } from './ui/remote-view.js';
 import { createWorkbench } from './ui/workbench-view.js';
 import { createSlashMenu } from './ui/slash-menu.js';
 import { createComposer } from './ui/composer.js';
+import { createAsyncAnswerSender } from './async-answer.js';
 import { createPreferences } from './ui/preferences-view.js';
+import { mountTitleSettings } from './ui/title-settings.js';
 import { mountDshConfig } from './ui/dsh-config-view.js';
 import { mountDshConnection } from './ui/dsh-connection-view.js';
 import { mountLanAccess } from './ui/lan-view.js';
@@ -172,7 +175,7 @@ async function fetchArtifactPreview(path, threadId = state.thread?.id) {
 }
 const lightbox = mountLightbox(document);
 const artifactView = mountArtifacts({ document, fetchPreview: fetchArtifactPreview, getScope:()=>state.thread?.id||null, onOpen: view => lightbox.open(view), resolveImage: (itemId, slot) => state.store.image(itemId, slot) });
-const conversation = mountConversation($('messages'), { onLocalLink: copyLocalPath, getCwd: () => state.thread?.cwd || state.cwd, artifacts: artifactView, onOpenAgent:(id,kind)=>{showDetails('dsh',true);dshView.openAgent(id,kind);} });
+const conversation = mountConversation($('messages'), { onLocalLink: copyLocalPath, getCwd: () => state.thread?.cwd || state.cwd, getThreadId:()=>state.thread?.id, onAnswerAsync:payload=>answerAsync(payload), artifacts: artifactView, onOpenAgent:(id,kind)=>{showDetails('dsh',true);dshView.openAgent(id,kind);} });
 setInterval(() => { if (conversation.hasRunningClock() && document.visibilityState === 'visible') conversation.tick(); }, 1000);
 /** Leaves a thread's subscription. Active work is retained by the bridge; that is not an error. */
 function releaseThread(threadId) {
@@ -201,7 +204,7 @@ async function api(path, body, {timeoutMs=90000}={}) {
     const data = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
     const statusDocument = path === '/api/app-update/status' || (body === undefined && (path === '/api/status' || path.startsWith('/api/operations?')));
     if (!r.ok || (data.error && !statusDocument)) { const error = new Error(typeof data.error === 'string' ? data.error : data.error?.message || `HTTP ${r.status}`); error.code = data.code ?? data.error?.code; error.outcome = data.outcome; error.notExecuted = data.notExecuted; error.requestId = data.requestId; throw error; }
-    if(data.persistenceWarning){state.persistenceWarning=String(data.persistenceWarning);$('desktop-receipts').classList.remove('hidden');$('desktop-receipts-status').textContent=state.persistenceWarning+' 操作可能已经执行，不要重试。';notice(state.persistenceWarning+' 操作可能已经执行；不要据此重试。',true);}
+    if(data.persistenceWarning){state.persistenceWarning=String(data.persistenceWarning);notice(state.persistenceWarning,true);}
     return data;
   } finally { clearTimeout(timeout); }
 }
@@ -349,11 +352,20 @@ function handlePendingReconcileError(marker,error){
 pendingReconciler=new PendingReconciler({records:reconcilableRecords,query:marker=>api('/api/operations?requestId='+encodeURIComponent(marker.requestId)),onResult:handlePendingReconcileResult,onError:handlePendingReconcileError,interval:5000,maxBackoff:30000});
 pendingReconciler.setActive(false);
 const eventSubscribers = new Set();
-const accountLoginPanel=mountAccountLoginPanel($('account-login-controls'),{api:accountApi,onAccountChanged:async()=>{resetAccountScopedViews('账户已改变');if(state.settingsPage==='account'&&!$('settings-dialog').classList.contains('hidden'))await refreshAccount();}});
+// Activation also reads the login-operation snapshot. Only authoritative account events
+// invalidate account-scoped views; a read-only snapshot merely refreshes this page.
+const accountLoginPanel=mountAccountLoginPanel($('account-login-controls'),{api:accountApi,onAccountChanged:async()=>{if(currentRoute==='account')await refreshAccount();}});
 const statsView = mountStatistics($('stats-root'), { api, notice, onPickFolder: async () => { if (!projectsState.canPickFolder) return null; const result = await api('/api/desktop/pick-folder', {}, { timeoutMs: 310000 }); return result.path || null; } });
 const accountQuota = mountAccountQuota($('account-quota'), { rpc, onOpen: () => route('account') });
+const accountIdentity = createAccountIdentityController({
+  rpc,
+  onChange: () => resetAccountScopedViews('账户已改变'),
+  onSame: async () => { await Promise.all([accountQuota.refresh(), currentRoute === 'account' ? refreshAccount() : null]); },
+  onError: () => notice('账户身份核对失败，已清除旧账户显示；请重试读取账户。', true),
+});
 const accountView = mountAccount($('account-root'), {
   rpc: (method, params) => {
+    if(method==='account/read')return accountIdentity.read();
     if(method!=='account/rateLimitResetCredit/consume')return rpc(method,params);
     if(pendingMutations.values().some(row=>row.method===method))throw Object.assign(new Error('上次重置结果仍待核实，请先刷新账户状态'),{outcome:'notExecuted'});
     return performMutation(method,params);
@@ -362,6 +374,7 @@ const accountView = mountAccount($('account-root'), {
   getThreadId: () => state.thread?.id, onQuota: result => accountQuota.update(result),
 });
 const lanView = mountLanAccess($('lan-root'), { api, notice });
+const titleSettings=mountTitleSettings($('title-settings-root'),{api,notice});
 const aboutView = mountAbout($('about-root'), { api, mutate: (method, params) => {
   if(pendingMutations.storageError||scopedPending('app-update').length)throw Object.assign(new Error('应用更新操作仍待确认，请先核对已有操作。'),{outcome:'notExecuted'});
   return performMutation(method, params);
@@ -373,7 +386,7 @@ function resetUsage(){statsView.reset();accountView.reset();if(currentRoute==='u
 function resetAccountScopedViews(reason='账户已改变'){accountQuota.reset();if(state.connected)accountQuota.refresh();resetUsage();configPanel.reset();pluginPanel.reset();prReviewPanel?.reset();resetRuntimePanel();remoteReset({statusMessage:reason+'，请重新读取远控状态。',pairMessage:reason+'，本机配对码显示已清除；不会撤销原账户或环境设备。',devicesMessage:reason+'，旧设备显示已清除；不会撤销原账户或环境设备。'});sessionDefaults.clear();state.dshReadGeneration++;state.dshReads.clear();state.dshReadErrors.clear();state.dshOpenDetails.clear();dshTasks.reset(state.thread?.id||null);state.dshConnection=null;renderDshConnection();dshLive.reset();syncDshLiveContext();if(state.connected)syncSessionDefaults();}
 const configPanel=mountConfigSettingsPanel($('config-panel'),{read:()=>api('/api/config-settings/read',state.cwd?{cwd:state.cwd}:{}),plan:edits=>{if(scopedPending('config').length)throw new Error('配置状态仍在自动同步');return api('/api/config-settings/plan',{edits});},apply:params=>{if(pendingMutations.storageError||scopedPending('config').length)throw new Error('配置状态仍在自动同步');return performMutation('config/apply',params);}});
 function renderConfigPending(){const host=$('config-pending');if(!host)return;const records=scopedPending('config');host.replaceChildren();for(const marker of records){const row=el('div','pending-inline');row.setAttribute('role','status');const status=el('span','pending-inline-status','正在更新配置状态…');const failure=pendingReconcileErrors.get(marker.requestId);if(failure)status.title=failure;row.append(status);host.append(row);}}
-function setConnected(connected, label) { if(state.connected !== connected){deactivatePendingReconciler();pluginPanel.reset();configPanel.reset();resetUsage();if(!connected)accountLoginPanel.update({state:'unknown'});state.dshReadGeneration++;state.dshReads.clear();state.dshReadErrors.clear();} state.connected = connected; if(connected)accountQuota.start();else accountQuota.stop(); if(!connected){followUps.pauseAll('连接已断开');renderQueue();try{workbench.connectionLost();}catch(error){notice('终端未能处理连接断开：'+(error?.message||'未知错误')+'。其余断连清理继续。',true);}state.searchGeneration++;resetRuntimePanel();remoteReset({statusMessage:'连接已断开，无法读取远控状态。',pairMessage:'连接已断开，本机配对码显示已清除；不会撤销任何设备。',devicesMessage:'连接已断开，设备列表显示已清除；未撤销旧环境设备。'});}terminalControls();$('connection-dot').className = connected ? 'ok' : 'bad'; $('connection-text').textContent = label || (connected ? '本地 Codex 已连接' : '连接已断开'); $('status-info').textContent = $('connection-text').textContent; updateControls(); renderDshConnection(); remoteControls(); syncSessionDefaults(); syncDshLiveContext(); syncDelegationMonitor(); syncPendingReconciler(); syncRuntimePanelActivity(); connectionBootstrap.update(connected,state.serverInstance); }
+function setConnected(connected, label) { if(state.connected !== connected){accountIdentity.reset();deactivatePendingReconciler();pluginPanel.reset();configPanel.reset();resetUsage();if(!connected)accountLoginPanel.update({state:'unknown'});state.dshReadGeneration++;state.dshReads.clear();state.dshReadErrors.clear();} state.connected = connected; if(connected)accountQuota.start();else accountQuota.stop(); if(!connected){followUps.pauseAll('连接已断开');renderQueue();try{workbench.connectionLost();}catch(error){notice('终端未能处理连接断开：'+(error?.message||'未知错误')+'。其余断连清理继续。',true);}state.searchGeneration++;resetRuntimePanel();remoteReset({statusMessage:'连接已断开，无法读取远控状态。',pairMessage:'连接已断开，本机配对码显示已清除；不会撤销任何设备。',devicesMessage:'连接已断开，设备列表显示已清除；未撤销旧环境设备。'});}terminalControls();$('connection-dot').className = connected ? 'ok' : 'bad'; $('connection-text').textContent = label || (connected ? '本地 Codex 已连接' : '连接已断开'); $('status-info').textContent = $('connection-text').textContent; updateControls(); renderDshConnection(); remoteControls(); syncSessionDefaults(); syncDshLiveContext(); syncDelegationMonitor(); syncPendingReconciler(); syncRuntimePanelActivity(); connectionBootstrap.update(connected,state.serverInstance); }
 function syncSessionDefaults(){sessionDefaults.sync({connected:state.connected,serverInstance:state.serverInstance,cwd:state.cwd,enabled:!state.demo});}
 function formatModelDisplayName(value){const text=typeof value==='string'?value.trim():'';if(!text)return '';return text.replace(/^GPT-(\d+(?:\.\d+)?)-([A-Za-z][A-Za-z0-9]*(?:[-.][A-Za-z0-9]+)*)/,'GPT-$1 $2');}
 function effectiveModel(){const id=activeModelId($('model').value,sessionDefaults.snapshot().value);return {id,model:id?state.models.find(entry=>entry.model===id)||null:null};}
@@ -406,12 +419,12 @@ function route(name, { section } = {}) {
   $('chat-sidebar').classList.toggle('hidden', name !== 'chat');
   $('settings-sidebar').classList.toggle('hidden', name !== 'settings');
   sidebarController.setRoute(name);
-  if (name !== 'chat') $('details').classList.add('hidden');
+  if (name !== 'chat') { $('details').classList.add('hidden'); $('toggle-details').setAttribute('aria-pressed', 'false'); }
   for (const button of document.querySelectorAll('.rail-btn[data-route]')) button.classList.toggle('active', button.dataset.route === name && !(name === 'settings' && (button.id === 'rail-plugins') !== (section === 'plugins')));
   // Deactivate pages being left so their polling/reads stop.
   if (previous === 'usage' && name !== 'usage') statsView.deactivate();
   if (previous === 'account' && name !== 'account') { accountView.deactivate(); accountLoginPanel.deactivate(); }
-  if (previous === 'settings' && name !== 'settings') { pluginPanel.deactivate(); aboutView.deactivate(); runtimePanel?.setActive?.(false); }
+  if (previous === 'settings' && name !== 'settings') { pluginPanel.deactivate(); aboutView.deactivate(); lanView.deactivate(); runtimePanel?.setActive?.(false); }
   if (previous === 'review' && name !== 'review') prReviewPanel?.reset();
   if (name === 'usage') statsView.activate();
   if (name === 'account') { accountView.activate(); accountLoginPanel.activate(); }
@@ -437,7 +450,9 @@ function newThread() {
   releaseThread(previous);
 }
 function renderThreads() {
-  projectNavigation.render({projects:projectsState.projects,threads:state.threads,selectedPath:state.cwd,activeThreadId:state.thread?.id||'',searching:!!$('search').value.trim(),busy:projectsState.busy||state.sending,error:projectsState.error});
+  const runningThreadIds=new Set([...state.activeTurns].filter(([,id])=>id&&!state.terminalTurns.has(id)).map(([id])=>id));
+  if(state.busy&&state.thread?.id&&state.turnId&&!state.terminalTurns.has(state.turnId))runningThreadIds.add(state.thread.id);
+  projectNavigation.render({projects:projectsState.projects,threads:state.threads,selectedPath:state.cwd,activeThreadId:state.thread?.id||'',runningThreadIds,searching:!!$('search').value.trim(),busy:projectsState.busy||state.sending,error:projectsState.error});
   $('more-threads').classList.toggle('hidden', !state.nextThreads);
   $('add-project').disabled=projectsState.busy||state.sending;
 }
@@ -574,7 +589,7 @@ function watchExternalTurn() {
       const latest = Array.isArray(result.data) ? result.data[0] : null; if (latest) state.ledger.merge(latest);
       if (latest && (latest.id !== turnId || latest.status !== 'inProgress') && state.turnId === turnId && sessionFor(threadId)?.activeTurnId !== turnId) {
         state.busy = false; state.turnId = null; state.activeTurns.delete(threadId);
-        await loadItems(false, generation); updateControls(); drainQueue(threadId); return;
+        await loadItems(false, generation); updateControls(); renderThreads(); drainQueue(threadId); return;
       }
     } catch { /* keep polling; status stays as last known */ }
     watchExternalTurn();
@@ -598,7 +613,7 @@ async function loadItems(earlier = false, generation = state.openGeneration, cur
   // explicit thread/read. A fresh (non-earlier) load restarts from the newest page.
   if (earlier && (!state.pager || state.pager.threadId !== id || !state.pager.hasMore)) return;
   const pager = earlier ? state.pager : new HistoryPager(rpc, id, historyCaps);
-  const page = await pager.next({ max: 80 });
+  const page = await pager.next();
   if (!current() || generation !== state.openGeneration || id !== state.thread?.id) return;
   if (!earlier) state.pager = pager; else if (state.pager !== pager) return;
   const items = page.items;
@@ -645,10 +660,10 @@ function scheduleRender() { if (state.rendering) return; state.rendering = true;
 function renderTools() {
   toolActivity.render(state.store.values(),state.thread?.id);
 }
-const toolActivity=mountToolActivity($('tool-list'));
+const toolActivity=mountToolActivity($('tool-list'),{artifacts:artifactView});
 const liveChanges=mountLiveChanges($('live-changes'),{renderDiff});
 const scrollToBottom=mountScrollToBottom($('conversation'));
-const dshView = createDshView({ document, state, $, dshLive, dshTasks, api, rpc, el });
+const dshView = createDshView({ document, state, $, dshLive, dshTasks, api, rpc, el, onAnswerAsync:payload=>answerAsync(payload), artifactFactory:({threadId,resolveImage})=>mountArtifacts({document,fetchPreview:fetchArtifactPreview,getScope:()=>threadId,onOpen:view=>lightbox.open(view),resolveImage}) });
 const { renderDshConnection, refreshDsh, syncDshLiveContext, scheduleDshRender, renderDshTasks, ingestDshSnapshot } = dshView;
 $('dsh-live-refresh').addEventListener('click', () => { dshLive.refresh(); scheduleDshRender(); });
 function removeAttachment(id) {
@@ -659,9 +674,9 @@ function renderAttachments() {
   const container = $('attachment-tray'); const files = attachmentDraft.values(); const regularFiles = fileAttachmentDraft.values(); const fragment = document.createDocumentFragment();
   container.classList.toggle('hidden', !files.length && !regularFiles.length && !state.uploadingImages);
   for (const file of files) {
-    const chip = el('div', 'attachment-chip'); const preview = attachmentPreviews.get(file.id);
+    const chip = el('div', 'attachment-chip attachment-image'); const preview = attachmentPreviews.get(file.id);chip.title=file.name;
     if (preview) { const button=el('button','attachment-preview');button.type='button';button.setAttribute('aria-label','预览 '+file.name);const image = el('img'); image.src = preview; image.alt = ''; image.addEventListener('error', () => { image.hidden = true; });button.append(image);button.addEventListener('click',()=>lightbox.open({url:preview,name:file.name}));chip.append(button); }
-    const label = el('span', 'attachment-label'); label.title = file.name; label.append(el('strong', '', file.name), el('small', '', `${(file.size / 1024).toFixed(0)} KiB · 已本地暂存`)); chip.append(label);
+    if(!preview){const unavailable=el('span','attachment-image-unavailable','预览不可用');chip.append(unavailable);}
     const remove = el('button', 'icon-btn'); remove.append(icon(document,'close')); remove.type = 'button'; remove.setAttribute('aria-label', '取消附带 ' + file.name); remove.title = '仅取消这次发送，不删除原文件'; remove.disabled = state.sending;
     remove.addEventListener('click', () => { removeAttachment(file.id); renderAttachments(); updateControls(); }); chip.append(remove); fragment.append(chip);
   }
@@ -794,6 +809,17 @@ const composer = createComposer({ document,
   thread: { restoreThreadReasoning: (...args) => restoreThreadReasoning(...args), loadThreads: (...args) => loadThreads(...args), syncStatus: () => syncStatus(), resetThreadDsh },
   view: { $, el, notice, activity, confirm: text => confirm(text), openImage:view=>lightbox.open(view), updateControls: () => updateControls(), renderMessages: (...args) => renderMessages(...args), scheduleRender: () => scheduleRender(), scrollBottom: () => scrollBottom(), renderContext: () => renderContext(), openProjectDialog: () => openProjectDialog(), openInlineCwd: () => openInlineCwd() } });
 const { send, queueDraft, hasDraft, runningInputAvailable, drainAll, drainQueue, renderQueue } = composer;
+const answerAsync=createAsyncAnswerSender({state,sessionFor,performMutation,
+  hasPending:threadId=>!!pendingMutations.storageError||scopedPending('chat',{threadId}).length>0,
+  getEchoIds:threadId=>threadId===state.thread?.id?state.store.values().filter(item=>item.type==='userMessage'&&!item._local).map(item=>item.id):[],
+  onChange:()=>{renderPendingMutations();updateControls();renderThreads();},
+  onSent:({threadId,text,method,result,beforeIds})=>{
+    if(method==='turn/start'&&result.turn?.id&&!state.terminalTurns.has(result.turn.id)&&!['completed','failed','interrupted'].includes(result.turn.status))state.activeTurns.set(threadId,result.turn.id);
+    if(state.thread?.id!==threadId)return;
+    if(method==='turn/steer')state.store.confirmUserEcho({id:`answer:${crypto.randomUUID()}`,turnId:result.turnId,text,beforeIds});
+    else{state.ledger.merge(result.turn,{observedStartMs:Date.now()});state.turnId=state.activeTurns.get(threadId)||null;state.busy=!!state.turnId;}
+    scheduleRender();
+  }});
 
 // ---------- Context meter ----------
 function renderContext() {
@@ -925,8 +951,8 @@ function onEvent(message) {
     renderThreads();
     return;
   }
-  if(message.method==='account/updated'){resetAccountScopedViews('账户已更新');return;}
-  if(message.method==='bridge/accountLogin'){accountLoginPanel.update(message.params);if(['completed','loggedOut'].includes(message.params?.state))resetAccountScopedViews('账户已改变');return;}
+  if(message.method==='account/updated')return accountIdentity.verify();
+  if(message.method==='bridge/accountLogin'){accountLoginPanel.update(message.params);if(['completed','loggedOut'].includes(message.params?.state)){accountIdentity.reset();resetAccountScopedViews('账户已改变');}return;}
   if(message.method==='thread/tokenUsage/updated'){if(!state.connected)return;const snapshot=contextSnapshot(message.params);if(snapshot){state.contexts.set(snapshot.threadId,snapshot);if(snapshot.threadId===state.thread?.id)renderContext();}return;}
   if(message.method==='bridge/threadSessions'){applyThreadSessions(message.params);return;}
   if(message.method==='skills/changed'){slashMenu.invalidateSkills();return;}
@@ -934,16 +960,17 @@ function onEvent(message) {
   if (message.method === 'bridge/dshSnapshot') { ingestDshSnapshot(message.params); return; }
   if (message.method === 'bridge/status') { const connected=!!message.params?.connected;if(!connected)dropRequests(()=>true);setConnected(connected);if(connected&&!state.serverInstance)syncStatus().catch(error=>notice('连接已建立，但本地服务标识读取失败：'+error.message+'。目录尚未加载；可点击重新检查连接。',true)); if (message.params?.error) notice(message.params.error, true); return; }
   if (message.method === 'bridge/warning') { notice(message.params?.message || '本地桥接警告'); return; }
+  if (message.method === 'bridge/titleSummary') { titleSettings.reset(); if(message.params?.state==='failed')notice(message.params.error||'标题总结未完成，保留原名称。',true); return; }
   if (message.id !== undefined && message.method) { if (trackRequest(message)) { renderRequests(); if(preferencesView.current().approvalNotice)notice('有一个请求等待你处理。'); } return; }
   const p = message.params || {};
   if (message.method === 'serverRequest/resolved') { if (validRequestId(p.requestId)) { state.requests.delete(requestKey(p.requestId)); renderRequests(); } return; }
   if (message.method === 'thread/closed' && typeof p.threadId === 'string' && p.threadId) dropRequests(request => requestThread(request) === p.threadId);
   if (message.method === 'error' && (!p.threadId || p.threadId === state.thread?.id)) { notice(p.error?.message || p.message || 'Codex 返回错误', true); return; }
-  if (message.method === 'turn/started') { state.activeTurns.set(p.threadId, p.turn?.id); }
+  if (message.method === 'turn/started') { state.activeTurns.set(p.threadId, p.turn?.id); renderThreads(); }
   if (message.method === 'turn/completed') { dropRequests(request => p.threadId && requestThread(request) === p.threadId && (request.params?.turnId ? request.params.turnId === p.turn?.id : request.method !== 'mcpServer/elicitation/request')); state.activeTurns.delete(p.threadId); state.interruptingTurns.delete(p.turn?.id); state.terminalTurns.add(p.turn?.id); if (state.terminalTurns.size > 100) state.terminalTurns.delete(state.terminalTurns.values().next().value);
     // The queue only advances after a normal completion; anything else waits for the user.
     if (p.turn?.status !== 'completed') followUps.pause(p.threadId, p.turn?.status === 'interrupted' ? '任务已停止' : '任务未正常完成');
-    setTimeout(() => drainQueue(p.threadId), 0); }
+    renderThreads(); setTimeout(() => drainQueue(p.threadId), 0); }
   if (!state.thread || p.threadId !== state.thread.id) return;
   const turnId = typeof p.turnId === 'string' ? p.turnId : p.turn?.id;
   if (message.method === 'item/started' || message.method === 'item/completed') {
@@ -970,7 +997,7 @@ function applyThreadSessions(params) {
   state.threadSessions = Array.isArray(params?.threads) ? params.threads.filter(row => typeof row?.threadId === 'string') : [];
   for (const row of state.threadSessions) if (row.activeTurnId && !state.terminalTurns.has(row.activeTurnId)) state.activeTurns.set(row.threadId, row.activeTurnId);
   const failed = state.threadSessions.find(row => row.releaseError); if (failed) notice(failed.releaseError, true);
-  updateControls(); drainAll();
+  updateControls(); renderThreads(); drainAll();
 }
 async function syncStatus() {
   const status = await api('/api/status'); applyAccessMode(state.lan || status.access === 'lan'); state.cliVersion = typeof status.version==='string'&&status.version ? boundedText(status.version,300) : null; state.desktop = status.desktop === true; if($('version-info'))$('version-info').textContent=state.cliVersion||'未知'; document.body.classList.toggle('native-desktop',state.desktop); $('runtime-close-info').textContent = state.desktop ? '关闭窗口时可选择退出并停止本应用后台、转入托盘继续运行或取消。托盘菜单可以重新打开或退出；退出可能中断本应用任务，独立 DSH 任务可能继续。' : '关闭窗口不等于停止服务。需要结束本次 GUI 服务时使用下面的按钮；正在运行的任务可能中断，独立 DSH 任务可能继续。'; $('reopen-info').textContent = state.desktop ? '再次启动会建立新连接并读取官方对话历史；不保存浏览器配置文件，不承诺无缝恢复。' : status.reopenAvailable === true ? '可安全重新打开本地 GUI' : status.reopenAvailable === false ? '当前不可用。关闭窗口后可能需要恢复原窗口或重新运行启动器；不会承诺能无缝重开。' : '未知（服务未提供重开状态）'; if (!state.desktop && status.reopenError) $('reopen-info').textContent += ' ' + boundedText(status.reopenError, 800); if(state.serverInstance !== (status.serverInstance || null)){deactivatePendingReconciler();historyCaps.unsupported.clear();pluginPanel.reset();configPanel.reset();resetUsage();prReviewPanel?.reset();resetRuntimePanel();dshLive.reset();remoteReset({statusMessage:'本地服务实例已变化，请重新读取远控状态。',pairMessage:'本地服务实例已变化，本机配对码显示已清除；不会撤销旧环境设备。',devicesMessage:'本地服务实例已变化，旧设备显示已清除；不会撤销旧环境设备。'});}state.serverInstance = status.serverInstance || null; state.demo = !!status.demo; setConnected(status.connected, status.demo ? '演示模式 · 不调用模型' : undefined); if(state.desktop){await loadDesktopState();preferencesView.syncHostTheme();} $('mode-info').textContent = status.demo ? '演示模式，不消耗额度' : '本地 Codex app-server';
@@ -1048,21 +1075,20 @@ $('earlier').addEventListener('click', async () => { $('earlier').disabled = tru
 $('shutdown').addEventListener('click', async () => { if (!confirm(state.desktop ? '停止本窗口的 Codex app-server？Codex 任务可能中断，独立 DSH 任务可能继续。再次启动会重新连接官方历史，不会无缝恢复当前连接。' : '停止 GUI 本地服务？通过此 GUI 运行的任务可能会中断，独立 DSH 任务可能继续。')) return; state.shuttingDown = true; try { const result = await api('/api/shutdown', {}); if (result?.engineStopped !== true || result?.shutdownAccepted !== true) throw new Error('服务未确认引擎已停止，状态未知；请稍后检查连接状态。'); state.eventController?.abort(); setConnected(false, 'GUI 服务已停止'); activity(state.desktop ? '已停止服务。请关闭本窗口后重新启动应用；新连接会读取官方历史。' : '已停止服务。重新运行启动器即可打开。'); closeSettings(); } catch (e) { state.shuttingDown = false; notice(e.message, true); } });
 $('model').addEventListener('change', () => populateEfforts(true)); $('dismiss-notice').addEventListener('click', () => notifications.dismiss());
 $('rail-sidebar').addEventListener('click', () => sidebarController.toggle()); $('sidebar-overlay').addEventListener('click', () => sidebarController.close()); for(const id of ['close-sidebar','settings-sidebar-close']) $(id).addEventListener('click', () => sidebarController.close());
-function showDetails(tab, force = false) {
+function showDetails(tab = state.detailsTab, force = false) {
   if (currentRoute !== 'chat') route('chat');
   const sameOpen = !$('details').classList.contains('hidden') && state.detailsTab === tab;
   const visible = force || !sameOpen; state.detailsTab = tab;
-  $('details').classList.toggle('hidden', !visible); $('toggle-details').setAttribute('aria-pressed', String(visible && tab === 'tools'));
-  $('open-dsh').setAttribute('aria-pressed', String(visible && tab === 'dsh'));
+  $('details').classList.toggle('hidden', !visible); $('toggle-details').setAttribute('aria-pressed', String(visible));
   $('tools-panel').classList.toggle('hidden', tab !== 'tools'); $('dsh-panel').classList.toggle('hidden', tab !== 'dsh');
   $('details-title').textContent = tab === 'dsh' ? '子代理' : '工具活动';
   for (const name of ['tools', 'dsh']) { $('tab-' + name).classList.toggle('active', name === tab); $('tab-' + name).setAttribute('aria-pressed', String(name === tab)); }
   syncDshLiveContext();
   if (visible) { if (tab === 'dsh') { renderDshConnection(); renderDshTasks(); } else renderTools(); }
 }
-$('toggle-details').addEventListener('click', () => showDetails('tools')); $('open-dsh').addEventListener('click', () => showDetails('dsh'));
+$('toggle-details').addEventListener('click', () => showDetails());
 $('tab-tools').addEventListener('click', () => showDetails('tools', true)); $('tab-dsh').addEventListener('click', () => showDetails('dsh', true));
-$('close-details').addEventListener('click', () => { $('details').classList.add('hidden'); $('toggle-details').setAttribute('aria-pressed', 'false'); $('open-dsh').setAttribute('aria-pressed', 'false'); syncDshLiveContext(); });
+$('close-details').addEventListener('click', () => { $('details').classList.add('hidden'); $('toggle-details').setAttribute('aria-pressed', 'false'); syncDshLiveContext(); });
 $('refresh-dsh').addEventListener('click', refreshDsh); $('refresh-dsh-settings').addEventListener('click', refreshDsh);
 for (const button of document.querySelectorAll('[data-prompt]')) button.addEventListener('click', () => { $('prompt').value = button.dataset.prompt; $('prompt').focus(); updateControls(); });
 let searchTimer; $('search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => loadThreads().catch(e => notice(e.message, true)), 250); });
@@ -1095,15 +1121,17 @@ $('settings-search').addEventListener('input', () => { const query = $('settings
 for (const button of document.querySelectorAll('[data-settings-section]')) button.addEventListener('click', () => {const wasOverlay=sidebarController.isOverlayOpen();selectSettingsSection(button.dataset.settingsSection);if(wasOverlay){sidebarController.closeForNavigation();$('settings-back').focus();}});
 function selectSettingsSection(section = 'general') {
   if(section==='account'||section==='usage'){route(section);return;}
-  const page = section === 'dsh' ? 'general' : (['lan','about'].includes(section) && state.lan) ? 'general' : ['general','archived','remote','plugins','appearance','notifications','shortcuts','configuration','lan','about'].includes(section) ? section : 'general'; state.settingsPage = page;
-  for (const name of ['general','archived','remote','plugins','appearance','notifications','shortcuts','configuration','lan','about']) $('settings-' + name).classList.toggle('hidden', name !== page);
+  if(section==='lan')section='remote';
+  const page = section === 'dsh' ? 'general' : (section==='about' && state.lan) ? 'general' : ['general','archived','remote','plugins','appearance','notifications','shortcuts','configuration','about'].includes(section) ? section : 'general'; state.settingsPage = page;
+  for (const name of ['general','archived','remote','plugins','appearance','notifications','shortcuts','configuration','about']) $('settings-' + name).classList.toggle('hidden', name !== page);
   for (const item of document.querySelectorAll('[data-settings-section]')) item.classList.toggle('active', item.dataset.settingsSection === section);
   document.querySelector('.settings-content').scrollTop = 0;
   if (section === 'dsh') $('settings-dsh-heading').scrollIntoView({ behavior: 'instant', block: 'start' });
   if (page === 'general' && !state.lan) { dshConnectionView.activate(); dshConfigView.activate(); } else { dshConnectionView.deactivate(); dshConfigView.deactivate(); }
+  if (page === 'appearance' && !state.lan) titleSettings.activate();
   if (page === 'archived') loadArchived().catch(e => notice(e.message, true));
   if(page==='plugins')pluginPanel.activate();else pluginPanel.deactivate();renderPluginPending();
-  if(page==='lan')lanView.activate();else lanView.deactivate();
+  if(page==='remote'&&!state.lan)lanView.activate();else lanView.deactivate();
   if(page==='about')aboutView.activate();else aboutView.deactivate();
   if (page === 'remote'){if(state.connected)refreshRemote();else remoteReset({statusMessage:'尚未连接 Codex，无法读取远控状态。',pairMessage:'尚未连接，本机配对码显示已清除；不会撤销已配对设备。',devicesMessage:'未连接时设备列表不可用；不会撤销旧环境设备。'});}
   syncRuntimePanelActivity();

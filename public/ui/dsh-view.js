@@ -15,7 +15,7 @@ import { createAgentInspector } from './agent-inspector.js';
  * @param {Function} deps.rpc       authenticated RPC call
  * @param {Function} deps.el        element factory
  */
-export function createDshView({ document, state, $, dshLive, dshTasks, api, rpc, el }) {
+export function createDshView({ document, state, $, dshLive, dshTasks, api, rpc, el, onAnswerAsync, artifactFactory }) {
   function renderDshConnection() {
     const c = state.dshConnection;
     const label = state.dshRefreshing ? '正在读取 MCP 状态…' : c ? `${!state.connected ? '上次检查：' : ''}${c.label}` : '尚未检查 DSH 连接';
@@ -118,7 +118,7 @@ export function createDshView({ document, state, $, dshLive, dshTasks, api, rpc,
     $('dsh-live-refresh').disabled = !snapshot.actionable;
     $('dsh-live-refresh').title = snapshot.actionable ? '刷新子代理' : snapshot.pauseReason || '自动刷新已暂停';
   }
-  const inspector=createAgentInspector({document,state,host:$('dsh-tasks'),dshTasks,dshLive,rpc,readDshTask,el});
+  const inspector=createAgentInspector({document,state,host:$('dsh-tasks'),dshTasks,dshLive,rpc,readDshTask,el,onAnswerAsync,artifactFactory});
   $('dsh-live-refresh').addEventListener('click',()=>inspector.refresh());
   function renderDshTasks(){renderDshLiveMeta();inspector.render();}
   function openAgent(id,kind){return inspector.open(id,kind);}

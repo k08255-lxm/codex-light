@@ -14,6 +14,13 @@ const n=value=>Number.isSafeInteger(value)&&value>=0?value:null;
 const metric=value=>typeof value==='number'&&Number.isFinite(value)&&value>=0?value:null;
 const id=value=>typeof value==='string'&&value.length>0&&value.length<=256&&!/[\x00-\x20\x7f]/.test(value)?value:null;
 const providerId=value=>typeof value==='string'&&/^[a-zA-Z0-9_.-]{1,100}$/.test(value)?value:null;
+export function publicAccountIdentity(raw){
+ const value=raw?.account??raw;if(!value||!['chatgpt','apiKey'].includes(value.type))return null;
+ const text=value=>typeof value==='string'&&value.length>0&&value.length<=256&&!/[\x00-\x1f\x7f]/.test(value)?value:null;
+ const email=value.type==='chatgpt'?text(value.email):null;
+ // API-key auth exposes no public account identity. Never read or hash a key.
+ return {type:value.type,email,planType:text(value.planType),id:email?createHash('sha256').update(JSON.stringify([value.type,email])).digest('hex'):null,label:email||(value.type==='apiKey'?'API Key 登录（账户未知）':'ChatGPT 登录（账户未知）')};
+}
 const iso=value=>typeof value==='string'&&value.length<64&&Number.isFinite(Date.parse(value))?new Date(value).toISOString():null;
 const emptyTokens=()=>Object.fromEntries(TOKEN_KEYS.map(key=>[key,null]));
 const tokens=value=>Object.fromEntries(TOKEN_KEYS.map(key=>[key,n(value?.[key])]));
@@ -21,7 +28,7 @@ const emptyMetrics=()=>Object.fromEntries(METRICS.map(key=>[key,null]));
 const keyFor=(thread,turn)=>JSON.stringify([thread,turn]);
 const plus=(a,b)=>n(a)!==null&&n(b)!==null&&Number.isSafeInteger(a+b)?a+b:null;
 const error=message=>Object.assign(new Error(message),{status:400,outcome:'notExecuted'});
-const blankRow=(threadId,turnId,source)=>({id:keyFor(threadId,turnId),kind:'turn',threadId,turnId,source,timestamp:null,startedAt:null,completedAt:null,model:null,provider:null,status:'unknown',submissionCount:0,tokens:emptyTokens(),tokensComplete:false,outputTokensComplete:false,unknownTokenFields:[],performance:emptyMetrics()});
+const blankRow=(threadId,turnId,source)=>({id:keyFor(threadId,turnId),kind:'turn',threadId,turnId,source,timestamp:null,startedAt:null,completedAt:null,model:null,provider:null,account:null,status:'unknown',submissionCount:0,tokens:emptyTokens(),tokensComplete:false,outputTokensComplete:false,unknownTokenFields:[],performance:emptyMetrics()});
 
 export function defaultStatisticsRoot(){const base=process.platform==='win32'?(process.env.LOCALAPPDATA||path.join(os.homedir(),'AppData','Local')):(process.env.XDG_DATA_HOME||path.join(os.homedir(),'.local','share'));return path.join(base,'CodexLight','statistics');}
 async function noLinks(target){for(let p=path.resolve(target);;p=path.dirname(p)){try{if((await fs.lstat(p)).isSymbolicLink())throw new Error('Statistics path is a link');}catch(e){if(e.code!=='ENOENT')throw e;}if(path.dirname(p)===p)return;}}
@@ -29,6 +36,7 @@ function cleanRow(raw){
  if(!raw||!id(raw.threadId)||!id(raw.turnId)||raw.source!=='light-events'||!statuses.has(raw.status))throw new Error('Invalid statistics record');
  const row=blankRow(raw.threadId,raw.turnId,'light-events');
  Object.assign(row,{timestamp:iso(raw.timestamp),startedAt:iso(raw.startedAt),completedAt:iso(raw.completedAt),model:id(raw.model),provider:providerId(raw.provider),status:raw.status,submissionCount:n(raw.submissionCount)??0,tokens:tokens(raw.tokens),tokensComplete:raw.tokensComplete===true,outputTokensComplete:raw.outputTokensComplete===true,unknownTokenFields:TOKEN_KEYS.filter(key=>raw.unknownTokenFields?.includes(key)),performance:Object.fromEntries(METRICS.map(key=>[key,metric(raw.performance?.[key])]))});
+ row.account=publicAccountIdentity(raw.account);
  return row;
 }
 function addUsage(row,delta){for(const key of TOKEN_KEYS){const value=n(delta[key]);if(value===null){row.tokens[key]=null;if(!row.unknownTokenFields.includes(key))row.unknownTokenFields.push(key);row.tokensComplete=false;}else if(!row.unknownTokenFields.includes(key)){row.tokens[key]=row.tokens[key]===null?value:plus(row.tokens[key],value);if(row.tokens[key]===null){row.unknownTokenFields.push(key);row.tokensComplete=false;}}}}
@@ -44,9 +52,9 @@ function turnThroughput(row){
  return row.kind==='turn'&&row.status==='completed'&&row.outputTokensComplete===true&&output!==null&&metric(duration)!==null&&duration>0?output/(duration/1000):null;
 }
 function cost(row,pricing){
- let estimate=null;
- if(row.provider&&row.model&&row.model.length<=200){try{estimate=estimateTokenCost({...row.tokens,model:row.model,provider:row.provider},pricing.get(row.model,row.provider));}catch{/* Exact model/provider or schema is unavailable; no price fallback. */}}
- return {kind:'reference-estimate',currency:'USD',usd:estimate?.complete?estimate.usd:null,complete:estimate?.complete===true&&row.tokensComplete===true,components:estimate?.components||[],reason:estimate?.reason||(!row.model||!row.provider?'模型或供应商未知':null)};
+ let estimate=null,reference=null;
+ if(row.provider&&row.model&&row.model.length<=200){try{reference=pricing.get(row.model,row.provider);estimate=estimateTokenCost({...row.tokens,model:row.model,provider:row.provider},reference);}catch{/* Invalid model/provider or schema cannot be priced. */}}
+ return {kind:'reference-estimate',currency:'USD',usd:estimate?.complete?estimate.usd:estimate?.knownUsd??null,complete:estimate?.complete===true&&row.tokensComplete===true,components:estimate?.components||[],reason:estimate?.reason||(!row.model||!row.provider?'模型或路由未知':null),reference:reference?{source:reference.source,catalogProvider:reference.catalogProvider||null,catalogModel:reference.catalogModel||null,matchedBy:reference.matchedBy,referenceTier:reference.referenceTier||null,fetchedAt:reference.fetchedAt||null}:null};
 }
 function aggregate(rows){
  const tokenTotals=Object.fromEntries(TOKEN_KEYS.map(key=>{const known=rows.map(row=>n(row.tokens[key])).filter(value=>value!==null);const sum=known.reduce((a,b)=>a+b,0);return [key,known.length&&Number.isSafeInteger(sum)?sum:null];}));
@@ -59,7 +67,7 @@ function aggregate(rows){
  const submissions=rows.map(row=>n(row.submissionCount)).filter(value=>value!==null);
  return {rowCount:rows.length,turnCount:turns.length,submissionCount:submissions.length?submissions.reduce((sum,value)=>sum+value,0):rows.length?null:0,requestCount:null,...tokenTotals,cacheHitRate:input>0?cached/input:null,
   completedCount,failedCount,interruptedCount,runningCount:count('inProgress'),unknownCount:count('unknown'),successRate:terminal?completedCount/terminal:null,errorRate:terminal?failedCount/terminal:null,interruptionRate:terminal?interruptedCount/terminal:null,
-  estimatedCost:{kind:'reference-estimate',currency:'USD',usd:priced.length?priced.reduce((sum,row)=>sum+row.estimatedCost.usd,0):null,pricedRows:priced.length,unpricedRows:rows.length-priced.length,totalRows:rows.length,complete:rows.length>0&&rows.every(row=>row.estimatedCost.complete)},
+  estimatedCost:{kind:'reference-estimate',currency:'USD',usd:priced.length?priced.reduce((sum,row)=>sum+row.estimatedCost.usd,0):null,pricedRows:priced.length,partialRows:priced.filter(row=>!row.estimatedCost.complete).length,unpricedRows:rows.length-priced.length,totalRows:rows.length,complete:rows.length>0&&rows.every(row=>row.estimatedCost.complete)},
   performance:{...Object.fromEntries(METRICS.map(key=>[key,percentiles(turns.map(row=>row.performance[key]))])),turnOutputTokensPerSecond:percentiles(turns.map(row=>row.performance.turnOutputTokensPerSecond)),ttftMs:null,outputTokensPerSecond:null}};
 }
 
@@ -68,6 +76,7 @@ export class StatisticsService {
  constructor({pricing,root=null,now=Date.now,monotonic=()=>performance.now(),limit=STATISTICS_LIMIT}={}){
   if(root!==null&&(typeof root!=='string'||!path.isAbsolute(root)))throw new Error('Statistics root must be absolute');
   Object.assign(this,{pricing,root,now,monotonic,limit});this.rows=new Map();this.baselines=new Map();this.blockedTokenThreads=new Set();this.threads=new Map();this.active=new Map();this.localRows=[];this.localCoverage={partial:false,excludedOverlappingThreads:0,excludedAmbiguousSessions:0};this.queue=Promise.resolve();this.persistenceWarning=null;this.revision=0;this.truncated=false;this.snapshots=new Map();
+  this.currentAccount=null;
  }
  async load(){
   if(!this.root)return;
@@ -104,11 +113,12 @@ export class StatisticsService {
  }
  rememberBaseline(threadId,value){this.baselines.set(threadId,value);while(this.baselines.size>1000){const oldest=this.baselines.keys().next().value;this.baselines.delete(oldest);this.blockedTokenThreads.delete(oldest);}}
  acknowledge(method,params,result){
+  if(method==='account/read'){this.setAccount(result);return;}
   if(result?.thread){this.thread(result.thread,result);if(method==='thread/start'){this.rememberBaseline(result.thread.id,Object.fromEntries(TOKEN_KEYS.map(key=>[key,0])));this.blockedTokenThreads.delete(result.thread.id);}}
   if(!['turn/start','turn/steer','review/start','thread/compact/start'].includes(method))return;
   const turnId=id(result?.turn?.id)||id(result?.turnId)||[...this.rows.values()].find(row=>row.threadId===params.threadId&&row.status==='inProgress')?.turnId;if(!turnId)return;
   const key=keyFor(params.threadId,turnId);let row=this.rows.get(key);
-  if(!row){row=blankRow(params.threadId,turnId,'light-events');row.timestamp=new Date(this.now()).toISOString();this.rows.set(key,row);}
+  if(!row){row=blankRow(params.threadId,turnId,'light-events');row.account=this.currentAccount?{...this.currentAccount}:null;row.timestamp=new Date(this.now()).toISOString();this.rows.set(key,row);}
   row.submissionCount++;const info=this.threads.get(params.threadId)||{};row.model=id(params.model)||row.model||info.model||null;row.provider=row.provider||info.provider||null;
   // An accepted explicit override becomes the thread's effective model for subsequent turns.
   if(method==='turn/start'&&id(params.model))this.threads.set(params.threadId,{...info,model:id(params.model)});
@@ -139,7 +149,7 @@ export class StatisticsService {
   if(!key)return;
   if(message.method==='turn/started'){
    if(this.rows.get(key)?.startedAt)return;
-   const info=this.threads.get(threadId)||{},row=this.rows.get(key)||blankRow(threadId,turnId,'light-events');row.status='inProgress';row.timestamp=row.startedAt=new Date(this.now()).toISOString();row.model=row.model||info.model||null;row.provider=row.provider||info.provider||null;row.tokensComplete=this.baselines.has(threadId);row.outputTokensComplete=n(this.baselines.get(threadId)?.outputTokens)!==null;
+   const info=this.threads.get(threadId)||{},existing=this.rows.get(key),row=existing||blankRow(threadId,turnId,'light-events');if(!existing)row.account=this.currentAccount?{...this.currentAccount}:null;row.status='inProgress';row.timestamp=row.startedAt=new Date(this.now()).toISOString();row.model=row.model||info.model||null;row.provider=row.provider||info.provider||null;row.tokensComplete=this.baselines.has(threadId);row.outputTokensComplete=n(this.baselines.get(threadId)?.outputTokens)!==null;
    this.rows.set(key,row);this.active.set(key,{turnId,start:this.monotonic(),streams:new Map(),streamChars:0,streamMs:0});this.changed();return;
   }
   const row=this.rows.get(key),active=this.active.get(key);if(!row)return;
@@ -195,24 +205,26 @@ export class StatisticsService {
   this.localRows=[...out.values()].sort((a,b)=>(b.timestamp||'').localeCompare(a.timestamp||'')).slice(0,this.limit);this.localCoverage={partial:scan.partial||out.size>this.limit||excluded>0||overlap.size>0,excludedOverlappingThreads:overlap.size,excludedAmbiguousSessions:excluded};this.revision++;return {recovered};
  }
  query(input={}){
-  if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['scope','from','to','bucket','model','provider','cursor','limit'].includes(key)))throw error('统计查询参数无效');
+  if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['scope','from','to','bucket','model','provider','account','cursor','limit'].includes(key)))throw error('统计查询参数无效');
   const {scope='light',bucket='day',limit=30}=input;if(!['light','local'].includes(scope)||!['hour','day'].includes(bucket)||!Number.isInteger(limit)||limit<1||limit>100)throw error('统计范围或分页参数无效');
-  for(const field of ['model','provider'])if(input[field]!==undefined&&!id(input[field]))throw error('统计筛选参数无效');
+  for(const field of ['model','provider','account'])if(input[field]!==undefined&&!id(input[field]))throw error('统计筛选参数无效');
   const from=input.from===undefined?null:iso(input.from),to=input.to===undefined?null:iso(input.to);if((input.from!==undefined&&!from)||(input.to!==undefined&&!to)||(from&&to&&from>=to))throw error('统计日期范围无效');
-  const signature=createHash('sha256').update(JSON.stringify({scope,bucket,from,to,model:input.model||null,provider:input.provider||null,limit})).digest('hex');let snapshot,offset=0;
+  const signature=createHash('sha256').update(JSON.stringify({scope,bucket,from,to,model:input.model||null,provider:input.provider||null,account:input.account||null,limit})).digest('hex');let snapshot,offset=0;
   if(input.cursor!==undefined){
    if(typeof input.cursor!=='string'||input.cursor.length>300)throw error('统计分页游标无效');let cursor;try{cursor=JSON.parse(Buffer.from(input.cursor,'base64url').toString());}catch{throw error('统计分页游标无效');}
    if(!cursor||typeof cursor!=='object'||Array.isArray(cursor)||Object.keys(cursor).sort().join(',')!=='id,offset'||typeof cursor.id!=='string')throw error('统计分页游标无效');
    snapshot=this.snapshots.get(cursor.id);if(!snapshot||snapshot.signature!==signature||!Number.isSafeInteger(cursor.offset)||cursor.offset<0||cursor.offset>snapshot.rows.length||this.now()-snapshot.created>300000)throw error('统计分页已过期，请刷新统计');offset=cursor.offset;
   }else{
-   const rows=(scope==='light'?[...this.rows.values()]:this.localRows).filter(row=>(!from||row.timestamp&&row.timestamp>=from)&&(!to||row.timestamp&&row.timestamp<to)&&(!input.model||row.model===input.model)&&(!input.provider||row.provider===input.provider)).map(row=>({...structuredClone(row),performance:{...row.performance,turnOutputTokensPerSecond:turnThroughput(row)},estimatedCost:cost(row,this.pricing)})).sort((a,b)=>(b.timestamp||'').localeCompare(a.timestamp||'')||a.id.localeCompare(b.id));
+   const rows=(scope==='light'?[...this.rows.values()]:this.localRows).filter(row=>(!from||row.timestamp&&row.timestamp>=from)&&(!to||row.timestamp&&row.timestamp<to)&&(!input.model||row.model===input.model)&&(!input.provider||row.provider===input.provider)&&(!input.account||(row.account?.id||'unknown')===input.account)).map(row=>({...structuredClone(row),performance:{...row.performance,turnOutputTokensPerSecond:turnThroughput(row)},estimatedCost:cost(row,this.pricing)})).sort((a,b)=>(b.timestamp||'').localeCompare(a.timestamp||'')||a.id.localeCompare(b.id));
    const identity=randomBytes(12).toString('hex');snapshot={id:identity,signature,created:this.now(),rows,pricing:this.pricing.status()};this.snapshots.set(identity,snapshot);while(this.snapshots.size>8)this.snapshots.delete(this.snapshots.keys().next().value);
   }
   const rows=snapshot.rows,group=(field)=>{const groups=new Map();for(const row of rows){const key=row[field];if(!groups.has(key))groups.set(key,[]);groups.get(key).push(row);}return [...groups].map(([key,items])=>({[field]:key,...aggregate(items)})).sort((a,b)=>b.rowCount-a.rowCount);};
   const buckets=new Map(),duration=bucket==='hour'?3600000:86400000;for(const row of rows){if(!row.timestamp)continue;const time=Math.floor(Date.parse(row.timestamp)/duration)*duration,start=new Date(time).toISOString();if(!buckets.has(start))buckets.set(start,[]);buckets.get(start).push(row);}
   const notes=['回合/提交数量不是上游模型API请求数。','Token仅累加有可验证基线的观察差分，首段缺失或重放不补猜。','回合平均输出为已完成回合的输出tokens/整轮秒数，包含思考、工具和等待，不是纯模型生成速度。','首次可见输出等待不是API TTFT；缺少对应推理耗时时不展示模型生成tok/s。','本地日志、本应用观测和官方账户统计不可相加。','费用仅为可匹配模型及provider的社区参考估算，不是账单。'];
-  return {scope,generatedAt:new Date(this.now()).toISOString(),totals:aggregate(rows),trend:[...buckets].sort(([a],[b])=>a.localeCompare(b)).map(([start,items])=>({start,...aggregate(items)})),models:group('model'),providers:group('provider'),details:{data:rows.slice(offset,offset+limit),total:rows.length,nextCursor:offset+limit<rows.length?Buffer.from(JSON.stringify({id:snapshot.id,offset:offset+limit})).toString('base64url'):null},
+  const accounts=new Map();for(const row of rows){const key=row.account?.id||'unknown';if(!accounts.has(key))accounts.set(key,{account:key,label:row.account?.label||'历史账户未知',rows:[]});accounts.get(key).rows.push(row);}
+  return {scope,currentAccount:this.currentAccount,accounts:[...accounts.values()].map(({rows,...entry})=>({...entry,...aggregate(rows)})),generatedAt:new Date(this.now()).toISOString(),totals:aggregate(rows),trend:[...buckets].sort(([a],[b])=>a.localeCompare(b)).map(([start,items])=>({start,...aggregate(items)})),models:group('model'),providers:group('provider'),details:{data:rows.slice(offset,offset+limit),total:rows.length,nextCursor:offset+limit<rows.length?Buffer.from(JSON.stringify({id:snapshot.id,offset:offset+limit})).toString('base64url'):null},
    coverage:{source:scope==='light'?'light-events':'local-codex-jsonl',partial:(scope==='light'?this.truncated:this.localCoverage.partial)||rows.some(row=>!row.tokensComplete),knownModelRows:rows.filter(row=>row.model!==null).length,unknownModelRows:rows.filter(row=>row.model===null).length,excludedOverlappingThreads:scope==='local'?this.localCoverage.excludedOverlappingThreads:0,excludedAmbiguousSessions:scope==='local'?this.localCoverage.excludedAmbiguousSessions:0,tokenRows:Object.fromEntries(TOKEN_KEYS.map(key=>[key,rows.filter(row=>row.tokens[key]!==null).length])),completeTokenRows:rows.filter(row=>row.tokensComplete).length,cacheHitRows:rows.filter(row=>row.tokens.inputTokens!==null&&row.tokens.cachedInputTokens!==null&&row.tokens.cachedInputTokens<=row.tokens.inputTokens).length,observedTurns:rows.filter(row=>row.kind==='turn').length,usageObservations:rows.filter(row=>row.kind==='usage-observation').length,retainedLimit:this.limit,persistenceWarning:this.persistenceWarning,notes},pricing:snapshot.pricing,dsh:{available:false,reason:'公开任务事件尚无已核实的用量和生成性能口径；不读取私有供应商账户或猜测费用。'}};
  }
+ setAccount(raw){this.currentAccount=publicAccountIdentity(raw);}
  async close(){for(const [key] of this.active){const row=this.rows.get(key);if(row?.status==='inProgress')row.status='unknown';}this.active.clear();await this.flush();}
 }

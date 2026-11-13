@@ -13,6 +13,16 @@ using System.Threading;
 using System.Threading.Tasks;
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("CodexLight.Setup.Tests")]
 namespace CodexLight.Bootstrap {
+ internal enum SetupPhase { Checking, Preparing, Downloading, Verifying, RuntimeInstalling, ApplicationInstalling }
+ internal sealed class SetupProgress {
+  public SetupPhase Phase { get; }
+  public string Message { get; }
+  public long? Bytes { get; }
+  public long? TotalBytes { get; }
+  public double? Percent=>Bytes.HasValue&&TotalBytes.HasValue&&TotalBytes.Value>0&&Bytes.Value<=TotalBytes.Value?(double?)((double)Bytes.Value/TotalBytes.Value*100):null;
+  public SetupProgress(SetupPhase phase,string message,long? bytes=null,long? totalBytes=null){Phase=phase;Message=message;Bytes=bytes>=0?bytes:null;TotalBytes=totalBytes>0?totalBytes:null;}
+  public static SetupPhase DependencyPhase(string message)=>message.Contains("下载")?SetupPhase.Downloading:message.Contains("核验")?SetupPhase.Verifying:message.Contains("安装")||message.Contains("等待官方")?SetupPhase.RuntimeInstalling:SetupPhase.Preparing;
+ }
  internal static class ExitCodePolicy {
   public static bool IsSuccess(int code)=>code==0||code==3010||code==1641;
   public static void RequireSuccess(int code,string component){if(IsSuccess(code))return;if(code==1602)throw new OperationCanceledException(component+"安装已取消（1602）。");throw new InvalidOperationException(component+"安装失败（"+code+"）。"+(code==1618?"另一个安装程序正在运行，请稍后重试。":code==1638?"已存在冲突的版本，请使用对应版本的安装器。":"请展开详情查看安装日志。"));}
@@ -47,34 +57,46 @@ namespace CodexLight.Bootstrap {
   public static string MsiArguments(string msi,string target,string log,bool reinstall=false)=>"/i \""+msi+"\" /qn /norestart /L*v \""+log+"\" SETUP_PREREQUISITES_VERIFIED=1 MSIRESTARTMANAGERCONTROL=DisableShutdown INSTALLFOLDER=\""+target+"\""+(reinstall?" REINSTALL=ALL REINSTALLMODE=vomus":"");
   // The authored MSI filename must survive extraction: secure repair resolves this name in SourceDir.
   // Read identity from the embedded package, not the bootstrapper assembly/build input filename.
-  internal static async Task<EmbeddedPackage> ExtractPackage(Stream input,string cache,CancellationToken token){
-   string temporary=Path.Combine(cache,"embedded.msi");
-   using(var output=new FileStream(temporary,FileMode.CreateNew,FileAccess.Write,FileShare.None))await input.CopyToAsync(output,65536,token);
+  internal static async Task CopyPackage(Stream input,Stream output,CancellationToken token,Action<long,long?>? progress=null){
+   long? total=input.CanSeek?(long?)(input.Length-input.Position):null;long copied=0;var reportClock=Stopwatch.StartNew();progress?.Invoke(copied,total);
+   byte[] buffer=new byte[65536];int count;
+   while((count=await input.ReadAsync(buffer,0,buffer.Length,token))>0){await output.WriteAsync(buffer,0,count,token);copied+=count;if(reportClock.ElapsedMilliseconds>=100){progress?.Invoke(copied,total);reportClock.Restart();}}
+   progress?.Invoke(copied,total);
    token.ThrowIfCancellationRequested();
+  }
+  internal static async Task<EmbeddedPackage> ExtractPackage(Stream input,string cache,CancellationToken token,Action<long,long?>? progress=null,Action? verifying=null){
+   string temporary=Path.Combine(cache,"embedded.msi");
+   using(var output=new FileStream(temporary,FileMode.CreateNew,FileAccess.Write,FileShare.None,65536,FileOptions.Asynchronous|FileOptions.SequentialScan))await CopyPackage(input,output,token,progress);
+   verifying?.Invoke();
    var package=EmbeddedPackage.Read(temporary);string final=Path.Combine(cache,PackageFileName(package.Version));File.Move(temporary,final);package.Path=final;return package;
   }
-  public async Task<int> Run(string target,bool registered,Action<string> progress,Action<bool> canCancel,CancellationToken token){
+  // Detection, package metadata and process startup must never resume on the WPF dispatcher.
+  public Task<int> Run(string target,bool registered,Action<string> progress,Action<bool> canCancel,CancellationToken token,IProgress<SetupProgress>? phaseProgress=null)=>Task.Run(()=>RunCore(target,registered,progress,canCancel,token,phaseProgress),token);
+  async Task<int> RunCore(string target,bool registered,Action<string> progress,Action<bool> canCancel,CancellationToken token,IProgress<SetupProgress>? phaseProgress){
+   Action<SetupPhase,string> report=(phase,message)=>{progress(message);phaseProgress?.Report(new SetupProgress(phase,message));};
+   report(SetupPhase.Checking,"正在检查安装位置和运行环境…");
    target=InstallPaths.Validate(target,registered);
-   var states=await Task.Run(()=>Detection.Read(target));int restart=0;
+   var states=Detection.Read(target);int restart=0;
    foreach(var dependency in states.Where(x=>!x.Compatible)){
-    progress("准备 "+dependency.Name+"…");
-    int code=await DependencyInstaller.Install(dependency.Key,message=>progress(dependency.Name+" · "+message),token,canCancel,true);
+    report(SetupPhase.Preparing,"准备 "+dependency.Name+"…");
+    int code=await DependencyInstaller.Install(dependency.Key,message=>report(SetupProgress.DependencyPhase(message),dependency.Name+" · "+message),token,canCancel,true,(bytes,total)=>phaseProgress?.Report(new SetupProgress(SetupPhase.Downloading,dependency.Name+" · 正在下载…",bytes,total)));
     if(code==3010||code==1641)restart=code;
-    progress("复查 "+dependency.Name+"…");
-    var current=await Task.Run(()=>Detection.Read(target));
+    report(SetupPhase.Checking,"正在复查 "+dependency.Name+"…");
+    var current=Detection.Read(target);
     if(!current.Single(x=>x.Key==dependency.Key).Compatible)throw new InvalidOperationException(dependency.Name+"安装后检查未通过。"+(restart!=0?"请重启 Windows 后重试。":"请查看详情，确认官方安装成功后重试。"));
    }
-   token.ThrowIfCancellationRequested();progress("正在复查全部运行环境…");
-   if(!(await Task.Run(()=>Detection.Read(target))).All(x=>x.Compatible))throw new InvalidOperationException("运行环境复查未通过，尚未开始安装应用。");
+   token.ThrowIfCancellationRequested();report(SetupPhase.Checking,"正在复查全部运行环境…");
+   if(!Detection.Read(target).All(x=>x.Compatible))throw new InvalidOperationException("运行环境复查未通过，尚未开始安装应用。");
    canCancel(true);token.ThrowIfCancellationRequested();
    string cache=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"CodexLight","SetupLogs",DateTime.Now.ToString("yyyyMMdd-HHmmss")+"-"+Guid.NewGuid().ToString("N").Substring(0,8));
    Directory.CreateDirectory(cache);string log=Path.Combine(cache,"install.log");EmbeddedPackage package;
+   report(SetupPhase.Preparing,"正在解压 Codex Light 安装包…");
    // Extract only the embedded MSI. Windows Installer owns every installed application file.
    using(var input=Assembly.GetExecutingAssembly().GetManifestResourceStream("CodexLight.Application.msi")){
     if(input==null)throw new InvalidOperationException("安装包缺少嵌入的 MSI。");
-    package=await ExtractPackage(input,cache,token);
+    package=await ExtractPackage(input,cache,token,(bytes,total)=>phaseProgress?.Report(new SetupProgress(SetupPhase.Preparing,"正在解压 Codex Light 安装包…",bytes,total)),()=>report(SetupPhase.Verifying,"正在读取并核验 Codex Light 安装包信息…"));
    }
-   token.ThrowIfCancellationRequested();canCancel(false);progress("正在安装 Codex Light…"+Environment.NewLine+"Windows Installer 日志："+log);
+   token.ThrowIfCancellationRequested();canCancel(false);report(SetupPhase.ApplicationInstalling,"Windows Installer 正在安装 Codex Light…"+Environment.NewLine+"Windows Installer 日志："+log);
    try{
     using(var process=Process.Start(new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"msiexec.exe"),MsiArguments(package.Path,target,log,package.InstalledForCurrentUser())){UseShellExecute=false,CreateNoWindow=true})){
      if(process==null)throw new InvalidOperationException("Windows Installer 未启动。");await Task.Run(()=>process.WaitForExit());ExitCodePolicy.RequireSuccess(process.ExitCode,"Codex Light");return process.ExitCode==0?restart:process.ExitCode;

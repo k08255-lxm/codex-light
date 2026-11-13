@@ -1,4 +1,10 @@
 /* Account detail uses the workbench's existing surfaces and typography. */
+.account :is(.acct-identity, .acct-quota, .acct-usage) { opacity: 1; transition: opacity 180ms var(--ease-out, cubic-bezier(0.23, 1, 0.32, 1)); }
+.account :is(.acct-identity, .acct-quota).acct-loading { min-height: 200px; opacity: .6; }
+.account .acct-usage.acct-loading { min-height: 220px; opacity: .6; }
+.acct-refresh svg { opacity: 1; transform: rotate(0deg); transition: transform 180ms var(--ease-out, cubic-bezier(0.23, 1, 0.32, 1)), opacity 180ms var(--ease-out, cubic-bezier(0.23, 1, 0.32, 1)); }
+.acct-refreshing .acct-refresh svg { opacity: .6; transform: rotate(90deg); }
+.acct-refresh-error { margin-bottom: 0; }
 .account .acct-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); }
 .account .acct-reset-credits { margin-top: 12px; padding: 4px 16px 14px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface); }
 .account .acct-who strong { white-space: normal; overflow-wrap: anywhere; }
@@ -36,15 +42,22 @@
 .acct-table td:first-child { max-width: 220px; white-space: normal; overflow-wrap: anywhere; }
 .acct-table td:not(:first-child), .acct-table th:not(:first-child) { text-align: right; }
 .account-quota-mini[hidden] { display: none; }
-.account-quota-mini { flex: none; width: 36px; margin: 0 0 4px; padding: 0; }
-.account-quota-open { display: flex; flex-direction: column; justify-content: center; gap: 8px; width: 36px; min-height: 40px; padding: 4px 0; border: 0; border-radius: 6px; background: transparent; color: var(--secondary); font: inherit; text-align: left; cursor: pointer; }
+.account-quota-mini { flex: none; width: 40px; margin: 0 0 4px; padding: 0; }
+.account-quota-open { display: flex; flex-direction: column; justify-content: center; gap: 5px; width: 40px; min-height: 40px; padding: 3px 0; border: 0; border-radius: 8px; background: transparent; color: var(--secondary); font: inherit; cursor: pointer; }
 .account-quota-open:focus-visible { outline: 2px solid var(--focus, var(--chart)); outline-offset: -2px; }
-.account-quota-row { display: flex; align-items: center; gap: 3px; width: 36px; }
-.account-quota-label { flex: none; font-size: .75rem; line-height: 1; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.account-quota-track { flex: 1; min-width: 0; height: 3px; overflow: hidden; background: var(--selected); border-radius: 999px; }
-.account-quota-track > span { display: block; height: 100%; border-radius: inherit; background: var(--chart); }
-.account-quota-track[data-level="mid"] > span { background: var(--warning); }
-.account-quota-track[data-level="high"] > span { background: var(--error); }
+.account-quota-row { display: block; width: 40px; height: 40px; }
+.account-quota-ring { display: block; width: 40px; height: 40px; overflow: visible; }
+.account-quota-ring-track { stroke: var(--border-strong); }
+.account-quota-ring-fill { stroke: var(--chart); }
+.account-quota-row[data-level="mid"] .account-quota-ring-fill { stroke: var(--warning); }
+.account-quota-row[data-level="high"] .account-quota-ring-fill { stroke: var(--error); }
+.account-quota-value { fill: var(--text); font-size: 9px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.account-quota-period { fill: var(--tertiary); font-size: 8px; }
+.account-quota-mini[data-stale="true"] .account-quota-open { opacity: .65; }
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-reduced-motion="false"]) .account :is(.acct-identity, .acct-quota, .acct-usage, .acct-refresh svg) { transition: none; transform: none; }
+}
+:root[data-reduced-motion="true"] .account :is(.acct-identity, .acct-quota, .acct-usage, .acct-refresh svg) { transition: none; transform: none; }
 @media (hover: hover) and (pointer: fine) {
   .acct-tabs button:hover, .account-quota-open:hover { background: var(--selected); color: var(--text); }
 }

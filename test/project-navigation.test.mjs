@@ -23,7 +23,7 @@ test('saved projects lead historical directories; unknown cwd cannot select a pr
   view.render({ projects, threads, selectedPath: 'c:/WORK/a/', activeThreadId: 'a1' });
   const result = groups(view.host);
   assert.deepEqual(result.map(group => find(group, 'project-group-select').textContent), ['Alpha', 'Beta', 'c', '其他对话']);
-  assert.equal(result[0].classList.contains('selected'), true);
+  assert.equal(result[0].classList.contains('selected'), false, 'an active conversation owns selection instead of its folder');
   assert.equal(find(result[0], 'project-group-toggle').attributes['aria-expanded'], 'true');
   assert.equal(find(result[0], 'project-group-select').title, 'C:\\Work\\A');
   assert.equal(find(result[0], 'project-group-thread').attributes['aria-current'], 'page');
@@ -105,4 +105,41 @@ test('empty and search empty states distinguish adding a project from no results
   assert.equal(groups(view.host).length, 0);
   view.render({ projects, threads: [] });
   assert.equal(empty.hidden, true);
+});
+
+test('selection moves between project draft and conversation with a single aria-current', () => {
+  const view = setup();
+  view.render({ projects, threads, selectedPath: 'C:\\Work\\A' });
+  const group = groups(view.host)[0], project = find(group, 'project-group-select');
+  assert.equal(group.classList.contains('selected'), true);
+  assert.deepEqual(view.host.querySelectorAll('[aria-current="page"]'), [project]);
+  view.render({ projects, threads, selectedPath: 'C:\\Work\\A', activeThreadId: 'a1' });
+  const thread = find(group, 'project-group-thread');
+  assert.equal(group.classList.contains('selected'), false);
+  assert.equal(project.getAttribute('aria-current'), null);
+  assert.equal(project.getAttribute('aria-pressed'), 'false');
+  assert.deepEqual(view.host.querySelectorAll('[aria-current="page"]'), [thread]);
+  view.render({ projects, threads, selectedPath: '/work/b', activeThreadId: 'c' });
+  assert.equal(thread.classList.contains('active'), false);
+  assert.equal(thread.getAttribute('aria-current'), null);
+  assert.equal(groups(view.host).filter(node => node.classList.contains('selected')).length, 0);
+  assert.equal(view.host.querySelectorAll('[aria-current="page"]').length, 1);
+});
+
+test('running markers track actual running IDs independently from the active conversation', () => {
+  const view = setup();
+  view.render({ projects, threads, activeThreadId: 'c', runningThreadIds: new Set(['a1']) });
+  const row = find(groups(view.host)[0], 'project-group-thread');
+  const marker = find(row, 'thread-running-indicator');
+  assert.equal(row.classList.contains('running'), true);
+  assert.equal(row.classList.contains('active'), false);
+  assert.equal(marker.hidden, false);
+  assert.match(row.getAttribute('aria-label'), /Alpha thread · 运行中/);
+  view.render({ projects, threads, activeThreadId: 'a1', runningThreadIds: new Set() });
+  assert.equal(find(groups(view.host)[0], 'project-group-thread'), row, 'running updates retain the existing row');
+  assert.equal(row.classList.contains('running'), false);
+  assert.equal(row.classList.contains('active'), true);
+  assert.equal(marker.hidden, true);
+  assert.equal(row.getAttribute('aria-label'), 'Alpha thread');
+  assert.equal(row.title, 'Alpha thread');
 });

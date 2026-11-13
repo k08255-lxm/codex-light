@@ -1,0 +1,21 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {createServer} from '../src/server.mjs';
+import {DemoClient} from '../src/demo.mjs';
+import {PricingService} from '../src/pricing.mjs';
+const post=(app,route,body={})=>fetch(app.origin+route,{method:'POST',headers:{Authorization:'Bearer '+app.token,'Content-Type':'application/json'},body:JSON.stringify(body)});
+test('pricing HTTP preserves provider selection and persisted source; statistics reads public account only',async t=>{
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'light-pricing-http-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
+ const seed=new PricingService({root,fetchImpl:async()=>new Response(JSON.stringify({openai:{models:{m:{cost:{input:10,output:50,tiers:[{input:20,tier:{type:'context',size:272000}}]}}}},other:{models:{m:{cost:{input:12,output:60}}}}}))});await seed.refresh();
+ const client=new DemoClient(),baseCall=client.call.bind(client),accountReads=[];client.call=async(method,params)=>{if(method==='account/read'){accountReads.push(params);return {account:{type:'chatgpt',email:'current@example.test',planType:'pro',accessToken:'PRIVATE_SECRET'},secret:'PRIVATE_SECRET'};}return baseCall(method,params);};
+ const app=await createServer({client,statisticsRoot:root});await app.started;t.after(()=>app.close());
+ const selected=await(await post(app,'/api/pricing/model',{provider:'custom',model:'m'})).json();assert.equal(selected.provider,'custom');assert.equal(selected.input,null);assert.equal(selected.candidates.length,2);
+ assert.equal((await post(app,'/api/pricing/configure',{mode:'catalog',provider:'custom',model:'m',catalogProvider:'openai',catalogModel:'m',referenceTier:'standard'})).status,400);
+ const saved=await(await post(app,'/api/pricing/configure',{mode:'catalog',provider:'custom',model:'m',catalogProvider:'openai',catalogModel:'m',referenceTier:'base'})).json();assert.equal(saved.referenceTier,'base');assert.equal(saved.provider,'custom');
+ const stats=await(await post(app,'/api/statistics/query')).json();assert.equal(stats.currentAccount.email,'current@example.test');assert.ok(!JSON.stringify(stats).includes('PRIVATE_SECRET'));assert.deepEqual(accountReads,[{refreshToken:false}]);
+ app.statistics.observe({method:'turn/started',params:{threadId:'thread',turn:{id:'known'}}});client.emit('event',{method:'account/updated',params:{authMode:'chatgpt'}});app.statistics.observe({method:'turn/started',params:{threadId:'thread',turn:{id:'unknown'}}});const rows=app.statistics.query().details.data;assert.equal(rows.find(row=>row.turnId==='known').account.email,'current@example.test');assert.equal(rows.find(row=>row.turnId==='unknown').account,null);
+ await app.close();const restored=new PricingService({root,fetchImpl:()=>{throw new Error('Startup must stay offline');}});await restored.load();assert.equal(restored.get('m','custom').referenceTier,'base');assert.ok(!(await fs.readFile(path.join(root,'pricing.json'),'utf8')).includes('PRIVATE_SECRET'));
+});

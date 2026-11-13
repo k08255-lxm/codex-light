@@ -17,7 +17,7 @@ namespace CodexLight.Bootstrap {
   static bool Official(Uri uri)=>uri.Scheme=="https"&&(uri.Host=="nodejs.org"||uri.Host=="go.microsoft.com"||uri.Host.EndsWith(".microsoft.com",StringComparison.OrdinalIgnoreCase)||uri.Host=="dotnetcli.azureedge.net");
   public static async Task Install(string key,Action<string> progress,CancellationToken cancellation,Action<bool> allowCancel){await Install(key,progress,cancellation,allowCancel,false);}
   internal static string PassiveArguments(string key,string file){switch(key){case "node":return "/i \""+file+"\" /passive /norestart";case "dotnet":return "/install /passive /norestart";case "webview":return "/silent /install";default:throw new InvalidOperationException("未知依赖");}}
-  public static async Task<int> Install(string key,Action<string> progress,CancellationToken cancellation,Action<bool> allowCancel,bool passive){
+  public static async Task<int> Install(string key,Action<string> progress,CancellationToken cancellation,Action<bool> allowCancel,bool passive,Action<long,long?>? downloadProgress=null){
    allowCancel(true);cancellation.ThrowIfCancellationRequested();
    var locked=Locked(key);if(!Uri.TryCreate(locked.Url,UriKind.Absolute,out var uri)||!Official(uri))throw new InvalidOperationException("下载地址不在官方白名单内。");
    var directory=Path.Combine(Path.GetTempPath(),"CodexLight-Dependency-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(directory);var file=Path.Combine(directory,key+(key=="node"?".msi":".exe"));
@@ -34,7 +34,8 @@ namespace CodexLight.Bootstrap {
          response.EnsureSuccessStatusCode();long? length=response.Content.Headers.ContentLength;if(length>200*1024*1024)throw new InvalidOperationException("依赖下载超出大小上限。");
          using(var input=await response.Content.ReadAsStreamAsync())using(var output=new FileStream(file,FileMode.CreateNew,FileAccess.Write,FileShare.None)){
           byte[] buffer=new byte[65536];long total=0,lastReported=0;int count;var clock=Stopwatch.StartNew();
-          Action report=()=>progress("下载进度："+(total/1048576d).ToString("F1")+" MiB"+(length.HasValue?" / "+(length.Value/1048576d).ToString("F1")+" MiB":"（总大小未知）"));
+          Action report=()=>{progress("下载进度："+(total/1048576d).ToString("F1")+" MiB"+(length.HasValue?" / "+(length.Value/1048576d).ToString("F1")+" MiB":"（总大小未知）"));downloadProgress?.Invoke(total,length);};
+          downloadProgress?.Invoke(0,length);
           while((count=await input.ReadAsync(buffer,0,buffer.Length,downloadToken))>0){
            total+=count;if(total>200*1024*1024)throw new InvalidOperationException("依赖下载超出大小上限。");await output.WriteAsync(buffer,0,count,downloadToken);
            if(total-lastReported>=5*1024*1024||clock.ElapsedMilliseconds>=1000){report();lastReported=total;clock.Restart();}

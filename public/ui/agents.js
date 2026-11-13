@@ -5,6 +5,7 @@ import { el } from './format.js';
 import { icon } from '../icons.js';
 import { renderMarkdown } from '../markdown.js';
 import { boundedText } from '../store.js';
+import { createAgentAvatar } from './agent-avatar.js';
 
 export const AGENT_STATE = {
   pendingInit: { label: '初始化中', tone: 'run' }, running: { label: '运行中', tone: 'run' }, interrupted: { label: '已中断', tone: 'stop' },
@@ -171,12 +172,7 @@ function relative(ms) {
   const m = Math.round(s / 60); if (m < 60) return `${m} 分钟前`;
   return `${Math.round(m / 60)} 小时前`;
 }
-// Local deterministic avatar: same identity keeps its colors and geometry across renders.
+// Same thread identity keeps its badge across renames and renders.
 export function agentAvatar(document,id){
- let hash=2166136261;for(const char of String(id))hash=Math.imul(hash^char.charCodeAt(0),16777619)>>>0;
- const hue=hash%360,svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 32 32');svg.setAttribute('aria-hidden','true');svg.classList.add('agent-avatar');
- const shape=(tag,attrs)=>{const node=document.createElementNS(svg.namespaceURI,tag);for(const [key,value]of Object.entries(attrs))node.setAttribute(key,String(value));svg.append(node);};
- shape('rect',{width:32,height:32,rx:10,fill:`hsl(${hue} 22% 26%)`});
- for(let y=0;y<3;y++)for(let x=0;x<2;x++)if((hash>>>(y*2+x+4))&1){for(const px of new Set([x,3-x]))shape('rect',{x:7+px*5,y:9+y*5,width:4,height:4,rx:1,fill:`hsl(${hue} 45% 75%)`});}
- shape('circle',{cx:11,cy:14,r:1.5,fill:`hsl(${hue} 50% 88%)`});shape('circle',{cx:21,cy:14,r:1.5,fill:`hsl(${hue} 50% 88%)`});return svg;
+ return createAgentAvatar(document,id);
 }

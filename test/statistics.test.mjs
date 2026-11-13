@@ -89,9 +89,9 @@ test('pagination is snapshot-stable and bound to filters; trends are observed UT
  const filtered=service.query({from:'2030-01-02T00:00:00Z',to:'2030-01-03T00:00:00Z'});assert.equal(filtered.totals.turnCount,1);
 });
 
-test('provider price never inferred from a GPT-like model name; missing price and metadata stay unknown',()=>{
+test('consistent exact-model reference retains the original routing ID and exposes its source',()=>{
  const {service,event,start}=fixture();start('t','m','custom');event('thread/tokenUsage/updated',{tokenUsage:{total:total()}});event('turn/completed',{turn:{id:'t',status:'completed'}});
- const data=service.query();assert.equal(data.totals.estimatedCost.usd,null);assert.equal(data.totals.estimatedCost.pricedRows,0);assert.equal(data.providers[0].provider,'custom');assert.equal(data.dsh.available,false);
+ const data=service.query();assert.ok(data.totals.estimatedCost.usd>0);assert.equal(data.totals.estimatedCost.pricedRows,1);assert.equal(data.providers[0].provider,'custom');assert.equal(data.details.data[0].estimatedCost.reference.matchedBy,'consistent-model-reference');assert.equal(data.details.data[0].estimatedCost.reference.catalogProvider,'openai');assert.equal(data.dsh.available,false);
 });
 
 test('persistence keeps only numeric/identity metadata; active records reopen unknown and corrupted files are preserved',async t=>{
@@ -109,8 +109,8 @@ test('retention is bounded with explicit partial coverage',async()=>{
 test('a missing intermediate token counter invalidates that component instead of preserving a stale price',()=>{
  const {service,event,start}=fixture();start();event('thread/tokenUsage/updated',{tokenUsage:{total:total(100,10)}});
  event('thread/tokenUsage/updated',{tokenUsage:{total:{...total(200,20),cachedInputTokens:null}}});
- let data=service.query();assert.equal(data.totals.inputTokens,200);assert.equal(data.totals.cachedInputTokens,null);assert.equal(data.totals.estimatedCost.usd,null);assert.equal(data.totals.estimatedCost.complete,false);
- event('thread/tokenUsage/updated',{tokenUsage:{total:total(300,30)}});data=service.query();assert.equal(data.totals.cachedInputTokens,null,'later known samples cannot recover an unknown earlier contribution');assert.equal(data.totals.estimatedCost.usd,null);
+ let data=service.query();assert.equal(data.totals.inputTokens,200);assert.equal(data.totals.cachedInputTokens,null);assert.equal(data.totals.estimatedCost.usd,20*4/1e6);assert.equal(data.totals.estimatedCost.complete,false);assert.equal(data.totals.estimatedCost.partialRows,1);assert.equal(data.details.data[0].estimatedCost.components.find(part=>part.kind==='input').usd,null);
+ event('thread/tokenUsage/updated',{tokenUsage:{total:total(300,30)}});data=service.query();assert.equal(data.totals.cachedInputTokens,null,'later known samples cannot recover an unknown earlier contribution');assert.equal(data.totals.estimatedCost.usd,30*4/1e6);assert.equal(data.details.data[0].estimatedCost.components.find(part=>part.kind==='cacheRead').usd,null);
 });
 
 test('malformed decoded cursor values fail with a controlled 400',()=>{

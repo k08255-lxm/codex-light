@@ -12,6 +12,15 @@ export const TEXT_LIMITS = Object.freeze({ perField: 4 * 1024 * 1024, head: 1024
 // Typed MCP image bytes are kept outside the text projection, with their own budget.
 export const IMAGE_LIMITS = Object.freeze({ perImageBase64: Math.ceil(6 * 1024 * 1024 / 3) * 4, totalBase64: 24 * 1024 * 1024, perItem: 4 });
 const RASTER = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+export function rasterBase64Mime(data) {
+  if(typeof data!=='string'||data.length<16)return null;
+  let header;try{header=atob(data.slice(0,32));}catch{return null;}
+  if(header.startsWith('\x89PNG\r\n\x1a\n'))return 'image/png';
+  if(header.startsWith('\xff\xd8\xff'))return 'image/jpeg';
+  if(/^GIF8[79]a/.test(header))return 'image/gif';
+  if(header.startsWith('RIFF')&&header.slice(8,12)==='WEBP')return 'image/webp';
+  return null;
+}
 export function boundedText(value, limit = MAX_TEXT) {
   const s = typeof value === 'string' ? value : value == null ? '' : JSON.stringify(value);
   return s.length > limit ? s.slice(0, limit) + '\n…〔界面显示已截断；完整内容由 Codex 保存〕' : s;
@@ -76,20 +85,29 @@ const bodySize = item => bodies(item).reduce((sum, row) => sum + row.text.length
  * images. Oversized, non-raster or malformed blocks keep a reason instead of their bytes.
  */
 export function extractImageContent(item) {
-  if((item?.type==='userMessage'&&Array.isArray(item.content))||(item?.type==='dynamicToolCall'&&Array.isArray(item.contentItems))){
-    const dynamic=item.type==='dynamicToolCall',field=dynamic?'contentItems':'content';
+  // Native image-generation `result` is base64. Verify its raster header before treating it as bytes.
+  const generatedMime=item?.type==='imageGeneration'?rasterBase64Mime(item.result):null;
+  if(generatedMime){
+    const data=item.result,reason=data.length>IMAGE_LIMITS.perImageBase64?'图片数据超过 6 MiB':!/^[A-Za-z0-9+/]+={0,2}$/.test(data)?'图片数据不是有效 base64':'';
+    return {item:{...item,result:'',imageRef:0,mimeType:generatedMime,...(reason?{imageError:reason}:{})},images:reason?[]:[{slot:0,mime:generatedMime,data}],replaces:true};
+  }
+  const imageField = ({userMessage:'content',dynamicToolCall:'contentItems',functionCallOutput:'output'})[item?.type];
+  if(imageField&&Array.isArray(item[imageField])){
+    const dynamic=item.type==='dynamicToolCall',functionOutput=item.type==='functionCallOutput',field=imageField;
+    const imageType=dynamic?'inputImage':functionOutput?'input_image':'image';
+    const urlField=dynamic?'imageUrl':functionOutput?'image_url':'url';
     const images=[];let slot=0;
     const content=item[field].map(part=>{
-      if(part?.type!==(dynamic?'inputImage':'image')||Number.isInteger(part.imageRef))return part;
-      const uri=typeof (dynamic?part.imageUrl:part.url)==='string'?(dynamic?part.imageUrl:part.url):'';
+      if(part?.type!==imageType||Number.isInteger(part.imageRef))return part;
+      const uri=typeof part[urlField]==='string'?part[urlField]:'';
       if(!uri.startsWith('data:'))return part;
       const index=slot++,match=/^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/]+={0,2})$/i.exec(uri);
-      const maxBase64=dynamic?IMAGE_LIMITS.perImageBase64:Math.ceil(10*1024*1024/3)*4;
-      const reason=index>=5?'图片数量超过显示上限':!match?'不支持的图片数据':match[2].length>maxBase64?'图片超过显示大小上限':'';
+      const maxBase64=dynamic||functionOutput?IMAGE_LIMITS.perImageBase64:Math.ceil(10*1024*1024/3)*4;
+      const reason=index>=(functionOutput?IMAGE_LIMITS.perItem:5)?'图片数量超过显示上限':!match?'不支持的图片数据':match[2].length>maxBase64?'图片超过显示大小上限':'';
       if(!reason)images.push({slot:index,mime:match[1].toLowerCase(),data:match[2]});
-      return {type:dynamic?'inputImage':'image',imageRef:index,mimeType:match?.[1]?.toLowerCase()||'',...(reason?{imageError:reason}:{})};
+      return {type:imageType,imageRef:index,mimeType:match?.[1]?.toLowerCase()||'',...(reason?{imageError:reason}:{})};
     });
-    const raw=item[field].some(part=>typeof (dynamic?part?.imageUrl:part?.url)==='string'&&(dynamic?part.imageUrl:part.url).startsWith('data:'));
+    const raw=item[field].some(part=>part?.type===imageType&&typeof part[urlField]==='string'&&part[urlField].startsWith('data:'));
     return {item:{...item,[field]:content},images,replaces:raw};
   }
   const content = item?.type === 'mcpToolCall' && Array.isArray(item.result?.content) ? item.result.content : null;
@@ -194,7 +212,8 @@ export class ItemStore {
     let next = extracted.item;
     if (extracted.replaces) {
       const accepted = this.keepImages(item.id, extracted.images);
-      if(['userMessage','dynamicToolCall'].includes(next.type)){const field=next.type==='userMessage'?'content':'contentItems';next={...next,[field]:next[field].map(block=>{if(!Number.isInteger(block?.imageRef)||block.imageError)return block;const pooled=accepted.get(block.imageRef);return pooled?{...block,revision:pooled.revision}:{...block,imageError:'图片超过显示内存预算'};})};}
+      if(next.type==='imageGeneration'&&Number.isInteger(next.imageRef))next={...next,...(accepted.get(next.imageRef)?{revision:accepted.get(next.imageRef).revision}:{imageError:next.imageError||'图片超过显示内存预算'})};
+      if(['userMessage','dynamicToolCall','functionCallOutput'].includes(next.type)){const field=({userMessage:'content',dynamicToolCall:'contentItems',functionCallOutput:'output'})[next.type];next={...next,[field]:next[field].map(block=>{if(!Number.isInteger(block?.imageRef)||block.imageError)return block;const pooled=accepted.get(block.imageRef);return pooled?{...block,revision:pooled.revision}:{...block,imageError:'图片超过显示内存预算'};})};}
       if (Array.isArray(next.result?.content))
       // Record pool revision (changes when the bytes change) and budget refusals in the projection.
       next = { ...next, result: { ...next.result, content: next.result.content.map(block => {

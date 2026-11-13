@@ -7,6 +7,7 @@ retain their respective copyright, license and distribution terms.
 | --- | --- | --- |
 | [xterm.js](https://github.com/xtermjs/xterm.js) | 6.0.0, vendored | Terminal renderer; [MIT license](../licenses/xterm/LICENSE) |
 | [@xterm/addon-fit](https://github.com/xtermjs/xterm.js/tree/f447274f430fd22513f6adbf9862d19524471c04/addons/addon-fit) | 0.11.0, vendored | Terminal resizing; [MIT license](../licenses/xterm/addon-fit-LICENSE) |
+| [jsdiff](https://github.com/kpdecker/jsdiff) | 9.0.0, minimal vendored ESM files | Applied DSH edit fragment statistics; [BSD license](../public/vendor/jsdiff/LICENSE), retained under `app/public/vendor/jsdiff` in the Windows payload |
 | [Microsoft WebView2 SDK](https://www.nuget.org/packages/Microsoft.Web.WebView2/1.0.4314.35) | 1.0.4314.35, restored and redistributed | Desktop web control and native loader; exact package LICENSE.txt and NOTICE.txt copied into the installed licenses directory |
 | [.NET](https://github.com/dotnet/runtime) / [Windows Forms](https://github.com/dotnet/winforms) | .NET 10 target, exact apphost version recorded at build | Desktop framework and application host; exact apphost LICENSE.TXT and THIRD-PARTY-NOTICES.TXT accompany the payload |
 | [WiX Toolset](https://github.com/wixtoolset/wix) | 6.0.2, build tool only | Builds the internal MSI; see the build-tool terms below |

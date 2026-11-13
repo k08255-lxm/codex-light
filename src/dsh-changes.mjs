@@ -1,7 +1,15 @@
+import path from 'node:path';
 import {dshResultError} from '../public/dsh.js';
+import {diffLines} from '../public/vendor/jsdiff/libesm/diff/line.js';
+import {projectDelegatedEdit} from '../public/delegated-changes.js';
 
 const EDIT_TOOLS = /^(?:write|edit|multi_edit|multiedit|apply_patch|delete_file|write_file|edit_file)$/i;
+const WRITE_TOOLS = /^(?:write|write_file)$/i;
+const CREATE_OPS = new Set(['create','add']);
 const TERMINAL = new Set(['completed','idle','interrupted','error','failed','closed','context_exhausted']);
+const WINDOWS_ABSOLUTE = /^[A-Za-z]:[\\/]/;
+const UNC_PATH = /^\\\\[^\\]/;
+const POSIX_ABSOLUTE = /^\//;
 
 function payload(result) {
   const queue = [result], seen = new Set();
@@ -22,29 +30,117 @@ function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
-function fileChanges(event) {
+// Resolve with the path flavor named by the value (or by the binding cwd for a relative
+// path). Windows comparisons are case-insensitive; POSIX comparisons stay case-sensitive.
+function normalizeTarget(value, cwd) {
+  if (typeof value !== 'string' || !value || value.length > 4096 || /[\x00\r\n]/.test(value)) return null;
+  if (WINDOWS_ABSOLUTE.test(value) || UNC_PATH.test(value)) {
+    return path.win32.resolve(value).replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+  }
+  if (POSIX_ABSOLUTE.test(value)) return path.posix.resolve(value).replace(/\/+$/, '');
+  if (typeof cwd !== 'string' || !cwd) return null;
+  if (WINDOWS_ABSOLUTE.test(cwd) || UNC_PATH.test(cwd)) {
+    return path.win32.resolve(cwd, value).replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+  }
+  if (POSIX_ABSOLUTE.test(cwd)) return path.posix.resolve(cwd, value).replace(/\/+$/, '');
+  return null;
+}
+
+function sameTarget(left, right, cwd) {
+  const a = normalizeTarget(left, cwd), b = normalizeTarget(right, cwd);
+  return a !== null && a === b;
+}
+
+function truncated(...rows) {
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    if (row.truncated === true || row.summary?.truncated === true || row.data?.truncated === true ||
+        row.data?.argumentsTruncated === true || row.data?.meta?.truncated === true) return true;
+  }
+  return false;
+}
+
+// A create reported without hunks still proves the old file did not exist, but only the
+// paired successful write call can prove what the new file contains. Read that call once.
+async function readCreatedContent({call, agentId, callEventId, callId, toolName, metaPath, cwd}) {
+  if (!Number.isSafeInteger(callEventId)) return null;
+  const response = await call('dsh_events', {agent_id:agentId, event_id:callEventId, include_tool_events:true, include_descendants:true, max_chars:65536});
+  const error = dshResultError(response); if (error) throw new Error(error);
+  const batch = payload(response);
+  if (batch.truncated === true) return null;
+  const event = (Array.isArray(batch.events) ? batch.events : []).find(row => row?.event_id === callEventId);
+  if (!event || event.type !== 'tool/call' || truncated(event, batch)) return null;
+  const data = object(event.data), summary = object(event.summary);
+  const name = typeof data.name === 'string' ? data.name : typeof summary.name === 'string' ? summary.name : '';
+  const id = typeof data.callId === 'string' ? data.callId : typeof summary.callId === 'string' ? summary.callId : '';
+  if (!id || id !== callId || !name || name.toLowerCase() !== toolName.toLowerCase() || !WRITE_TOOLS.test(name)) return null;
+  let args = data.arguments;
+  if (typeof args === 'string') { try { args = JSON.parse(args); } catch { return null; } }
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return null;
+  const filePath = args.file_path, content = args.content;
+  if (typeof filePath !== 'string' || typeof content !== 'string') return null;
+  if (!sameTarget(filePath, metaPath, cwd)) return null;
+  return content;
+}
+
+// Count physical lines from complete content: CRLF and CR normalize to LF, one trailing
+// newline terminates the last line, and an empty file has zero lines. NUL means binary.
+function addedLines(content) {
+  if (typeof content !== 'string' || content.includes('\0')) return null;
+  const text = content.replace(/\r\n?/g, '\n');
+  if (text === '') return 0;
+  return (text.endsWith('\n') ? text.slice(0, -1) : text).split('\n').length;
+}
+
+function editChanges(event) {
   const data = object(event.data), message = object(data.message), meta = object(data.meta);
-  if (message.isError !== false) return [];
+  if (message.isError !== false) return null;
   const changes = [], paths = new Set();
-  const kind = {create:'add',add:'add',delete:'delete',remove:'delete'}[meta.operation] || 'update';
-  for (const row of [...(Array.isArray(meta.diffs) ? meta.diffs : []), meta].slice(0, 200)) {
-    if (typeof row?.path !== 'string' || !row.path || row.path.length > 4096 || paths.has(row.path)) continue;
+  const operation = typeof meta.operation === 'string' ? meta.operation.toLowerCase() : '';
+  const kind = {create:'add',add:'add',delete:'delete',remove:'delete'}[operation] || 'update';
+  for (const row of (Array.isArray(meta.diffs)?meta.diffs:[])) {
+    if (typeof row?.path !== 'string' || !row.path || row.path.length > 4096) continue;
     paths.add(row.path);
     const change = {path:row.path,kind:{type:kind}};
-    // oldText/newText are replacement fragments, not a net file diff or real line locations.
+    if(typeof row.diff==='string'){change.diff=row.diff;change.diffFormat='unified';}
+    else if((row.oldText===null||typeof row.oldText==='string')&&typeof row.newText==='string'){
+      // DSH computeHunkDiffs records applied hunks with shared context. Diff the fragments
+      // without inventing whole-file locations or counting unchanged context as edits.
+      const parts=diffLines(row.oldText??'',row.newText,{timeout:50,maxEditLength:20000,ignoreNewlineAtEof:true});
+      if(parts){let added=0,removed=0;const preview=[];for(const part of parts){if(part.added)added+=part.count;else if(part.removed)removed+=part.count;preview.push(...part.value.replace(/\n$/,'').split('\n').map(line=>(part.added?'+':part.removed?'-':' ')+line));}change.lineStats={added,removed};change.diffFormat='fragment';change.diff='已应用的编辑片段（无完整文件行号）\n'+preview.join('\n');}
+      else change.statsReason='limited';
+    }
     changes.push(change);
   }
-  return changes;
+  // Empty metadata can mean an identical overwrite or a create without applied hunks.
+  // The path is evidence; absence of hunks is not evidence of zero changed lines.
+  if(typeof meta.path==='string'&&!paths.has(meta.path))changes.push({path:meta.path,kind:{type:kind}});
+  return {data,message,meta,operation,changes};
+}
+
+function applyCreatedContent(collected, content) {
+  if (typeof collected.meta.path !== 'string' || !collected.meta.path) return false;
+  const added = addedLines(content);
+  if (added === null) return false;
+  let target = collected.changes.find(change => change.path === collected.meta.path);
+  if (!target) { target = {path:collected.meta.path}; collected.changes.push(target); }
+  target.kind = {type:'add'};
+  target.diff = content;
+  target.lineStats = {added, removed:0};
+  delete target.statsReason;
+  delete target.diffFormat;
+  delete target.diffTruncated;
+  return true;
 }
 
 /** Incremental edit evidence. Read-only tool records never inspect the workspace diff. */
 export class DshChangeReader {
   constructor() { this.agents = new Map(); }
   clear() { this.agents.clear(); }
-  async read(key, agentId, call, {status, updatedAt} = {}) {
+  async read(key, agentId, call, {status, updatedAt, cwd} = {}) {
     let state = this.agents.get(key);
     if (!state) {
-      state = {cursor:0, edits:new Map(), events:new Map(), finished:false, updatedAt:null};
+      state = {cursor:0, edits:new Map(), events:new Map(), processed:new Set(), finished:false, updatedAt:null};
       this.agents.set(key, state);
       while (this.agents.size > 100) this.agents.delete(this.agents.keys().next().value);
     }
@@ -61,10 +157,11 @@ export class DshChangeReader {
         if (event.type === 'tool/call' && EDIT_TOOLS.test(summary.name || '')) {
           if (typeof summary.callId === 'string') {
             if(state.edits.size>=200)throw new Error('子代理编辑调用尚未配对，文件汇总暂不完整');
-            state.edits.set(summary.callId, summary.name);
+            state.edits.set(summary.callId, {eventId:event.event_id, name:summary.name});
           }
         }
         if (event.type === 'tool/result' && state.edits.size) {
+          if (state.processed.has(event.event_id)) { state.cursor = event.event_id; continue; }
           if (detailReads >= 20) return response(true);
           const full = await call('dsh_events',{agent_id:agentId,event_id:event.event_id,include_tool_events:true,include_descendants:true,max_chars:65536});
           detailReads++;
@@ -73,21 +170,31 @@ export class DshChangeReader {
           if (!complete?.data) throw new Error('DSH 编辑结果尚未完整返回');
           const data = object(complete.data), message = object(data.message);
           const callId = message.toolCallId || message.source?.callId;
-          if (state.edits.has(callId)) {
-            const changes = fileChanges(complete);
-            if (changes.length && Number.isSafeInteger(data.turn) && data.turn > 0) for(const change of changes){
-              const fileKey=`${data.turn}:${change.path.replace(/\\/g,'/').toLowerCase()}`;
-              const previous=state.events.get(fileKey);
-              if(!previous&&state.events.size>=1000)throw new Error('子代理文件记录超过读取上限，当前汇总尚不完整');
-              // Multiple edits to a file do not make the last patch its net diff.
-              const projected=previous?{path:change.path,kind:change.kind}:change;
-              state.events.set(fileKey,{
-                type:'tool/result', event_id:previous?.event_id||`change:${data.turn}:${state.events.size+1}`, seq:event.seq ?? event.event_id,
-                taskTurn:data.turn, callId, success:true, changes:[projected],
+          const pairing = state.edits.get(callId);
+          if (pairing) {
+            const collected = editChanges(complete);
+            let changes = collected ? projectDelegatedEdit({success:true,changes:collected.changes})?.changes||[] : [];
+            const countable = changes.some(row => Number.isSafeInteger(row.lineStats?.added) && Number.isSafeInteger(row.lineStats?.removed));
+            // A successful create with no countable hunk can be counted from the complete
+            // write call that produced it. Updates never use this path: they need the old file.
+            if (collected && !countable && CREATE_OPS.has(collected.operation) && WRITE_TOOLS.test(pairing.name) && typeof collected.meta.path === 'string') {
+              if (detailReads >= 20) return response(true);
+              const content = await readCreatedContent({call,agentId,callEventId:pairing.eventId,callId,toolName:pairing.name,metaPath:collected.meta.path,cwd});
+              detailReads++;
+              if (content !== null && applyCreatedContent(collected, content)) changes = projectDelegatedEdit({success:true,changes:collected.changes})?.changes||[];
+            }
+            if (changes.length && Number.isSafeInteger(data.turn) && data.turn > 0){
+              const editKey=`${data.turn}:${event.event_id}`;
+              if(!state.events.has(editKey)&&state.events.size>=1000)throw new Error('子代理编辑记录超过读取上限，当前汇总尚不完整');
+              state.events.set(editKey,{
+                type:'tool/result', event_id:`change:${data.turn}:${event.event_id}`, seq:event.seq ?? event.event_id,
+                taskTurn:data.turn, callId, success:true, changes,
               });
             }
             state.edits.delete(callId);
           }
+          state.processed.add(event.event_id);
+          while (state.processed.size > 2000) state.processed.delete(state.processed.values().next().value);
         }
         state.cursor = event.event_id;
       }

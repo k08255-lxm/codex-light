@@ -174,7 +174,7 @@ export class DshReadService {
    ?this.changes.read(`${threadId}:${agentId}`,agentId,(name,args)=>{
      if(generation!==this.generation||this.bindings.get(threadId)!==bindingCwd)throw new Error(STALE);
      return this.reader.call(bindingCwd,name,args);
-    },{status:proof?.status?.status,updatedAt:proof?.updatedAt})
+    },{status:proof?.status?.status,updatedAt:proof?.updatedAt,cwd:bindingCwd})
    :this.reader.call(bindingCwd,tool,argumentsValue);
   let operation;
   operation=Promise.resolve(request).then(result=>{

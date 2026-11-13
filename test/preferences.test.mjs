@@ -73,5 +73,5 @@ test('a failed desktop preference read uses defaults explicitly instead of brows
  const storage=memory(JSON.stringify({...DEFAULT_PREFERENCES,theme:'light'}));
  const h=await view({desktop:true,storage,api:async path=>{if(path==='/api/desktop/receipts')return {receipts:[]};if(path==='/api/desktop/theme')return {};throw new Error('state unavailable');}});
  await h.prefs.loadDesktopState();
- assert.equal(h.document.documentElement.dataset.theme,'dark');assert.match(h.$('preference-status').textContent,/未采用浏览器存储代替/);assert.equal(h.notices.at(-1)[1],true);
+ assert.equal(h.document.documentElement.dataset.theme,'dark');assert.match(h.$('preference-status').textContent,/无法读取本机偏好.*默认外观/);assert.equal(h.notices.at(-1)[1],true);
 });

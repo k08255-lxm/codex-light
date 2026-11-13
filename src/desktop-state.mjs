@@ -16,6 +16,14 @@ export class DesktopState{
  async preferences(value){if(value===undefined)return (await this.read()).preferences;return (await this.update(s=>{s.preferences=validatePreferences(value);})).preferences;}
  async list(){return(await this.read()).receipts;}
  async ack(ids){if(!Array.isArray(ids)||!ids.length||ids.length>1000||new Set(ids).size!==ids.length||ids.some(x=>typeof x!=='string'))throw error();await this.update(s=>{if(ids.some(id=>!s.receipts.some(r=>r.requestId===id)))throw error();s.receipts=s.receipts.filter(r=>!ids.includes(r.requestId));});}
- async before(r){try{await this.update(s=>{if(s.receipts.length>=1000||s.receipts.some(x=>x.requestId===r.requestId))throw error();s.receipts.push(receipt({...r,state:'pending',outcome:'pending'}));});}catch{throw Object.assign(error(),{outcome:'notExecuted',code:'PERSISTENCE_WRITE_FAILED'});}}
+ async before(r){try{await this.update(s=>{
+  if(s.receipts.some(x=>x.requestId===r.requestId))throw error();
+  // Keep a small settled audit trail; unresolved operations must never be silently discarded.
+  const settled=x=>['succeeded','failed'].includes(x.state)&&['succeeded','failed','notExecuted'].includes(x.outcome);
+  const retained=new Set(s.receipts.filter(settled).slice(-100).map(x=>x.requestId));
+  s.receipts=s.receipts.filter(x=>!settled(x)||retained.has(x.requestId));
+  if(s.receipts.length>=1000)throw error();
+  s.receipts.push(receipt({...r,state:'pending',outcome:'pending'}));
+ });}catch{throw Object.assign(error(),{outcome:'notExecuted',code:'PERSISTENCE_WRITE_FAILED'});}}
  async after(r){try{await this.update(s=>{const index=s.receipts.findIndex(x=>x.requestId===r.requestId);if(index<0)throw error();s.receipts[index]=receipt(r);});}catch{this.persistenceWarning='操作可能已经执行，但最终状态未保存。保留此前待核对记录，不能自动重发。';throw error();}}
 }

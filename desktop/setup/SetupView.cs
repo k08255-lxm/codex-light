@@ -16,6 +16,11 @@ namespace CodexLight.Bootstrap {
   internal readonly Button Primary = new Button { Content = "安装", MinWidth = 96, Height = 34, IsDefault = true, IsEnabled = false };
   internal readonly Button Secondary = new Button { Content = "取消", MinWidth = 80, Height = 34, Margin = new Thickness(8, 0, 0, 0) };
   internal readonly TextBlock Status = new TextBlock { Text = "正在检查运行环境…", TextWrapping = TextWrapping.Wrap };
+  internal readonly TextBlock Phase = new TextBlock { FontWeight = FontWeights.SemiBold };
+  internal readonly TextBlock Elapsed = new TextBlock { Foreground = Brush("#666666"), HorizontalAlignment = HorizontalAlignment.Right };
+  internal readonly ProgressBar Activity = new ProgressBar { Minimum = 0, Maximum = 100, Height = 6, Margin = new Thickness(0, 8, 0, 0), IsIndeterminate = true, Foreground = Brush("#0067C0") };
+  internal readonly TextBlock Transfer = new TextBlock { Foreground = Brush("#666666"), Margin = new Thickness(0, 6, 0, 0), TextWrapping = TextWrapping.Wrap };
+  readonly StackPanel progressArea = new StackPanel { Margin = new Thickness(0, 12, 0, 0) };
   internal readonly TextBlock Note = new TextBlock { TextWrapping = TextWrapping.Wrap, Foreground = Brush("#666666"), Margin = new Thickness(0, 8, 0, 0) };
   internal readonly TextBlock Mode = new TextBlock { Text = "安装 Codex Light", FontSize = 22, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center };
   internal readonly Expander DetailsToggle = new Expander { Header = "查看详情", Margin = new Thickness(0, 16, 0, 0), HorizontalContentAlignment = HorizontalAlignment.Stretch };
@@ -37,7 +42,9 @@ namespace CodexLight.Bootstrap {
    body.Children.Add(new TextBlock { Text = "安装位置", Margin = new Thickness(0, 0, 0, 8) });
    var path = new Grid(); path.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); path.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
    path.Children.Add(Location); Grid.SetColumn(Change, 1); path.Children.Add(Change); body.Children.Add(path);
-   var state = new StackPanel { Margin = new Thickness(0, 24, 0, 0) }; state.Children.Add(Status); state.Children.Add(Note); body.Children.Add(state);
+   var state = new StackPanel { Margin = new Thickness(0, 24, 0, 0) }; state.Children.Add(Status);
+   var progressHeading = new Grid(); progressHeading.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); progressHeading.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); progressHeading.Children.Add(Phase); Grid.SetColumn(Elapsed, 1); progressHeading.Children.Add(Elapsed);
+   progressArea.Children.Add(progressHeading); progressArea.Children.Add(Activity); progressArea.Children.Add(Transfer); state.Children.Add(progressArea); state.Children.Add(Note); body.Children.Add(state);
    DetailsToggle.Content = Details; DetailsToggle.Expanded += (_, __) => DetailsToggle.Header = "收起详情"; DetailsToggle.Collapsed += (_, __) => DetailsToggle.Header = "查看详情"; body.Children.Add(DetailsToggle);
    ContentScroll = new ScrollViewer { Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, CanContentScroll = false }; layout.Children.Add(ContentScroll);
    var divider = new Border { BorderBrush = Brush("#E6E6E6"), BorderThickness = new Thickness(0, 1, 0, 0), Child = Footer }; Grid.SetRow(divider, 1); layout.Children.Add(divider);
@@ -45,6 +52,7 @@ namespace CodexLight.Bootstrap {
    Grid.SetColumn(Primary, 1); Grid.SetColumn(Secondary, 2); Footer.Children.Add(Primary); Footer.Children.Add(Secondary); Content = layout;
    Location.TextChanged += (_, __) => { Location.ToolTip = Location.Text; Location.ScrollToHome(); };
    AutomationProperties.SetName(Location, "安装位置"); AutomationProperties.SetName(Change, "更改安装位置"); AutomationProperties.SetName(Details, "安装详情"); AutomationProperties.SetLiveSetting(Status, AutomationLiveSetting.Polite);
+   AutomationProperties.SetName(Activity, "当前阶段进度");
    KeyboardNavigation.SetTabIndex(Location, 0); KeyboardNavigation.SetTabIndex(Change, 1); KeyboardNavigation.SetTabIndex(DetailsToggle, 2); KeyboardNavigation.SetTabIndex(Details, 3); KeyboardNavigation.SetTabIndex(Primary, 4); KeyboardNavigation.SetTabIndex(Secondary, 5);
    SetStage(SetupStage.Checking, "正在检查运行环境…");
   }
@@ -66,9 +74,25 @@ namespace CodexLight.Bootstrap {
   internal void SetIcon(ImageSource source) { icon.Source = source; }
   internal void SetRegistered(bool value) { registered = value; Mode.Text = value ? "更新 Codex Light" : "安装 Codex Light"; RefreshActions(); }
   internal void SetMessage(string message) { Status.Text = message; }
+  internal void SetElapsed(TimeSpan elapsed) { Elapsed.Text = "已用时 " + (elapsed.TotalHours >= 1 ? ((int)elapsed.TotalHours).ToString("00") + ":" : "") + elapsed.Minutes.ToString("00") + ":" + elapsed.Seconds.ToString("00"); }
+  internal void SetProgress(SetupProgress progress) {
+   SetMessage(ProgressSummary(progress.Message));
+   Phase.Text = (progress.Phase == SetupPhase.Checking ? "检查环境" : progress.Phase == SetupPhase.Preparing ? "准备安装包" : progress.Phase == SetupPhase.Downloading ? "下载运行环境" : progress.Phase == SetupPhase.Verifying ? "验证安装文件" : progress.Phase == SetupPhase.RuntimeInstalling ? "安装运行环境" : "安装应用") + " · 进行中";
+   double? percent = progress.Percent; Activity.IsIndeterminate = !percent.HasValue; Activity.Value = percent ?? 0;
+   Transfer.Text = progress.Bytes.HasValue ? (percent.HasValue ? Math.Floor(percent.Value).ToString("F0") + "% · " : "") + (progress.Bytes.Value / 1048576d).ToString("F1") + " MiB" + (progress.TotalBytes.HasValue ? " / " + (progress.TotalBytes.Value / 1048576d).ToString("F1") + " MiB" : "（总大小未知）") : progress.Phase == SetupPhase.ApplicationInstalling ? "请保持此窗口打开，安装完成后会自动更新。" : "";
+   Transfer.Visibility = string.IsNullOrEmpty(Transfer.Text) ? Visibility.Collapsed : Visibility.Visible;
+  }
   internal void Log(string message) { Details.AppendText(DateTime.Now.ToString("HH:mm:ss") + "  " + message + Environment.NewLine); Details.ScrollToEnd(); }
   internal void SetCancelAllowed(bool value) { cancelAllowed = value; Secondary.IsEnabled = value; Secondary.Content = value ? "取消" : "安装中…"; }
-  internal void SetStage(SetupStage stage, string message) { Stage = stage; SetMessage(message); RefreshActions(); }
+  internal void SetStage(SetupStage stage, string message) {
+   Stage = stage; SetMessage(message);
+   bool active = stage == SetupStage.Checking || stage == SetupStage.Installing;
+   progressArea.Visibility = stage == SetupStage.Ready ? Visibility.Collapsed : Visibility.Visible;
+   Activity.Visibility = active ? Visibility.Visible : Visibility.Collapsed; Activity.IsIndeterminate = active; Activity.Value = 0;
+   Transfer.Visibility = Visibility.Collapsed;
+   Phase.Text = stage == SetupStage.Checking ? "检查环境" : stage == SetupStage.Installing ? "准备安装" : stage == SetupStage.Completed ? "已完成" : stage == SetupStage.Cancelled ? "已取消" : "未完成";
+   RefreshActions();
+  }
   void RefreshActions() {
    Primary.Visibility = Visibility.Visible;
    Primary.Content = Stage == SetupStage.Completed ? (restartRequired ? "完成" : "打开应用") : Stage == SetupStage.Failed || Stage == SetupStage.Cancelled ? "重试" : registered ? "更新" : "安装";

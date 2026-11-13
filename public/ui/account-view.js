@@ -17,10 +17,12 @@ const REACHED = { rate_limit_reached: '已达使用限额', workspace_owner_cred
 export function mountAccount(host, { rpc, loginPanelHost, pendingHost, demo = () => false, getThreadId = () => null, onQuota = () => {} }) {
   const document = host.ownerDocument;
   let generation = 0, accountEpoch = 0, active = false, quotaResult = null, attempt = null, selectedCredit = null, bucketId = null, usageTab = 'overview';
+  let loadTask = null, creditSignature = null;
+  const rendered = new Map();
   host.classList.add('account');
   const header = el(document, 'header', 'page-head');
   const titles = el(document, 'div', 'page-titles'); titles.append(el(document, 'h1', '', '账户'), el(document, 'p', 'page-sub', '本机 Codex 登录与额度'));
-  const refresh = el(document, 'button', 'btn icon-only'); refresh.type = 'button'; refresh.setAttribute('aria-label', '刷新账户'); refresh.title = '刷新'; refresh.append(icon(document, 'refresh', { size: 16 }));
+  const refresh = el(document, 'button', 'btn icon-only acct-refresh'); refresh.type = 'button'; refresh.setAttribute('aria-label', '刷新账户'); refresh.title = '刷新'; refresh.append(icon(document, 'refresh', { size: 16 }));
   refresh.addEventListener('click', () => load());
   const controls = el(document, 'div', 'page-controls'); controls.append(refresh);
   header.append(titles, controls);
@@ -36,7 +38,13 @@ export function mountAccount(host, { rpc, loginPanelHost, pendingHost, demo = ()
   const grid = el(document, 'div', 'acct-grid'); grid.append(identity, quota);
   host.replaceChildren(header, grid, resetCredits, usage, manage);
 
-  const section = (node, title, ...children) => node.replaceChildren(el(document, 'h2', 'section-title', title), ...children);
+  const section = (node, title, ...children) => {
+    const focusKey = node.contains(document.activeElement) ? document.activeElement?.dataset.focusKey : null;
+    const open = new Map([...node.querySelectorAll('details')].map(detail => [detail.dataset.stateKey, detail.open]));
+    node.replaceChildren(el(document, 'h2', 'section-title', title), ...children);
+    for (const detail of node.querySelectorAll('details')) if (open.has(detail.dataset.stateKey)) detail.open = open.get(detail.dataset.stateKey);
+    if (focusKey) [...node.querySelectorAll('[data-focus-key]')].find(item => item.dataset.focusKey === focusKey)?.focus({ preventScroll: true });
+  };
   const fact = (label, value, mono = false) => { const row = el(document, 'div', 'fact'); row.append(el(document, 'span', 'fact-label', label), el(document, 'span', 'fact-value' + (mono ? ' mono' : ''), value)); return row; };
   const errorLine = (text, error) => el(document, 'p', 'inline-error', `${text}：${error?.message || error}`);
 
@@ -64,14 +72,14 @@ export function mountAccount(host, { rpc, loginPanelHost, pendingHost, demo = ()
     const top = el(document, 'div', 'quota-top');
     top.append(el(document, 'span', 'quota-name', view.label), el(document, 'strong', 'quota-left', view.remaining === null ? UNKNOWN : `剩余 ${Math.round(view.remaining)}%`));
     const bar = el(document, 'div', 'quota-bar'); bar.setAttribute('role', 'meter'); bar.setAttribute('aria-valuemin', '0'); bar.setAttribute('aria-valuemax', '100');
-    if (view.used !== null) { bar.setAttribute('aria-valuenow', String(Math.round(view.used))); bar.setAttribute('aria-label', `${view.label}已用 ${Math.round(view.used)}%`); const fill = el(document, 'span'); fill.style.width = view.used + '%'; bar.append(fill); bar.dataset.level = view.used >= 90 ? 'high' : view.used >= 70 ? 'mid' : 'low'; }
-    else bar.setAttribute('aria-label', `${view.label}用量未知`);
-    const foot = el(document, 'div', 'quota-foot'); foot.append(el(document, 'span', '', view.used === null ? '已用未知' : `已用 ${Math.round(view.used)}%`), el(document, 'span', '', view.reset));
+    if (view.remaining !== null) { bar.setAttribute('aria-valuenow', String(Math.round(view.remaining))); bar.setAttribute('aria-label', `${view.label}剩余额度 ${Math.round(view.remaining)}%`); const fill = el(document, 'span'); fill.style.width = view.remaining + '%'; bar.append(fill); bar.dataset.level = view.remaining <= 10 ? 'high' : view.remaining <= 30 ? 'mid' : 'low'; }
+    else bar.setAttribute('aria-label', `${view.label}剩余额度未知`);
+    const foot = el(document, 'div', 'quota-foot'); foot.append(el(document, 'span', '', '剩余额度'), el(document, 'span', '', view.reset));
     foot.title = '重置时间 ' + view.resetAt;
     node.append(top, bar, foot); return node;
   }
   function renderQuota(result, error) {
-    selectedCredit = null;
+    if (selectedCredit) selectedCredit = result?.rateLimitResetCredits?.credits?.find(credit => credit.id === selectedCredit.id && credit.status === 'available' && credit.resetType === 'codexRateLimits' && (!finite(credit.expiresAt) || credit.expiresAt * 1000 > Date.now())) || null;
     if (error) { quotaResult = null; renderResetCredits(); section(quota, '额度', errorLine('无法读取额度', error)); return; }
     quotaResult = result; onQuota(result);
     const buckets = quotaBuckets(result);
@@ -82,6 +90,7 @@ export function mountAccount(host, { rpc, loginPanelHost, pendingHost, demo = ()
     if (buckets.length > 1) {
       const label = el(document, 'label', 'acct-quota-select'); label.append(el(document, 'span', '', '额度类型'));
       const select = el(document, 'select');
+      select.dataset.focusKey = 'quota-bucket';
       for (const bucket of buckets) { const option = el(document, 'option', '', bucket.limitName || bucket.id); option.value = bucket.id; select.append(option); }
       select.value = bucketId; select.addEventListener('change', () => { bucketId = select.value; renderQuota(quotaResult); }); label.append(select); children.push(label);
     }
@@ -101,7 +110,7 @@ export function mountAccount(host, { rpc, loginPanelHost, pendingHost, demo = ()
       }
       const limit = bucket.individualLimit;
       if (limit) {
-        const details = el(document, 'details', 'acct-details'); details.append(el(document, 'summary', '', '个人支出控制'));
+        const details = el(document, 'details', 'acct-details'); details.dataset.stateKey = 'individual-limit'; const summary = el(document, 'summary', '', '个人支出控制'); summary.dataset.focusKey = 'individual-limit'; details.append(summary);
         details.append(fact('已使用 / 上限', `${limit.used} / ${limit.limit}`), fact('剩余比例', `${limit.remainingPercent}%`), fact('重置时间', localTime(limit.resetsAt * 1000))); group.append(details);
       }
       children.push(group);
@@ -112,6 +121,9 @@ export function mountAccount(host, { rpc, loginPanelHost, pendingHost, demo = ()
 
   function renderResetCredits() {
     const summary = quotaResult?.rateLimitResetCredits;
+    const signature = JSON.stringify([summary, attempt, selectedCredit?.id, demo(), summary?.credits?.map(credit => finite(credit.expiresAt) && credit.expiresAt * 1000 <= Date.now())]);
+    if (signature === creditSignature) return;
+    creditSignature = signature;
     resetCredits.hidden = !summary && !attempt;
     if (!summary && !attempt) return;
     const body = el(document, 'div', 'acct-credit-body');
@@ -126,8 +138,8 @@ export function mountAccount(host, { rpc, loginPanelHost, pendingHost, demo = ()
     if (credits === null && summary?.availableCount > 0) body.append(el(document, 'p', 'empty-line', '服务只返回可用数量，暂未提供可选择的卡片。'));
     else if (credits && !credits.length && summary?.availableCount > 0) body.append(el(document, 'p', 'empty-line', '服务未返回卡片详情，暂时无法选择使用。'));
     if (credits?.length) {
-      const details = el(document, 'details', 'acct-details'); details.open = !!selectedCredit;
-      details.append(el(document, 'summary', '', `查看卡片（${credits.length}）`));
+      const details = el(document, 'details', 'acct-details'); details.open = !!selectedCredit; details.dataset.stateKey = 'reset-credits';
+      const toggle = el(document, 'summary', '', `查看卡片（${credits.length}）`); toggle.dataset.focusKey = 'reset-credits'; details.append(toggle);
       const list = el(document, 'div', 'acct-credit-list');
       for (const credit of credits) {
         const expired = finite(credit.expiresAt) && credit.expiresAt * 1000 <= Date.now();
@@ -137,7 +149,8 @@ export function mountAccount(host, { rpc, loginPanelHost, pendingHost, demo = ()
         if (credit.description) info.append(el(document, 'span', '', credit.description));
         info.append(el(document, 'span', 'acct-credit-meta', `${expired ? '已过期' : RESET_STATUS[credit.status] || '状态未知'} · ${localTime(credit.grantedAt * 1000)} 获得${finite(credit.expiresAt) ? ` · ${localTime(credit.expiresAt * 1000)} 到期` : ''}`));
         const choose = el(document, 'button', 'btn', selectedCredit?.id === credit.id ? '已选择' : '选择使用'); choose.type = 'button'; choose.disabled = !canUse;
-        choose.addEventListener('click', () => { selectedCredit = credit; renderResetCredits(); resetCredits.querySelector('.acct-credit-confirm button')?.focus(); });
+        choose.dataset.focusKey = `credit:${credit.id}`;
+        choose.addEventListener('click', () => { selectedCredit = credit; renderResetCredits(); resetCredits.querySelector('[data-focus-key="credit-confirm"]')?.focus(); });
         row.append(info, choose); list.append(row);
       }
       details.append(list); body.append(details);
@@ -149,6 +162,7 @@ export function mountAccount(host, { rpc, loginPanelHost, pendingHost, demo = ()
       const actions = el(document, 'div', 'acct-credit-actions');
       const cancel = el(document, 'button', 'btn', '取消'); cancel.type = 'button'; cancel.addEventListener('click', () => { selectedCredit = null; renderResetCredits(); });
       const use = el(document, 'button', 'btn primary', '确认使用这张卡'); use.type = 'button'; use.addEventListener('click', consumeCredit);
+      cancel.dataset.focusKey = 'credit-cancel'; use.dataset.focusKey = 'credit-confirm';
       actions.append(cancel, use); confirm.append(actions); body.append(confirm);
     }
     section(resetCredits, '限额重置卡', body);
@@ -190,7 +204,7 @@ export function mountAccount(host, { rpc, loginPanelHost, pendingHost, demo = ()
     const children = [];
     if (tabs.length > 1) {
       const nav = el(document, 'div', 'acct-tabs'); nav.setAttribute('role', 'group'); nav.setAttribute('aria-label', '官方用量维度');
-      for (const tab of tabs) { const button = el(document, 'button', '', tab.name); button.type = 'button'; button.setAttribute('aria-pressed', String(tab.id === usageTab)); button.addEventListener('click', () => { usageTab = tab.id; renderUsage(result); usage.querySelector(`[data-tab="${tab.id}"]`)?.focus(); }); button.dataset.tab = tab.id; nav.append(button); }
+      for (const tab of tabs) { const button = el(document, 'button', '', tab.name); button.type = 'button'; button.setAttribute('aria-pressed', String(tab.id === usageTab)); button.addEventListener('click', () => { usageTab = tab.id; renderUsage(result); usage.querySelector(`[data-tab="${tab.id}"]`)?.focus(); }); button.dataset.tab = tab.id; button.dataset.focusKey = `usage:${tab.id}`; nav.append(button); }
       children.push(nav);
     }
     if (usageTab === 'overview') {
@@ -233,13 +247,40 @@ export function mountAccount(host, { rpc, loginPanelHost, pendingHost, demo = ()
     table.append(head, body); wrap.append(table); return wrap;
   }
 
-  async function load() {
+  function setRefreshing(value) {
+    refresh.disabled = value;
+    refresh.setAttribute('aria-busy', String(value));
+    refresh.setAttribute('aria-label', value ? '正在刷新账户' : '刷新账户');
+    host.classList.toggle('acct-refreshing', value);
+    for (const node of [identity, quota, usage]) node.setAttribute('aria-busy', String(value));
+  }
+
+  function load() {
     if (!active || attempt?.state === 'pending') return;
-    const mine = ++generation; refresh.disabled = true;
-    selectedCredit = null; resetCredits.hidden = true;
-    const loading = text => el(document, 'p', 'empty-line', text);
-    section(identity, '身份', loading('正在读取…')); section(quota, '额度', loading('正在读取…')); section(usage, '官方账户用量', loading('正在读取…'));
-    const settle = async (promise, render) => { try { const result = await promise; if (mine === generation) render(result, null); } catch (error) { if (mine === generation) render(null, error); } };
+    if (loadTask) return loadTask;
+    const mine = ++generation; setRefreshing(true);
+    for (const [node, title] of [[identity, '身份'], [quota, '额度'], [usage, '官方账户用量']]) {
+      if (!node.childNodes.length) { node.classList.add('acct-loading'); section(node, title, el(document, 'p', 'empty-line', '正在读取…')); }
+    }
+    const settle = async (promise, node, render, signatureFor = result => result) => {
+      try {
+        const result = await promise;
+        if (!active || mine !== generation) return;
+        node.querySelector('.acct-refresh-error')?.remove();
+        const signature = JSON.stringify(signatureFor(result));
+        if (rendered.get(node) !== signature) { render(result, null); rendered.set(node, signature); }
+        // The credit attempt can change independently of the quota response.
+        if (node === quota) renderResetCredits();
+      } catch (error) {
+        if (!active || mine !== generation) return;
+        if (rendered.has(node)) {
+          node.querySelector('.acct-refresh-error')?.remove();
+          const line = errorLine('刷新失败，显示上次读取结果', error); line.classList.add('acct-refresh-error'); line.setAttribute('role', 'status'); node.append(line);
+        } else render(null, error);
+      } finally {
+        if (active && mine === generation) { node.classList.remove('acct-loading'); node.setAttribute('aria-busy', 'false'); }
+      }
+    };
     const readUsage = async () => {
       const threadId = getThreadId();
       // A thread-scoped request returns thread estimates instead of account-wide activity.
@@ -249,17 +290,17 @@ export function mountAccount(host, { rpc, loginPanelHost, pendingHost, demo = ()
       if (accountResult.status === 'rejected') throw accountResult.reason;
       return { ...accountResult.value, threadUsage: threadResult?.status === 'fulfilled' ? threadResult.value?.threadUsage : null, threadUsageError: threadResult?.status === 'rejected' };
     };
-    await Promise.all([
-      settle(rpc('account/read', { refreshToken: false }), renderIdentity),
-      settle(rpc('account/rateLimits/read', { excludeResetCreditDetails: false }), renderQuota),
-      settle(readUsage(), renderUsage),
-    ]);
-    if (mine === generation) refresh.disabled = false;
+    loadTask = Promise.all([
+      settle(Promise.resolve().then(() => rpc('account/read', { refreshToken: false })), identity, renderIdentity),
+      settle(Promise.resolve().then(() => rpc('account/rateLimits/read', { excludeResetCreditDetails: false })), quota, renderQuota, result => [result, quotaBuckets(result).map(bucket => [windowView(bucket.primary), windowView(bucket.secondary)])]),
+      settle(readUsage(), usage, renderUsage, result => [result, getThreadId()]),
+    ]).finally(() => { if (mine === generation) { loadTask = null; setRefreshing(false); } });
+    return loadTask;
   }
   return {
     activate() { active = true; return load(); },
-    deactivate() { active = false; generation++; selectedCredit = null; refresh.disabled = false; },
+    deactivate() { active = false; generation++; loadTask = null; setRefreshing(false); },
     refresh: load,
-    reset() { generation++; accountEpoch++; quotaResult = null; selectedCredit = null; attempt = null; bucketId = null; usageTab = 'overview'; refresh.disabled = false; resetCredits.hidden = true; for (const node of [identity, quota, usage, resetCredits]) node.replaceChildren(); },
+    reset() { generation++; accountEpoch++; loadTask = null; rendered.clear(); creditSignature = null; quotaResult = null; selectedCredit = null; attempt = null; bucketId = null; usageTab = 'overview'; setRefreshing(false); resetCredits.hidden = true; for (const node of [identity, quota, usage, resetCredits]) { node.classList.remove('acct-loading'); node.replaceChildren(); } },
   };
 }

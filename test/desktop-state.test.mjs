@@ -50,6 +50,13 @@ test('desktop state API requires exact confirmed ack and authentication',async t
  assert.equal((await call('/api/desktop/receipts/ack',{requestIds:[key],confirmed:true})).status,200);
  assert.deepEqual((await(await call('/api/desktop/receipts')).json()).receipts,[]);
 });
+test('settled audit history cannot block new work; unresolved receipts are retained',async t=>{
+ const s=await fixture(t),prefix='a'.repeat(32)+':'+Date.now()+':';
+ await s.update(v=>{v.receipts=Array.from({length:1000},(_,i)=>({requestId:prefix+('record'+i).padEnd(10,'x'),method:'turn/start',createdAt:Date.now(),state:i===0?'unknown':'succeeded',outcome:i===0?'unknown':'succeeded'}));});
+ const unknown=(await s.list())[0].requestId,op=store(s);let ran=false;
+ await op.execute(id(op),'turn/start',{},()=>{ran=true;return {};});
+ assert.equal(ran,true);const rows=await s.list();assert.equal(rows.length,102);assert.equal(rows.find(x=>x.requestId===unknown)?.state,'unknown');
+});
 test('legacy desktop preferences migrate to codex without dropping receipts',async t=>{
  const s=await fixture(t);await mkdir(s.root,{recursive:true});
  const requestId='a'.repeat(32)+':'+Date.now()+':legacy-op';

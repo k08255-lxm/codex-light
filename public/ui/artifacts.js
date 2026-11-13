@@ -3,6 +3,7 @@
 // Never inline SVG, never use object/iframe, never auto-fetch remote URLs. Blob URLs are revoked.
 import { el } from './format.js';
 import { icon } from '../icons.js';
+import { rasterBase64Mime } from '../store.js';
 
 const PREVIEW_EXT = /\.(png|jpe?g|webp|gif|ico|svg)$/i;
 // MCP image content is shown only for raster types; SVG markup from a tool result is never rendered.
@@ -10,6 +11,19 @@ const INLINE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gi
 const INLINE_MAX_BASE64 = Math.ceil(6 * 1024 * 1024 / 3) * 4;
 function decodeBase64(data, mime) { let binary; try { binary = atob(data); } catch { throw new Error('图片数据不是有效 base64'); } const bytes = new Uint8Array(binary.length); for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i); return new Blob([bytes], { type: mime }); }
 const isRemote = value => /^[a-z][a-z0-9+.-]*:\/\//i.test(value) && !/^file:/i.test(value);
+
+function toolImageCandidate(item, part, index, source) {
+  const key = `${item.id}:${source}:${index}:r${part.revision || 0}`;
+  const name = `${item.tool || item.name || '工具'} 图片 ${index + 1}`;
+  const ref = Number.isInteger(part.imageRef) ? part.imageRef : null;
+  const uri = part.imageUrl ?? part.image_url;
+  if (!part.imageError && typeof uri === 'string' && !isRemote(uri) && /^(file:|[a-z]:[\\/]|\/)/i.test(uri) && PREVIEW_EXT.test(uri)) return { key, kind: 'viewed', path: uri, status: 'done', caption: '', reason: '', name };
+  const match = typeof uri === 'string' ? /^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/]+={0,2})$/i.exec(uri) : null;
+  const mime = typeof part.mimeType === 'string' ? part.mimeType.toLowerCase() : match?.[1]?.toLowerCase() || '';
+  const data = match?.[2] || '';
+  const reason = part.imageError || (!INLINE_TYPES.has(mime) ? (part.file_id ? '图片仅提供文件标识，尚无可读取内容' : '此图片没有可预览的本地内容') : ref === null && !data ? '没有图片数据' : data.length > INLINE_MAX_BASE64 ? '图片数据超过 6 MiB' : '');
+  return { key, kind: 'viewed', path: null, inline: reason ? null : { mime, data: ref === null ? data : null, itemId: item.id, slot: ref, revision: part.revision || 0 }, status: reason ? 'failed' : 'done', caption: '', reason, name };
+}
 
 /** Explicit artifact candidates from a native item. Prose is never parsed as proof of an artifact. */
 export function artifactCandidates(item) {
@@ -21,17 +35,16 @@ export function artifactCandidates(item) {
     if(ref!==null)return [{key:`${item.id}:upload:${index}:r${part.revision||0}`,kind:'uploaded',path:null,inline:part.imageError?null:{mime:part.mimeType,itemId:item.id,slot:ref,revision:part.revision||0},status:part.imageError?'failed':'done',caption:'',reason:part.imageError||'',name:`图片 ${index+1}`}];
     return [{key:`${item.id}:upload:${index}`,kind:'uploaded',path:null,status:'failed',caption:'',reason:'此图片没有可预览的本地内容',name:`图片 ${index+1}`}];
   });
-  if(item.type==='dynamicToolCall')return (item.contentItems||[]).flatMap((part,index)=>{
-    if(part?.type!=='inputImage')return [];
-    const ref=Number.isInteger(part.imageRef)?part.imageRef:null;
-    const reason=part.imageError||(ref===null?'此图片没有可预览的本地内容':'');
-    return [{key:`${item.id}:dynamic:${index}:r${part.revision||0}`,kind:'viewed',path:null,inline:reason?null:{mime:part.mimeType,itemId:item.id,slot:ref,revision:part.revision||0},status:reason?'failed':'done',caption:'',reason,name:`${item.tool||'工具'} 图片 ${index+1}`}];
-  });
+  if(item.type==='dynamicToolCall')return (item.contentItems||[]).flatMap((part,index)=>part?.type==='inputImage'?[toolImageCandidate(item,part,index,'dynamic')]:[]);
+  if(item.type==='functionCallOutput'&&Array.isArray(item.output))return item.output.flatMap((part,index)=>part?.type==='input_image'?[toolImageCandidate(item,part,index,'function')]:[]);
   if (item.type === 'imageGeneration') {
     const failed = item.failure || ['failed', 'error'].includes(item.status);
     const path = typeof item.savedPath === 'string' && item.savedPath ? item.savedPath : null;
-    return [{ key: `${item.id}:gen`, kind: 'generated', path, status: failed ? 'failed' : item.status === 'inProgress' || item._complete === false ? 'running' : 'done',
-      caption: typeof item.revisedPrompt === 'string' ? item.revisedPrompt.slice(0, 300) : '', reason: failed ? '生成失败' : path ? '' : '生成结果没有提供本地保存路径' }];
+    const mime=rasterBase64Mime(item.result),ref=Number.isInteger(item.imageRef)?item.imageRef:null;
+    const imageError=item.imageError||(mime?(item.result.length>INLINE_MAX_BASE64?'图片数据超过 6 MiB':!/^[A-Za-z0-9+/]+={0,2}$/.test(item.result)?'图片数据不是有效 base64':''):'');
+    const inline=!path&&!imageError&&(ref!==null||mime)?{mime:item.mimeType||mime,data:ref===null?item.result:null,itemId:item.id,slot:ref,revision:item.revision||0}:null;
+    return [{ key: `${item.id}:gen:r${item.revision||0}`, kind: 'generated', path, inline, status: failed ? 'failed' : ['inProgress','in_progress','running'].includes(item.status) || item._complete === false ? 'running' : 'done',
+      caption: typeof item.revisedPrompt === 'string' ? item.revisedPrompt.slice(0, 300) : '', reason: failed ? '生成失败' : path||inline ? '' : imageError||'生成结果没有提供本地保存路径' }];
   }
   if (item.type === 'imageView' && typeof item.path === 'string' && item.path) return [{ key: `${item.id}:view`, kind: 'viewed', path: item.path, status: 'done', caption: '', reason: '' }];
   if (item.type === 'mcpToolCall') {

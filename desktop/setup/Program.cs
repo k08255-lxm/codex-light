@@ -8,13 +8,17 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using Forms = System.Windows.Forms;
 
 namespace CodexLight.Bootstrap {
  internal sealed class SetupWindow : Window {
   readonly SetupView view = new SetupView();
-  bool checking, busy, cancelAllowed, registered, restartRequired, checkFailed, closeAfterCheck, loaded;
+  bool checking, busy, registered, restartRequired, checkFailed, closeAfterCheck, loaded;
+  volatile bool cancelAllowed;
   CancellationTokenSource? cancellation;
+  readonly Stopwatch elapsed = new Stopwatch();
+  readonly DispatcherTimer elapsedTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
 
   public SetupWindow(string? startupIssue = null) {
    Title = "安装 Codex Light"; Content = view;
@@ -25,6 +29,8 @@ namespace CodexLight.Bootstrap {
     if (stream != null) { var image = BitmapDecoder.Create(stream, BitmapCreateOptions.None, BitmapCacheOption.OnLoad).Frames.OrderByDescending(frame => frame.PixelWidth).First(); Icon = image; view.SetIcon(image); }
    }
    view.Location.Text = InstallPaths.Default;
+   elapsedTimer.Tick += (_, __) => view.SetElapsed(elapsed.Elapsed);
+   Closed += (_, __) => elapsedTimer.Stop();
    view.Change.Click += (_, __) => ChangeDirectory();
    view.Primary.Click += async (_, __) => {
     if (view.Stage == SetupStage.Completed) { OpenApp(); return; }
@@ -52,12 +58,14 @@ namespace CodexLight.Bootstrap {
     view.Location.Text = InstallPaths.UnderParent(dialog.SelectedPath); view.SetMessage("准备安装。所需运行环境会自动检查。");
    }
   }
-  void Progress(string message) { view.Log(message); if (!message.StartsWith("安装日志保留在：", StringComparison.Ordinal)) view.SetMessage(SetupView.ProgressSummary(message)); }
+  void StartElapsed() { elapsed.Restart(); view.SetElapsed(elapsed.Elapsed); elapsedTimer.Start(); }
+  void StopElapsed() { elapsed.Stop(); elapsedTimer.Stop(); view.SetElapsed(elapsed.Elapsed); }
   void AllowCancel(bool allowed) { cancelAllowed = allowed; view.SetCancelAllowed(allowed); }
   void CancelOrClose() { if (!view.Secondary.IsEnabled) return; if (busy) RequestCancel(); else Close(); }
   void RequestCancel() { if (!cancelAllowed) return; cancellation?.Cancel(); view.Secondary.IsEnabled = false; view.SetMessage("正在取消，等待当前操作安全结束…"); }
   async Task CheckAsync() {
    checking = true; checkFailed = false; view.SetStage(SetupStage.Checking, "正在检查运行环境…");
+   StartElapsed();
    try {
     string? previous = await Task.Run(() => InstallPaths.Registered()); registered = previous != null;
     view.SetRegistered(registered); Title = registered ? "更新 Codex Light" : "安装 Codex Light"; if (previous != null) view.Location.Text = previous;
@@ -68,14 +76,18 @@ namespace CodexLight.Bootstrap {
     view.SetStage(SetupStage.Ready, missing == 0 ? "运行环境已就绪。" : "将自动安装 " + missing + " 项必要运行环境。");
     if (registered) view.Log("检测到 Windows Installer 登记；更新将使用原安装位置。");
    } catch (Exception error) { checkFailed = true; view.Log(error.ToString()); view.SetStage(SetupStage.Failed, "环境检查未完成：" + error.Message); }
-   finally { checking = false; if (closeAfterCheck) Close(); }
+   finally { StopElapsed(); checking = false; if (closeAfterCheck) Close(); }
   }
   async Task InstallAsync() {
    busy = true; cancellation = new CancellationTokenSource(); view.SetStage(SetupStage.Installing, "正在检查运行环境…"); AllowCancel(true);
-   try { int code = await new SetupEngine().Run(view.Location.Text, registered, Progress, AllowCancel, cancellation.Token); restartRequired = code == 3010 || code == 1641; view.Complete(code); }
+   StartElapsed();
+   var messages = new Progress<string>(message => view.Log(message));
+   var cancel = new Progress<bool>(allowed => { if (busy && cancellation?.IsCancellationRequested != true) view.SetCancelAllowed(allowed); });
+   var progress = new Progress<SetupProgress>(update => { if (view.Stage == SetupStage.Installing && cancellation?.IsCancellationRequested != true) view.SetProgress(update); });
+   try { int code = await new SetupEngine().Run(view.Location.Text, registered, ((IProgress<string>)messages).Report, allowed => { cancelAllowed = allowed; ((IProgress<bool>)cancel).Report(allowed); }, cancellation.Token, progress); restartRequired = code == 3010 || code == 1641; view.Complete(code); }
    catch (OperationCanceledException error) { view.Log(error.Message); view.SetStage(SetupStage.Cancelled, "安装已取消。已完成的运行环境安装会保留，可点击“重试”继续。"); }
    catch (Exception error) { view.Log(error.ToString()); view.SetStage(SetupStage.Failed, "安装未完成：" + error.Message); }
-   finally { busy = false; cancellation.Dispose(); cancellation = null; }
+   finally { StopElapsed(); busy = false; cancellation.Dispose(); cancellation = null; }
   }
   void OpenApp() {
    if (restartRequired) { Close(); return; }

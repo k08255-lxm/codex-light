@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { mountConversation, describeItem, itemState } from '../public/activity-feed.js';
 import { TurnLedger, buildTurns } from '../public/state.js';
 import { createDocument, visibleText } from './mini-dom.mjs';
+import { mountToolActivity } from '../public/ui/tool-activity.js';
+import { createAgentInspector } from '../public/ui/agent-inspector.js';
 
 const user = (id, turnId, text) => ({ id, type: 'userMessage', content: [{ type: 'text', text }], _turnId: turnId, _complete: true });
 const agent = (id, turnId, text, phase = null, complete = true) => ({ id, type: 'agentMessage', text, phase, _turnId: turnId, _complete: complete });
@@ -15,6 +17,24 @@ function mount() {
   return { document, host, view, links };
 }
 const q = (host, selector) => host.querySelectorAll(selector);
+
+test('context compaction stays visible in chronology between independently collapsed operation groups', () => {
+  const ledger = new TurnLedger(); ledger.merge({ id: 't', status: 'inProgress' });
+  const compact = { id: 'compact', type: 'contextCompaction', _turnId: 't', _complete: false };
+  const items = [user('u', 't', '任务'), cmd('before', 't'), compact, cmd('after', 't')];
+  const { host, view } = mount(); view.render(buildTurns(items, ledger, { activeTurnId: 't' }));
+  const row = host.querySelector('.compaction-record');
+  assert.ok(row); assert.equal(row.tag, 'section'); assert.equal(row.closest('details'), null);
+  assert.match(row.textContent, /正在压缩上下文/);
+  const turn = host.querySelector('.turn');
+  assert.ok(turn.children.indexOf(q(host, '.turn-process')[0]) < turn.children.indexOf(row));
+  assert.ok(turn.children.indexOf(row) < turn.children.indexOf(q(host, '.turn-process')[1]));
+  assert.ok(q(host, '.turn-process').every(group => !group.open));
+  view.render(buildTurns(items.map(item => item.id === 'compact' ? { ...item, _complete: true } : item), ledger));
+  assert.equal(host.querySelector('.compaction-record'), row); assert.match(row.textContent, /上下文已压缩/);
+  view.render(buildTurns(items.map(item => item.id === 'compact' ? { ...item, _complete: true, status:'failed' } : item), ledger));
+  assert.match(row.textContent,/上下文压缩失败/);assert.equal(row.closest('details'),null);
+});
 
 test('each visible model utterance closes the preceding operation group and keyed open choice survives streaming',()=>{
   const ledger=new TurnLedger();ledger.merge({id:'t',status:'inProgress'});
@@ -65,6 +85,64 @@ test('running operations stay collapsed while commentary remains visible', () =>
   view.tick(1000 * 1000 + 70000);
   assert.equal(process.querySelector('.turn-process-label').textContent, '1 项操作 · 运行中');
   assert.equal(q(host, '.step')[0].querySelector('.step-state').textContent, '进行中');
+});
+
+test('running operation headers stop their feedback on terminal items and terminal turns', () => {
+  const ledger = new TurnLedger(); ledger.merge({ id:'live', status:'inProgress' });
+  const live = cmd('operation', 'live', { status:'inProgress', exitCode:null, _complete:false });
+  const {host,view} = mount();
+  const render = item => view.render(buildTurns([user('u','live','检查'),item],ledger,{activeTurnId:'live'}));
+  render(live);
+  const group = host.querySelector('.turn-process'), row = host.querySelector('.step');
+  assert.equal(group.dataset.running,'true'); assert.equal(row.dataset.running,'true');
+  assert.equal(group.open,false);
+  for (const status of ['completed','failed','interrupted']) {
+    render({...live,status});
+    assert.equal(host.querySelector('.step'),row);
+    assert.equal(row.dataset.running,'false'); assert.equal(group.dataset.running,'false');
+  }
+  render(live);
+  for (const status of ['completed','failed','interrupted']) {
+    ledger.merge({id:'live',status}); view.render(buildTurns([user('u','live','检查'),live],ledger));
+    assert.equal(group.dataset.running,'false'); assert.equal(row.dataset.running,'false','stale running item cannot revive terminal turn feedback');
+  }
+});
+
+test('tool activity marks only the current running group and clears stopped operation feedback', () => {
+  const document=createDocument(),host=document.createElement('div'),view=mountToolActivity(host);
+  const running=cmd('c','t',{status:'inProgress',exitCode:null,_complete:false});
+  view.render([running],'thread');
+  assert.equal(host.querySelector('.tool-operation-group').dataset.running,'true');
+  assert.equal(host.querySelector('.step').dataset.running,'true');
+  view.render([running,agent('comment','t','已结束操作','commentary')],'thread');
+  assert.equal(host.querySelector('.tool-operation-group').dataset.running,'false');
+  assert.equal(host.querySelector('.step').dataset.running,'false');
+  view.render([{...running,status:'interrupted',_complete:true}],'thread');
+  assert.equal(host.querySelector('.tool-operation-group').dataset.running,'false');
+  assert.equal(host.querySelector('.step').dataset.running,'false');
+});
+
+test('native and DSH inspector operations stop feedback when the parent task settles', async () => {
+  for (const native of [true,false]) {
+    const document=createDocument(),host=document.createElement('div');document.body.append(host);
+    const el=(tag,cls,text)=>{const node=document.createElement(tag);node.className=cls;if(text!=null)node.textContent=text;return node;};
+    let status='inProgress';
+    const row={threadId:'parent',agentId:'child',status:'running'};
+    const state={connected:true,thread:{id:'parent'},dshReadErrors:new Map(),store:{values:()=>native?[{id:'spawn',type:'collabAgentToolCall',tool:'spawnAgent',receiverThreadIds:['child'],agentsStates:{child:{status:'running'}}}]:[]}};
+    const live={selectedAgentId:'child',selected:{events:[{seq:1,type:'command/start',details:{command:'npm test',status:'inProgress'}}]}};
+    const inspector=createAgentInspector({document,state,host,el,dshTasks:{values:()=>native?[]:[row]},dshLive:{selectAgent(){},snapshot:()=>live},readDshTask:async()=>{},
+      rpc:async()=>({thread:{id:'child',turns:[{id:'t',status,items:[cmd('c','t',{status:'inProgress',exitCode:null,_complete:false})]}]}})});
+    inspector.render();assert.equal(inspector.open('child',native?'native':'dsh'),true);
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(host.querySelector('.agent-operation-group').dataset.running,'true');
+    assert.equal(host.querySelector('.step').dataset.running,'true');
+    for(const settled of ['completed','interrupted','failed']) {
+      status=settled;row.status=settled==='failed'?'error':settled;
+      if(native){inspector.refresh();await new Promise(resolve=>setImmediate(resolve));}else inspector.render();
+      assert.equal(host.querySelector('.agent-operation-group').dataset.running,'false');
+      assert.equal(host.querySelector('.step').dataset.running,'false');
+    }
+  }
 });
 
 test('user choice to expand survives re-render; completion collapses only untouched turns', () => {
@@ -142,9 +220,12 @@ test('turn diff is authoritative and deduplicates; unknown per-file stats are sh
   const turn = buildTurns(items, ledger, { cwd: 'C:/proj' })[0];
   assert.equal(turn.files.count, 2);
   assert.deepEqual(turn.files.rows.map(row => [row.path, row.added, row.removed]), [['src/a.js', 1, 1], ['img.png', null, null]]);
-  assert.equal(turn.files.added, null, 'aggregate is unknown when any file is unknown');
+  assert.equal(turn.files.added, 1, 'known totals survive an unknown binary file');
+  assert.equal(turn.files.unknownCount,1);assert.equal(turn.files.complete,false);
   const { host, view } = mount(); view.render([turn]);
   assert.match(q(host, '.files-stats')[0].textContent, /行数未知/);
+  assert.match(q(host,'.files-stats')[0].textContent,/已知 \+1-1/);assert.match(q(host,'.files-stats')[0].textContent,/1 个二进制/);
+  assert.match(q(host,'.file-stats')[1].textContent,/二进制/);
 });
 
 test('live edits remain inspectable without showing a premature terminal file summary', () => {

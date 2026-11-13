@@ -1,7 +1,9 @@
 // Pure conversation state: turn/phase grouping, timing, per-turn file changes,
 // context snapshots, the per-thread follow-up queue and the slash catalog.
 // No DOM, no network. Every unknown value stays unknown instead of becoming 0.
-import {delegatedItemsForTurn,mergeDelegatedFileSummary} from './delegated-changes.js';
+import {absolutePath,delegatedItemsForTurn,mergeDelegatedFileSummary} from './delegated-changes.js';
+import {changeEvidence,summarizeFileRows} from './change-stats.js';
+export {changeStats} from './change-stats.js';
 
 const PROCESS_TYPES = new Set(['reasoning', 'commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'webSearch',
   'collabAgentToolCall', 'subAgentActivity', 'imageView', 'imageGeneration', 'plan', 'contextCompaction', 'hookPrompt',
@@ -190,6 +192,7 @@ export function parseUnifiedDiff(source) {
   const headerPath = line => { const raw = line.slice(4).trim(); return raw.startsWith('"') ? unquoteGitPath(raw) : raw.split('\t')[0]; };
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
+    if (line.startsWith('diff --git ')) { const paths = gitHeaderPaths(line.slice(11)); start(stripPrefix(paths[1] || paths[0] || '')); file.lines.push(line); continue; }
     const inHunk = oldLeft > 0 || newLeft > 0;
     if (inHunk && file) {
       if (line.startsWith('+')) { file.added++; newLeft--; }
@@ -198,7 +201,6 @@ export function parseUnifiedDiff(source) {
       else { oldLeft--; newLeft--; }
       file.lines.push(line); continue;
     }
-    if (line.startsWith('diff --git ')) { const paths = gitHeaderPaths(line.slice(11)); start(stripPrefix(paths[1] || paths[0] || '')); file.lines.push(line); continue; }
     if (line.startsWith('--- ') && lines[index + 1]?.startsWith('+++ ')) {
       if (!file || file.lines.some(row => row.startsWith('--- '))) start('');
       oldPath = headerPath(line); file.lines.push(line); continue;
@@ -215,22 +217,7 @@ export function parseUnifiedDiff(source) {
     if (/^Binary files .* differ$/.test(line) || line.startsWith('GIT binary patch')) file.known = false;
     file.lines.push(line);
   }
-  return files.filter(row => row.path).map(row => ({ path: row.path, added: row.known ? row.added : null, removed: row.known ? row.removed : null, diff: row.lines.join('\n') }));
-}
-
-/** Line stats for one native FileUpdateChange. Add/delete carry full content; update carries a unified diff. */
-export function changeStats(change) {
-  const diff = text(change?.diff); const kind = change?.kind?.type || change?.kind;
-  if (!diff) return { added: null, removed: null };
-  const lines = () => diff.replace(/\r\n?/g, '\n').replace(/\n$/, '').split('\n').length;
-  // Add/delete carry full file contents, which may legitimately contain "@@" lines.
-  if (kind === 'add') return { added: lines(), removed: 0 };
-  if (kind === 'delete') return { added: 0, removed: lines() };
-  if (/^@@ /m.test(diff)) {
-    const [parsed] = parseUnifiedDiff(`--- a/x\n+++ b/x\n${diff.replace(/^(?:---|\+\+\+) .*\n/gm, (header, offset) => offset < diff.indexOf('@@') ? '' : header)}`);
-    return parsed ? { added: parsed.added, removed: parsed.removed } : { added: null, removed: null };
-  }
-  return { added: null, removed: null };
+  return files.filter(row => row.path).map(row => {const diff=row.lines.join('\n'),stats=changeEvidence({diff,diffFormat:'unified'});return {path:row.path,added:stats.added,removed:stats.removed,statsReason:stats.reason,diff};});
 }
 
 function displayPath(path, cwd) {
@@ -246,14 +233,14 @@ function displayPath(path, cwd) {
 export function fileSummary(items, turnDiff, { cwd = '', running = false } = {}) {
   const files = new Map();
   for (const item of items) {
-    if (item.type !== 'fileChange' || ['declined', 'failed'].includes(item.status)) continue;
+    if (item.type !== 'fileChange' || ['declined', 'failed','rejected','cancelled','canceled'].includes(item.status)) continue;
     for (const change of Array.isArray(item.changes) ? item.changes : []) {
       if (typeof change?.path !== 'string' || !change.path) continue;
-      const key = pathKey(change.path); const stats = changeStats(change);
-      const row = files.get(key) || { path: displayPath(change.path, cwd), fullPath: change.path, kind: change.kind?.type || null, added: 0, removed: 0, known: true, diffs: [], live: false };
-      if (stats.added === null || stats.removed === null) row.known = false;
-      else { row.added += stats.added; row.removed += stats.removed; }
-      if (change.diff) row.diffs.push(text(change.diff).slice(0, 65536));
+      const key = absolutePath(change.path,cwd); const stats = changeEvidence(change);
+      const row = files.get(key) || { path: displayPath(change.path, cwd), fullPath: change.path, kind: change.kind?.type || null, added: 0, removed: 0, knownAdded:0,knownRemoved:0,knownEdits:0,statsReasons:[],statsBasis:'edits',known: true, diffs: [], live: false };
+      if (stats.added === null || stats.removed === null) {row.known = false;if(!row.statsReasons.includes(stats.reason))row.statsReasons.push(stats.reason);}
+      else { row.added += stats.added; row.removed += stats.removed;row.knownAdded+=stats.added;row.knownRemoved+=stats.removed;row.knownEdits++; }
+      if (change.diff || change.diffTruncated) row.diffs.push(text(change.diff).slice(0, 65536)+(change.diffTruncated?'\n…〔差异预览已截断〕':''));
       if (item.status === 'inProgress' || item._complete === false) row.live = true;
       files.set(key, row);
     }
@@ -269,23 +256,17 @@ export function fileSummary(items, turnDiff, { cwd = '', running = false } = {})
       for (const [key, row] of files) if (key === rel || key.endsWith('/' + rel)) { match = [key, row]; break; }
       if (match) files.delete(match[0]);
       merged.set(rel, { path: entry.path, fullPath: match?.[1].fullPath || entry.path, kind: match?.[1].kind || null, added: entry.added, removed: entry.removed,
-        known: entry.added !== null, diffs: [entry.diff], live: match?.[1].live || false });
+        known: entry.added !== null,statsReasons:entry.statsReason?[entry.statsReason]:[],statsBasis:'net', diffs: [entry.diff], live: match?.[1].live || false });
     }
     // Edited files absent from the net diff currently have no net change (e.g. reverted).
-    for (const [key, row] of files) merged.set(key, { ...row, known: true, added: 0, removed: 0, diffs: [], net: 'unchanged' });
+    for (const [key, row] of files) merged.set(key, { ...row, known: true, added: 0, removed: 0,statsReasons:[],statsBasis:'net', diffs: [], net: 'unchanged' });
     return summarize([...merged.values()], running);
   }
   return summarize([...files.values()].map(row => row.known ? row : { ...row, added: null, removed: null }), running);
 }
 
 function summarize(rows, running) {
-  const known = rows.length > 0 && rows.every(row => row.known);
-  return {
-    count: rows.length, running, rows,
-    added: known ? rows.reduce((sum, row) => sum + row.added, 0) : null,
-    removed: known ? rows.reduce((sum, row) => sum + row.removed, 0) : null,
-    complete: known,
-  };
+  return summarizeFileRows(rows,running);
 }
 
 // ---------- Context window ----------
@@ -429,7 +410,7 @@ export function isUnsupportedMethod(error) {
   if (error?.code === -32602 && /itemsView|unknown variant/i.test(message)) return true;
   return /method not found|is not supported|not supported yet|unknown method|unknown variant/i.test(message);
 }
-export const HISTORY_PAGE = Object.freeze({ items: 80, turns: 20, fetchesPerPage: 4, readKeepTurns: 20 });
+export const HISTORY_PAGE = Object.freeze({ items: 300, itemsPerRequest: 100, turns: 40, fetchesPerPage: 4, readKeepTurns: 40 });
 /** Shared per server instance: which history methods the connected CLI lacks. */
 export function historyCapabilities() { return { unsupported: new Set() }; }
 
@@ -455,19 +436,19 @@ export class HistoryPager {
     const turns = []; let activeTurnId = null; let fetches = 0; this.didRead = false;
     const take = rows => { for (const turn of rows) { turns.push(turn); if (turn?.status === 'inProgress') activeTurnId ??= turn.id; } };
     while (this.buffer.length < max && (!this.started || this.cursor !== null) && fetches < HISTORY_PAGE.fetchesPerPage) {
-      take(await this.fetch()); fetches++; this.started = true;
-      // items: one page per call; read: at most one full transfer per explicit request.
-      if (this.mode === 'read' || this.mode === 'items') break;
+      take(await this.fetch(Math.min(HISTORY_PAGE.itemsPerRequest, max - this.buffer.length))); fetches++; this.started = true;
+      // A display page can span bounded API pages; read stays one full transfer per explicit request.
+      if (this.mode === 'read') break;
     }
     const items = this.buffer.splice(Math.max(0, this.buffer.length - max));
     return { mode: this.mode, items, turns, activeTurnId, hasMore: this.hasMore, fullRead: this.didRead, read: this.read && { ...this.read } };
   }
-  async fetch() {
+  async fetch(itemLimit = HISTORY_PAGE.itemsPerRequest) {
     const { unsupported } = this.capabilities;
     if (!this.mode || this.mode === 'items') {
       if (!unsupported.has('items')) {
         try {
-          const params = { threadId: this.threadId, limit: HISTORY_PAGE.items, sortDirection: 'desc' }; if (this.cursor) params.cursor = this.cursor;
+          const params = { threadId: this.threadId, limit: itemLimit, sortDirection: 'desc' }; if (this.cursor) params.cursor = this.cursor;
           const result = await this.call('thread/items/list', params);
           this.mode = 'items'; this.cursor = result?.nextCursor || null;
           const rows = (Array.isArray(result?.data) ? result.data : []).map(historyEntry).filter(Boolean).reverse();

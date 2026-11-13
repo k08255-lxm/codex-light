@@ -72,7 +72,7 @@ export function createDelegationMonitor({ rpc, api, onChange = () => {}, onError
         const response = await api('/api/dsh/read',{threadId:job.threadId,agentId:job.id,kind:'changes'});
         if (!current(job)) return;
         if (response.threadId && response.threadId !== job.threadId || response.agentId && response.agentId !== job.id) throw new Error('修改记录返回了其他会话或子代理');
-        const projection = dshEventsSnapshot(response.result);
+        const projection = dshEventsSnapshot(response.result,{retainChanges:true});
         if (!projection.available) throw new Error('子代理修改记录格式无法识别');
         changed = job.dshTasks.ingestChanges(job.threadId,job.id,projection.events,{hasMore:projection.has_more});
         record.hasMore = projection.has_more;

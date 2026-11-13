@@ -53,3 +53,12 @@ test('LAN settings cannot expose local-only About content',()=>{
   assert.equal(h.$('settings-about').classList.contains('hidden'),true);
   assert.ok(!h.calls.some(([view,action])=>view==='about'&&action==='activate'));
 });
+
+test('leaving the conversation closes Activity without forgetting its selected tab',()=>{
+  const h=setup();h.state.detailsTab='dsh';
+  h.$('details').classList.remove('hidden');h.$('toggle-details').setAttribute('aria-pressed','true');
+  h.route('usage');
+  assert.equal(h.$('details').classList.contains('hidden'),true);
+  assert.equal(h.$('toggle-details').getAttribute('aria-pressed'),'false');
+  assert.equal(h.state.detailsTab,'dsh');
+});

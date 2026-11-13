@@ -6,6 +6,7 @@ import { mountConversation, splitSegments, segmentSource, LONG_TEXT } from '../p
 import { TurnLedger, buildTurns, HistoryPager, historyCapabilities, isUnsupportedMethod } from '../public/state.js';
 import { renderMarkdown } from '../public/markdown.js';
 import { createDocument } from './mini-dom.mjs';
+import { validateRpc } from '../src/security.mjs';
 
 // Distinct markers spread through a synthetic body so order and completeness can be checked.
 function body(length, tag = 'M') {
@@ -332,7 +333,7 @@ test('when thread/items/list is unsupported, history pages through thread/turns/
   const pager = new HistoryPager(rpc, 'th', caps);
   const first = await pager.next({ max: 80 });
   assert.equal(first.mode, 'turns');
-  assert.deepEqual(calls.map(c => c[0]), ['thread/items/list', 'thread/turns/list', 'thread/turns/list'], 'no full thread/read');
+  assert.deepEqual(calls.map(c => c[0]), ['thread/items/list', 'thread/turns/list'], 'no full thread/read');
   assert.equal(first.items.length, 80); assert.equal(first.items.at(-1).id, 'a44', 'newest last');
   assert.deepEqual(ids(first.items).slice(0, 2), ['u5', 'a5']);
   assert.ok(first.items.every(item => item._turnId === 'T' + item.id.slice(1) && item._complete === true));
@@ -356,21 +357,46 @@ test('thread/items/list stays the first choice when supported', async () => {
   const next = await pager.next({ max: 80 }); assert.equal(next.items.length, 10); assert.equal(calls[1][1].cursor, '80');
 });
 
+test('default history shows 300 items through safe API pages and preserves the older cursor', async () => {
+  const fixture = turnsFixture(220), { rpc, calls } = cliStub({ items: true, fixture });
+  const pager = new HistoryPager(rpc, 'th');
+  const first = await pager.next();
+  assert.equal(first.items.length, 300);
+  assert.equal(first.items[0].id, 'u70'); assert.equal(first.items.at(-1).id, 'a219');
+  assert.deepEqual(calls.map(([, params]) => [params.cursor, params.limit]), [[undefined,100],['100',100],['200',100]]);
+  assert.equal(first.hasMore, true);
+  const older = await pager.next();
+  assert.equal(older.items.length, 140); assert.equal(older.hasMore, false);
+  const loaded = [...older.items, ...first.items];
+  assert.deepEqual(ids(loaded), fixture.flatMap(turn => turn.items.map(item => item.id)));
+  assert.equal(new Set(ids(loaded)).size, 440);
+  for (const [method, params] of calls) assert.doesNotThrow(()=>validateRpc(method,params));
+});
+
+test('history stops after four API pages even when the server returns fewer items than requested', async () => {
+  let count = 0;
+  const pager = new HistoryPager(async (_method, params) => {
+    assert.ok(params.limit <= 100);
+    return { data: [{ item: { id: `i${++count}`, type:'agentMessage', text:'history' }, turnId:'t' }], nextCursor:String(count) };
+  }, 'th');
+  const page = await pager.next();
+  assert.equal(count, 4); assert.equal(page.items.length, 4); assert.equal(page.hasMore, true);
+});
+
 test('without any paging method, one explicit full read shows the newest turns and later pages state they re-read', async () => {
   const { rpc, calls } = cliStub({ turns: false });
   const pager = new HistoryPager(rpc, 'th');
   const first = await pager.next({ max: 80 });
   assert.equal(first.mode, 'read'); assert.equal(first.fullRead, true);
-  assert.deepEqual(first.read, { totalTurns: 45, shownTurns: 20 });
+  assert.deepEqual(first.read, { totalTurns: 45, shownTurns: 40 });
   assert.equal(calls.filter(c => c[0] === 'thread/read').length, 1);
-  assert.equal(first.items[0].id, 'u25'); assert.equal(first.items.at(-1).id, 'a44');
+  assert.equal(first.items[0].id, 'u5'); assert.equal(first.items.at(-1).id, 'a44');
   assert.equal(first.turns.length, 45, 'all turn metadata'); assert.ok(first.turns.every(turn => turn.items === undefined), 'older items are not kept');
   assert.equal(first.hasMore, true); assert.equal(pager.nextNeedsFullRead, true);
   const second = await pager.next({ max: 80 });
-  assert.equal(second.fullRead, true); assert.equal(second.items[0].id, 'u5'); assert.equal(second.items.at(-1).id, 'a24');
-  const third = await pager.next({ max: 80 });
-  assert.equal(third.items[0].id, 'u0'); assert.equal(third.hasMore, false);
-  assert.equal(calls.filter(c => c[0] === 'thread/read').length, 3, 'one full read per explicit request, never more');
+  assert.equal(second.fullRead, true); assert.equal(second.items[0].id, 'u0'); assert.equal(second.items.at(-1).id, 'a4');
+  assert.equal(second.hasMore, false);
+  assert.equal(calls.filter(c => c[0] === 'thread/read').length, 2, 'one full read per explicit request, never more');
 });
 
 test('other history errors are surfaced, not converted into a full read', async () => {

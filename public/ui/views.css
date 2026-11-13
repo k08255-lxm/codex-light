@@ -296,7 +296,7 @@
 .agent-list-toolbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;color:var(--secondary);font-size:.8125rem}
 .agent-inspector-content{min-width:0}
 .agent-row{display:flex;align-items:center;gap:9px;width:100%;padding:10px 4px;text-align:left;border:0;border-bottom:1px solid var(--border);background:transparent;color:inherit;cursor:pointer;border-radius:0}
-.agent-avatar{width:30px;height:30px;flex:0 0 30px}
+.agent-avatar{width:24px;height:24px;flex:0 0 24px}
 .agent-row-copy{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
 .agent-row-head{display:flex;align-items:center;gap:7px;min-width:0;flex-wrap:wrap}
 .agent-row-name{min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.8125rem;font-weight:500;flex:1 1 80px}
@@ -315,7 +315,7 @@
 .agent-detail-mode .agent-detail-content{padding:12px}
 .agent-model-meta{display:block;font-size:.75rem;line-height:1.5;color:var(--tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
 .agent-detail-content>.agent-model-meta{margin-bottom:12px}
-.agent-detail-toolbar>.agent-avatar{width:26px;height:26px;flex-basis:26px}
+.agent-detail-toolbar>.agent-avatar{width:22px;height:22px;flex-basis:22px}
 .agent-detail-content{min-width:0;overflow-wrap:anywhere}
 .agent-detail-content h4{font-size:.75rem;color:var(--tertiary);font-weight:500;margin:20px 0 8px}
 .agent-detail-content h4:first-child{margin-top:0}
@@ -343,6 +343,6 @@
 .agent-thread-tool summary{font-size:.75rem;color:var(--secondary);cursor:pointer}
 .agent-links{display:flex;margin:8px 0 12px}
 .agent-conversation-link{display:inline-flex;align-items:center;gap:7px;border:0;background:transparent;color:var(--secondary);font-size:.75rem;padding:4px 0;cursor:pointer}
-.agent-conversation-link .agent-avatar{width:22px;height:22px;flex-basis:22px}
+.agent-conversation-link .agent-avatar{width:18px;height:18px;flex-basis:18px}
 .agent-row:focus-visible,.agent-conversation-link:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
 @media(hover:hover){.agent-row:hover,.agent-conversation-link:hover{color:var(--text);background:var(--surface)}}

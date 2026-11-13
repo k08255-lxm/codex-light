@@ -17,6 +17,29 @@ internal static class Tests {
  static int checks, renders;
  static void Assert(bool condition, string message) { checks++; if (!condition) throw new InvalidOperationException(message); }
  static void Fails(Action action, string message) { try { action(); } catch (InvalidOperationException) { checks++; return; } throw new Exception(message); }
+ sealed class ImmediateProgress<T> : IProgress<T> { readonly Action<T> report; public ImmediateProgress(Action<T> report){this.report=report;} public void Report(T value)=>report(value); }
+ sealed class NonSeekableStream : MemoryStream { public NonSeekableStream(byte[] bytes):base(bytes){} public override bool CanSeek=>false; public override long Length=>throw new NotSupportedException(); public override long Position { get=>throw new NotSupportedException(); set=>throw new NotSupportedException(); } }
+ static void ProgressContracts(){
+  Assert(new SetupProgress(SetupPhase.Downloading,"x",25,100).Percent==25,"percentage derives from actual bytes");
+  foreach(var update in new[]{new SetupProgress(SetupPhase.Checking,"x"),new SetupProgress(SetupPhase.Downloading,"x",25),new SetupProgress(SetupPhase.Downloading,"x",25,0),new SetupProgress(SetupPhase.Downloading,"x",101,100),new SetupProgress(SetupPhase.Downloading,"x",-1,100)})Assert(!update.Percent.HasValue,"unknown or invalid totals never invent a percentage");
+  byte[] source=Enumerable.Range(0,200000).Select(i=>(byte)i).ToArray();
+  foreach(bool known in new[]{true,false}){
+   var samples=new List<(long bytes,long? total)>();
+   using(Stream input=known?new MemoryStream(source):new NonSeekableStream(source))using(var output=new MemoryStream()){
+    SetupEngine.CopyPackage(input,output,System.Threading.CancellationToken.None,(bytes,total)=>samples.Add((bytes,total))).GetAwaiter().GetResult();
+    Assert(source.SequenceEqual(output.ToArray()),"progress copy preserves exact bytes");
+   }
+   Assert(samples.First().bytes==0&&samples.Last().bytes==source.Length,"progress reports initial and completed byte counts");
+   Assert(samples.All(x=>known?x.total==source.Length:!x.total.HasValue),"unknown stream length remains unknown");
+   Assert(samples.Zip(samples.Skip(1),(a,b)=>a.bytes<=b.bytes).All(x=>x),"byte reports never decrease");
+  }
+  using(var cancelled=new System.Threading.CancellationTokenSource())using(var input=new MemoryStream(source))using(var output=new MemoryStream()){
+   cancelled.Cancel();try{SetupEngine.CopyPackage(input,output,cancelled.Token).GetAwaiter().GetResult();throw new Exception("cancel ignored");}catch(OperationCanceledException){Assert(output.Length==0,"cancelled package never copied");}
+  }
+  int uiThread=Environment.CurrentManagedThreadId;bool reported=false;
+  Fails(()=>new SetupEngine().Run("relative",false,_=>{},_=>{},System.Threading.CancellationToken.None,new ImmediateProgress<SetupProgress>(update=>{Assert(update.Phase==SetupPhase.Checking,"first engine phase precedes path validation");Assert(Environment.CurrentManagedThreadId!=uiThread,"engine work runs outside UI dispatcher");reported=true;})).GetAwaiter().GetResult(),"invalid target fails without detection");
+  Assert(reported,"engine announces work before validating target");
+ }
  static void PackageContracts(){
   Assert(SetupEngine.PackageFileName("0.3.0")=="CodexLight-0.3.0-x64.msi","published MSI source filename preserved");
   Assert(SetupEngine.PackageFileName("0.4.0")=="CodexLight-0.4.0-x64.msi","next MSI source filename follows embedded version");
@@ -34,7 +57,9 @@ internal static class Tests {
   byte[] expected=Hash(source);
   for(int i=0;i<3;i++){
    string cache=Path.Combine(evidence,"extract-"+i+"-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(cache);
-   EmbeddedPackage extracted;using(var input=File.OpenRead(source))extracted=SetupEngine.ExtractPackage(input,cache,System.Threading.CancellationToken.None).GetAwaiter().GetResult();
+   var samples=new List<(long bytes,long? total)>();bool verifying=false;
+   EmbeddedPackage extracted;using(var input=File.OpenRead(source))extracted=SetupEngine.ExtractPackage(input,cache,System.Threading.CancellationToken.None,(bytes,total)=>samples.Add((bytes,total)),()=>verifying=true).GetAwaiter().GetResult();
+   Assert(samples.First().bytes==0&&samples.Last().bytes==new FileInfo(source).Length&&samples.Last().total==new FileInfo(source).Length,"actual MSI extraction reports exact source bytes");Assert(verifying,"package metadata has explicit verification phase");
    Assert(Path.GetFileName(extracted.Path)==SetupEngine.PackageFileName(original.Version),"actual extracted filename matches MSI source convention");
    Assert(extracted.Version==original.Version&&extracted.ProductCode==original.ProductCode,"embedded identity retained across repeated extractions");
    Assert(expected.SequenceEqual(Hash(extracted.Path)),"extracted MSI bytes preserved");
@@ -80,7 +105,7 @@ internal static class Tests {
   foreach(var button in new[]{view.Primary,view.Secondary}) if(button.Visibility==Visibility.Visible) {
    var bounds=Bounds(button,view); Assert(bounds.Bottom<=view.ActualHeight && bounds.Top>=footer.Top,"action always visible");
   }
-  foreach(var text in new[]{view.Mode,view.Status,view.Note}) if(text.Visibility==Visibility.Visible) {
+  foreach(var text in new[]{view.Mode,view.Status,view.Note}.Concat(view.Stage==SetupStage.Ready?Array.Empty<TextBlock>():new[]{view.Phase,view.Elapsed,view.Transfer})) if(text.Visibility==Visibility.Visible) {
    Assert(text.ActualWidth+0.5>=text.DesiredSize.Width-text.Margin.Left-text.Margin.Right && text.ActualHeight+0.5>=text.DesiredSize.Height-text.Margin.Top-text.Margin.Bottom,$"text fully arranged at {scale}: {text.Text}; actual {text.ActualWidth}x{text.ActualHeight}, desired {text.DesiredSize}");
   }
   if(expanded) Assert(view.Details.ActualHeight>=160 && view.Details.ActualHeight<=180,"details bounded usable height");
@@ -94,6 +119,7 @@ internal static class Tests {
   try {
    if(args.Length==3&&args[0]=="--package-only")return PackageOnly(Path.GetFullPath(args[1]),Path.GetFullPath(args[2]));
    PackageContracts();
+   ProgressContracts();
    string preview=args.Length>0?Path.GetFullPath(args[0]):Path.Combine(AppContext.BaseDirectory,"previews"); Directory.CreateDirectory(preview);
    Assert(ExitCodePolicy.IsSuccess(0)&&ExitCodePolicy.IsSuccess(3010)&&ExitCodePolicy.IsSuccess(1641),"success/reboot codes");
    foreach(int code in new[]{1603,1618,1638}) Fails(()=>ExitCodePolicy.RequireSuccess(code,"test"),"must surface installer failure");
@@ -112,6 +138,16 @@ internal static class Tests {
      view.SetStage(stage,"状态验证"); Assert(view.Primary.IsEnabled==(stage!=SetupStage.Checking&&stage!=SetupStage.Installing),"state action gating");
     }
     view.SetStage(SetupStage.Installing,"正在安装"); view.SetCancelAllowed(false); Assert(!view.Secondary.IsEnabled,"MSI critical section cannot cancel"); view.SetCancelAllowed(true); Assert(view.Secondary.IsEnabled,"downloads may cancel");
+    view.SetProgress(new SetupProgress(SetupPhase.Downloading,"Node.js · 正在下载…",25*1048576,100*1048576));view.SetElapsed(TimeSpan.FromSeconds(83));
+    Assert(!view.Activity.IsIndeterminate&&view.Activity.Value==25&&view.Transfer.Text.Contains("25%")&&view.Elapsed.Text=="已用时 01:23","download shows byte-derived percentage and elapsed time");
+    Assert(!view.DetailsToggle.IsExpanded&&view.Activity.Visibility==Visibility.Visible&&view.Phase.Text=="下载运行环境 · 进行中","progress is visible with details collapsed");
+    Layout(view);AssertLayout(view,scale,false);Render(view,scale,Path.Combine(preview,$"setup-{(int)(scale*100)}-download-progress.png"));
+    view.SetProgress(new SetupProgress(SetupPhase.Downloading,"Node.js · 正在下载…",1048576));Assert(view.Activity.IsIndeterminate&&view.Transfer.Text.Contains("总大小未知")&&!view.Transfer.Text.Contains("%"),"unknown download total remains indeterminate");
+    view.SetProgress(new SetupProgress(SetupPhase.ApplicationInstalling,"Windows Installer 正在安装 Codex Light…\nWindows Installer 日志：C:\\cache"));view.SetCancelAllowed(false);
+    Assert(view.Activity.IsIndeterminate&&view.Activity.Value==0&&!view.Status.Text.Contains("C:\\cache")&&!view.Transfer.Text.Contains("%"),"MSI wait clears prior byte percentage and keeps details out of status");
+    view.SetElapsed(TimeSpan.FromSeconds(125));Assert(view.Elapsed.Text=="已用时 02:05"&&view.Phase.Text=="安装应用 · 进行中","elapsed update preserves actual installer phase");
+    Layout(view);AssertLayout(view,scale,false);Render(view,scale,Path.Combine(preview,$"setup-{(int)(scale*100)}-msi-wait.png"));
+    view.SetStage(SetupStage.Failed,"失败");Assert(!view.Activity.IsIndeterminate&&view.Activity.Visibility==Visibility.Collapsed,"terminal error stops progress animation");
     view.Complete(3010); Assert((string)view.Primary.Content=="完成"&&view.Secondary.Visibility==Visibility.Collapsed&&view.Status.Text.Contains("重启"),"restart required one Done action");
     view.Complete(1641); Assert(view.Status.Text.Contains("已开始重启"),"restart initiated distinct");
     view.Complete(0); Assert((string)view.Primary.Content=="打开应用"&&(string)view.Secondary.Content=="完成","success offers explicit open and done");
@@ -121,7 +157,7 @@ internal static class Tests {
     foreach(var scenario in new[]{"ready","installing","failed","completed"}) foreach(bool expanded in new[]{false,true}) {
      view.DetailsToggle.IsExpanded=expanded;
      if(scenario=="ready") { view.SetRegistered(true); view.SetStage(SetupStage.Ready,"运行环境已就绪。"); }
-     else if(scenario=="installing") { view.SetStage(SetupStage.Installing,"Node.js · 下载进度：68%（18 MB / 27 MB）"); view.SetCancelAllowed(true); }
+     else if(scenario=="installing") { view.SetStage(SetupStage.Installing,"正在安装"); view.SetProgress(new SetupProgress(SetupPhase.Downloading,"Node.js · 正在下载…",18*1048576,27*1048576)); view.SetCancelAllowed(true); }
      else if(scenario=="failed") { view.SetStage(SetupStage.Failed,"安装未完成：无法连接到官方下载服务。请检查网络连接，然后点击“重试”。已完成的运行环境安装会保留。"); view.Log("测试错误详情：连接超时。没有执行网络、检测或安装。"); }
      else view.Complete(0);
      Layout(view); AssertLayout(view,scale,expanded); Render(view,scale,Path.Combine(preview,$"setup-{(int)(scale*100)}-{scenario}-{(expanded?"details":"collapsed")}.png"));
@@ -138,7 +174,7 @@ internal static class Tests {
    }
    File.WriteAllText(Path.Combine(preview,"layout-report.json"),System.Text.Json.JsonSerializer.Serialize(new {
     passed=true, assertions=checks, pngPreviews=renders, dpiPercent=new[]{100,125,150,175,200},
-    scenarios="Long Chinese path; Ready/Installing/Failed/Completed with details folded/expanded; bounded long-error scroll; normal fresh/update at 175%; all stage/cancel/restart/startup-block state checks",
+    scenarios="Long Chinese path; byte-derived download progress and elapsed time; unknown-size download and MSI wait indeterminate; terminal state stops animation; Ready/Installing/Failed/Completed with details folded/expanded; bounded long-error scroll; normal fresh/update at 175%; all stage/cancel/restart/startup-block state checks",
     method="Shared SetupView.cs on net10.0-windows via installed system dotnet.exe; SetRootDpi + Measure/Arrange + RenderTargetBitmap; no manual font scaling",
     boundary="Not a net48 launch or physical-monitor test. No Window/HwndSource construction, generated apphost, Setup/product launch, dependency detection, network, installers or foreground input."
    },new System.Text.Json.JsonSerializerOptions{WriteIndented=true}));

@@ -311,7 +311,7 @@ function finalizeEvent(row) {
   if (row.details) row.details = clip(row.details, MAX_EVENT_DETAILS);
   return row;
 }
-export function mergeDshEvents(previous = [], incoming = []) {
+export function mergeDshEvents(previous = [], incoming = [], {limit = MAX_EVENTS} = {}) {
   const rows = new Map();
   for (const event of [...(Array.isArray(previous) ? previous : []), ...(Array.isArray(incoming) ? incoming : [])]) {
     const row = event?._normalized ? event : normalizeEvent(event); if (!row) continue;
@@ -320,7 +320,7 @@ export function mergeDshEvents(previous = [], incoming = []) {
     else if (key) rows.set(key, row);
     else rows.set(Symbol('event'), row);
   }
-  return [...rows.values()].map(finalizeEvent).slice(-MAX_EVENTS);
+  return [...rows.values()].map(finalizeEvent).slice(-Math.min(1000,Math.max(MAX_EVENTS,limit)));
 }
 export function dshListSnapshot(result) {
   const payload = resultPayload(result, row => listRows(row) !== null);
@@ -370,10 +370,10 @@ export function dshFilterListResult(result, allowedIds) {
   const encoded = JSON.stringify(out);
   return { content: [{ type: 'text', text: encoded }], structuredContent: out };
 }
-export function dshEventsSnapshot(result, { after = 0 } = {}) {
+export function dshEventsSnapshot(result, { after = 0, retainChanges = false } = {}) {
   const payload = resultPayload(result, row => Array.isArray(row.events) || row.next_cursor !== undefined || row.nextCursor !== undefined || row.has_more !== undefined);
   if (!payload) return { available: false, agent_id: '', events: [], next_cursor: after ?? 0, has_more: false, final_text: '', final_event_id: null, last_event: '' };
-  const events = mergeDshEvents([], Array.isArray(payload.events) ? payload.events : []);
+  const events = mergeDshEvents([], Array.isArray(payload.events) ? payload.events : [],{limit:retainChanges?1000:MAX_EVENTS});
   // A continuation page starts mid-event. The bridge's continuation_cursor marks the end
   // of the returned chunk; the request's after cursor marks where this chunk starts.
   const startOffset = continuationOffset(after) ?? (typeof after === 'number' && Number.isSafeInteger(after) && after >= 0 ? 0 : null);
@@ -464,6 +464,46 @@ function pathWithin(child, root) {
   const a = fold ? left.toLowerCase() : left, b = fold ? right.toLowerCase() : right;
   return a === b || a.startsWith(b + '/');
 }
+const positiveMs = value => typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+function timeMs(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const numeric = Number(value);
+  const parsed = Number.isFinite(numeric) ? numeric * (Math.abs(numeric) < 1e11 ? 1000 : 1) : Date.parse(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+function runCallRejected(item, row) {
+  return !!item.error || item.result?.isError === true || !!dshResultError(item.result) ||
+    ['failed','declined','rejected','cancelled','canceled'].includes(String(item.status || '').toLowerCase()) ||
+    item.accepted === false || item.result?.accepted === false || row?.accepted === false;
+}
+function runDispatchTime(item) {
+  const started = positiveMs(item._startedAtMs);
+  if (started !== null) return { at: started, source: 'dispatch_started_at' };
+  const completed = positiveMs(item._completedAtMs);
+  if (completed !== null) return { at: completed, source: 'dispatch_completed_at' };
+  return null;
+}
+/** Bind a run start only to known, accepted parent dispatch calls. Never invents Date.now(). */
+function applyRunStart(task, item, row, update, agentId) {
+  if (!agentId || !['dsh_start','dsh_followup','dsh_send'].includes(item.tool)) return;
+  const seen = Array.isArray(task.runStartCallIds) ? task.runStartCallIds : task.runStartedAtCallId ? [task.runStartedAtCallId] : [];
+  if (seen.includes(item.id) || runCallRejected(item, row)) return;
+  const dispatch = runDispatchTime(item);
+  if (item.tool === 'dsh_start' && task.runStartedFromFollowup) return;
+  if (dispatch && positiveMs(task.runStartedAtMs) !== null && dispatch.at < task.runStartedAtMs) return;
+  const calls = [...seen, item.id].slice(-20);
+  if (item.tool === 'dsh_start') {
+    const created = timeMs(update.created_at);
+    const start = created !== null ? { at: created, source: 'created_at' } : dispatch;
+    if (!start) return;
+    task.runStartedAtMs = start.at; task.runStartedAtSource = start.source;
+    task.runStartedAtCallId = item.id; task.runStartedFromFollowup = false; task.runStartCallIds = calls;
+    return;
+  }
+  task.runStartedAtMs = dispatch?.at ?? null; task.runStartedAtSource = dispatch?.source ?? null;
+  if (!update.started_at) delete task.started_at;
+  task.runStartedAtCallId = item.id; task.runStartedFromFollowup = true; task.runStartCallIds = calls;
+}
 export class DshTaskStore {
   constructor(limit = 50) { this.limit = limit; this.threadId = null; this.tasks = new Map(); this.calls = new Map(); this.sequence = 0; this.olderSequence = 0; this.listMeta = null; this.owners=new Map();this.editEvidence=new Map();this.editMaxSeq=new Map(); }
   reset(threadId = null) { this.threadId = threadId; this.tasks.clear(); this.calls.clear(); this.sequence = 0; this.olderSequence = 0; this.listMeta = null; this.owners.clear();this.editEvidence.clear();this.editMaxSeq.clear(); }
@@ -492,6 +532,7 @@ export class DshTaskStore {
       if(update.agentId&&Array.isArray(row.events))this.ingestChanges(threadId,update.agentId,row.events,{hasMore:row.has_more});
       if (older && this.tasks.has(key)) continue;
       const task = { ...previous, ...update, key, threadId, source: text(source, 120), tool: text(item.tool, 100), callState: text(item.status || 'inProgress', 80), lastCallId: item.id };
+      applyRunStart(task, item, row, update, update.agentId || this.calls.get(item.id));
       // A returned MCP envelope being completed says nothing about the child lifecycle.
       if (!update.status && !previous.status) delete task.status;
       if (['starting','running'].includes(update.status) && (['dsh_start','dsh_followup','dsh_send'].includes(item.tool) || !['starting','running','interrupting'].includes(previous.status))) clearFinal(task, update);

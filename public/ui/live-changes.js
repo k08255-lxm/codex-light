@@ -2,6 +2,8 @@
 // Scope: the running turn, or the most recent turn that edited files. Unknown counts stay unknown.
 import { el } from './format.js';
 import { icon } from '../icons.js';
+import {summarizeFileRows} from '../change-stats.js';
+import {statsNode} from '../activity-feed.js';
 
 /**
  * The pill shows the file changes of ONE turn: the running turn, otherwise the latest turn that
@@ -14,9 +16,7 @@ export function pillChanges(turns) {
   if (!turn) return { count: 0, rows: [], running: false, added: null, removed: null, turnId: null };
   // Files whose net change in this turn is zero (e.g. edited then restored) are not "changed".
   const rows = turn.files.rows.filter(row => row.net !== 'unchanged');
-  const known = rows.length > 0 && rows.every(row => row.known);
-  return { count: rows.length, rows, running: turn.status === 'running', turnId: turn.id,
-    added: known ? rows.reduce((sum, row) => sum + row.added, 0) : null, removed: known ? rows.reduce((sum, row) => sum + row.removed, 0) : null };
+  return {...summarizeFileRows(rows,turn.status==='running'),turnId:turn.id};
 }
 
 export function mountLiveChanges(host, { renderDiff }) {
@@ -27,22 +27,17 @@ export function mountLiveChanges(host, { renderDiff }) {
   let summary = { count: 0, rows: [] }; let open = false; const expanded = new Set();
   pill.addEventListener('click', () => { open = !open; draw(); });
   panel.addEventListener('keydown', event => { if (event.key === 'Escape') { event.stopPropagation(); open = false; draw(); pill.focus(); } });
-  function stats(added, removed) {
-    const span = el(document, 'span', 'diff-stats');
-    if (added === null || removed === null) span.append(el(document, 'span', 'diff-unknown', '行数未知'));
-    else span.append(el(document, 'span', 'diff-added', '+' + added), el(document, 'span', 'diff-removed', '-' + removed));
-    return span;
-  }
+  const stats = evidence => statsNode(document,evidence.added,evidence.removed,evidence);
   function draw() {
     panel.style.maxWidth=Math.max(220,(host.parentElement?.clientWidth||560)-24)+'px';
     host.classList.toggle('hidden', !summary.count);
     if (!summary.count) { open = false; panel.classList.add('hidden'); return; }
-    pill.replaceChildren(icon(document, 'diff', { size: 14 }), el(document, 'span', 'pill-text', `${summary.count} 个文件${summary.running ? '正在更改' : '已更改'}`), stats(summary.added, summary.removed));
+    pill.replaceChildren(icon(document, 'diff', { size: 14 }), el(document, 'span', 'pill-text', `${summary.count} 个文件${summary.running ? '正在更改' : '已更改'}`), stats(summary));
     pill.dataset.running = String(!!summary.running);
     pill.setAttribute('aria-expanded', String(open));
     panel.classList.toggle('hidden', !open);
     if (!open) return;
-    const head = el(document, 'div', 'changes-head'); head.append(el(document, 'strong', '', summary.running ? '本轮正在更改的文件' : '最近一轮更改的文件'), stats(summary.added, summary.removed));
+    const head = el(document, 'div', 'changes-head'); head.append(el(document, 'strong', '', summary.running ? '本轮正在更改的文件' : '最近一轮更改的文件'), stats(summary));
     const close = el(document, 'button', 'btn icon-only'); close.type = 'button'; close.setAttribute('aria-label', '关闭'); close.append(icon(document, 'close', { size: 14 }));
     close.addEventListener('click', () => { open = false; draw(); pill.focus(); }); head.append(close);
     const list = el(document, 'ul', 'changes-list');
@@ -50,7 +45,7 @@ export function mountLiveChanges(host, { renderDiff }) {
       const li = el(document, 'li', 'changes-row');
       const button = el(document, 'button', 'changes-file'); button.type = 'button'; button.title = row.fullPath;
       const slash = row.path.lastIndexOf('/');
-      button.append(el(document, 'span', 'file-dir', slash >= 0 ? row.path.slice(0, slash + 1) : ''), el(document, 'span', 'file-base', slash >= 0 ? row.path.slice(slash + 1) : row.path), stats(row.added, row.removed));
+      button.append(el(document, 'span', 'file-dir', slash >= 0 ? row.path.slice(0, slash + 1) : ''), el(document, 'span', 'file-base', slash >= 0 ? row.path.slice(slash + 1) : row.path), stats(row));
       button.setAttribute('aria-expanded', String(expanded.has(row.path)));
       button.addEventListener('click', () => { if (expanded.has(row.path)) expanded.delete(row.path); else expanded.add(row.path); draw(); });
       li.append(button);

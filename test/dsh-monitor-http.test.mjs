@@ -41,6 +41,7 @@ test('HTTP monitor binds the actual thread result cwd, lists only that cwd, and 
  const threadCwd=process.cwd();const requestCwd=os.tmpdir();
  assert.notEqual(threadCwd,requestCwd);
  const client=new MockClient({threadCwd});const a=await createServer({client,cwd:threadCwd});await a.started;t.after(()=>a.close());
+ const statsModule=await fetch(a.origin+'/change-stats.js',{headers:{Authorization:`Bearer ${a.token}`}});assert.equal(statsModule.status,200);assert.match(await statsModule.text(),/export function changeEvidence/);
 
  const created=await post(a,'/api/rpc',{method:'thread/start',params:{cwd:requestCwd,approvalPolicy:'on-request',sandbox:'workspace-write'}});
  assert.equal(created.status,200);const {thread}=await created.json();assert.equal(thread.id,'thread-real');assert.equal(thread.cwd,threadCwd);

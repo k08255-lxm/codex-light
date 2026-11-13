@@ -126,18 +126,26 @@ export function mountProjectNavigation(host, { onSelect, onOpenThread, onRemove,
         const button = element(document, 'button', 'project-group-thread');
         button.type = 'button';
         const title = element(document, 'span', 'thread-name');
-        button.append(title);
-        row = { button, title, thread };
+        const runningIndicator = element(document, 'span', 'thread-running-indicator');
+        runningIndicator.setAttribute('aria-hidden', 'true');
+        button.append(title, runningIndicator);
+        row = { button, title, runningIndicator, thread };
         button.addEventListener('click', () => onOpenThread(row.thread.id));
         view.threadViews.set(thread.id, row);
       }
       row.thread = thread;
       const title = thread.name || thread.preview || '未命名对话';
       setText(row.title, title);
-      row.button.title = title;
+      const running = view.runningThreadIds.has(thread.id);
+      const description = running ? `${title} · 运行中` : title;
+      row.button.title = description;
+      row.button.setAttribute('aria-label', description);
+      row.button.classList.toggle('running', running);
+      row.runningIndicator.hidden = !running;
       const active = thread.id === activeThreadId;
       row.button.classList.toggle('active', active);
-      row.button.setAttribute('aria-current', active ? 'page' : 'false');
+      if (active) row.button.setAttribute('aria-current', 'page');
+      else row.button.removeAttribute('aria-current');
       nodes.push(row.button);
     }
     if(all.length>5&&!view.searching){
@@ -148,7 +156,7 @@ export function mountProjectNavigation(host, { onSelect, onOpenThread, onRemove,
     for (const id of view.threadViews.keys()) if (!ids.has(id)) view.threadViews.delete(id);
   }
 
-  function render({ projects = [], threads = [], selectedPath = '', activeThreadId = '', searching = false, busy: isBusy = false, error = '' }) {
+  function render({ projects = [], threads = [], selectedPath = '', activeThreadId = '', runningThreadIds = new Set(), searching = false, busy: isBusy = false, error = '' }) {
     const focused = document.activeElement;
     const keepFocus = focused && host.contains(focused);
     const scrollTop = host.scrollTop;
@@ -164,11 +172,12 @@ export function mountProjectNavigation(host, { onSelect, onOpenThread, onRemove,
       let view = views.get(group.key);
       if (!view) { view = createGroup(group); views.set(group.key, view); }
       view.group = group;
-      view.searching = searching; view.activeThreadId = activeThreadId;
+      view.searching = searching; view.activeThreadId = activeThreadId; view.runningThreadIds = runningThreadIds;
       view.compose.hidden = !group.path; view.compose.disabled = busy;
       view.more.disabled = busy;
       view.node.dataset.projectKey = group.key;
-      view.node.classList.toggle('selected', group.selected);
+      const projectSelected = group.selected && !activeThreadId;
+      view.node.classList.toggle('selected', projectSelected);
       view.node.setAttribute('aria-label', group.name);
       setText(view.select, group.name);
       setText(view.unknown, group.name);
@@ -176,7 +185,9 @@ export function mountProjectNavigation(host, { onSelect, onOpenThread, onRemove,
       view.select.hidden = !group.path;
       view.unknown.hidden = !!group.path;
       view.select.disabled = busy || !group.path;
-      view.select.setAttribute('aria-pressed', String(group.selected));
+      view.select.setAttribute('aria-pressed', String(projectSelected));
+      if (projectSelected) view.select.setAttribute('aria-current', 'page');
+      else view.select.removeAttribute('aria-current');
       if (!openGroups.has(group.key)) openGroups.set(group.key, true);
       if (selectionChanged && group.selected) openGroups.set(group.key, true);
       setOpen(view, searching || openGroups.get(group.key), false);

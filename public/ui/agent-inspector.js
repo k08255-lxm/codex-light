@@ -1,14 +1,16 @@
 import {nativeAgents,agentLifecycle,agentAvatar,agentDisplayMetadata} from './agents.js';
 import {dshStatusLabel} from '../dsh.js';
 import {renderMarkdown} from '../markdown.js';
-import {boundedText} from '../store.js';
+import {boundedText,ItemStore} from '../store.js';
 import {icon} from '../icons.js';
-import {renderActivityRecord,describeItem} from '../activity-feed.js';
+import {renderActivityRecord,renderCompactionRecord,describeItem,itemState} from '../activity-feed.js';
 import {readAgentThread} from '../agent-history.js';
+import {asyncInputDefinition,asyncInputBodyText,createAsyncInputCard} from './async-input.js';
 
 // One list, one detail view, one scrolling parent. Reads happen only on opening or refreshing.
-export function createAgentInspector({document,state,host,dshTasks,dshLive,rpc,readDshTask,el}){
+export function createAgentInspector({document,state,host,dshTasks,dshLive,rpc,readDshTask,el,onAnswerAsync,artifactFactory}){
  const cache=new Map();let selected=null,scope=null;
+ const asyncInputs=new Map();
  const readQueue=[];
  let readGeneration=0,activeReads=0,nextRefresh=0;
  const visible=()=>document.visibilityState!=='hidden'&&!host.closest('.hidden');
@@ -24,8 +26,9 @@ export function createAgentInspector({document,state,host,dshTasks,dshLive,rpc,r
   for(const row of native){const saved=cache.get(`${scope}:${row.id}`)?.thread;const last=saved?.turns?.at(-1);if(saved){row.actualModel=saved.model;row.actualEffort=saved.reasoningEffort;row.actualProvider=saved.modelProvider;}if(last&&(!row.lastSeenMs||(cache.get(`${scope}:${row.id}`)?.checkedAt||0)>=row.lastSeenMs)){const mapped={completed:'completed',interrupted:'interrupted',failed:'errored',inProgress:'running'}[last.status];if(mapped){row.state=mapped;row.life=null;row.life=agentLifecycle({...row,life:null,state:mapped});row.life={...row.life,...({completed:{label:'已完成',tone:'ok'},interrupted:{label:'已中断',tone:'stop'},errored:{label:'出错',tone:'fail'},running:{label:'运行中',tone:'run'}}[mapped])};}if(last.startedAt!=null)row.firstSeenMs=stamp(last.startedAt);if(last.completedAt!=null)row.lastSeenMs=stamp(last.completedAt);const messages=(last.items||[]).filter(item=>item.type==='agentMessage');if(messages.length)row.message=messages.at(-1).text||row.message;}}
   return [...native,...dshTasks.values().filter(row=>row.threadId===state.thread?.id&&row.agentId)].sort((a,b)=>Number(lifecycle(b).tone==='run')-Number(lifecycle(a).tone==='run')||((b.native?b.lastSeenMs:stamp(b.updated_at))||0)-((a.native?a.lastSeenMs:stamp(a.updated_at))||0));
  }
+ function runStart(row){const explicit=stamp(row.started_at);if(explicit!==null)return explicit;const dispatch=Number(row.runStartedAtMs);if(Number.isFinite(dispatch)&&dispatch>0)return dispatch;return row.runStartedFromFollowup?null:stamp(row.created_at);}
  function duration(row){
-  const running=lifecycle(row).tone==='run',start=row.native?row.firstSeenMs:stamp(row.started_at||(!row.finalClearedAt?row.created_at:null)),end=running?Date.now():row.native?row.lastSeenMs:stamp(row.updated_at);
+  const running=lifecycle(row).tone==='run',start=row.native?row.firstSeenMs:runStart(row),end=running?Date.now():row.native?row.lastSeenMs:stamp(row.updated_at);
   const text=el('span','agent-runtime');text.title='基于已报告的开始与结束时间';
   if(start===null||start===undefined||end===null||end===undefined||end<start){text.textContent='时长不详';text.title='未提供可靠的开始或结束时间';return text;}
   text.dataset.start=String(start);text.dataset.end=String(end);text.dataset.running=String(running);updateDuration(text);return text;
@@ -38,7 +41,7 @@ export function createAgentInspector({document,state,host,dshTasks,dshLive,rpc,r
  },1000);
  clockTimer?.unref?.();
  function markdown(text,cwd){const body=el('div','agent-markdown');body.append(renderMarkdown(document,boundedText(text,65536),{cwd:cwd||state.thread?.cwd||state.cwd,complete:true}));return body;}
- function toolRecord(item,key){const record=renderActivityRecord(document,item);record.open=expandedTools.has(`${scope}:${key}`);record.addEventListener('toggle',()=>{if(!record.isConnected)return;const id=`${scope}:${key}`;if(record.open)expandedTools.add(id);else expandedTools.delete(id);});return record;}
+ function toolRecord(item,key,artifacts){const record=renderActivityRecord(document,item,{artifacts});record.open=expandedTools.has(`${scope}:${key}`);record.addEventListener('toggle',()=>{if(!record.isConnected)return;const id=`${scope}:${key}`;if(record.open)expandedTools.add(id);else expandedTools.delete(id);});return record;}
  function object(value){if(value&&typeof value==='object'&&!Array.isArray(value))return value;if(typeof value==='string'&&value.length<=65536){try{const parsed=JSON.parse(value);return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:null;}catch{}}return null;}
  function eventRecord(event){
   const data=object(event.details)||object(event.data)||object(event.content)||{};
@@ -83,7 +86,11 @@ export function createAgentInspector({document,state,host,dshTasks,dshLive,rpc,r
    if(row.native){
     const snapshot=await readAgentThread(rpc,row.id,{isCurrent:()=>job.generation===readGeneration&&job.scope===state.thread?.id});
     if(job.generation!==readGeneration||job.scope!==state.thread?.id)return;
-    saved.thread=snapshot.thread;saved.complete=snapshot.complete;
+    saved.imageStore??=new ItemStore(1000);
+    saved.artifacts?.clear();
+    if(!saved.artifacts&&artifactFactory)saved.artifacts=artifactFactory({threadId:row.id,resolveImage:(itemId,slot)=>saved.imageStore.image(itemId,slot)});
+    saved.imageStore.clear();
+    saved.thread={...snapshot.thread,turns:snapshot.thread.turns.map(turn=>({...turn,items:(turn.items||[]).map(item=>{saved.imageStore.upsert(item);return saved.imageStore.items.get(item.id);})}))};saved.complete=snapshot.complete;
    }else{
     await readDshTask(row.agentId);
     if(job.generation!==readGeneration||job.scope!==state.thread?.id)return;
@@ -104,27 +111,35 @@ export function createAgentInspector({document,state,host,dshTasks,dshLive,rpc,r
   nextRefresh=Date.now()+5000;
   for(const row of rows())queueRead(row);
  }
- function appendSequence(body,items,key,cwd,running){
+ function appendSequence(body,items,key,cwd,running,threadId=null,artifacts=null){
   let operations=[];
   const flush=tail=>{
    if(!operations.length)return;
    const batch=operations;operations=[];
+   const active=tail&&running&&batch.some(item=>itemState(item)==='running');
    const id=`${scope}:${key}:group:${batch[0].id}`;
-   const group=el('details','agent-operation-group');group.open=expandedTools.has(id);
+   const group=el('details','agent-operation-group');group.open=expandedTools.has(id);group.dataset.running=String(active);
    group.addEventListener('toggle',()=>{if(!group.isConnected)return;if(group.open)expandedTools.add(id);else expandedTools.delete(id);});
    const summary=el('summary','agent-operation-summary');
-   summary.append(el('span','',`${batch.length} 项操作${tail&&running?' · 运行中':''}`));
-   if(tail&&running)summary.append(el('span','agent-operation-latest',describeItem(batch.at(-1)).verb));
+   summary.append(el('span','',`${batch.length} 项操作${active?' · 运行中':''}`));
+   if(active)summary.append(el('span','agent-operation-latest',describeItem(batch.at(-1)).verb));
    summary.append(icon(document,'down',{size:14}));group.append(summary);
    const list=el('div','agent-operation-items');
-   for(const item of batch)list.append(toolRecord(item,`${key}:item:${item.id}`));
+   for(const item of batch){const record=toolRecord(item,`${key}:item:${item.id}`,artifacts);record.dataset.running=String(active&&itemState(item)==='running');list.append(record);}
    group.append(list);body.append(group);
   };
   for(const item of items){
+   if(item.type==='contextCompaction'){flush(false);body.append(renderCompactionRecord(document,item));continue;}
    if(!['agentMessage','userMessage'].includes(item.type)){operations.push(item);continue;}
    flush(false);
-   const text=item.type==='agentMessage'?item.text:(item.content||[]).filter(part=>part.type==='text').map(part=>part.text).join('\n');
+   const text=item.type==='agentMessage'?asyncInputBodyText(item,item.text):(item.content||[]).filter(part=>part.type==='text').map(part=>part.text).join('\n');
    if(text){const content=markdown(text,cwd);if(item.type==='userMessage')content.classList.add('agent-user-input');body.append(content);}
+   if(asyncInputDefinition(item)){
+    const inputKey=JSON.stringify([threadId,item.id]);let input=asyncInputs.get(inputKey);
+    if(!input){input=createAsyncInputCard(document,item,{threadId,onAnswerAsync});asyncInputs.set(inputKey,input);}
+    else input.update(item,{threadId,onAnswerAsync});
+    body.append(input.node);
+   }
   }
   flush(true);
  }
@@ -139,7 +154,7 @@ export function createAgentInspector({document,state,host,dshTasks,dshLive,rpc,r
   }
   const items=saved.thread.turns.flatMap(turn=>turn.items||[]);
   if(items.length>100)body.append(el('p','muted','显示最近 100 条记录'));
-  appendSequence(body,items.slice(-100),row.id,saved.thread.cwd,lifecycle(row).tone==='run');
+  appendSequence(body,items.slice(-100),row.id,saved.thread.cwd,lifecycle(row).tone==='run',row.id,saved.artifacts);
  }
  function renderDshDetail(row,body){
   const snapshot=dshLive.snapshot();
@@ -166,13 +181,14 @@ export function createAgentInspector({document,state,host,dshTasks,dshLive,rpc,r
   const thread=state.thread?.id||null;
   if(scope!==thread){
    scope=thread;selected=null;readGeneration++;nextRefresh=0;
-   readQueue.length=0;cache.clear();expandedTools.clear();
+   readQueue.length=0;for(const saved of cache.values()){saved.artifacts?.clear();saved.imageStore?.clear();}cache.clear();expandedTools.clear();
   }
   const list=rows(),row=list.find(value=>identity(value)===selected);
   host.closest('.inspector')?.classList.toggle('agent-detail-mode',!!row);
   const scroll=scroller.scrollTop;
   const focused=document.activeElement;
   const action=host.contains(focused)?focused.dataset.agentAction:null;
+  for(const strip of host.querySelectorAll('.artifact-strip'))strip.release?.();
   host.replaceChildren();
   if(!row){
    selected=null;
@@ -196,6 +212,7 @@ export function createAgentInspector({document,state,host,dshTasks,dshLive,rpc,r
    host.append(toolbar,body);
   }
   scroller.scrollTop=scroll;
+  if(focused&&host.contains(focused))focused.focus({preventScroll:true});
   if(action)[...host.querySelectorAll('[data-agent-action]')].find(node=>node.dataset.agentAction===action)?.focus({preventScroll:true});
   hydrate();
  }
