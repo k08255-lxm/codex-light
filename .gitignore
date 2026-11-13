@@ -74,3 +74,10 @@ docs/legacy-repair-v7-evidence.json
 *.key
 *.pfx
 *.p12
+*.keystore
+*.jks
+
+# Android local build intermediates, screenshots and helper scripts.
+/android/build/
+/android/screenshots/
+/start-lan-server.mjs

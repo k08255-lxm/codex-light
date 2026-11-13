@@ -1,3 +1,4 @@
+import { bootstrapToken } from './ui/access.js';
 import { mountConfigSettingsPanel } from './config-settings-panel.js';
 import { createNotifications } from './ui/notifications.js';
 import { mountAccountLoginPanel } from './account-login-panel.js';
@@ -8,7 +9,6 @@ import { mountAccountQuota } from './account-quota.js';
 import { createAccountIdentityController } from './account-identity.js';
 import { mountArtifacts, mountLightbox } from './ui/artifacts.js';
 import { pastedFiles, classifyPaste } from './ui/paste.js';
-import { bootstrapToken } from './ui/access.js';
 import { renderApprovals } from './ui/approvals-view.js';
 import { createDshView } from './ui/dsh-view.js';
 import { createRemoteView } from './ui/remote-view.js';
