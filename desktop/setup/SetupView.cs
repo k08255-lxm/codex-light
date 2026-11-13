@@ -84,8 +84,17 @@ namespace CodexLight.Bootstrap {
   }
   internal void Log(string message) { Details.AppendText(DateTime.Now.ToString("HH:mm:ss") + "  " + message + Environment.NewLine); Details.ScrollToEnd(); }
   internal void SetCancelAllowed(bool value) { cancelAllowed = value; Secondary.IsEnabled = value; Secondary.Content = value ? "取消" : "安装中…"; }
+  internal void SetCloseConfirmation() {
+   SetStage(SetupStage.Installing, "此安装位置的 Codex Light 正在运行。继续安装前，需要先关闭应用。");
+   SetCancelAllowed(true);
+   Note.Text = "关闭可能中断正在进行的工作。请先保存需要的内容；确认后，安装器将请求应用正常退出。";
+   Phase.Text = "等待关闭确认"; Activity.IsIndeterminate = false; Activity.Visibility = Visibility.Collapsed;
+   Primary.Content = "关闭并继续"; Primary.IsEnabled = true; Primary.IsDefault = false;
+   Secondary.Content = "取消安装"; Secondary.IsDefault = true;
+  }
   internal void SetStage(SetupStage stage, string message) {
    Stage = stage; SetMessage(message);
+   Primary.IsDefault = true; Secondary.IsDefault = false;
    bool active = stage == SetupStage.Checking || stage == SetupStage.Installing;
    progressArea.Visibility = stage == SetupStage.Ready ? Visibility.Collapsed : Visibility.Visible;
    Activity.Visibility = active ? Visibility.Visible : Visibility.Collapsed; Activity.IsIndeterminate = active; Activity.Value = 0;

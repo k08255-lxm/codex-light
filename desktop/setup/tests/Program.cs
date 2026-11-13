@@ -41,6 +41,12 @@ internal static class Tests {
   Assert(reported,"engine announces work before validating target");
  }
  static void PackageContracts(){
+  const string oldCode="{89C1BBD8-3EF5-4778-8831-BF532519F9E8}",otherCode="{4C6774DC-FF79-49D5-B2CE-5115D62CDD71}";
+  Fails(()=>InstallPaths.ValidateUpgradeIdentity("0.4.0",oldCode,"0.4.0",otherCode),"different same-version candidate rejected before msiexec");
+  Fails(()=>InstallPaths.ValidateUpgradeIdentity("0.4.1",oldCode,"0.4.0",otherCode),"downgrade rejected before msiexec");
+  Fails(()=>InstallPaths.ValidateUpgradeIdentity("invalid",oldCode,"0.4.1",otherCode),"invalid installed version cannot be guessed");
+  InstallPaths.ValidateUpgradeIdentity("0.4.0",oldCode,"0.4.1",otherCode);checks++;
+  InstallPaths.ValidateUpgradeIdentity("0.4.1",oldCode,"0.4.1",oldCode.ToLowerInvariant());checks++;
   Assert(SetupEngine.PackageFileName("0.3.0")=="CodexLight-0.3.0-x64.msi","published MSI source filename preserved");
   Assert(SetupEngine.PackageFileName("0.4.0")=="CodexLight-0.4.0-x64.msi","next MSI source filename follows embedded version");
   foreach(string version in new[]{"","0.4","0.4.0.1","0.4.0+commit","../0.4.0","256.0.0","0.256.0","0.4.65536"})Fails(()=>SetupEngine.PackageFileName(version),"invalid package version refused");
@@ -120,6 +126,7 @@ internal static class Tests {
    if(args.Length==3&&args[0]=="--package-only")return PackageOnly(Path.GetFullPath(args[1]),Path.GetFullPath(args[2]));
    PackageContracts();
    ProgressContracts();
+   checks += RunningApplicationTests.Run();
    string preview=args.Length>0?Path.GetFullPath(args[0]):Path.Combine(AppContext.BaseDirectory,"previews"); Directory.CreateDirectory(preview);
    Assert(ExitCodePolicy.IsSuccess(0)&&ExitCodePolicy.IsSuccess(3010)&&ExitCodePolicy.IsSuccess(1641),"success/reboot codes");
    foreach(int code in new[]{1603,1618,1638}) Fails(()=>ExitCodePolicy.RequireSuccess(code,"test"),"must surface installer failure");
@@ -137,6 +144,12 @@ internal static class Tests {
     foreach(SetupStage stage in Enum.GetValues<SetupStage>()) {
      view.SetStage(stage,"状态验证"); Assert(view.Primary.IsEnabled==(stage!=SetupStage.Checking&&stage!=SetupStage.Installing),"state action gating");
     }
+    view.SetCloseConfirmation();
+    Assert((string)view.Primary.Content=="关闭并继续"&&(string)view.Secondary.Content=="取消安装"&&view.Primary.IsEnabled&&view.Secondary.IsEnabled,"running app confirmation exposes explicit actions");
+    Assert(!view.Primary.IsDefault&&view.Secondary.IsDefault&&!view.Change.IsEnabled,"confirmation defaults to cancel and locks target");
+    Assert(view.Activity.Visibility==Visibility.Collapsed&&!view.Activity.IsIndeterminate&&view.Note.Text.Contains("中断"),"confirmation explains impact without pretending installation is in progress");
+    Layout(view);AssertLayout(view,scale,false);Render(view,scale,Path.Combine(preview,$"setup-{(int)(scale*100)}-close-confirmation.png"));
+    view.SetStage(SetupStage.Cancelled,"安装已取消");Assert(view.Primary.IsDefault&&!view.Secondary.IsDefault,"leaving confirmation resets keyboard defaults");
     view.SetStage(SetupStage.Installing,"正在安装"); view.SetCancelAllowed(false); Assert(!view.Secondary.IsEnabled,"MSI critical section cannot cancel"); view.SetCancelAllowed(true); Assert(view.Secondary.IsEnabled,"downloads may cancel");
     view.SetProgress(new SetupProgress(SetupPhase.Downloading,"Node.js · 正在下载…",25*1048576,100*1048576));view.SetElapsed(TimeSpan.FromSeconds(83));
     Assert(!view.Activity.IsIndeterminate&&view.Activity.Value==25&&view.Transfer.Text.Contains("25%")&&view.Elapsed.Text=="已用时 01:23","download shows byte-derived percentage and elapsed time");

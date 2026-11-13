@@ -11,6 +11,7 @@ const SETUP=Buffer.from('test installer fixture, never executable');
 const HASH=createHash('sha256').update(SETUP).digest('hex');
 const SUMS=`${HASH}  CodexLight-Setup.exe\n`;
 const URL_BASE='https://github.com/k08255-lxm/codex-light/releases/download/v0.4.0/';
+const VERSIONED_SETUP='CodexLight-Setup-0.4.0-x64.exe';
 function release(overrides={}){
  return {tag_name:'v0.4.0',draft:false,prerelease:false,html_url:'https://github.com/k08255-lxm/codex-light/releases/tag/v0.4.0',body:'更新说明',published_at:'2026-11-13T00:00:00Z',assets:[{name:'CodexLight-Setup.exe',size:SETUP.length,browser_download_url:URL_BASE+'CodexLight-Setup.exe'},{name:'SHA256SUMS.txt',size:Buffer.byteLength(SUMS),browser_download_url:URL_BASE+'SHA256SUMS.txt'}],...overrides};
 }
@@ -21,7 +22,7 @@ async function fixture(t,{raw=release(),setup=SETUP,sums=SUMS,fetchExtra,launchF
   calls.push({url,request});const extra=await fetchExtra?.(url,request);if(extra)return extra;
   if(url===APP_RELEASES_API)return new Response(JSON.stringify(raw),{headers:{'content-type':'application/json'}});
   if(url===URL_BASE+'SHA256SUMS.txt')return new Response(sums);
-  if(url===URL_BASE+'CodexLight-Setup.exe')return new Response(setup);
+  if(url===URL_BASE+'CodexLight-Setup.exe'||url===URL_BASE+VERSIONED_SETUP)return new Response(setup);
   throw new Error('Unexpected external URL: '+url);
  };
  const service=new AppUpdateService({currentVersion:'0.3.0',platform:'win32',arch:'x64',cacheRoot:root,fetchFn,launchFn,...options});t.after(()=>service.close());
@@ -39,6 +40,36 @@ test('release accepts only the fixed project assets and stable versions',()=>{
 test('published checksums require one exact installer filename',()=>{
  assert.equal(publishedSetupHash(SUMS),HASH);assert.equal(publishedSetupHash(SUMS.replace('  ',' *')),HASH);
  assert.throws(()=>publishedSetupHash(SUMS+SUMS));assert.throws(()=>publishedSetupHash(SUMS.replace('CodexLight-Setup.exe','../CodexLight-Setup.exe')));assert.throws(()=>publishedSetupHash('not a checksum'));
+});
+test('release prefers the exact tag-derived versioned installer and preserves the legacy fallback',()=>{
+ const raw=release();const versioned={...raw.assets[0],name:VERSIONED_SETUP,browser_download_url:URL_BASE+VERSIONED_SETUP,size:256*1024};raw.assets.push(versioned);
+ const parsed=parseAppRelease(raw,'0.3.0');assert.equal(parsed.setup.name,VERSIONED_SETUP);assert.equal(parsed.setup.url,URL_BASE+VERSIONED_SETUP);
+ assert.equal(parseAppRelease(release(),'0.3.0').setup.name,'CodexLight-Setup.exe');
+ const bare=release({tag_name:'0.4.0',html_url:'https://github.com/k08255-lxm/codex-light/releases/tag/0.4.0',assets:raw.assets.filter(item=>item.name!=='CodexLight-Setup.exe').map(item=>({...item,browser_download_url:item.browser_download_url.replace('/v0.4.0/','/0.4.0/')}))});
+ assert.equal(parseAppRelease(bare,'0.3.0').setup.name,VERSIONED_SETUP);
+});
+test('versioned assets cannot bypass uniqueness, tag, size or URL validation through the legacy fallback',()=>{
+ const versioned={...release().assets[0],name:VERSIONED_SETUP,browser_download_url:URL_BASE+VERSIONED_SETUP};
+ for(const extras of [[versioned,versioned],[{...versioned,size:301*1024*1024}],[{...versioned,browser_download_url:URL_BASE+'CodexLight-Setup.exe'}],[{...versioned,browser_download_url:URL_BASE+VERSIONED_SETUP+'?download=1'}],[{...versioned,browser_download_url:URL_BASE+'../v0.4.0/'+VERSIONED_SETUP}]]){
+  const raw=release();raw.assets.push(...extras);assert.throws(()=>parseAppRelease(raw,'0.3.0'));
+ }
+ for(const name of ['CodexLight-Setup-0.4.1-x64.exe','CodexLight-Setup-0.4.0-arm64.exe','../'+VERSIONED_SETUP]){
+  const raw=release();raw.assets[0]={...versioned,name,browser_download_url:URL_BASE+encodeURIComponent(name)};assert.throws(()=>parseAppRelease(raw,'0.3.0'));
+ }
+});
+test('versioned checksums bind to the selected asset without accepting another name or duplicate',()=>{
+ const versioned=`${HASH}  ${VERSIONED_SETUP}\n`;const alias=`${'1'.repeat(64)}  CodexLight-Setup.exe\n`;
+ assert.equal(publishedSetupHash(versioned+alias,VERSIONED_SETUP),HASH);
+ assert.equal(publishedSetupHash(versioned.replace('  ',' *'),VERSIONED_SETUP),HASH);
+ for(const sums of [alias,versioned+versioned,versioned.replace(VERSIONED_SETUP,'../'+VERSIONED_SETUP),versioned.replace('0.4.0','0.4.1')])assert.throws(()=>publishedSetupHash(sums,VERSIONED_SETUP));
+ for(const name of ['../'+VERSIONED_SETUP,'CodexLight-Setup-00.4.0-x64.exe','CodexLight-Setup-0.4.0-arm64.exe'])assert.throws(()=>publishedSetupHash(versioned,name));
+});
+test('versioned-only download verifies its own checksum and keeps the native launcher cache basename',async t=>{
+ const sums=`${HASH}  ${VERSIONED_SETUP}\n${'1'.repeat(64)}  CodexLight-Setup.exe\n`;const raw=release();
+ raw.assets[0]={...raw.assets[0],name:VERSIONED_SETUP,browser_download_url:URL_BASE+VERSIONED_SETUP};raw.assets[1].size=Buffer.byteLength(sums);
+ const launches=[];const {service,calls}=await fixture(t,{raw,sums,launchFn:async file=>launches.push(file)});
+ await service.check();assert.equal((await service.download({version:'0.4.0'})).phase,'ready');await service.install({version:'0.4.0',confirmed:true});
+ assert.equal(calls.filter(call=>call.url.endsWith('.exe')).length,1);assert.ok(calls.some(call=>call.url===URL_BASE+VERSIONED_SETUP));assert.equal(path.basename(launches[0]),'CodexLight-Setup.exe');assert.deepEqual(await readFile(launches[0]),SETUP);
 });
 test('status is local-only; explicit check downloads metadata and checksum, never installer',async t=>{
  const {service,calls}=await fixture(t);assert.equal(service.status().phase,'idle');assert.equal(calls.length,0);

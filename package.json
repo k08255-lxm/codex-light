@@ -1,5 +1,5 @@
 {
-  "name": "codex-light-local", "version": "0.4.0", "private": true,
+  "name": "codex-light-local", "version": "0.4.1", "private": true,
   "description": "Unofficial lightweight local GUI for Codex app-server", "type": "module",
   "engines": {"node": ">=20"},
   "scripts": {"start": "node src/launch.mjs", "browser": "node src/launch.mjs --browser", "serve": "node src/server.mjs", "demo": "node src/launch.mjs --demo", "test": "node --test test/*.test.mjs"},

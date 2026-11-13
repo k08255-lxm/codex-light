@@ -1,5 +1,7 @@
-param([string]$Output = (Join-Path $PSScriptRoot 'out-release-0.4.0'), [string]$Version = '0.4.0')
+param([string]$Output, [string]$Version)
 $ErrorActionPreference = 'Stop'
+if (!$Version) { $Version = (Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../package.json') -Raw | ConvertFrom-Json).version }
+if (!$Output) { $Output = Join-Path $PSScriptRoot "out-release-$Version" }
 $Output = (Resolve-Path -LiteralPath $Output).Path
 $msi = Join-Path $Output "CodexLight-$Version-x64.msi"
 $wix = Join-Path (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path '.tools/wix6/wix.exe'

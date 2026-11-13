@@ -151,4 +151,4 @@ try {
     if (Test-Path -LiteralPath $manifestTemp) { Remove-Item -LiteralPath $manifestTemp }
 }
 Write-Host "Built: $out\CodexLight.exe"
-Write-Host 'Application payload built. Build and verify the internal MSI, then build CodexLight-Setup.exe; see desktop/msi/README.md and desktop/setup/README.md.'
+Write-Host 'Application payload built. Build and verify the internal MSI, then build CodexLight-Setup-<version>-x64.exe; see desktop/msi/README.md and desktop/setup/README.md.'

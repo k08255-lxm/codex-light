@@ -3,7 +3,7 @@
   <OutputType>Exe</OutputType><TargetFramework>net10.0-windows</TargetFramework><UseWPF>true</UseWPF><EnableWindowsTargeting>true</EnableWindowsTargeting><UseAppHost>false</UseAppHost><PlatformTarget>x64</PlatformTarget><LangVersion>latest</LangVersion><Nullable>enable</Nullable><AssemblyName>CodexLight.Setup.Tests</AssemblyName><EnableDefaultCompileItems>false</EnableDefaultCompileItems>
  </PropertyGroup>
  <ItemGroup>
-  <Compile Include="Program.cs"/><Compile Include="../SetupView.cs" Link="SetupView.cs"/><Compile Include="../SetupEngine.cs" Link="SetupEngine.cs"/><Compile Include="../StartupEnvironment.cs" Link="StartupEnvironment.cs"/>
+  <Compile Include="Program.cs"/><Compile Include="RunningApplicationTests.cs"/><Compile Include="../RunningApplication.cs" Link="RunningApplication.cs"/><Compile Include="../SetupView.cs" Link="SetupView.cs"/><Compile Include="../SetupEngine.cs" Link="SetupEngine.cs"/><Compile Include="../StartupEnvironment.cs" Link="StartupEnvironment.cs"/>
   <Compile Include="../../bootstrap/RuntimeDetection.cs" Link="RuntimeDetection.cs"/><Compile Include="../../bootstrap/DependencyInstaller.cs" Link="DependencyInstaller.cs"/><Compile Include="../../shared/ProcessIntegrity.cs" Link="ProcessIntegrity.cs"/><Compile Include="../../shared/NodeRuntimeDetection.cs" Link="NodeRuntimeDetection.cs"/>
   <EmbeddedResource Include="../../installer/dependencies.lock.json" LogicalName="CodexLight.dependencies.lock.json"/><EmbeddedResource Include="../../app.ico" LogicalName="CodexLight.Icon"/>
  </ItemGroup>

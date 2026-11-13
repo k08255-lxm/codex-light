@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ET
 p = argparse.ArgumentParser()
 p.add_argument('payload', type=Path)
 p.add_argument('output', type=Path)
-p.add_argument('--version', default='0.4.0')
+p.add_argument('--version', default=json.loads((Path(__file__).resolve().parents[2]/'package.json').read_text(encoding='utf-8'))['version'])
 a = p.parse_args()
 host_source = (Path(__file__).resolve().parent.parent/'WebViewRuntime.cs').read_text(encoding='utf-8')
 minimum = re.search(r'const int MinimumMajor\s*=\s*(\d+)\s*;', host_source)
@@ -29,8 +29,12 @@ ET.register_namespace('', ns)
 def sub(parent, name, **attrs):
     return ET.SubElement(parent, '{'+ns+'}'+name, attrs)
 root = ET.Element('{'+ns+'}Wix')
+namespace = uuid.UUID('c63d113f-36e4-46f6-b635-f1ce57bd166e')
+# Rebuilding one version must remain the same MSI product, so maintenance can
+# recache it. Distributed changes still require a higher three-part version.
+product_code = '{'+str(uuid.uuid5(namespace, 'product:win-x64:'+a.version)).upper()+'}'
 pkg = sub(root, 'Package', Name='Codex Light', Manufacturer='Codex Light contributors', Version=a.version,
-          UpgradeCode='{C63D113F-36E4-46F6-B635-F1CE57BD166E}', Scope='perUser', Language='1033', InstallerVersion='500')
+          ProductCode=product_code, UpgradeCode='{C63D113F-36E4-46F6-B635-F1CE57BD166E}', Scope='perUser', Language='1033', InstallerVersion='500')
 sub(pkg, 'MajorUpgrade', DowngradeErrorMessage='A newer Codex Light is already installed.', Schedule='afterInstallInitialize')
 sub(pkg, 'MediaTemplate', EmbedCab='yes', CompressionLevel='high')
 sub(pkg, 'Icon', Id='AppIcon', SourceFile=str(Path(__file__).resolve().parent.parent/'app.ico'))
@@ -77,7 +81,6 @@ feature = sub(pkg, 'Feature', Id='Main', Title='Codex Light', Level='1')
 manifest = []
 directory_map = {'': install}
 cleanup_directories = set()
-namespace = uuid.UUID('c63d113f-36e4-46f6-b635-f1ce57bd166e')
 allowed_roots = {'CodexLight.exe','CodexLight.dll','CodexLight.deps.json','CodexLight.runtimeconfig.json',
                  'Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.WinForms.dll','WebView2Loader.dll'}
 for file in sorted(a.payload.resolve().rglob('*')):

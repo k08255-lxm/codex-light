@@ -1,6 +1,6 @@
 # Codex Light Windows 桌面宿主
 
-Codex Light 使用 WinForms + WebView2 承载本地界面，通过 Node 后台连接官方 Codex CLI 的 app-server，运行目标为 Windows x64。用户安装入口是内嵌 MSI 的单文件 `CodexLight-Setup.exe`，详见 [安装与升级](INSTALLATION.md)。
+Codex Light 使用 WinForms + WebView2 承载本地界面，通过 Node 后台连接官方 Codex CLI 的 app-server，运行目标为 Windows x64。用户安装入口是内嵌 MSI 的单文件 `CodexLight-Setup-<version>-x64.exe`，详见 [安装与升级](INSTALLATION.md)。
 
 ## 运行与窗口行为
 
@@ -45,9 +45,9 @@ licenses/...
 
 1. [MSI 构建说明](msi/README.md)：Python 3、项目本地 WiX 6.0.2 和完整 framework-dependent payload。
 2. [Setup 构建说明](setup/README.md)：.NET Framework 4.8 WPF 安装器与嵌入资源检查。
-3. `desktop/package-release.ps1 -Version 0.4.0`：读取对应构建收据和校验结果，生成分发 ZIP 与哈希清单。
+3. `desktop/package-release.ps1`：从 `package.json` 推导版本并读取对应构建收据和校验结果，生成分发 ZIP 与哈希清单。显式传入 `-Version` 时必须与 `package.json` 一致。
 
-向用户分发 `CodexLight-Setup.exe` 的正式发行包；MSI 是内部安装机制。安装后的升级和卸载由 Windows Installer 管理。发布签名使用 `desktop/sign-release.ps1` 和发布者已有证书；未签名构建可能显示未知发布者或 SmartScreen 提示。
+向用户分发 `CodexLight-Setup-<version>-x64.exe` 的正式发行包；MSI 是内部安装机制。0.4.1 同时发布同内容的 `CodexLight-Setup.exe` 兼容附件，保证 0.4.0 应用内更新仍可用；两者均写入 `SHA256SUMS.txt`。新版本更新器优先选择与 Release tag 精确匹配的版本化附件，并兼容历史旧名称。安装后的升级和卸载由 Windows Installer 管理。发布签名使用 `desktop/sign-release.ps1` 和发布者已有证书；未签名构建可能显示未知发布者或 SmartScreen 提示。
 
 项目设置了 `EnableWindowsTargeting=true`，可还原 Windows targeting packs 进行交叉编译。完整安装器和窗口运行以 Windows 为目标，编译成功不代表运行兼容性。
 

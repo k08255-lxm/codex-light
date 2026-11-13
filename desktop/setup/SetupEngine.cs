@@ -46,6 +46,19 @@ namespace CodexLight.Bootstrap {
    if(result!=0||path.Length==0)throw new InvalidOperationException("现有 MSI 安装路径不可读，请通过 Windows 设置修复或卸载后重试。");
    return Path.GetFullPath(path.ToString()).TrimEnd('\\');
   }
+  public static void ValidateUpgrade(string version,string productCode){
+   var installed=new StringBuilder(39);int result=MsiEnumRelatedProducts(UpgradeCode,0,0,installed);
+   if(result==259)return;if(result!=0)throw new InvalidOperationException("无法读取 Windows Installer 安装登记（"+result+"）。");
+   uint length=256;var previousVersion=new StringBuilder((int)length);result=MsiGetProductInfo(installed.ToString(),"VersionString",previousVersion,ref length);
+   if(result!=0)throw new InvalidOperationException("无法读取已安装版本（"+result+"），尚未开始安装。");
+   ValidateUpgradeIdentity(previousVersion.ToString(),installed.ToString(),version,productCode);
+  }
+  internal static void ValidateUpgradeIdentity(string previousVersion,string previousCode,string version,string productCode){
+   if(!Version.TryParse(previousVersion,out var previous)||!Version.TryParse(version,out var next))throw new InvalidOperationException("安装版本信息无效，尚未开始安装。");
+   int order=next.CompareTo(previous);
+   if(order<0)throw new InvalidOperationException("已安装 "+previousVersion+"，不能安装较旧的 "+version+"。请下载最新安装包。");
+   if(order==0&&!string.Equals(previousCode,productCode,StringComparison.OrdinalIgnoreCase))throw new InvalidOperationException("已安装另一个 "+version+" 候选包，产品标识与此安装包不同。请使用更高版本的安装包升级；现有文件未更改。");
+  }
   [DllImport("msi.dll",CharSet=CharSet.Unicode)]static extern int MsiEnumRelatedProducts(string upgradeCode,int reserved,int index,StringBuilder productCode);
   [DllImport("msi.dll",CharSet=CharSet.Unicode)]static extern int MsiGetProductInfo(string product,string property,StringBuilder value,ref uint length);
  }
@@ -96,6 +109,8 @@ namespace CodexLight.Bootstrap {
     if(input==null)throw new InvalidOperationException("安装包缺少嵌入的 MSI。");
     package=await ExtractPackage(input,cache,token,(bytes,total)=>phaseProgress?.Report(new SetupProgress(SetupPhase.Preparing,"正在解压 Codex Light 安装包…",bytes,total)),()=>report(SetupPhase.Verifying,"正在读取并核验 Codex Light 安装包信息…"));
    }
+   InstallPaths.ValidateUpgrade(package.Version,package.ProductCode);
+   RunningApplication.EnsureStopped(target);
    token.ThrowIfCancellationRequested();canCancel(false);report(SetupPhase.ApplicationInstalling,"Windows Installer 正在安装 Codex Light…"+Environment.NewLine+"Windows Installer 日志："+log);
    try{
     using(var process=Process.Start(new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"msiexec.exe"),MsiArguments(package.Path,target,log,package.InstalledForCurrentUser())){UseShellExecute=false,CreateNoWindow=true})){

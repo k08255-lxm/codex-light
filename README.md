@@ -4,16 +4,16 @@
 
 ## 界面预览
 
-以下为早期版本的演示截图；窄屏图为 390px 浏览器模拟布局。
+以下为当前源码运行的浏览器演示截图，全部使用合成数据，不调用真实模型。宽屏为 1440px，窄屏为 390px。
 
-![桌面对话界面（演示数据）](docs/assets/conversation-demo.png)
+![对话与统一活动面板：折叠操作过程、几何子代理头像、模型与时长（合成演示数据）](docs/assets/conversation-demo.png)
 
 <details>
 <summary>查看文件 diff 与窄屏布局</summary>
 
-![文件 diff（演示数据）](docs/assets/file-diff-demo.png)
+![本轮文件变更与展开的 diff（合成演示数据）](docs/assets/file-diff-demo.png)
 
-![窄屏布局（390px 浏览器模拟，演示数据）](docs/assets/narrow-layout-demo.png)
+![窄屏对话布局（390px 浏览器演示，合成数据）](docs/assets/narrow-layout-demo.png)
 
 </details>
 
@@ -34,7 +34,7 @@
 
 ## 安装与依赖
 
-使用 Windows 发行包中的 **`CodexLight-Setup.exe`**。它是唯一安装入口，负责检测并复用 .NET 10 Desktop Runtime、Node.js 20+ 和 WebView2；缺失时下载经过校验的官方运行时并安装。普通用户不需要手动安装 Node.js 或开发 SDK。
+使用 Windows 发行包中的 **`CodexLight-Setup-<version>-x64.exe`**（如 `CodexLight-Setup-0.4.1-x64.exe`）。它是安装入口，负责检测并复用 .NET 10 Desktop Runtime、Node.js 20+ 和 WebView2；缺失时下载经过校验的官方运行时并安装。普通用户不需要手动安装 Node.js 或开发 SDK。
 
 安装器内置 Windows Installer 包，已有正式安装沿用原目录升级；卸载使用 Windows 的“已安装的应用”。旧版非 MSI 目录不会被自动覆盖。项目、用户配置、会话和共享运行时不会随应用卸载删除。详见 [安装与升级](desktop/INSTALLATION.md)。
 

@@ -1,11 +1,16 @@
 param(
-    [string]$Version = '0.4.0',
-    [string]$MsiPath = (Join-Path $PSScriptRoot 'msi/out-release-0.4.0/CodexLight-0.4.0-x64.msi'),
-    [string]$SetupPath = (Join-Path $PSScriptRoot 'setup/out-release-0.4.0/CodexLight-Setup.exe'),
+    [string]$Version,
+    [string]$MsiPath,
+    [string]$SetupPath,
     [string]$OutputRoot = (Join-Path $PSScriptRoot 'dist')
 )
 $ErrorActionPreference = 'Stop'
-if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw 'Use a three-part release version.' }
+$packageVersion = (Get-Content -LiteralPath (Join-Path $PSScriptRoot '../package.json') -Raw | ConvertFrom-Json).version
+if (!$Version) { $Version = $packageVersion }
+if ($Version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$' -or $Version -ne $packageVersion) { throw 'Release version must match the three-part package.json version.' }
+$setupName = "CodexLight-Setup-$Version-x64.exe"
+if (!$MsiPath) { $MsiPath = Join-Path $PSScriptRoot "msi/out-release-$Version/CodexLight-$Version-x64.msi" }
+if (!$SetupPath) { $SetupPath = Join-Path $PSScriptRoot "setup/out-release-$Version/$setupName" }
 $package = (Resolve-Path -LiteralPath $MsiPath).Path
 $setup = (Resolve-Path -LiteralPath $SetupPath).Path
 $root = [IO.Path]::GetFullPath($OutputRoot)
@@ -30,16 +35,18 @@ if ($verification.sha256 -ne $msiHash -or !$verification.allCabinetHashesMatch -
 if ([IO.Path]::GetFileName($package) -ne "CodexLight-$Version-x64.msi") {
     throw 'MSI filename does not match release version.'
 }
-if ($receipt.msiSha256 -ne $msiHash -or $receipt.setupSha256 -ne $setupHash) {
+if ($receipt.version -ne $Version -or $receipt.msiSha256 -ne $msiHash -or $receipt.setupSha256 -ne $setupHash) {
     throw 'Setup build receipt is stale.'
 }
 New-Item -ItemType Directory -Path $directory | Out-Null
+Copy-Item -LiteralPath $setup -Destination (Join-Path $directory $setupName)
+# 0.4.0's updater only recognizes this alias; publish both names and checksum entries during migration.
 Copy-Item -LiteralPath $setup -Destination (Join-Path $directory 'CodexLight-Setup.exe')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'INSTALLATION.md') -Destination (Join-Path $directory 'INSTALLATION.md')
 $readme = @"
 # Codex Light $Version · Windows x64
 
-将整个 ZIP 解压到下载等普通文件夹，打开 CodexLight-Setup.exe。
+将整个 ZIP 解压到下载等普通文件夹，打开 $setupName。CodexLight-Setup.exe 是供 0.4.0 应用内更新使用的同内容兼容附件。
 选择安装位置后点击“安装”；已有 MSI 安装会沿用原位置更新。安装器会复用已有运行环境，只补充缺失的 Node.js、.NET Desktop 与 WebView2；无需手动安装 Node 或开发工具。
 
 EXE 已内置 MSI，不需要再找另一个安装包。默认安装到当前用户的 Programs/CodexLight，开始菜单提供应用入口。卸载使用 Windows 设置中的“已安装的应用”。安装完成不会自动打开应用。

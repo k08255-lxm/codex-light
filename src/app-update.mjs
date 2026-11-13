@@ -32,24 +32,28 @@ async function limitedBytes(response,max){
  for await(const chunk of response.body){count+=chunk.length;if(count>max)throw fail('应用更新响应过大','APP_UPDATE_TOO_LARGE');chunks.push(Buffer.from(chunk));}
  return Buffer.concat(chunks);
 }
-function asset(release,name){
+function asset(release,name,{installer=false}={}){
  const matches=Array.isArray(release.assets)?release.assets.filter(item=>item?.name===name):[];
  if(matches.length!==1)throw fail(`发布版本缺少唯一的 ${name}`,'APP_UPDATE_ASSET_MISSING');
  const item=matches[0];const url=trustedUrl(item.browser_download_url);
  const expected=`${REPO_DOWNLOAD}${encodeURIComponent(release.tag_name)}/${encodeURIComponent(name)}`;
- if(url.hostname!=='github.com'||url.pathname!==expected||url.search)throw fail('发布附件地址与版本不匹配','APP_UPDATE_SOURCE_INVALID');
- if(!Number.isSafeInteger(item.size)||item.size<1||item.size>(name===SETUP?MAX_SETUP:128*1024))throw fail('发布附件大小无效','APP_UPDATE_TOO_LARGE');
- return {url:url.href,size:item.size};
+ if(item.browser_download_url!==`https://github.com${expected}`)throw fail('发布附件地址与版本不匹配','APP_UPDATE_SOURCE_INVALID');
+ if(!Number.isSafeInteger(item.size)||item.size<1||item.size>(installer?MAX_SETUP:128*1024))throw fail('发布附件大小无效','APP_UPDATE_TOO_LARGE');
+ return {name,url:url.href,size:item.size};
 }
 export function parseAppRelease(release,currentVersion){
  const version=typeof release?.tag_name==='string'?release.tag_name.replace(/^v/,''):'';
  if(!VERSION.test(version)||release.draft===true||release.prerelease===true)throw fail('没有可安装的稳定发布版本','APP_UPDATE_RELEASE_INVALID');
- const setup=asset(release,SETUP);const sums=asset(release,SUMS);
+ const versionedSetup=`CodexLight-Setup-${version}-x64.exe`;
+ // A present versioned asset must validate; never hide a bad or duplicate asset behind the legacy alias.
+ const setupName=Array.isArray(release.assets)&&release.assets.some(item=>item?.name===versionedSetup)?versionedSetup:SETUP;
+ const setup=asset(release,setupName,{installer:true});const sums=asset(release,SUMS);
  if(release.html_url!==`https://github.com/k08255-lxm/codex-light/releases/tag/${encodeURIComponent(release.tag_name)}`)throw fail('发布页面来源无效','APP_UPDATE_SOURCE_INVALID');
  return {version,tag:release.tag_name,releaseUrl:release.html_url,notes:typeof release.body==='string'?release.body.slice(0,12000):'',publishedAt:typeof release.published_at==='string'?release.published_at:null,available:compareVersions(currentVersion,version)<0,setup,sums};
 }
-export function publishedSetupHash(text){
- const matches=String(text).replace(/^\uFEFF/,'').split(/\r?\n/).map(line=>/^([a-fA-F0-9]{64})\s+\*?(.+?)\s*$/.exec(line)).filter(match=>match&&match[2]===SETUP);
+export function publishedSetupHash(text,name=SETUP){
+ if(name!==SETUP&&!/^CodexLight-Setup-(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-x64\.exe$/.test(name))throw fail('发布安装包文件名无效','APP_UPDATE_CHECKSUM_INVALID');
+ const matches=String(text).replace(/^\uFEFF/,'').split(/\r?\n/).map(line=>/^([a-fA-F0-9]{64})\s+\*?(.+?)\s*$/.exec(line)).filter(match=>match&&match[2]===name);
  if(matches.length!==1)throw fail('发布校验文件缺少唯一的安装包 SHA256','APP_UPDATE_CHECKSUM_INVALID');
  return matches[0][1].toLowerCase();
 }
@@ -101,7 +105,7 @@ export class AppUpdateService{
     const latest=parseAppRelease(raw,this.currentVersion);const sums=await this._fetch(latest.sums.url,AbortSignal.timeout(this.checkTimeoutMs));
     const checksumBytes=await limitedBytes(sums,128*1024);
     if(checksumBytes.length!==latest.sums.size)throw fail('发布校验文件大小与元数据不一致','APP_UPDATE_CHECKSUM_INVALID');
-    latest.sha256=publishedSetupHash(checksumBytes.toString('utf8'));
+    latest.sha256=publishedSetupHash(checksumBytes.toString('utf8'),latest.setup.name);
     this.latest=latest;this.checkedAt=new Date(this.now()).toISOString();
     if(this.prepared&&(this.prepared.version!==latest.version||this.prepared.sha256!==latest.sha256))this.prepared=null;
     this.phase=this.prepared?'ready':latest.available?'available':'upToDate';return this.status();

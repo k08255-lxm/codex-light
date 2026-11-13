@@ -18,7 +18,7 @@ internal sealed class MainWindow : CaptionWindow {
  string startupStage="检测运行环境";
  readonly WindowPlacementController placement;
  public MainWindow(bool demo){this.demo=demo;Text="Codex Light";Icon=Icon.ExtractAssociatedIcon(Application.ExecutablePath);Size=new Size(1257,945);MinimumSize=new Size(800,600);BackColor=Color.FromArgb(24,24,24);Controls.Add(view);Controls.Add(loading);BuildCaptionMenu();placement=new WindowPlacementController(this,WindowPlacementStore.ForCurrentUser());Shown+=async(_,_)=>await StartAsync();FormClosing+=OnClosing;}
- protected override void OnLoad(EventArgs e){base.OnLoad(e);placement.Restore();}
+ protected override void OnLoad(EventArgs e){base.OnLoad(e);placement.Restore();try{ShowTray();}catch{DisposeTray();ShowTrayFailure();}}
  protected override void OnMove(EventArgs e){base.OnMove(e);placement?.Capture();}
  protected override void OnResize(EventArgs e){base.OnResize(e);placement?.Capture();}
  protected override void OnResizeEnd(EventArgs e){base.OnResizeEnd(e);placement.Capture();placement.Save();}
@@ -188,29 +188,33 @@ internal sealed class MainWindow : CaptionWindow {
  public void RestoreFromTray(){
   if(closing||IsDisposed)return;
   Show();if(WindowState==FormWindowState.Minimized)WindowState=placement.WasMaximized?FormWindowState.Maximized:FormWindowState.Normal;
-  Activate();if(tray!=null)tray.Visible=false;
+  Activate();
  }
  void ShowFailure(string message){
   if(closing||IsDisposed||failed)return;
   failed=true;loading.Text=message;loading.Show();loading.BringToFront();
-  if(tray?.Visible==true)RestoreFromTray();
+  if(!Visible)RestoreFromTray();
  }
  void MoveToTray(){
   placement.Capture();placement.Save();
   if(failed){RestoreFromTray();return;}
   if(backend==null||backend.HasExited){ShowFailure("本地后台未运行。请关闭并重新打开应用；窗口将保持打开。");return;}
   try{
-   if(tray==null){
-    trayMenu=new ContextMenuStrip();trayMenu.Items.Add("打开窗口",null,(_,_)=>RestoreFromTray());trayMenu.Items.Add(new ToolStripSeparator());
-    trayMenu.Items.Add("退出",null,(_,_)=>{exitRequested=true;Close();});
-    trayIcon=(Icon)(Icon??SystemIcons.Application).Clone();
-    tray=new NotifyIcon{Text="Codex Light",Icon=trayIcon,ContextMenuStrip=trayMenu};tray.DoubleClick+=(_,_)=>RestoreFromTray();
-   }
-   tray.Visible=true;
-   if(!tray.Visible)throw new InvalidOperationException("Tray icon unavailable");
+   ShowTray();
    Hide();
-  }catch{RestoreFromTray();MessageBox.Show(this,"无法显示系统托盘图标，窗口将保持打开。","Codex Light",MessageBoxButtons.OK,MessageBoxIcon.Error);}
+  }catch{DisposeTray();RestoreFromTray();ShowTrayFailure();}
  }
+ void ShowTray(){
+  if(tray==null){
+   trayMenu=new ContextMenuStrip();trayMenu.Items.Add("打开窗口",null,(_,_)=>RestoreFromTray());trayMenu.Items.Add(new ToolStripSeparator());
+   trayMenu.Items.Add("退出",null,(_,_)=>{exitRequested=true;Close();});
+   trayIcon=(Icon)(Icon??SystemIcons.Application).Clone();
+   tray=new NotifyIcon{Text="Codex Light",Icon=trayIcon,ContextMenuStrip=trayMenu};tray.DoubleClick+=(_,_)=>RestoreFromTray();
+  }
+  tray.Visible=true;
+  if(!tray.Visible)throw new InvalidOperationException("Tray icon unavailable");
+ }
+ void ShowTrayFailure()=>MessageBox.Show(this,"无法显示系统托盘图标，窗口将保持打开。","Codex Light",MessageBoxButtons.OK,MessageBoxIcon.Error);
  void DisposeTray(){if(tray!=null){tray.Visible=false;tray.Dispose();tray=null;}trayMenu?.Dispose();trayMenu=null;trayIcon?.Dispose();trayIcon=null;}
  protected override void WndProc(ref Message message){
   sessionEnd.Observe(message.Msg,message.WParam);

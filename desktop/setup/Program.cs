@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -17,6 +18,7 @@ namespace CodexLight.Bootstrap {
   bool checking, busy, registered, restartRequired, checkFailed, closeAfterCheck, loaded;
   volatile bool cancelAllowed;
   CancellationTokenSource? cancellation;
+  TaskCompletionSource<bool>? closeConfirmation;
   readonly Stopwatch elapsed = new Stopwatch();
   readonly DispatcherTimer elapsedTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
 
@@ -33,6 +35,7 @@ namespace CodexLight.Bootstrap {
    Closed += (_, __) => elapsedTimer.Stop();
    view.Change.Click += (_, __) => ChangeDirectory();
    view.Primary.Click += async (_, __) => {
+    if (closeConfirmation != null) { closeConfirmation.TrySetResult(true); return; }
     if (view.Stage == SetupStage.Completed) { OpenApp(); return; }
     if (view.Stage == SetupStage.Checking || checking) return;
     if (checkFailed) { await CheckAsync(); return; }
@@ -84,10 +87,26 @@ namespace CodexLight.Bootstrap {
    var messages = new Progress<string>(message => view.Log(message));
    var cancel = new Progress<bool>(allowed => { if (busy && cancellation?.IsCancellationRequested != true) view.SetCancelAllowed(allowed); });
    var progress = new Progress<SetupProgress>(update => { if (view.Stage == SetupStage.Installing && cancellation?.IsCancellationRequested != true) view.SetProgress(update); });
-   try { int code = await new SetupEngine().Run(view.Location.Text, registered, ((IProgress<string>)messages).Report, allowed => { cancelAllowed = allowed; ((IProgress<bool>)cancel).Report(allowed); }, cancellation.Token, progress); restartRequired = code == 3010 || code == 1641; view.Complete(code); }
+   try {
+    string target = InstallPaths.Validate(view.Location.Text, registered);
+    await RunningApplication.PrepareAsync(target, ConfirmCloseAsync, cancellation.Token);
+    int code = await new SetupEngine().Run(target, registered, ((IProgress<string>)messages).Report, allowed => { cancelAllowed = allowed; ((IProgress<bool>)cancel).Report(allowed); }, cancellation.Token, progress); restartRequired = code == 3010 || code == 1641; view.Complete(code);
+   }
    catch (OperationCanceledException error) { view.Log(error.Message); view.SetStage(SetupStage.Cancelled, "安装已取消。已完成的运行环境安装会保留，可点击“重试”继续。"); }
    catch (Exception error) { view.Log(error.ToString()); view.SetStage(SetupStage.Failed, "安装未完成：" + error.Message); }
    finally { StopElapsed(); busy = false; cancellation.Dispose(); cancellation = null; }
+  }
+  async Task<bool> ConfirmCloseAsync(IReadOnlyList<RunningAppProcess> processes, CancellationToken token) {
+   var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+   closeConfirmation = completion;
+   view.SetCloseConfirmation();
+   view.Log("检测到此安装位置的运行实例（PID）：" + string.Join("、", processes.Select(process => process.Id)) + "。等待用户确认关闭。");
+   try {
+    using (token.Register(() => completion.TrySetCanceled())) return await completion.Task;
+   } finally {
+    closeConfirmation = null;
+    view.SetStage(SetupStage.Installing, "正在等待 Codex Light 正常退出…"); AllowCancel(!token.IsCancellationRequested);
+   }
   }
   void OpenApp() {
    if (restartRequired) { Close(); return; }

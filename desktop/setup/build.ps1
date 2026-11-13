@@ -1,11 +1,18 @@
 param(
- [string]$MsiPath = (Join-Path $PSScriptRoot '../msi/out-release-0.4.0/CodexLight-0.4.0-x64.msi'),
- [string]$Output = (Join-Path $PSScriptRoot 'out-release-0.4.0'),
+ [string]$MsiPath,
+ [string]$Output,
+ [string]$Version,
  [switch]$VerifyLayout
 )
 $ErrorActionPreference = 'Stop'
+$packageVersion = (Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../package.json') -Raw | ConvertFrom-Json).version
+if (!$Version) { $Version = $packageVersion }
+if ($Version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$' -or $Version -ne $packageVersion) { throw 'Setup version must match the three-part package.json version.' }
+if (!$MsiPath) { $MsiPath = Join-Path $PSScriptRoot "../msi/out-release-$Version/CodexLight-$Version-x64.msi" }
+if (!$Output) { $Output = Join-Path $PSScriptRoot "out-release-$Version" }
 $package = (Resolve-Path -LiteralPath $MsiPath).Path
 if ([IO.Path]::GetExtension($package) -ne '.msi') { throw 'MsiPath must name an MSI package.' }
+if ([IO.Path]::GetFileName($package) -ne "CodexLight-$Version-x64.msi") { throw 'MSI filename does not match setup version.' }
 $destination = [IO.Path]::GetFullPath($Output)
 New-Item -ItemType Directory -Force -Path $destination | Out-Null
 & dotnet build (Join-Path $PSScriptRoot 'CodexLight.Setup.csproj') -c Release "-p:MsiPath=$package" --nologo
@@ -18,7 +25,8 @@ if ($VerifyLayout) {
 }
 & python (Join-Path $PSScriptRoot 'verify-resource.py') (Join-Path $PSScriptRoot 'bin/Release/net48/CodexLightSetup.exe') $package
 if ($LASTEXITCODE -ne 0) { throw 'Embedded MSI verification failed.' }
-$artifact = Join-Path $destination 'CodexLight-Setup.exe'
+$artifact = Join-Path $destination "CodexLight-Setup-$Version-x64.exe"
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'bin/Release/net48/CodexLightSetup.exe') -Destination $artifact -Force
-@{ version = '0.4.0'; msi = $package; msiSha256 = (Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash; setupSha256 = (Get-FileHash -LiteralPath $artifact -Algorithm SHA256).Hash; tests = $(if($VerifyLayout){Get-Content -LiteralPath (Join-Path $destination 'previews/layout-report.json') -Raw | ConvertFrom-Json}else{'not run; compilation and Python read-only CLR embedded-resource verification only'}); builtUtc = [DateTime]::UtcNow.ToString('o') } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $destination 'build-receipt.json') -Encoding utf8
+if ((Get-Item -LiteralPath $artifact).VersionInfo.FileVersion -ne "$Version.0") { throw 'Setup file version does not match package.json version.' }
+@{ version = $Version; msi = $package; msiSha256 = (Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash; setupSha256 = (Get-FileHash -LiteralPath $artifact -Algorithm SHA256).Hash; tests = $(if($VerifyLayout){Get-Content -LiteralPath (Join-Path $destination 'previews/layout-report.json') -Raw | ConvertFrom-Json}else{'not run; compilation and Python read-only CLR embedded-resource verification only'}); builtUtc = [DateTime]::UtcNow.ToString('o') } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $destination 'build-receipt.json') -Encoding utf8
 Write-Output "Built single executable (not started): $artifact"

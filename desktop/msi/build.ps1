@@ -1,10 +1,15 @@
 param(
-    [string]$Payload = (Join-Path $PSScriptRoot '../dist/CodexLight-win-x64-0.4.0'),
-    [string]$Version = '0.4.0',
-    [string]$Output = (Join-Path $PSScriptRoot 'out-release-0.4.0')
+    [string]$Payload,
+    [string]$Version,
+    [string]$Output
 )
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
+$sourceVersion = (Get-Content -LiteralPath (Join-Path $repo 'package.json') -Raw | ConvertFrom-Json).version
+if (!$Version) { $Version = $sourceVersion }
+if ($Version -ne $sourceVersion) { throw 'MSI version must match package.json.' }
+if (!$Payload) { $Payload = Join-Path $PSScriptRoot "../dist/CodexLight-win-x64-$Version" }
+if (!$Output) { $Output = Join-Path $PSScriptRoot "out-release-$Version" }
 $wix = Join-Path $repo '.tools/wix6/wix.exe'
 if (!(Test-Path -LiteralPath $wix)) { throw 'Install pinned WiX 6.0.2 locally: dotnet tool install wix --version 6.0.2 --tool-path .tools/wix6 (review OSMF first)' }
 if ((& $wix --version) -notmatch '^6\.0\.2\+') { throw 'Expected WiX 6.0.2' }

@@ -1,6 +1,6 @@
 # Codex Light Setup
 
-`CodexLight-Setup.exe` is a single .NET Framework 4.8 WPF executable containing the per-user application MSI. The installer UI uses the system Framework and does not need modern .NET or WebView2 to display. The application has its own runtime requirements; see [INSTALLATION.md](../INSTALLATION.md).
+`CodexLight-Setup-<version>-x64.exe` is a single .NET Framework 4.8 WPF executable containing the per-user application MSI. The installer UI uses the system Framework and does not need modern .NET or WebView2 to display. The application has its own runtime requirements; see [INSTALLATION.md](../INSTALLATION.md).
 
 ## Build
 
@@ -8,11 +8,12 @@ Run from the repository root on Windows with the .NET SDK and Python 3 installed
 
 ```powershell
 ./desktop/setup/build.ps1 -VerifyLayout
-# Default input: desktop/msi/out-release-0.4.0/CodexLight-0.4.0-x64.msi
-# Output: desktop/setup/out-release-0.4.0/CodexLight-Setup.exe
+# Version comes from package.json (shown here for 0.4.1).
+# Default input: desktop/msi/out-release-0.4.1/CodexLight-0.4.1-x64.msi
+# Output: desktop/setup/out-release-0.4.1/CodexLight-Setup-0.4.1-x64.exe
 ```
 
-Use `-MsiPath '<absolute-path-to-msi>' -Output '<output-directory>'` for explicit inputs. Rebuild the application, MSI and Setup together for each release version.
+Use `-MsiPath '<absolute-path-to-msi>' -Output '<output-directory>'` for explicit inputs. An explicit `-Version` must match `package.json`. Rebuild the application, MSI and Setup together for each release version. `package-release.ps1` publishes the versioned executable and, for 0.4.0 updater compatibility, an identical `CodexLight-Setup.exe` alias with both exact filenames in `SHA256SUMS.txt`. The updater keeps the old basename only in its private cache for the native launcher gate.
 
 The build uses Python to verify that the exact input MSI occurs once in the CLR embedded-resource directory, without loading or starting Setup. It records the MSI and Setup hashes in `build-receipt.json`. Only the resulting Setup executable is a user installation entry point; the MSI remains embedded. Generated files and receipts stay in the build output directory.
 
@@ -27,6 +28,8 @@ The checks cover supported DPI scales, long Chinese paths, installation states, 
 `Program.cs` hosts `SetupView.cs` and connects the setup engine. WPF owns scaling, with per-monitor DPI declarations and Framework switches configured before UI initialization. The location field is selectable and read-only; the parent-folder picker appends `CodexLight`. A registered MSI installation retains its location and offers an update. An existing non-MSI directory is not claimed or overwritten.
 
 Startup checks process integrity before dependency detection. Low or Untrusted integrity, or an integrity-check failure, produces an explicit stop. Setup does not restart itself elevated or modify ACLs.
+
+Before installation, Setup detects running `CodexLight.exe` processes by the exact canonical executable path at the selected install location. The existing window asks for explicit confirmation to close them; cancellation is the default keyboard action. After confirmation, Windows Restart Manager requests graceful shutdown of the captured PID/creation-time identities without forcing termination. A process from another session, a newly started instance, a failed shutdown or cancellation stops installation. The application is checked again immediately before MSI starts. Processes from other installation locations and unrelated Node processes are not closed.
 
 Setup links runtime detection, dependency installation and shared runtime/integrity helpers from the repository. It reuses compatible dependencies and installs only missing ones after official URL, pinned hash, Authenticode trust and publisher checks. Dependencies are checked again before application installation. Vendor installers use supported unattended/passive arguments and retain system authorization behavior.
 
