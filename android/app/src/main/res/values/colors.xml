@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Exact Codex Light dark workbench tokens -->
+    <color name="bg_main">#181818</color>
+    <color name="bg_rail">#1b1b1b</color>
+    <color name="bg_surface">#202020</color>
+    <color name="bg_surface_alt">#252525</color>
+    <color name="bg_selected">#333333</color>
+    <color name="bg_input">#1f1f1f</color>
+
+    <color name="border_subtle">#2b2b2b</color>
+    <color name="border_strong">#3a3a3a</color>
+    <color name="border_focus">#e8e8e8</color>
+
+    <color name="accent_primary">#e8e8e8</color>
+    <color name="accent_primary_pressed">#ffffff</color>
+    <color name="brand_mark">#f2b25c</color>
+    <color name="text_on_primary">#181818</color>
+
+    <color name="text_primary">#ececec</color>
+    <color name="text_secondary">#b8b8b8</color>
+    <color name="text_tertiary">#a2a2a2</color>
+    <color name="text_muted">#808080</color>
+
+    <color name="status_connected">#9fc5aa</color>
+    <color name="status_error">#f0a6a6</color>
+    <color name="status_warning">#d6bd82</color>
+</resources>

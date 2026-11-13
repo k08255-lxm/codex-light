@@ -34,6 +34,14 @@
 
 ## 安装与依赖
 
+### Android 局域网客户端
+
+Android 客户端是连接电脑的 WebView 外壳，不在手机上安装或运行 Codex CLI。需要 Android 7.0（API 24）及以上、可用的系统 WebView，以及已开启局域网访问的电脑。手机与电脑须在同一可信局域网；这不是公网远控或离线模型运行方式。
+
+APK 获取、安装与升级、配对和 Windows 源码构建步骤见 [Android 客户端说明](android/README.md)。预构建包由贡献者的 Fork Release 提供，请核对版本、来源及校验文件；它不是本仓库的自动构建产物。
+
+### Windows 桌面客户端
+
 使用 Windows 发行包中的 **`CodexLight-Setup-<version>-x64.exe`**（如 `CodexLight-Setup-0.4.1-x64.exe`）。它是安装入口，负责检测并复用 .NET 10 Desktop Runtime、Node.js 20+ 和 WebView2；缺失时下载经过校验的官方运行时并安装。普通用户不需要手动安装 Node.js 或开发 SDK。
 
 安装器内置 Windows Installer 包，已有正式安装沿用原目录升级；卸载使用 Windows 的“已安装的应用”。旧版非 MSI 目录不会被自动覆盖。项目、用户配置、会话和共享运行时不会随应用卸载删除。详见 [安装与升级](desktop/INSTALLATION.md)。

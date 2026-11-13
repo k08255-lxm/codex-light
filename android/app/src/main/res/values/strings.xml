@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Codex Light</string>
+    <string name="app_subtitle">局域网移动工作台 · 复用桌面端 Codex CLI</string>
+
+    <string name="btn_paste_url">从剪贴板粘贴局域网链接</string>
+    <string name="paste_url_hint">自动解析 http://IP:PORT/#token=… 并填入下方参数</string>
+
+    <string name="label_host">主机地址 (IPv4)</string>
+    <string name="hint_host">192.168.x.x</string>
+
+    <string name="label_port">端口</string>
+    <string name="hint_port">54321</string>
+
+    <string name="label_token">访问令牌 (Token)</string>
+    <string name="hint_token">粘贴 64 位十六进制局域网访问令牌</string>
+
+    <string name="btn_connect">连接工作台</string>
+    <string name="btn_demo_mode">离线界面预览（不连接电脑）</string>
+
+    <string name="guide_summary">配对方式：电脑端打开 Codex Light → 设置 → 远程控制 → 局域网访问，开启后复制链接。局域网 HTTP 未加密，请仅在可信网络中使用。</string>
+
+    <string name="recent_servers">最近连接</string>
+    <string name="no_recent_servers">暂无记录</string>
+
+    <string name="error_connection_failed">未能连接到桌面端服务</string>
+    <string name="error_check_wifi">请核对手机与电脑处于同一局域网，且桌面端局域网访问仍处于开启状态。</string>
+    <string name="btn_retry">重试连接</string>
+    <string name="btn_change_server">切换连接地址</string>
+    <string name="press_again_exit">再按一次返回退出</string>
+</resources>
