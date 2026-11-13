@@ -50,11 +50,12 @@ test('LAN is default-off; only owner token manages it and loopback/phone use the
  assert.equal(f.pickers,0);assert.equal(app.rpc.connected,true);assert.equal(app.operations.entries.size,0,'LAN capability URLs must not enter operation receipts');
 });
 
-test('LAN artifact preview retains the project boundary and uses only its independently authenticated bytes path',async t=>{
+test('LAN artifact preview requires its own capability and accepts external image paths from a known scope',async t=>{
  const {app}=await fixture(t),lan=(await owner(app,'enable',{address})).body;
  const success=await request(lan,{pathname:'/api/artifacts/preview',method:'POST',body:{projectId:'p',path:'icon.png'}});assert.equal(success.status,200);assert.equal(success.headers['content-type'],'image/png');assert.deepEqual(success.bytes,png);
  assert.equal((await request(lan,{pathname:'/api/artifacts/preview',method:'POST',token:null,body:{projectId:'p',path:'icon.png'}})).status,401);
- assert.equal((await request(lan,{pathname:'/api/artifacts/preview',method:'POST',body:{projectId:'p',path:'../outside.png'}})).status,403);
+ const external=await fs.mkdtemp(path.join(os.tmpdir(),'lan-image-preview-'));t.after(()=>fs.rm(external,{recursive:true,force:true}));const image=path.join(external,'outside.png');await fs.writeFile(image,png);
+ const preview=await request(lan,{pathname:'/api/artifacts/preview',method:'POST',body:{projectId:'p',path:image}});assert.equal(preview.status,200);assert.deepEqual(preview.bytes,png);
  assert.equal((await request(lan,{pathname:'/api/artifacts/preview',method:'POST',body:{projectId:'unknown',path:'icon.png'}})).status,403);
 });
 

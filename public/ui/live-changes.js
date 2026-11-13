@@ -10,7 +10,7 @@ import { icon } from '../icons.js';
  */
 export function pillChanges(turns) {
   const list = Array.isArray(turns) ? turns : [];
-  const turn = list.find(row => row.status === 'running' && row.files?.count) || [...list].reverse().find(row => row.files?.count) || null;
+  const turn = [...list].reverse().find(row => row.status==='running'&&row.files?.count) || null;
   if (!turn) return { count: 0, rows: [], running: false, added: null, removed: null, turnId: null };
   // Files whose net change in this turn is zero (e.g. edited then restored) are not "changed".
   const rows = turn.files.rows.filter(row => row.net !== 'unchanged');
@@ -34,6 +34,7 @@ export function mountLiveChanges(host, { renderDiff }) {
     return span;
   }
   function draw() {
+    panel.style.maxWidth=Math.max(220,(host.parentElement?.clientWidth||560)-24)+'px';
     host.classList.toggle('hidden', !summary.count);
     if (!summary.count) { open = false; panel.classList.add('hidden'); return; }
     pill.replaceChildren(icon(document, 'diff', { size: 14 }), el(document, 'span', 'pill-text', `${summary.count} 个文件${summary.running ? '正在更改' : '已更改'}`), stats(summary.added, summary.removed));
@@ -59,4 +60,43 @@ export function mountLiveChanges(host, { renderDiff }) {
     panel.replaceChildren(head, list);
   }
   return { update(next) { summary = next; draw(); }, close() { open = false; draw(); }, isOpen: () => open };
+}
+
+/** A viewport control only: never changes whether new messages automatically follow. */
+export function mountScrollToBottom(conversation) {
+  const document=conversation.ownerDocument,window=document.defaultView;
+  const parent=conversation.parentElement;
+  const hadAnchor=parent.classList.contains('scroll-button-host');parent.classList.add('scroll-button-host');
+  const button=el(document,'button','scroll-to-bottom');button.type='button';button.hidden=true;
+  button.setAttribute('aria-label','回到底部');button.title='回到底部';button.append(icon(document,'down',{size:17}));
+  parent.append(button);
+  let frame=null;
+  function update(){
+    frame=null;
+    const visible=conversation.getClientRects().length>0;
+    const gap=conversation.scrollHeight-conversation.scrollTop-conversation.clientHeight;
+    button.hidden=!visible||gap<=160;
+    if(button.hidden)return;
+    const viewport=conversation.getBoundingClientRect(),container=parent.getBoundingClientRect();
+    button.style.left=(viewport.right-container.left-button.offsetWidth/2-12)+'px';
+    button.style.bottom=Math.max(12,container.bottom-viewport.bottom+12)+'px';
+  }
+  function schedule(){if(frame===null)frame=window.requestAnimationFrame(update);}
+  button.addEventListener('click',()=>{
+    const preference=document.documentElement.dataset.reducedMotion;
+    const reduced=preference==='true'||preference!=='false'&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    conversation.scrollTo({top:conversation.scrollHeight,behavior:reduced?'auto':'smooth'});
+    conversation.focus({preventScroll:true});
+  });
+  conversation.addEventListener('scroll',schedule,{passive:true});window.addEventListener('resize',schedule);
+  const resize=new window.ResizeObserver(schedule);resize.observe(conversation);
+  const mutation=new window.MutationObserver(schedule);
+  mutation.observe(conversation,{childList:true,subtree:true,characterData:true});
+  mutation.observe(parent,{attributes:true,attributeFilter:['class','hidden']});
+  schedule();
+  return {update:schedule,button,destroy(){
+    if(frame!==null)window.cancelAnimationFrame(frame);
+    conversation.removeEventListener('scroll',schedule);window.removeEventListener('resize',schedule);
+    resize.disconnect();mutation.disconnect();button.remove();if(!hadAnchor)parent.classList.remove('scroll-button-host');
+  }};
 }

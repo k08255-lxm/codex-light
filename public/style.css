@@ -137,6 +137,8 @@ h1,h2,h3 { text-wrap: balance; } p { text-wrap: pretty; }
 .sidebar { width: var(--sidebar-width); flex: none; display: flex; flex-direction: column; min-height: 0; background: var(--sidebar); border-right: 1px solid var(--border); overflow: hidden; }
 .sidebar-overlay { display: none; }
 .app.sidebar-collapsed .sidebar { display: none; }
+.sidebar.route-hidden { display: none !important; }
+#rail-sidebar[hidden] { display: none; }
 .side-pane { display: flex; flex-direction: column; gap: 2px; height: 100%; min-height: 0; padding: 10px 8px 8px; }
 .side-head { display: flex; align-items: center; gap: 4px; min-height: 34px; padding: 0 2px 6px 8px; }
 .side-title { flex: 1; min-width: 0; font-size: .875rem; font-weight: 600; letter-spacing: .01em; }
@@ -165,6 +167,7 @@ h1,h2,h3 { text-wrap: balance; } p { text-wrap: pretty; }
 .settings-nav { flex: 1; min-height: 0; overflow: auto; scrollbar-width: thin; }
 .settings-nav-item { display: flex; align-items: center; gap: 10px; width: 100%; height: var(--sidebar-row-height); padding: 0 9px; border-radius: var(--radius-row); font-size: .875rem; color: var(--secondary); text-align: left; transition: none; }
 .settings-nav-item.active { background: var(--selected); color: var(--text); }
+#settings-nav .settings-nav-item, #chat-sidebar .new-chat { justify-content: flex-start; text-align: left; }
 .settings-nav-item .ui-icon { width: 16px; height: 16px; color: var(--tertiary); }
 
 /* ---------- Stage ---------- */

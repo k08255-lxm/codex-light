@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import {scanLocalCodexUsage as scan,LOCAL_SCAN_LIMITS} from '../src/local-usage-scan.mjs';
 const fixture=JSON.stringify({type:'session_meta',payload:{id:'11111111-1111-4111-8111-111111111111',source:'cli'}})+'\n'+JSON.stringify({type:'event_msg',payload:{type:'token_count',info:{total_token_usage:{total_tokens:3,input_tokens:3,output_tokens:0}}}})+'\n'+JSON.stringify({type:'response_item',payload:{text:'PRIVATE MESSAGE NEVER RETURNED'}});
 async function temp(t){const p=await fs.mkdtemp(path.join(os.tmpdir(),'codex-synthetic-scan-'));t.after(()=>fs.rm(p,{recursive:true,force:true}));return p;}
@@ -18,11 +19,17 @@ test('symlink root/files/directories refused, including external targets',async 
  const r=await scan(root);assert.equal(r.filesRead,0);assert.equal(r.diagnosticCounts['symlink-refused'],2);assert.equal(r.partial,true);
  const q=await scan(path.join(root,'external'));assert.equal(q.diagnosticCounts['symlink-root-refused'],1);
 });
-test('compressed logs, oversized files and depth have explicit partial diagnostics',async t=>{
+test('invalid compressed logs, oversized files and depth have explicit partial diagnostics',async t=>{
  const root=await temp(t);await fs.writeFile(path.join(root,'log.jsonl.zst'),'not-decompressed');
  const handle=await fs.open(path.join(root,'huge.jsonl'),'w');await handle.truncate(LOCAL_SCAN_LIMITS.fileBytes+1);await handle.close();
  let folder=root;for(let i=0;i<9;i++){folder=path.join(folder,'d');await fs.mkdir(folder);}await fs.writeFile(path.join(folder,'deep.jsonl'),fixture);
- const r=await scan(root);assert.equal(r.filesRead,0);for(const code of ['compressed-format-unsupported','file-size-limit','depth-limit'])assert.equal(r.diagnosticCounts[code],1);
+ const r=await scan(root);assert.equal(r.filesRead,0);for(const code of [typeof zlib.zstdDecompress==='function'?'decompression-failed':'compression-runtime-unsupported','file-size-limit','depth-limit'])assert.equal(r.diagnosticCounts[code],1);
+});
+
+test('gzip and supported zstd logs import the same usage without exposing message text',async t=>{
+ const root=await temp(t);await fs.writeFile(path.join(root,'one.jsonl.gz'),zlib.gzipSync(fixture));
+ if(typeof zlib.zstdCompressSync==='function')await fs.writeFile(path.join(root,'two.jsonl.zst'),zlib.zstdCompressSync(fixture));
+ const r=await scan(root);assert.equal(r.filesRead,typeof zlib.zstdCompressSync==='function'?2:1);assert.ok(r.sessions.every(row=>row.snapshot.totalTokens===3));assert.ok(!JSON.stringify(r).includes('PRIVATE MESSAGE'));
 });
 test('file count hard cap and total bytes hard cap with sparse synthetic files',async t=>{
  const root=await temp(t);for(let i=0;i<1001;i++)await fs.writeFile(path.join(root,`${i}.jsonl`),'');

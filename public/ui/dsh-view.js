@@ -3,7 +3,7 @@
 // call returning is never shown as task completion.
 import { boundedText } from '../store.js';
 import { dshConnectionSummary, dshStatusLabel, dshRuntimeStatusLabel, dshEventsSnapshot, dshStatusSnapshot } from '../dsh.js';
-import { icon } from '../icons.js';
+import { createAgentInspector } from './agent-inspector.js';
 
 /**
  * @param {object} deps
@@ -57,7 +57,7 @@ export function createDshView({ document, state, $, dshLive, dshTasks, api, rpc,
     dshLive.setContext({
       threadId: state.thread?.id || null,
       connected: state.connected,
-      visible: dshPanelVisible(),
+      visible: document.visibilityState !== 'hidden' && !$('chat-page').classList.contains('hidden'),
       serverInstance: state.serverInstance,
     });
     if (dshPanelVisible()) renderDshLiveMeta();
@@ -90,14 +90,14 @@ export function createDshView({ document, state, $, dshLive, dshTasks, api, rpc,
     const stateLabel = !snapshot.context.threadId ? '等待对话'
       : !snapshot.context.connected ? '自动刷新暂停：未连接'
         : !snapshot.context.visible ? '自动刷新暂停：不可见'
-          : snapshot.list.loading ? '正在刷新当前目录…'
-            : snapshot.list.nextRetryAt ? '自动刷新退避中'
-              : '当前目录 · 每 5 秒自动刷新';
+          : snapshot.list.loading ? '正在刷新…'
+            : snapshot.list.nextRetryAt ? '等待重试'
+              : '当前对话 · 自动刷新';
     $('dsh-live-state').textContent = stateLabel;
     $('dsh-live-state').classList.toggle('paused', !snapshot.actionable || !!snapshot.list.nextRetryAt);
     const parts = [];
     if (!snapshot.context.threadId) {
-      parts.push('请先打开一个已有对话，或开始一个新对话并发送消息；不会自动创建对话，也不会查询其他目录。');
+      parts.push('打开对话后查看子代理');
     } else {
       parts.push(`最后检查：${snapshot.list.checkedAt ? formatDshTime(snapshot.list.checkedAt) : '尚未检查'}`);
       if (snapshot.list.cwd) parts.push(`目录：${boundedText(snapshot.list.cwd, 4000)}`);
@@ -110,121 +110,18 @@ export function createDshView({ document, state, $, dshLive, dshTasks, api, rpc,
     $('dsh-live-meta').textContent = parts.join(' · ');
     const warnings = [];
     if (hasDshOmission(snapshot.list.omitted)) warnings.push('列表提示可能有遗漏：' + boundedText(snapshot.list.omitted, 500));
-    if (snapshot.list.error) warnings.push('自动列表读取失败：' + snapshot.list.error + '。保留上次结果并标记为可能过时；不会改查其他目录。');
+    if (snapshot.list.error) warnings.push(/thread not found/i.test(snapshot.list.error) ? '子代理暂时无法刷新：当前后端未载入对应会话。' : '子代理刷新失败：' + boundedText(snapshot.list.error, 220));
     const warning = warnings.join('\n');
     $('dsh-live-warning').textContent = warning;
+    $('dsh-live-warning').title = snapshot.list.error || warning;
     $('dsh-live-warning').classList.toggle('hidden', !warning);
     $('dsh-live-refresh').disabled = !snapshot.actionable;
-    $('dsh-live-refresh').title = snapshot.actionable ? '立即重试当前目录列表；不会创建或停止任务' : snapshot.pauseReason || '自动刷新已暂停';
+    $('dsh-live-refresh').title = snapshot.actionable ? '刷新子代理' : snapshot.pauseReason || '自动刷新已暂停';
   }
-  function rememberDshDetails(details, key) {
-    details.open = state.dshOpenDetails.has(key);
-    details.addEventListener('toggle', () => {
-      if (details.open) state.dshOpenDetails.add(key); else state.dshOpenDetails.delete(key);
-    });
-    return details;
-  }
-  function renderDshLiveEvents(task, live) {
-    const section = el('section', 'dsh-live-progress');
-    const head = el('div', 'dsh-live-progress-head');
-    head.append(el('strong', '', '实时进展'));
-    const liveState = !live ? '未选择' : live.event_loading ? '读取中…' : live.syncing_history ? '同步历史中' : live.events_stopped ? '轮询已停止' : '每 3 秒读取事件';
-    head.append(el('span', 'dsh-live-progress-state', liveState));
-    section.append(head);
-    section.append(el('p', 'dsh-live-facts', [
-      `生命周期：${dshStatusLabel({ ...task, status: live?.status || task.status })}`,
-      `最新活动：${boundedText(live?.progress || live?.last_event || task.progress || task.last_event || '未提供', 4000)}`,
-      `更新时间：${formatDshTime(live?.updated_at || task.updated_at)}`,
-      `事件检查：${live?.event_checked_at ? formatDshTime(live.event_checked_at) : '尚未读取'}`,
-    ].join('\n')));
-    if (!live) {
-      section.append(el('p', 'muted', '选择此 agent 后才会读取该 agent 的事件。'));
-      return section;
-    }
-    if (live.syncing_history) section.append(el('p', 'dsh-live-note', '历史尚未追完：本轮最多读取 3 页，稍后从当前游标继续同步。'));
-    if (live.has_more && !live.event_loading) section.append(el('p', 'dsh-live-note', '还有更多事件待读取；不会跳到其他 agent，也不会丢失当前游标。'));
-    if (live.events_stopped) section.append(el('p', 'dsh-live-note', '任务已结束且事件已追到当前末尾，事件轮询已停止；列表仍会检查 followup 并以 running 恢复读取。'));
-    if (live.event_error) section.append(el('p', 'dsh-error', `事件读取错误：${live.event_error}${live.event_stale ? '。旧事件可能过时。' : ''}`));
-    if (live.status_error) section.append(el('p', 'dsh-error', `状态读取错误：${live.status_error}${live.status_stale ? '。显示状态可能过时。' : ''}`));
-    if (live.final_cleared_at && ['starting','running','interrupting'].includes(String(live.status || '').toLowerCase())) section.append(el('p', 'dsh-live-note', `检测到重新运行；旧最终展示已清除，历史事件保留并继续从原游标读取。`));
-    section.append(el('p', 'dsh-live-note', '以下仅为 DSH 实际返回事件（最多保留 100 条）。仅显示已公开的进展，不把事件类型当成任务完成。'));
-    const events = Array.isArray(live.events) ? live.events.slice(-100).reverse() : [];
-    if (!events.length) {
-      section.append(el('p', 'muted', live.events_stopped ? '事件已追到末尾；此任务没有可显示的事件。列表仍会检查 followup。' : '尚未读取到事件；会按游标继续等待。'));
-      return section;
-    }
-    section.append(el('h4', '', '事件记录（新→旧，最多 100 条）'));
-    const list = el('ol', 'dsh-live-events');
-    for (const event of events) {
-      const item = el('li', 'dsh-live-event');
-      const meta = el('div', 'dsh-live-event-meta');
-      meta.append(el('span', 'dsh-live-event-type', event.type || 'event'));
-      if (event.seq !== undefined && event.seq !== null && event.seq !== '') meta.append(el('span', '', `#${boundedText(event.seq, 80)}`));
-      if (event.event_id) meta.append(el('span', '', boundedText(event.event_id, 200)));
-      item.append(meta);
-      if (event.text) item.append(el('p', 'dsh-live-event-text', event.text));
-      if (event.summary && event.summary !== event.text) item.append(el('p', 'dsh-live-event-summary', event.summary));
-      list.append(item);
-    }
-    section.append(list);
-    return section;
-  }
-  function renderDshTasks() {
-    const snapshot = dshLive.snapshot(); renderDshLiveMeta(snapshot);
-    const previousScroll = $('dsh-tasks').scrollTop;
-    const focusedAction = document.activeElement?.closest?.('#dsh-tasks [data-dsh-action]')?.dataset.dshAction || null;
-    const frag = document.createDocumentFragment(); const tasks = dshTasks.values();
-    for (const task of tasks) {
-      const selected = !!task.agentId && task.agentId === snapshot.selectedAgentId;
-      // DSH task card: identity, last known DSH status, concise live progress, expandable details.
-      // The MCP call state is shown separately: a returned call is not a finished task.
-      const card = el('article', 'agent-card dsh-task' + (selected ? ' selected' : ''));
-      const statusText = dshStatusLabel(task); const raw = String(task.status || '').toLowerCase();
-      card.dataset.tone = /error|fail/.test(raw) ? 'fail' : /complete|done|finish|success/.test(raw) ? 'ok' : /cancel|stop|interrupt/.test(raw) ? 'stop' : /run|progress|start|pending|queue/.test(raw) ? 'run' : 'idle';
-      const head = el('header', 'agent-head'); const glyph = el('span', 'agent-glyph'); glyph.append(icon(document, 'branch', { size: 16 }));
-      const title = el('div', 'agent-title'); title.append(el('strong', '', task.name || task.agentId || '等待任务标识'), el('span', 'agent-id mono', task.agentId ? String(task.agentId).slice(0, 14) : '尚未返回 ID'));
-      const chip = el('span', 'agent-state', statusText); chip.dataset.tone = card.dataset.tone;
-      head.append(glyph, title, chip); card.append(head);
-      const facts = el('div', 'agent-facts');
-      const fact = (label, value) => { if (!value) return; const f = el('span', 'agent-fact'); f.append(el('span', '', label), el('b', '', value)); facts.append(f); };
-      fact('来源', 'DSH'); fact('MCP 调用', ({inProgress:'进行中',completed:'已返回',failed:'失败',snapshot:'自动快照'})[task.callState] || task.callState || '');
-      if (task.updated_at) fact('最近更新', formatDshTime(task.updated_at));
-      if (task.cwd) fact('目录', String(task.cwd).split(/[\\/]/).filter(Boolean).at(-1));
-      if (facts.children.length) card.append(facts);
-      const progress = task.progress || task.last_event || task.mcpProgress;
-      if (progress) card.append(el('p', 'agent-progress', String(progress).split(/\r?\n/).filter(Boolean).at(-1)?.slice(0, 400) || ''));
-      const more = (title, value, className = '') => { if (!value) return; const d = rememberDshDetails(el('details', 'agent-more'), `${title}:${task.key || task.agentId}`); d.append(el('summary', '', title), el('pre', className, value)); card.append(d); };
-      more('部分输出（非最终结果）', task.partial_text);
-      more('返回结果（历史记录，不代表当前完成）', task.answer);
-      if (task.eventSummary && !(selected && task.liveEvents?.length)) more('最近事件摘要', task.eventSummary);
-      more('结束原因', task.finish_reason); if (task.error) card.append(el('p', 'agent-progress dsh-error', 'DSH 任务错误：' + String(task.error).slice(0, 400))); more('MCP 调用错误（不等同任务状态）', task.callError, 'dsh-error');
-      if (task.agentId) {
-        const key = `${task.threadId}:${task.agentId}`; const actions = el('div', 'dsh-read-actions'); const pending = state.dshReads.get(key);
-        const liveButton = el('button', 'btn small'); liveButton.append(icon(document, 'branch', { size:15 }), document.createTextNode(selected ? '正在查看实时进展' : '查看实时进展'));
-        liveButton.disabled = !state.connected; liveButton.setAttribute('aria-pressed', String(selected)); liveButton.dataset.dshAction = `live:${task.agentId}`;
-        liveButton.title = '只读查看此 agent 的状态与事件；不创建、停止或重试任务';
-        liveButton.addEventListener('click', () => { dshLive.selectAgent(task.agentId); scheduleDshRender(); });
-        actions.append(liveButton);
-        const statusButton = el('button', 'btn small'); statusButton.append(icon(document, 'refresh', { size:15 }), document.createTextNode(pending === 'status' ? '读取中…' : '刷新任务状态'));
-        statusButton.disabled = !!pending || !state.connected; statusButton.title = '只读查询此任务状态，不创建任务，不请求模型生成'; statusButton.dataset.dshAction = `status:${task.agentId}`;
-        statusButton.addEventListener('click', () => readDshTask(task.agentId, 'status')); actions.append(statusButton);
-        card.append(actions);
-        const readError = state.dshReadErrors.get(key);
-        if (readError) { const p = el('p', 'agent-progress dsh-error', '读取错误：' + boundedText(readError, 400)); p.setAttribute('role', 'status'); card.append(p); }
-        if (selected) card.append(renderDshLiveEvents(task, snapshot.selected));
-      }
-      frag.append(card);
-    }
-    if (!tasks.length) {
-      if (!state.thread) frag.append(el('p', 'muted', '先打开一个已有对话，或开始一个新对话并发送消息。这里不会偷偷创建对话，也不会读取全局所有目录。'));
-      else if (snapshot.list.loading) frag.append(el('p', 'muted', '正在读取当前对话工作目录中的 DSH agent…'));
-      else if (snapshot.list.error) frag.append(el('p', 'muted', '无法读取当前目录的 DSH agent 列表；未改查其他目录。已加载的对话历史仍会显示在这里。'));
-      else frag.append(el('p', 'muted', '当前目录的自动列表中尚未发现 DSH agent；已加载的对话历史仍会显示在这里。'));
-    }
-    $('dsh-tasks').replaceChildren(frag);
-    $('dsh-tasks').scrollTop = previousScroll;
-    if (focusedAction) [...$('dsh-tasks').querySelectorAll('[data-dsh-action]')].find(button => button.dataset.dshAction === focusedAction)?.focus({ preventScroll: true });
-  }
+  const inspector=createAgentInspector({document,state,host:$('dsh-tasks'),dshTasks,dshLive,rpc,readDshTask,el});
+  $('dsh-live-refresh').addEventListener('click',()=>inspector.refresh());
+  function renderDshTasks(){renderDshLiveMeta();inspector.render();}
+  function openAgent(id,kind){return inspector.open(id,kind);}
   function ingestDshSnapshot(snapshot) {
     if (snapshot?.threadId !== state.thread?.id || !snapshot.agentId || !['dsh_status','dsh_result','dsh_events'].includes(snapshot.tool)) return false;
     let changed = false;
@@ -259,5 +156,5 @@ export function createDshView({ document, state, $, dshLive, dshTasks, api, rpc,
     finally { state.dshReads.delete(key); if (generation === state.openGeneration && readGeneration === state.dshReadGeneration) renderDshTasks(); }
   }
 
-  return { renderDshConnection, refreshDsh, syncDshLiveContext, scheduleDshRender, renderDshTasks, ingestDshSnapshot, readDshTask };
+  return { renderDshConnection, refreshDsh, syncDshLiveContext, scheduleDshRender, renderDshTasks, ingestDshSnapshot, readDshTask, openAgent };
 }

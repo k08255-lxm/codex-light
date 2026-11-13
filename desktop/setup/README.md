@@ -8,8 +8,8 @@ Run from the repository root on Windows with the .NET SDK and Python 3 installed
 
 ```powershell
 ./desktop/setup/build.ps1 -VerifyLayout
-# Default input: desktop/msi/out-release-0.3.0/CodexLight-0.3.0-x64.msi
-# Output: desktop/setup/out-release-0.3.0/CodexLight-Setup.exe
+# Default input: desktop/msi/out-release-0.4.0/CodexLight-0.4.0-x64.msi
+# Output: desktop/setup/out-release-0.4.0/CodexLight-Setup.exe
 ```
 
 Use `-MsiPath '<absolute-path-to-msi>' -Output '<output-directory>'` for explicit inputs. Rebuild the application, MSI and Setup together for each release version.

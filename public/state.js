@@ -1,6 +1,7 @@
 // Pure conversation state: turn/phase grouping, timing, per-turn file changes,
 // context snapshots, the per-thread follow-up queue and the slash catalog.
 // No DOM, no network. Every unknown value stays unknown instead of becoming 0.
+import {delegatedItemsForTurn,mergeDelegatedFileSummary} from './delegated-changes.js';
 
 const PROCESS_TYPES = new Set(['reasoning', 'commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'webSearch',
   'collabAgentToolCall', 'subAgentActivity', 'imageView', 'imageGeneration', 'plan', 'contextCompaction', 'hookPrompt',
@@ -105,7 +106,7 @@ function turnStatus(meta, items, activeTurnId, id) {
  * - Each user message starts a segment; later user messages in a running turn are steers.
  * - Answers (final/partial, or the last legacy message of a finished turn) stay outside the process list.
  */
-export function buildTurns(items, ledger, { activeTurnId = null, cwd = '' } = {}) {
+export function buildTurns(items, ledger, { activeTurnId = null, cwd = '', delegatedChanges = [] } = {}) {
   const order = []; const byId = new Map(); let current = null;
   for (const item of items) {
     let id = typeof item._turnId === 'string' && item._turnId ? item._turnId : null;
@@ -139,9 +140,10 @@ export function buildTurns(items, ledger, { activeTurnId = null, cwd = '' } = {}
     }
     const processCount = segments.reduce((sum, row) => sum + row.process.length, 0);
     return {
-      id: turn.id, local: turn.local, status, finished, meta, segments, processCount,
+      id: turn.id, local: turn.local, status, finished, meta, segments, processCount, items:turn.items,
       timing: turnTiming(meta, turn.items, { running: !finished }),
-      files: fileSummary(turn.items, meta?.diff, { cwd, running: !finished }),
+      delegatedChanges:delegatedChanges.filter(record=>record.turnId===turn.id),
+      files:mergeDelegatedFileSummary(fileSummary(turn.items,meta?.diff,{cwd,running:!finished}),fileSummary(delegatedItemsForTurn(delegatedChanges,turn.id,cwd),null,{cwd,running:!finished}),{cwd}),
       error: meta?.error || null,
     };
   });
@@ -304,9 +306,9 @@ export function contextView(snapshot) {
     return { known: false, label: '上下文未知', detail: snapshot?.used != null ? `最近一次请求 ${snapshot.used.toLocaleString('zh-CN')} tokens；模型未提供上下文窗口` : '本对话尚未收到上下文用量' };
   }
   const ratio = Math.min(1, snapshot.used / snapshot.window);
-  const left = Math.max(0, Math.round((1 - ratio) * 100));
-  return { known: true, percentLeft: left, ratio, label: `${left}%`,
-    detail: `上下文剩余约 ${left}% · 已用 ${snapshot.used.toLocaleString('zh-CN')} / ${snapshot.window.toLocaleString('zh-CN')} tokens` };
+  const used = Math.round(ratio * 100);
+  return { known: true, percentUsed: used, percentLeft: 100 - used, ratio, label: `${used}%`,
+    detail: `上下文已使用约 ${used}% · ${snapshot.used.toLocaleString('zh-CN')} / ${snapshot.window.toLocaleString('zh-CN')} tokens` };
 }
 
 // ---------- Running input ----------
@@ -332,7 +334,7 @@ export class FollowUpQueue {
     if (rows.length >= 20) throw new Error('每个对话最多排队 20 条消息。');
     const item = { id: `q${Date.now().toString(36)}${(++queueSequence).toString(36)}`, status: 'queued', error: '', text: text(entry.text),
       images: [...(entry.images || [])], files: [...(entry.files || [])], confirmedFileAttachmentIds: [...(entry.confirmedFileAttachmentIds || [])],
-      cwd: text(entry.cwd), model: text(entry.model), effort: entry.effort || null, createdAt: Date.now() };
+      cwd: text(entry.cwd), model: text(entry.model), effort: entry.effort || null, controls:entry.controls?structuredClone(entry.controls):null, createdAt: Date.now() };
     rows.push(item); this.threads.set(threadId, rows); return { ...item };
   }
   update(threadId, id, patch) {

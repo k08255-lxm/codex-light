@@ -15,6 +15,11 @@ test('model and rate-limit switches do not reset cumulative baseline',()=>{
  const result=run([meta(),context('first'),token(0),a,context('second'),b]);
  assert.deepEqual(result.increments.map(e=>[e.model,e.tokens.totalTokens]),[['first',10],['second',5]]);
 });
+
+test('unbound legacy context does not assign its model to a later turn without its own context',()=>{
+ const result=run([meta(),context('older'),token(0),{type:'event_msg',payload:{type:'task_started',turn_id:'new-turn'}},token(5)]);
+ assert.equal(result.increments[0].turnId,'new-turn');assert.equal(result.increments[0].model,null);
+});
 test('reset, historical replay, parent and continuation defer attribution',()=>{
  for(const records of [[meta(),token(5),token(9),token(5)],[meta(),token(5),token(9),token(2)],[meta({forked_from_id:id}),token(0),token(9)],[meta({history_mode:'paginated',history_base:{thread_id:id}}),token(0),token(9)]]){
  const r=run(records);assert.equal(r.attribution,'deferred');assert.deepEqual(r.increments,[]);

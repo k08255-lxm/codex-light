@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import {pathToFileURL} from 'node:url';
 import {ArtifactPreviewService,inspectArtifact,ARTIFACT_LIMITS} from '../src/artifacts.mjs';
 const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jF1sAAAAASUVORK5CYII=','base64');
 const svg=Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0H24V24H0Z"/></svg>');
@@ -19,10 +20,10 @@ test('registered project and native-bound thread preview the same Chinese/space 
  service.bindThread({id:'thread-a',cwd:root});const bound=await service.preview({threadId:'thread-a',path:path.join(root,'图标','测试 图.png')});assert.deepEqual(bound.bytes,png);
 });
 
-test('scope and lexical containment reject arbitrary cwd, URLs, cross-project and credential paths',async t=>{
+test('known scope allows external local images while rejecting arbitrary cwd, remote URLs and credential paths',async t=>{
  const {service,root,outside}=await fixture(t);await fs.writeFile(path.join(outside,'secret.png'),png);await fs.writeFile(path.join(root,'auth.json'),png);
- for(const input of [{cwd:root,path:'auth.json'},{projectId:'unknown',path:'x.png'},{projectId:'project-a',threadId:'x',path:'x.png'},{projectId:'project-a',path:'../other-project/secret.png'},{projectId:'project-a',path:path.join(outside,'secret.png')},{projectId:'project-a',path:'file:///tmp/a.png'},{projectId:'project-a',path:'https://example.invalid/a.png'},{projectId:'project-a',path:'a.png:secret'},{projectId:'project-a',path:'a\0.png'},{projectId:'project-a',path:'auth.json'}])await assert.rejects(service.preview(input),e=>[400,403,415].includes(e.status));
- const broad=new ArtifactPreviewService({projects:{list:async()=>({projects:[{id:'root',path:path.parse(root).root}]})}});await assert.rejects(broad.preview({projectId:'root',path:'x.png'}),e=>e.code==='ARTIFACT_ROOT_REFUSED');await broad.close();
+ for(const input of [{cwd:root,path:'auth.json'},{projectId:'unknown',path:'x.png'},{projectId:'project-a',threadId:'x',path:'x.png'},{projectId:'project-a',path:'https://example.invalid/a.png'},{projectId:'project-a',path:'a.png:secret'},{projectId:'project-a',path:'a\0.png'},{projectId:'project-a',path:'auth.json'}])await assert.rejects(service.preview(input),e=>[400,403,415].includes(e.status));
+ for(const file of ['../other-project/secret.png',path.join(outside,'secret.png'),pathToFileURL(path.join(outside,'secret.png')).href])assert.deepEqual((await service.preview({projectId:'project-a',path:file})).bytes,png);
 });
 
 test('byte MIME and dimension admission rejects renamed text, mismatches, oversized and malformed headers',async t=>{
@@ -91,5 +92,5 @@ test('ICO embedded PNG dimensions and APNG declared frame count cannot bypass pr
 test('a canonical root changed after component checks is rejected before opening image bytes',async t=>{
  const {service,root,outside}=await fixture(t);await fs.writeFile(path.join(root,'x.png'),png);await fs.writeFile(path.join(outside,'x.png'),png);
  const realpath=fs.realpath;let opened=0;t.mock.method(fs,'realpath',async name=>name===root?outside:name===path.join(root,'x.png')?path.join(outside,'x.png'):realpath(name));t.mock.method(fs,'open',async()=>{opened++;throw new Error('Must not open outside bytes');});
- await assert.rejects(service.preview({projectId:'project-a',path:'x.png'}),e=>e.code==='ARTIFACT_OUTSIDE_ROOT');assert.equal(opened,0);
+ await assert.rejects(service.preview({projectId:'project-a',path:'x.png'}),e=>e.code==='ARTIFACT_PATH_CHANGED');assert.equal(opened,0);
 });

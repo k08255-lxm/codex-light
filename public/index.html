@@ -7,8 +7,13 @@
 <title>Codex Light</title>
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/session-controls.css">
 <link rel="stylesheet" href="/activity-feed.css">
 <link rel="stylesheet" href="/ui/views.css">
+<link rel="stylesheet" href="/ui/account-view.css">
+<link rel="stylesheet" href="/ui/about-view.css">
+<link rel="stylesheet" href="/ui/panel-resize.css">
+<link rel="stylesheet" href="/project-navigation.css">
 <link rel="stylesheet" href="/vendor/xterm.css">
 </head>
 <body>
@@ -25,10 +30,11 @@
       <button id="rail-home" class="rail-btn active" data-route="chat" title="对话" aria-label="对话"><span data-icon="home"></span></button>
       <button id="rail-usage" class="rail-btn" data-route="usage" title="用量与性能" aria-label="用量与性能"><span data-icon="chart"></span></button>
       <button id="rail-terminal" class="rail-btn" data-route="terminal" title="终端与 Git" aria-label="终端与 Git"><span data-icon="terminal"></span></button>
-      <button id="rail-dsh" class="rail-btn" title="DSH 子代理" aria-label="DSH 子代理"><span data-icon="branch"></span></button>
+      <button id="rail-dsh" class="rail-btn" title="子代理" aria-label="子代理"><span data-icon="branch"></span></button>
       <button id="rail-plugins" class="rail-btn" data-route="settings" title="插件" aria-label="插件"><span data-icon="plug"></span></button>
     </div>
     <div class="rail-spacer"></div>
+    <div id="account-quota" hidden></div>
     <button id="rail-account" class="rail-btn" data-route="account" title="账户" aria-label="账户"><span data-icon="user"></span></button>
     <button id="rail-settings" class="rail-btn" data-route="settings" title="设置" aria-label="设置"><span data-icon="settings"></span></button>
   </nav>
@@ -64,6 +70,7 @@
         <button class="settings-nav-item" data-settings-section="plugins"><span data-icon="plug"></span><span>插件</span></button>
         <button class="settings-nav-item" data-settings-section="remote"><span data-icon="remote"></span><span>远程控制</span></button>
         <button class="settings-nav-item local-only" data-settings-section="lan"><span data-icon="globe"></span><span>局域网访问</span></button>
+        <button class="settings-nav-item local-only" data-settings-section="about"><span data-icon="info"></span><span>关于</span></button>
       </nav>
     </div>
   </aside>
@@ -73,7 +80,7 @@
     <header class="stage-bar">
       <div class="crumbs"><span id="project-name" class="crumb-project">工作区</span><span class="crumb-sep" aria-hidden="true">/</span><strong id="thread-title">新对话</strong></div>
       <div class="stage-actions">
-        <button id="open-dsh" class="btn ghost small" aria-pressed="false" title="DSH 子代理"><span data-icon="branch"></span><span class="label">DSH</span></button>
+        <button id="open-dsh" class="btn ghost small" aria-pressed="false" title="子代理"><span data-icon="branch"></span><span class="label">子代理</span></button>
         <button id="toggle-details" class="btn ghost small" aria-pressed="false" title="工具活动"><span data-icon="panel"></span><span class="label">活动</span></button>
         <button id="thread-menu-button" class="btn icon-only ghost" aria-label="对话操作" aria-haspopup="menu" aria-expanded="false" title="对话操作"><span data-icon="more"></span></button>
       </div>
@@ -106,6 +113,7 @@
           </div>
           <div class="selectors native-model-selectors"><label><span class="sr-only">模型</span><select id="model"><option value="">使用 Codex 默认模型</option></select></label><label><span class="sr-only">思考强度</span><select id="effort"><option value="">默认思考强度</option></select></label></div>
           <button id="context-meter" type="button" class="context-meter hidden" data-known="false" aria-label="上下文未知"><span class="context-ring" aria-hidden="true"></span><span id="context-label">—</span></button>
+          <button id="fast-toggle" type="button" class="tool fast-toggle" aria-label="Fast 模式" aria-pressed="false" title="Fast · 继承配置"><span data-icon="bolt"></span></button>
           <div class="model-control"><button type="button" id="model-trigger" aria-haspopup="dialog" aria-expanded="false" aria-controls="reasoning-popover">默认模型<span data-icon="down"></span></button><section id="reasoning-popover" class="reasoning-popover hidden" role="dialog" aria-label="模型与思考强度"><div id="reasoning-controls"><div class="reasoning-heading"><span aria-hidden="true"><span data-icon="bolt"></span></span><output id="reasoning-label" for="reasoning-range">默认</output><button type="button" id="reasoning-reset" aria-label="恢复模型默认思考强度" title="恢复模型默认思考强度"><span data-icon="reset"></span></button></div><button type="button" id="model-list-open" aria-label="选择模型"><span id="reasoning-model-name">默认模型</span><span><span data-icon="right"></span></span></button><div id="reasoning-track" class="reasoning-track"><div id="reasoning-ticks" aria-hidden="true"></div><input id="reasoning-range" type="range" min="0" max="0" step="1" value="0" aria-label="思考强度"></div></div><div id="reasoning-model-list" class="reasoning-model-list hidden" role="group" aria-label="可用模型"><div class="model-list-head"><button type="button" id="model-list-back" aria-label="返回思考强度"><span data-icon="left"></span></button><strong>选择模型</strong></div><div id="model-options"></div></div></section></div>
           <button id="queue-send" type="button" class="queue-send hidden" title="排队到当前任务完成后发送 (Tab)"><span data-icon="queue"></span><span>排队</span></button>
           <button id="stop" type="button" class="stop hidden" title="停止当前任务" aria-label="停止当前任务"><span data-icon="stop"></span></button>
@@ -222,16 +230,17 @@
       </section>
       <section id="settings-plugins" class="settings-section hidden"></section>
       <section id="settings-lan" class="settings-section hidden"><h1>局域网访问</h1><div id="lan-root"></div></section>
+      <section id="settings-about" class="settings-section hidden"><div id="about-root"></div></section>
     </div>
   </main>
 
   <!-- ===== Inspector: tool activity and DSH ===== -->
   <aside id="details" class="inspector hidden" aria-label="活动">
-    <div class="inspector-head"><div class="segmented" role="tablist"><button id="tab-tools" class="active" aria-pressed="true">工具活动</button><button id="tab-dsh" aria-pressed="false">DSH</button></div><strong id="details-title" class="sr-only">工具活动</strong><button id="close-details" class="btn icon-only ghost" aria-label="关闭"><span data-icon="close"></span></button></div>
+    <div class="inspector-head"><div class="segmented" role="tablist"><button id="tab-tools" class="active" aria-pressed="true">工具活动</button><button id="tab-dsh" aria-pressed="false">子代理</button></div><strong id="details-title" class="sr-only">工具活动</strong><button id="close-details" class="btn icon-only ghost" aria-label="关闭"><span data-icon="close"></span></button></div>
     <div id="tools-panel" class="inspector-body"><div id="tool-list"><p class="muted">暂无工具活动</p></div></div>
     <div id="dsh-panel" class="inspector-body hidden">
-      <section class="dsh-connection"><div class="dsh-connection-head"><strong id="dsh-status-label">尚未检查 DSH 连接</strong><button id="refresh-dsh" class="btn small"><span data-icon="refresh"></span>检查</button></div><p id="dsh-status-details" class="fine">只读取 MCP 连接状态。</p></section>
-      <section class="dsh-live" aria-labelledby="dsh-live-heading"><div class="dsh-live-head"><div class="dsh-live-title"><strong id="dsh-live-heading">当前目录 Agent</strong><span id="dsh-live-state" class="dsh-live-state">等待对话</span></div><button id="dsh-live-refresh" class="btn small" type="button"><span data-icon="refresh"></span>刷新</button></div><p id="dsh-live-meta" class="dsh-live-meta">请先打开或开始一个对话。</p><p id="dsh-live-warning" class="dsh-live-warning dsh-error hidden" role="status"></p><div id="dsh-tasks" class="dsh-task-list"><p class="muted">当前对话尚未观察到 DSH 任务。</p></div><p class="dsh-live-footnote fine">只读，不创建、继续或停止 agent。</p></section>
+      <div hidden><strong id="dsh-status-label"></strong><button id="refresh-dsh" type="button">检查连接</button><p id="dsh-status-details"></p><span id="dsh-live-state"></span><p id="dsh-live-meta"></p></div>
+      <section class="agent-inspector" aria-label="当前对话的子代理"><div class="agent-list-toolbar"><strong>当前对话</strong><button id="dsh-live-refresh" class="btn icon-only ghost" type="button" title="刷新子代理列表" aria-label="刷新子代理列表"><span data-icon="refresh"></span></button></div><p id="dsh-live-warning" class="dsh-live-warning dsh-error hidden" role="status"></p><div id="dsh-tasks" class="agent-inspector-content"><p class="muted">当前对话暂无子代理</p></div></section>
     </div>
   </aside>
 </div>

@@ -19,7 +19,10 @@ function harness({ tasks = [], snapshot = liveSnapshot(), state: extra = {}, api
   const $ = id => { if (!nodes.has(id)) { const node = document.createElement('div'); node.id = id; nodes.set(id, node); } return nodes.get(id); };
   const el = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; };
   const calls = { api: [], contexts: [], selected: [], ingested: [] };
-  const state = { thread: { id: 't' }, connected: true, serverInstance: 'i', openGeneration: 1, dshReadGeneration: 1, dshReads: new Map(), dshReadErrors: new Map(), dshOpenDetails: new Set(), dshReadSequence: 0, ...extra };
+  const details=$('details');details.className='inspector';
+  const head=el('div','inspector-head');const panel=$('dsh-panel');panel.className='inspector-body';
+  const section=el('section','agent-inspector');section.append(el('div','agent-list-toolbar'),$('dsh-live-warning'),$('dsh-tasks'));panel.append(section);details.append(head,panel);document.body.append(details);
+  const state = { thread: { id: 't' },store:{values:()=>[]}, connected: true, serverInstance: 'i', openGeneration: 1, dshReadGeneration: 1, dshReads: new Map(), dshReadErrors: new Map(), dshOpenDetails: new Set(), dshReadSequence: 0, ...extra };
   const dshLive = { snapshot: () => snapshot, setContext: context => calls.contexts.push(context), selectAgent: id => calls.selected.push(id) };
   const record = kind => (threadId, ...rest) => { calls.ingested.push([kind, threadId]); return false; };
   const dshTasks = { values: () => tasks, ingest: record('ingest'), ingestLiveEvents: record('events'), ingestLiveStatus: record('status') };
@@ -31,23 +34,26 @@ function harness({ tasks = [], snapshot = liveSnapshot(), state: extra = {}, api
 const task = (overrides = {}) => ({ threadId: 't', agentId: 'agent-1', name: 'Worker', status: 'running', ...overrides });
 const buttons = h => h.$('dsh-tasks').querySelectorAll('button');
 
-test('task cards offer only read-only live and status actions; status reads use the fixed status kind', async () => {
+test('overview hydrates read-only status automatically and opens one detail surface', async () => {
   const h = harness({ tasks: [task()] });
   h.view.renderDshTasks();
-  const labels = buttons(h).map(button => button.textContent);
-  assert.deepEqual(labels, ['查看实时进展', '刷新任务状态']);
+  assert.equal(buttons(h).length,1,'one compact row, not a card with duplicate actions');
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(h.calls.api, [['/api/dsh/read', { threadId: 't', agentId: 'agent-1', kind: 'status' }]]);
   buttons(h)[0].click();
   assert.deepEqual(h.calls.selected, ['agent-1'], 'live selection goes to the monitor, not a new request');
-  buttons(h)[1].click(); await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(h.calls.api, [['/api/dsh/read', { threadId: 't', agentId: 'agent-1', kind: 'status' }]]);
+  assert.equal(h.$('details').classList.contains('agent-detail-mode'),true);
+  assert.equal(h.$('dsh-tasks').querySelectorAll('.agent-detail-toolbar').length,1);
   assert.equal(h.calls.ingested.length > 0, true, 'a current read is ingested');
   await h.view.readDshTask('agent-1', 'result');
   assert.equal(h.calls.api.length, 1, 'result reads are never issued');
+  buttons(h)[0].click();assert.equal(h.$('details').classList.contains('agent-detail-mode'),false,'return restores list chrome');
 });
 
 test('a failed status read is shown as a read error without creating tasks or using a model', async () => {
   const h = harness({ tasks: [task()], api: async () => { throw new Error('offline'); } });
   await h.view.readDshTask('agent-1', 'status');
+  h.view.openAgent('agent-1','dsh');
   assert.match(visibleText(h.$('dsh-tasks')), /offline/);
   assert.equal(h.state.dshReads.size, 0, 'the in-flight marker is released');
 });
@@ -66,17 +72,17 @@ test('a late status read for a previous thread or generation is ignored', async 
 test('empty states never imply that a conversation will be created', () => {
   const noThread = harness({ state: { thread: null }, snapshot: liveSnapshot({ context: { threadId: null, connected: true, visible: true } }) });
   noThread.view.renderDshTasks();
-  assert.match(visibleText(noThread.$('dsh-tasks')), /不会偷偷创建对话/);
+  assert.equal(visibleText(noThread.$('dsh-tasks')), '当前对话暂无子代理');assert.equal(noThread.calls.api.length,0);
   assert.equal(noThread.$('dsh-live-state').textContent, '等待对话');
   const empty = harness();
   empty.view.renderDshTasks();
-  assert.match(visibleText(empty.$('dsh-tasks')), /尚未发现 DSH agent/);
+  assert.equal(visibleText(empty.$('dsh-tasks')), '当前对话暂无子代理');
 });
 
 test('list errors keep the old list, surface a warning and disable refresh when not actionable', () => {
   const h = harness({ snapshot: liveSnapshot({ list: { matched: 0, count: 0, total: 0, error: 'timeout', nextRetryAt: null }, actionable: false, pauseReason: '未连接' }) });
   h.view.renderDshTasks();
-  assert.match(h.$('dsh-live-warning').textContent, /自动列表读取失败：timeout/);
+  assert.match(h.$('dsh-live-warning').textContent, /子代理刷新失败：timeout/);
   assert.equal(h.$('dsh-live-warning').classList.contains('hidden'), false);
   assert.equal(h.$('dsh-live-refresh').disabled, true);
 });
@@ -85,22 +91,23 @@ test('context sync forwards thread, connection, visibility and instance to the m
   const h = harness();
   h.view.syncDshLiveContext();
   h.$('details').classList.add('hidden');
+  h.view.syncDshLiveContext();
+  h.$('chat-page').classList.add('hidden');
   h.state.connected = false;
   h.view.syncDshLiveContext();
   assert.deepEqual(h.calls.contexts, [
+    { threadId: 't', connected: true, visible: true, serverInstance: 'i' },
     { threadId: 't', connected: true, visible: true, serverInstance: 'i' },
     { threadId: 't', connected: false, visible: false, serverInstance: 'i' },
   ]);
 });
 
-test('static shell mounts each DSH live element once; list and event areas scroll in place', () => {
+test('static shell mounts one inspector scroll surface rather than nested event scrollers', () => {
   for (const id of ['open-dsh', 'rail-dsh', 'dsh-panel', 'dsh-live-state', 'dsh-live-meta', 'dsh-live-warning', 'dsh-live-refresh', 'dsh-tasks']) {
     assert.equal((html.match(new RegExp(`id="${id}"`, 'g')) || []).length, 1, `${id} mounted once`);
   }
-  for (const selector of ['.dsh-task-list', '.dsh-live-events']) {
-    const rule = css.match(new RegExp(`\\${selector}\\s*\\{([^}]+)\\}`))?.[1] || '';
-    assert.match(rule, /max-height:/, selector);
-    assert.match(rule, /overflow-y:\s*auto/, selector);
-    assert.match(rule, /overscroll-behavior:\s*contain/, selector);
-  }
+  assert.match(html,/id="dsh-panel" class="inspector-body hidden"/);
+  assert.match(html,/id="dsh-tasks" class="agent-inspector-content"/);
+  const rule=css.match(/\.inspector-body\s*\{([^}]+)\}/)?.[1]||'';
+  assert.match(rule,/overflow:\s*auto/);
 });

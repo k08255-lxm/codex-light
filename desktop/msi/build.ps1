@@ -1,7 +1,7 @@
 param(
-    [string]$Payload = (Join-Path $PSScriptRoot '../dist/CodexLight-win-x64-0.3.0'),
-    [string]$Version = '0.3.0',
-    [string]$Output = (Join-Path $PSScriptRoot 'out-release-0.3.0')
+    [string]$Payload = (Join-Path $PSScriptRoot '../dist/CodexLight-win-x64-0.4.0'),
+    [string]$Version = '0.4.0',
+    [string]$Output = (Join-Path $PSScriptRoot 'out-release-0.4.0')
 )
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path

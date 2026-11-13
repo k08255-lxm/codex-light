@@ -42,7 +42,8 @@ export class ProjectStore {
     if (!keysAre(value, 'projects,selectedId,version') || value.version !== 1 || !Array.isArray(value.projects) || value.projects.length > MAX_PROJECTS) throw stateError();
     const ids = new Set(), paths = new Set();
     for (const project of value.projects) {
-      if (!keysAre(project, 'id,name,path') || typeof project.id !== 'string' || !/^[a-f0-9]{32}$/.test(project.id) || !this.validPath(project.path) || typeof project.name !== 'string' || project.name !== projectName(project.path) || ids.has(project.id) || paths.has(this.key(project.path))) throw stateError();
+      const validName = typeof project.name === 'string' && (project.name === projectName(project.path) || (project.name.trim().length > 0 && project.name.length <= 120 && !/[\u0000-\u001f\u007f]/.test(project.name)));
+      if ((!keysAre(project, 'id,name,path') && !keysAre(project, 'id,name,path,pinned')) || (project.pinned !== undefined && typeof project.pinned !== 'boolean') || typeof project.id !== 'string' || !/^[a-f0-9]{32}$/.test(project.id) || !this.validPath(project.path) || !validName || ids.has(project.id) || paths.has(this.key(project.path))) throw stateError();
       ids.add(project.id);
       paths.add(this.key(project.path));
     }
@@ -140,6 +141,18 @@ export class ProjectStore {
       if (!snapshot.projects.some(item => item.id === id)) throw new Error('找不到该项目，请刷新项目列表。');
       snapshot.projects = snapshot.projects.filter(item => item.id !== id);
       if (snapshot.selectedId === id) snapshot.selectedId = null;
+    });
+  }
+
+  updateMetadata(id, changes) {
+    if (!changes || typeof changes !== 'object' || Array.isArray(changes) || !Object.keys(changes).length || Object.keys(changes).some(key => !['name', 'pinned'].includes(key))) throw new Error('项目参数无效');
+    if (Object.hasOwn(changes, 'name') && (typeof changes.name !== 'string' || !changes.name.trim() || changes.name.trim().length > 120 || /[\u0000-\u001f\u007f]/.test(changes.name))) throw new Error('项目名称需要 1–120 个字符，不能包含控制字符。');
+    if (Object.hasOwn(changes, 'pinned') && typeof changes.pinned !== 'boolean') throw new Error('置顶状态无效');
+    return this.update(snapshot => {
+      const project = snapshot.projects.find(item => item.id === id);
+      if (!project) throw new Error('找不到该项目，请刷新项目列表。');
+      if (Object.hasOwn(changes, 'name')) project.name = changes.name.trim();
+      if (Object.hasOwn(changes, 'pinned')) project.pinned = changes.pinned;
     });
   }
 }

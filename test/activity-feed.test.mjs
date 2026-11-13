@@ -16,30 +16,54 @@ function mount() {
 }
 const q = (host, selector) => host.querySelectorAll(selector);
 
-test('completed turn collapses commentary/reasoning/tools behind exact duration; final answer stays outside', () => {
+test('each visible model utterance closes the preceding operation group and keyed open choice survives streaming',()=>{
+  const ledger=new TurnLedger();ledger.merge({id:'t',status:'inProgress'});
+  const items=[user('u','t','任务'),agent('a','t','先检查。','commentary'),cmd('c1','t'),agent('b','t','继续修改。','commentary'),cmd('c2','t',{status:'inProgress',_complete:false})];
+  const {host,view}=mount();view.render(buildTurns(items,ledger,{activeTurnId:'t'}));
+  const groups=q(host,'.turn-process');assert.equal(groups.length,2);assert.ok(groups.every(group=>!group.open));
+  assert.equal(groups[0].dataset.running,'false');assert.equal(groups[1].dataset.running,'true');
+  assert.deepEqual(q(host,'.agentMessage').map(node=>node.dataset.itemId),['a','b']);
+  groups[0].open=true;
+  view.render(buildTurns([...items.slice(0,-1),{...items.at(-1),aggregatedOutput:'new output'}],ledger,{activeTurnId:'t'}));
+  assert.equal(q(host,'.turn-process')[0],groups[0]);assert.equal(groups[0].open,true);
+});
+
+test('reasoning durations use a real start and tick text without opening its operation group',()=>{
+  const ledger=new TurnLedger();ledger.merge({id:'t',status:'inProgress'});
+  const reasoning={id:'r',type:'reasoning',_turnId:'t',_complete:false};
+  const {host,view}=mount();view.render(buildTurns([user('u','t','x'),reasoning],ledger,{activeTurnId:'t'}));
+  assert.equal(q(host,'.step-target')[0].textContent,'');
+  view.render(buildTurns([user('u','t','x'),{...reasoning,_startedAtMs:1000}],ledger,{activeTurnId:'t'}));
+  const group=q(host,'.turn-process')[0];view.tick(4000);
+  assert.equal(q(host,'.step-verb')[0].textContent,'思考中');assert.equal(q(host,'.step-target')[0].textContent,'3 秒');
+  assert.equal(group.open,false);assert.match(group.querySelector('.turn-process-latest').textContent,/3 秒/);
+});
+
+test('completed turn keeps commentary visible and collapses operations, with exact duration in footer', () => {
   const ledger = new TurnLedger(); ledger.merge({ id: 't1', status: 'completed', durationMs: 18000 });
   const items = [user('u1', 't1', '整理文档'), agent('c1', 't1', '我先看一下文件。', 'commentary'), { id: 'r1', type: 'reasoning', summary: ['检查结构'], _turnId: 't1', _complete: true }, cmd('x1', 't1'), agent('f1', 't1', '已完成 **整理**。', 'final_answer')];
   const { host, view } = mount(); view.render(buildTurns(items, ledger));
   const process = q(host, '.turn-process')[0];
   assert.equal(process.open, false, 'finished process collapses by default');
-  assert.equal(process.querySelector('.turn-process-label').textContent, '用时 18s');
+  assert.equal(process.querySelector('.turn-process-label').textContent, '2 项操作');
+  assert.equal(q(host,'.turn-footer')[0].textContent,'用时 18s');
   const answers = q(host, '.agentMessage').filter(node => !node.classList.contains('process-note'));
-  assert.equal(answers.length, 1); assert.equal(answers[0].dataset.itemId, 'f1');
+  assert.equal(answers.length, 2); assert.equal(answers[1].dataset.itemId, 'f1');
   assert.ok(!process.contains(answers[0]), 'final answer is outside the collapsed process');
-  assert.ok(process.contains(q(host, '.process-note')[0]), 'commentary lives inside process');
+  assert.ok(!process.contains(answers[0]), 'commentary remains visible outside operation group');
   assert.equal(q(host, '.step').length, 2, 'reasoning + command are steps');
-  assert.equal(answers[0].querySelector('strong').textContent, '整理');
+  assert.equal(answers[1].querySelector('strong').textContent, '整理');
 });
 
-test('running turn shows live elapsed time, keeps steps open and does not treat partial commentary as final', () => {
+test('running operations stay collapsed while commentary remains visible', () => {
   const ledger = new TurnLedger(); ledger.merge({ id: 't2', status: 'inProgress', startedAt: 1000 });
   const items = [user('u', 't2', '跑测试'), agent('c', 't2', '先运行', 'commentary'), cmd('x', 't2', { status: 'inProgress', exitCode: null, _complete: false })];
   const { host, view } = mount(); view.render(buildTurns(items, ledger, { activeTurnId: 't2' }), { now: 1000 * 1000 + 65000 });
   const process = q(host, '.turn-process')[0];
-  assert.equal(process.open, true); assert.equal(process.dataset.running, 'true');
-  assert.equal(process.querySelector('.turn-process-label').textContent, '正在工作 · 1m 05s');
+  assert.equal(process.open, false); assert.equal(process.dataset.running, 'true');
+  assert.equal(process.querySelector('.turn-process-label').textContent, '1 项操作 · 运行中');
   view.tick(1000 * 1000 + 70000);
-  assert.equal(process.querySelector('.turn-process-label').textContent, '正在工作 · 1m 10s');
+  assert.equal(process.querySelector('.turn-process-label').textContent, '1 项操作 · 运行中');
   assert.equal(q(host, '.step')[0].querySelector('.step-state').textContent, '进行中');
 });
 
@@ -61,10 +85,10 @@ test('history without server duration uses item timestamps as approximate, and u
   const ledger = new TurnLedger(); ledger.merge({ id: 'h', status: 'completed' });
   const approx = [user('u', 'h', 'x'), { ...cmd('c', 'h'), _startedAtMs: 1000, _completedAtMs: 13000 }, agent('f', 'h', 'done')];
   let { host, view } = mount(); view.render(buildTurns(approx, ledger));
-  assert.equal(q(host, '.turn-process-label')[0].textContent, '用时约 12s');
+  assert.equal(q(host, '.turn-footer')[0].textContent, '用时约 12s');
   ({ host, view } = mount()); view.render(buildTurns([user('u', 'h', 'x'), cmd('c', 'h'), agent('f', 'h', 'done')], ledger));
   const label = q(host, '.turn-process-label')[0].textContent;
-  assert.doesNotMatch(label, /0s/); assert.equal(label, '已处理 1 步');
+  assert.doesNotMatch(label, /0s/); assert.equal(label, '1 项操作');assert.equal(q(host,'.turn-footer').length,0);
 });
 
 test('legacy messages without phase: last agent message of a finished turn is the answer; running turn has none', () => {
@@ -123,11 +147,12 @@ test('turn diff is authoritative and deduplicates; unknown per-file stats are sh
   assert.match(q(host, '.files-stats')[0].textContent, /行数未知/);
 });
 
-test('live edits show 正在编辑 while the turn runs', () => {
+test('live edits remain inspectable without showing a premature terminal file summary', () => {
   const ledger = new TurnLedger(); ledger.merge({ id: 'r', status: 'inProgress' });
   const turns = buildTurns([user('u', 'r', 'x'), change('c', 'r', 'C:/proj/a.md', '@@ -0,0 +1 @@\n+hi\n', 'inProgress')], ledger, { activeTurnId: 'r', cwd: 'C:/proj' });
   const { host, view } = mount(); view.render(turns);
-  assert.equal(q(host, '.files-title')[0].textContent, '正在编辑 1 个文件');
+  assert.equal(q(host,'.files-card').length,0,'running work has no terminal file summary');
+  assert.equal(q(host,'.step-verb')[0].textContent,'编辑');
 });
 
 test('streaming and completed agent text render the same safe Markdown with local file controls', () => {

@@ -10,20 +10,27 @@ class Mock extends EventEmitter{
  async call(method,params){this.calls.push({method,params});if(method!=='config/read')throw new Error('unexpected RPC '+method);return structuredClone(this.response);}
 }
 const post=(app,url,data,extra={})=>fetch(app.origin+url,{method:'POST',headers:{Authorization:`Bearer ${app.token}`,'Content-Type':'application/json',...extra},body:JSON.stringify(data)});
-test('defaults projection returns only three bounded fields and never raw config',()=>{
+test('defaults projection returns only bounded model, permission and speed fields and never raw config',()=>{
  const projected=projectSessionDefaults(configResponse());
- assert.deepEqual(projected,{model:'gpt-5.1-codex',modelProvider:'openai',reasoningEffort:'high'});
- assert.deepEqual(Object.keys(projected).sort(),['model','modelProvider','reasoningEffort']);
+ assert.deepEqual(projected,{model:'gpt-5.1-codex',modelProvider:'openai',reasoningEffort:'high',approvalPolicy:null,approvalsReviewer:null,sandbox:null,sandboxPolicy:null,serviceTier:null});
+ assert.deepEqual(Object.keys(projected).sort(),['approvalPolicy','approvalsReviewer','model','modelProvider','reasoningEffort','sandbox','sandboxPolicy','serviceTier']);
  assert.ok(!JSON.stringify(projected).includes('SECRET'));
  assert.ok(!JSON.stringify(projected).includes('private-version'));
 });
 test('defaults projection marks missing, non-string, empty and overlong values null',()=>{
- assert.deepEqual(projectSessionDefaults({config:{}}),{model:null,modelProvider:null,reasoningEffort:null});
- assert.deepEqual(projectSessionDefaults({config:{model:42,model_provider:{name:'openai'},model_reasoning_effort:''}}),{model:null,modelProvider:null,reasoningEffort:null});
+ assert.deepEqual(projectSessionDefaults({config:{}}),{model:null,modelProvider:null,reasoningEffort:null,approvalPolicy:null,approvalsReviewer:null,sandbox:null,sandboxPolicy:null,serviceTier:null});
+ assert.deepEqual(projectSessionDefaults({config:{model:42,model_provider:{name:'openai'},model_reasoning_effort:''}}),{model:null,modelProvider:null,reasoningEffort:null,approvalPolicy:null,approvalsReviewer:null,sandbox:null,sandboxPolicy:null,serviceTier:null});
  assert.equal(projectSessionDefaults({config:{model:'m'.repeat(512)}}).model,'m'.repeat(512));
  assert.equal(projectSessionDefaults({config:{model:'m'.repeat(513)}}).model,null);
  assert.throws(()=>projectSessionDefaults({}),{code:'CONFIG_INVALID_RESPONSE'});
  assert.throws(()=>projectSessionDefaults(null),{code:'CONFIG_INVALID_RESPONSE'});
+});
+
+test('permission and Fast defaults are projected without provider credentials',()=>{
+ const result=projectSessionDefaults({config:{approval_policy:'on-request',approvals_reviewer:'auto_review',sandbox_mode:'workspace-write',sandbox_workspace_write:{writable_roots:[process.cwd()],network_access:true},service_tier:'fast',api_key:'PRIVATE'}});
+ assert.equal(result.approvalPolicy,'on-request');assert.equal(result.approvalsReviewer,'auto_review');assert.equal(result.serviceTier,'fast');assert.deepEqual(result.sandboxPolicy,{type:'workspaceWrite',writableRoots:[process.cwd()],networkAccess:true});assert.ok(!JSON.stringify(result).includes('PRIVATE'));
+ const invalid=projectSessionDefaults({config:{approval_policy:'invalid',approvals_reviewer:'invalid',sandbox_mode:'invalid',service_tier:'invalid'}});
+ for(const key of ['approvalPolicy','approvalsReviewer','sandbox','sandboxPolicy','serviceTier'])assert.equal(invalid[key],null,key);
 });
 test('service rejects null, arrays, unknown fields and unusable cwd before any RPC',async()=>{
  const rpc=new Mock();let validated=0;const service=new SessionDefaultsService({rpc,validateDirectory:async()=>{validated++;}});
@@ -38,7 +45,7 @@ test('service reads includeLayers:false and only forwards a validated cwd',async
  await assert.rejects(()=>service.read({cwd:path.join(dir,'missing')}),/工作目录不存在或不是文件夹/);
  assert.equal(rpc.calls.length,0);
  const projected=await service.read({cwd:dir});
- assert.deepEqual(projected,{model:'gpt-5.1-codex',modelProvider:'openai',reasoningEffort:'high'});
+ assert.deepEqual(projected,{model:'gpt-5.1-codex',modelProvider:'openai',reasoningEffort:'high',approvalPolicy:null,approvalsReviewer:null,sandbox:null,sandboxPolicy:null,serviceTier:null});
  assert.deepEqual(rpc.calls,[{method:'config/read',params:{includeLayers:false,cwd:dir}}]);
  await service.read({});
  assert.deepEqual(rpc.calls.at(-1),{method:'config/read',params:{includeLayers:false}});
@@ -54,7 +61,7 @@ test('HTTP defaults require auth and same origin, then return only the whitelist
  assert.equal((await fetch(app.origin+'/api/session/defaults',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).status,401);
  assert.equal((await post(app,'/api/session/defaults',{},{Origin:'https://evil.example'})).status,403);
  const response=await post(app,'/api/session/defaults',{cwd:process.cwd()});assert.equal(response.status,200);
- const body=await response.json();assert.deepEqual(body,{model:'gpt-5.1-codex',modelProvider:'openai',reasoningEffort:'high'});
+ const body=await response.json();assert.deepEqual(body,{model:'gpt-5.1-codex',modelProvider:'openai',reasoningEffort:'high',approvalPolicy:null,approvalsReviewer:null,sandbox:null,sandboxPolicy:null,serviceTier:null});
  const serialized=JSON.stringify(body);assert.ok(!serialized.includes('SECRET'));assert.ok(!serialized.includes('private-version'));
  assert.deepEqual(client.calls,[{method:'config/read',params:{includeLayers:false,cwd:process.cwd()}}]);
  assert.equal(app.operations.entries.size,0);

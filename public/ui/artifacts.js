@@ -14,6 +14,19 @@ const isRemote = value => /^[a-z][a-z0-9+.-]*:\/\//i.test(value) && !/^file:/i.t
 /** Explicit artifact candidates from a native item. Prose is never parsed as proof of an artifact. */
 export function artifactCandidates(item) {
   if (!item || typeof item !== 'object') return [];
+  if(item.type==='userMessage')return (item.content||[]).flatMap((part,index)=>{
+    if(part?.type==='localImage'&&typeof part.path==='string'&&part.path&&!isRemote(part.path))return [{key:`${item.id}:upload:${index}`,kind:'uploaded',path:part.path,status:'done',caption:'',reason:''}];
+    if(part?.type!=='image')return [];
+    const ref=Number.isInteger(part.imageRef)?part.imageRef:null;
+    if(ref!==null)return [{key:`${item.id}:upload:${index}:r${part.revision||0}`,kind:'uploaded',path:null,inline:part.imageError?null:{mime:part.mimeType,itemId:item.id,slot:ref,revision:part.revision||0},status:part.imageError?'failed':'done',caption:'',reason:part.imageError||'',name:`图片 ${index+1}`}];
+    return [{key:`${item.id}:upload:${index}`,kind:'uploaded',path:null,status:'failed',caption:'',reason:'此图片没有可预览的本地内容',name:`图片 ${index+1}`}];
+  });
+  if(item.type==='dynamicToolCall')return (item.contentItems||[]).flatMap((part,index)=>{
+    if(part?.type!=='inputImage')return [];
+    const ref=Number.isInteger(part.imageRef)?part.imageRef:null;
+    const reason=part.imageError||(ref===null?'此图片没有可预览的本地内容':'');
+    return [{key:`${item.id}:dynamic:${index}:r${part.revision||0}`,kind:'viewed',path:null,inline:reason?null:{mime:part.mimeType,itemId:item.id,slot:ref,revision:part.revision||0},status:reason?'failed':'done',caption:'',reason,name:`${item.tool||'工具'} 图片 ${index+1}`}];
+  });
   if (item.type === 'imageGeneration') {
     const failed = item.failure || ['failed', 'error'].includes(item.status);
     const path = typeof item.savedPath === 'string' && item.savedPath ? item.savedPath : null;
@@ -67,13 +80,17 @@ const basename = path => String(path).split(/[\\/]/).filter(Boolean).at(-1) || S
  * Artifact strip with lazy, cached, cancellable previews.
  * `fetchPreview(path)` → `{blob,width,height}` or throws `{message}`.
  */
-export function mountArtifacts({ document, fetchPreview, onOpen, ttlMs = 60000, resolveImage = () => null }) {
+export function mountArtifacts({ document, fetchPreview, onOpen, ttlMs = 60000, resolveImage = () => null, getScope=()=>null }) {
   // Cache key = candidate key (item id + slot), so a new item writing the same path is read again.
   // Entries are reference-counted by live cards; unreferenced entries are revoked after ttlMs.
   const cache = new Map();
   const timers = new Map();
+  const pending=[];let active=0;
+  function pump(){while(active<3&&pending.length){const job=pending.shift();if(cache.get(job.key)!==job.entry){job.reject(new Error('预览已取消'));continue;}active++;Promise.resolve().then(job.run).then(job.resolve,job.reject).finally(()=>{active--;pump();});}}
+  function enqueue(key,entry,run){return new Promise((resolve,reject)=>{pending.push({key,entry,run,resolve,reject});pump();});}
   function acquire(candidate) {
     const key = candidate.key;
+    const scope=getScope();
     let entry = cache.get(key);
     clearTimeout(timers.get(key)); timers.delete(key);
     if (!entry) {
@@ -84,7 +101,7 @@ export function mountArtifacts({ document, fetchPreview, onOpen, ttlMs = 60000, 
         if (!stored?.data) throw new Error('图片数据已不在内存中（超过显示预算），请重新打开对话');
         if (!candidate.inline.data && candidate.inline.revision && stored.revision !== candidate.inline.revision) throw new Error('图片已被更新，正在刷新');
         return { blob: decodeBase64(stored.data, candidate.inline.mime), width: null, height: null };
-      }) : Promise.resolve().then(() => fetchPreview(candidate.path));
+      }) : enqueue(key,entry,() => fetchPreview(candidate.path,scope));
       source.then(result => {
         if (cache.get(key) !== entry) return;
         entry.url = URL.createObjectURL(result.blob); entry.width = result.width; entry.height = result.height; entry.state = 'ready';
@@ -144,28 +161,42 @@ export function mountArtifacts({ document, fetchPreview, onOpen, ttlMs = 60000, 
 
 /** Full-size viewer. Escape/close return focus to the opener. */
 export function mountLightbox(document) {
-  const dialog = el(document, 'dialog', 'lightbox'); dialog.setAttribute('aria-label', '图片预览');
-  const bar = el(document, 'div', 'lightbox-bar');
-  const title = el(document, 'strong', 'lightbox-title');
-  const meta = el(document, 'span', 'lightbox-meta');
-  const close = el(document, 'button', 'btn icon-only ghost'); close.type = 'button'; close.setAttribute('aria-label', '关闭预览'); close.append(icon(document, 'close', { size: 16 }));
-  bar.append(title, meta, close);
-  const stage = el(document, 'div', 'lightbox-stage');
-  const caption = el(document, 'p', 'lightbox-caption');
-  dialog.append(bar, stage, caption);
-  document.body.append(dialog);
-  let opener = null;
-  close.addEventListener('click', () => dialog.close());
-  dialog.addEventListener('click', event => { if (event.target === dialog) dialog.close(); });
-  dialog.addEventListener('close', () => { stage.replaceChildren(); opener?.focus?.(); opener = null; });
-  return {
-    open({ url, name, path, width, height, caption: text }) {
-      opener = document.activeElement;
-      title.textContent = name; title.title = path || name;
-      meta.textContent = width && height ? `${width} × ${height}` : '';
-      const img = el(document, 'img'); img.src = url; img.alt = text || name; stage.replaceChildren(img);
-      caption.textContent = text || ''; caption.hidden = !text;
-      dialog.showModal(); close.focus();
-    },
-  };
+  const dialog=el(document,'dialog','lightbox');dialog.setAttribute('aria-label','图片预览');
+  const bar=el(document,'div','lightbox-bar'),title=el(document,'strong','lightbox-title'),meta=el(document,'span','lightbox-meta');
+  const controls=el(document,'div','lightbox-controls');
+  function button(label,action){const node=el(document,'button','btn ghost small',label);node.type='button';node.addEventListener('click',action);controls.append(node);return node;}
+  let opener=null,image=null,scale=1,fit=true;
+  button('−',()=>zoom(scale/1.25)).setAttribute('aria-label','缩小图片');
+  const percent=el(document,'output','lightbox-zoom');controls.append(percent);
+  button('+',()=>zoom(scale*1.25)).setAttribute('aria-label','放大图片');
+  const fitButton=button('适应',()=>{fit=true;paint();});
+  const actual=button('原尺寸',()=>{fit=false;scale=1;paint();});
+  const imageButtons=[...controls.querySelectorAll('button')];
+  const close=button('关闭',()=>dialog.close());close.setAttribute('aria-label','关闭预览');
+  const stage=el(document,'div','lightbox-stage'),canvas=el(document,'div','lightbox-canvas');
+  stage.tabIndex=0;stage.setAttribute('aria-label','图片，可滚动查看');stage.append(canvas);
+  const caption=el(document,'p','lightbox-caption');bar.append(title,meta,controls);dialog.append(bar,stage,caption);document.body.append(dialog);
+  function paint(){
+    if(!image?.naturalWidth)return;
+    for(const button of imageButtons)button.disabled=false;
+    if(fit)scale=Math.min(1,Math.max(.01,(stage.clientWidth-32)/image.naturalWidth),Math.max(.01,(stage.clientHeight-32)/image.naturalHeight));
+    image.style.width=Math.round(image.naturalWidth*scale)+'px';image.style.height=Math.round(image.naturalHeight*scale)+'px';
+    percent.textContent=Math.round(scale*100)+'%';meta.textContent=image.naturalWidth+' × '+image.naturalHeight;
+    fitButton.setAttribute('aria-pressed',String(fit));actual.setAttribute('aria-pressed',String(!fit&&scale===1));
+  }
+  function zoom(value){if(!image?.naturalWidth)return;fit=false;scale=Math.max(.01,Math.min(8,value));paint();}
+  window.addEventListener('resize',()=>{if(dialog.open&&fit)paint();});
+  dialog.addEventListener('click',event=>{if([dialog,stage,canvas].includes(event.target))dialog.close();});
+  dialog.addEventListener('close',()=>{canvas.replaceChildren();image=null;opener?.isConnected&&opener.focus?.();opener=null;});
+  dialog.addEventListener('keydown',event=>{if(event.key==='+'||event.key==='='){event.preventDefault();zoom(scale*1.25);}if(event.key==='-'){event.preventDefault();zoom(scale/1.25);}});
+  return {open({url,name='',path='',caption:text}){
+    if(!/^(blob:|data:image\/(png|jpeg|webp|gif);base64,)/i.test(url||''))return;
+    if(!dialog.open)opener=document.activeElement;
+    title.textContent=name||'图片';title.title=path||name;meta.textContent='';percent.textContent='';fit=true;scale=1;
+    for(const button of imageButtons)button.disabled=true;
+    const opened=el(document,'img');image=opened;image.alt=text||name||'图片';image.draggable=false;image.addEventListener('load',paint);
+    image.addEventListener('error',()=>{if(image!==opened)return;image=null;percent.textContent='';for(const button of imageButtons)button.disabled=true;const error=el(document,'p','inline-error','无法读取此图片，文件可能已失效或无法解码。');error.setAttribute('role','status');canvas.replaceChildren(error);});
+    image.src=url;canvas.replaceChildren(image);
+    caption.textContent=text||'';caption.hidden=!text;if(!dialog.open)dialog.showModal();stage.scrollTop=0;stage.scrollLeft=0;paint();close.focus();
+  }};
 }

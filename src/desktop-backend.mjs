@@ -4,10 +4,12 @@ import {randomUUID} from 'node:crypto';
 import {isAbsolute} from 'node:path';
 import {createServer} from './server.mjs';
 import {nativeCodex} from './runtime-path.mjs';
+import {createDesktopInstallerBridge} from './desktop-app-update-bridge.mjs';
 const args=process.argv.slice(2);
 if(args.some(a=>a!=='--demo')) {process.stderr.write('Unsupported desktop backend argument.\n');process.exit(2);}
 const lines=createInterface({input:process.stdin,crlfDelay:Infinity});
 let app,starting=false,stopping=false,pendingFolder;
+const installers=createDesktopInstallerBridge({send:message=>process.stdout.write(JSON.stringify(message)+'\n')});
 const timer=setTimeout(()=>shutdown(),15000);
 const exact=(value,keys)=>value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).length===keys.length&&keys.every(key=>Object.hasOwn(value,key));
 const uuid=value=>typeof value==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(value);
@@ -25,6 +27,7 @@ function pickFolder(){
 }
 async function shutdown(){
  if(stopping)return;stopping=true;clearTimeout(timer);
+ installers.close();
  if(pendingFolder){const pending=pendingFolder;pendingFolder=undefined;clearTimeout(pending.timeout);pending.reject(new Error('桌面宿主已关闭文件夹选择'));}
  let exitCode=0;
  try{if(app)await app.close();}catch(error){exitCode=1;process.stderr.write(JSON.stringify({type:'shutdownError',code:/^[A-Z0-9_]+$/.test(error?.code)?error.code:'SHUTDOWN_FAILED'})+'\n');}finally{lines.close();process.exit(exitCode);}
@@ -34,6 +37,7 @@ lines.on('line',async line=>{
  if(line.length>32768)return shutdown();
  let message;try{message=JSON.parse(line);}catch{return shutdown();}
  if(exact(message,['action'])&&message.action==='shutdown')return shutdown();
+ try{if(installers.receive(message))return;}catch{return shutdown();}
  if(exact(message,['action','requestId','path'])&&message.action==='folderPicked'){
   if(!uuid(message.requestId)||!pendingFolder||message.requestId!==pendingFolder.requestId||!(message.path===null||(typeof message.path==='string'&&message.path.length>0&&message.path.length<=4096&&!message.path.includes('\0')&&isAbsolute(message.path))))return shutdown();
   const pending=pendingFolder;pendingFolder=undefined;clearTimeout(pending.timeout);if(!pending.expired)pending.resolve(message.path);return;
@@ -42,7 +46,7 @@ lines.on('line',async line=>{
  starting=true;clearTimeout(timer);
  try{
   // The host assigns this process to its kill-on-close Job before sending start.
-  app=await createServer({demo:args.includes('--demo'),reopen:false,desktop:true,onDesktopPickFolder:pickFolder,onDesktopTheme:(theme,visualStyle)=>{
+  app=await createServer({demo:args.includes('--demo'),reopen:false,desktop:true,onDesktopPickFolder:pickFolder,onDesktopLaunchInstaller:(file,metadata)=>installers.launch(file,metadata),onDesktopTheme:(theme,visualStyle)=>{
    if(!['light','dark'].includes(theme)||(visualStyle!==undefined&&!['codex','claude'].includes(visualStyle)))throw new Error('无效原生主题');
    if(!stopping)process.stdout.write(JSON.stringify({type:'theme',theme,...(visualStyle===undefined?{}:{visualStyle})})+'\n');
   },cwd:'',command:args.includes('--demo')?'demo-unused':nativeCodex()});

@@ -1,0 +1,55 @@
+/* Account detail uses the workbench's existing surfaces and typography. */
+.account .acct-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); }
+.account .acct-reset-credits { margin-top: 12px; padding: 4px 16px 14px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface); }
+.account .acct-who strong { white-space: normal; overflow-wrap: anywhere; }
+.account .usage-strip { display: flex; flex-wrap: wrap; }
+.account .usage-stat { flex: 1 1 120px; border: 0; padding: 10px 12px; }
+.acct-quota-select { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 4px 0 12px; color: var(--secondary); font-size: .8125rem; }
+.acct-quota-select select { min-width: 0; max-width: 72%; min-height: 36px; border: 1px solid var(--border); border-radius: var(--r-md); padding: 4px 8px; background: var(--surface); color: var(--text); font: inherit; }
+.acct-details { margin-top: 10px; font-size: .8125rem; }
+.acct-details > summary { min-height: 40px; display: list-item; align-content: center; cursor: pointer; color: var(--secondary); }
+.acct-details[open] > summary { color: var(--text); }
+.acct-details summary:focus-visible, .acct-table-wrap:focus-visible { outline: 2px solid var(--focus, var(--chart)); outline-offset: 3px; border-radius: 4px; }
+.acct-credit-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; font-size: .8125rem; }
+.acct-credit-heading strong { font-size: .9375rem; font-variant-numeric: tabular-nums; }
+.acct-credit-heading > span, .acct-credit-meta { color: var(--tertiary); }
+.acct-credit-list { display: flex; flex-direction: column; }
+.acct-credit-row { display: flex; gap: 16px; align-items: center; padding: 12px 0; border-top: 1px solid var(--border); }
+.acct-credit-info { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 5px; line-height: 1.5; overflow-wrap: anywhere; }
+.acct-credit-info > span { font-size: .8125rem; }
+.acct-credit-info > strong { font-weight: 500; }
+.acct-credit-row > button { flex: none; min-height: 40px; }
+.acct-credit-confirm { margin-top: 12px; padding: 12px; border: 1px solid var(--border-strong); border-radius: var(--r-md); background: var(--selected); font-size: .875rem; line-height: 1.6; }
+.acct-credit-confirm > p { margin: 6px 0 12px; color: var(--secondary); text-wrap: pretty; }
+.acct-credit-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.acct-credit-actions .btn { min-height: 40px; }
+.acct-credit-result { color: var(--secondary); font-size: .875rem; }
+.acct-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 12px; border-bottom: 1px solid var(--border); }
+.acct-tabs button { min-height: 40px; margin-bottom: -1px; padding: 6px 12px; border: 0; border-bottom: 2px solid transparent; border-radius: 6px 6px 0 0; background: transparent; color: var(--secondary); font: inherit; font-size: .875rem; cursor: pointer; }
+.acct-tabs button[aria-pressed="true"] { border-bottom-color: var(--text); color: var(--text); }
+.acct-tabs button:focus-visible { outline: 2px solid var(--focus, var(--chart)); outline-offset: -3px; }
+.acct-usage-caption { margin: 8px 0 12px; color: var(--secondary); font-size: .8125rem; font-variant-numeric: tabular-nums; }
+.acct-table-wrap { max-height: 360px; overflow: auto; scrollbar-gutter: stable; }
+.acct-table { width: 100%; border-collapse: collapse; font-size: .8125rem; line-height: 1.5; text-align: left; font-variant-numeric: tabular-nums; }
+.acct-table th, .acct-table td { border-bottom: 1px solid var(--border); padding: 10px 12px; white-space: nowrap; }
+.acct-table th { position: sticky; top: 0; font-weight: 500; background: var(--surface); color: var(--secondary); }
+.acct-table td:first-child { max-width: 220px; white-space: normal; overflow-wrap: anywhere; }
+.acct-table td:not(:first-child), .acct-table th:not(:first-child) { text-align: right; }
+.account-quota-mini[hidden] { display: none; }
+.account-quota-mini { flex: none; width: 36px; margin: 0 0 4px; padding: 0; }
+.account-quota-open { display: flex; flex-direction: column; justify-content: center; gap: 8px; width: 36px; min-height: 40px; padding: 4px 0; border: 0; border-radius: 6px; background: transparent; color: var(--secondary); font: inherit; text-align: left; cursor: pointer; }
+.account-quota-open:focus-visible { outline: 2px solid var(--focus, var(--chart)); outline-offset: -2px; }
+.account-quota-row { display: flex; align-items: center; gap: 3px; width: 36px; }
+.account-quota-label { flex: none; font-size: .75rem; line-height: 1; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.account-quota-track { flex: 1; min-width: 0; height: 3px; overflow: hidden; background: var(--selected); border-radius: 999px; }
+.account-quota-track > span { display: block; height: 100%; border-radius: inherit; background: var(--chart); }
+.account-quota-track[data-level="mid"] > span { background: var(--warning); }
+.account-quota-track[data-level="high"] > span { background: var(--error); }
+@media (hover: hover) and (pointer: fine) {
+  .acct-tabs button:hover, .account-quota-open:hover { background: var(--selected); color: var(--text); }
+}
+@media (max-width: 760px) { .account .acct-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (pointer: coarse) {
+  .acct-tabs button, .acct-credit-row > button, .acct-credit-actions .btn, .account-quota-open, .acct-details > summary { min-height: 44px; }
+  .acct-quota-select select { min-height: 44px; font-size: 1rem; }
+}

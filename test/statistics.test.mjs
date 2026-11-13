@@ -73,10 +73,10 @@ test('history groups safe differences by native turn and provider; historical la
  assert.equal(service.query().totals.turnCount,0,'local import never adds into live scope');
 });
 
-test('unbound observations are not requests; overlapping/ambiguous sessions are excluded',()=>{
+test('unbound observations are not requests; overlapping sessions retain metadata but exclude token totals',()=>{
  const {service}=fixture();const observation=parseLocalCodexUsage([{type:'session_meta',payload:{id:THREAD,source:'cli'}},nativeToken(0),nativeToken(5)],{sourceId:'old'});
  service.importLocal(mergeLocalCodexUsage([observation]));let data=service.query({scope:'local'});assert.equal(data.totals.turnCount,0);assert.equal(data.coverage.usageObservations,1);assert.equal(data.totals.totalTokens,5);
- service.importLocal(mergeLocalCodexUsage([parsed('one'),parsed('copy')]));data=service.query({scope:'local'});assert.equal(data.details.total,0);assert.equal(data.coverage.excludedOverlappingThreads,1);
+ service.importLocal(mergeLocalCodexUsage([parsed('one'),parsed('copy')]));data=service.query({scope:'local'});assert.equal(data.details.total,1);assert.equal(data.totals.totalTokens,null);assert.equal(data.coverage.excludedOverlappingThreads,1);
  const ambiguous=parsed();ambiguous.attribution='deferred';service.importLocal(mergeLocalCodexUsage([ambiguous]));assert.equal(service.query({scope:'local'}).coverage.excludedAmbiguousSessions,1);
 });
 

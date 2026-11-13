@@ -3,12 +3,12 @@
 const fail=(message,code)=>Object.assign(new Error(message),{code,outcome:'notExecuted',status:409});
 const workMethods=new Set(['turn/start','review/start','thread/compact/start']);
 export class ThreadSessions {
- constructor(rpc,{onEvent=()=>{},closeTimeout=1000}={}){Object.assign(this,{rpc,onEvent,closeTimeout});this.entries=new Map();this.queues=new Map();this.closed=false;}
+ constructor(rpc,{onEvent=()=>{},onThreadLoaded=()=>{},closeTimeout=1000}={}){Object.assign(this,{rpc,onEvent,onThreadLoaded,closeTimeout});this.entries=new Map();this.queues=new Map();this.closed=false;}
  serial(id,run){const previous=this.queues.get(id)||Promise.resolve();const current=previous.catch(()=>{}).then(run);this.queues.set(id,current);current.finally(()=>{if(this.queues.get(id)===current)this.queues.delete(id);}).catch(()=>{});return current;}
  changed(){this.onEvent({method:'bridge/threadSessions',params:this.snapshot()});}
  snapshot(){return {threads:[...this.entries].map(([threadId,e])=>({threadId,activeTurnId:e.activeTurnId||null,state:e.unknown?'unknown':e.activeTurnId?'active':'idle',releaseError:e.releaseError||null}))};}
  entry(id){let e=this.entries.get(id);if(!e){e={loaded:false,unpersisted:false,activeTurnId:null,completed:new Set()};this.entries.set(id,e);}return e;}
- async ensureLoaded(id){const e=this.entry(id);if(!e.loaded){try{await this.rpc.call('thread/resume',{threadId:id,excludeTurns:true});e.loaded=true;}catch(error){
+ async ensureLoaded(id){const e=this.entry(id);if(!e.loaded){try{const result=await this.rpc.call('thread/resume',{threadId:id,excludeTurns:true});e.loaded=true;this.onThreadLoaded(result);}catch(error){
   if(typeof error.code==='number'||error.outcome==='notExecuted'||['NOT_CONNECTED','INPUT_BACKPRESSURE','TOO_MANY_REQUESTS'].includes(error.code))this.entries.delete(id);
   else{e.loaded=true;e.unknown=true;this.changed();}
   // The work RPC has not been sent even if the resume outcome is uncertain.

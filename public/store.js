@@ -76,6 +76,22 @@ const bodySize = item => bodies(item).reduce((sum, row) => sum + row.text.length
  * images. Oversized, non-raster or malformed blocks keep a reason instead of their bytes.
  */
 export function extractImageContent(item) {
+  if((item?.type==='userMessage'&&Array.isArray(item.content))||(item?.type==='dynamicToolCall'&&Array.isArray(item.contentItems))){
+    const dynamic=item.type==='dynamicToolCall',field=dynamic?'contentItems':'content';
+    const images=[];let slot=0;
+    const content=item[field].map(part=>{
+      if(part?.type!==(dynamic?'inputImage':'image')||Number.isInteger(part.imageRef))return part;
+      const uri=typeof (dynamic?part.imageUrl:part.url)==='string'?(dynamic?part.imageUrl:part.url):'';
+      if(!uri.startsWith('data:'))return part;
+      const index=slot++,match=/^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/]+={0,2})$/i.exec(uri);
+      const maxBase64=dynamic?IMAGE_LIMITS.perImageBase64:Math.ceil(10*1024*1024/3)*4;
+      const reason=index>=5?'图片数量超过显示上限':!match?'不支持的图片数据':match[2].length>maxBase64?'图片超过显示大小上限':'';
+      if(!reason)images.push({slot:index,mime:match[1].toLowerCase(),data:match[2]});
+      return {type:dynamic?'inputImage':'image',imageRef:index,mimeType:match?.[1]?.toLowerCase()||'',...(reason?{imageError:reason}:{})};
+    });
+    const raw=item[field].some(part=>typeof (dynamic?part?.imageUrl:part?.url)==='string'&&(dynamic?part.imageUrl:part.url).startsWith('data:'));
+    return {item:{...item,[field]:content},images,replaces:raw};
+  }
   const content = item?.type === 'mcpToolCall' && Array.isArray(item.result?.content) ? item.result.content : null;
   // `replaces`: the item carries a complete result, so any previously pooled images are superseded.
   if (!content) return { item, images: [], replaces: item?.type === 'mcpToolCall' && item.result !== undefined };
@@ -152,12 +168,33 @@ export class ItemStore {
       this.items.set(id, next); this.dirty.add(id); this.setTextSize(id, bodySize(next));
     }
   }
+  confirmUserEcho({id,turnId,text,beforeIds=[]}){
+    if(typeof text!=='string'||!text.trim())return;
+    this.upsert({id,type:'userMessage',content:[{type:'text',text}],_turnId:turnId,_complete:true,_local:true,_echoText:text.trim(),_echoBefore:[...beforeIds]});
+  }
+  reconcileUserEcho(item){
+    if(item.type!=='userMessage')return item;
+    const text=(item.content||[]).filter(part=>part.type==='text').map(part=>part.text||'').join('\n').trim();
+    if(!text||!item._turnId)return item;
+    if(item._local&&item._echoText){
+      // An event/history response may arrive before the steer HTTP acknowledgement.
+      const native=this.values().find(row=>row.type==='userMessage'&&!row._local&&!row._echoClaim&&row._turnId===item._turnId&&!item._echoBefore.includes(row.id)&&(row.content||[]).filter(part=>part.type==='text').map(part=>part.text||'').join('\n').trim()===item._echoText);
+      if(native){this.items.set(native.id,{...native,_echoClaim:item.id});return null;}
+    }else if(!item._local&&!this.items.get(item.id)?._echoClaim){
+      // Match exactly one acknowledgement, never collapse two intentional identical messages.
+      const local=this.values().find(row=>row._local&&row._echoText===text&&row._turnId===item._turnId&&!row._echoBefore.includes(item.id));
+      if(local){this.forget(local.id);return {...item,_echoClaim:local.id};}
+    }
+    return item;
+  }
   upsert(item, { append = null } = {}) {
     if (!item?.id) return;
+    item=this.reconcileUserEcho(item);if(!item)return;
     const extracted = extractImageContent(item);
     let next = extracted.item;
     if (extracted.replaces) {
       const accepted = this.keepImages(item.id, extracted.images);
+      if(['userMessage','dynamicToolCall'].includes(next.type)){const field=next.type==='userMessage'?'content':'contentItems';next={...next,[field]:next[field].map(block=>{if(!Number.isInteger(block?.imageRef)||block.imageError)return block;const pooled=accepted.get(block.imageRef);return pooled?{...block,revision:pooled.revision}:{...block,imageError:'图片超过显示内存预算'};})};}
       if (Array.isArray(next.result?.content))
       // Record pool revision (changes when the bytes change) and budget refusals in the projection.
       next = { ...next, result: { ...next.result, content: next.result.content.map(block => {

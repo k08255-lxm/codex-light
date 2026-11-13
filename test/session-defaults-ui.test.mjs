@@ -11,9 +11,9 @@ test('configured defaults are read once per instance and cwd, shown, never sent 
  const calls=[];const bridge=new SessionDefaultsBridge(async body=>{calls.push(body);return {model:'gpt-5-codex',modelProvider:'openai',reasoningEffort:'high',apiKey:'SECRET',cwd:'/private'};});
  bridge.sync({connected:true,serverInstance:INSTANCE,cwd:'/project'});assert.deepEqual(calls,[]);await flush();
  assert.deepEqual(calls,[{cwd:'/project'}]);
- assert.deepEqual(bridge.snapshot().value,{model:'gpt-5-codex',modelProvider:'openai',reasoningEffort:'high'});
+ assert.deepEqual(bridge.snapshot().value,{model:'gpt-5-codex',modelProvider:'openai',reasoningEffort:'high',approvalsReviewer:null,sandbox:null,serviceTier:null});
  assert.ok(!JSON.stringify(bridge.snapshot()).includes('SECRET'));
- assert.deepEqual(sanitizeSessionDefaults({model:' gpt-5-codex ',modelProvider:null,reasoningEffort:3,extra:'x'}),{model:'gpt-5-codex',modelProvider:null,reasoningEffort:null});
+ assert.deepEqual(sanitizeSessionDefaults({model:' gpt-5-codex ',modelProvider:null,reasoningEffort:3,extra:'x'}),{model:'gpt-5-codex',modelProvider:null,reasoningEffort:null,approvalsReviewer:null,sandbox:null,serviceTier:null});
  const selection=restoredReasoning(null),view=configuredReasoningView(model,selection,bridge.snapshot().value);
  assert.equal(view.source,'config');assert.equal(view.effective,'high');assert.equal(view.index,2);assert.equal(view.configSupport,'supported');
  assert.equal(reasoningParameter(selection),undefined);

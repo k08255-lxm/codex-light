@@ -1,7 +1,7 @@
 param(
-    [string]$Version = '0.3.0',
-    [string]$MsiPath = (Join-Path $PSScriptRoot 'msi/out-release-0.3.0/CodexLight-0.3.0-x64.msi'),
-    [string]$SetupPath = (Join-Path $PSScriptRoot 'setup/out-release-0.3.0/CodexLight-Setup.exe'),
+    [string]$Version = '0.4.0',
+    [string]$MsiPath = (Join-Path $PSScriptRoot 'msi/out-release-0.4.0/CodexLight-0.4.0-x64.msi'),
+    [string]$SetupPath = (Join-Path $PSScriptRoot 'setup/out-release-0.4.0/CodexLight-Setup.exe'),
     [string]$OutputRoot = (Join-Path $PSScriptRoot 'dist')
 )
 $ErrorActionPreference = 'Stop'

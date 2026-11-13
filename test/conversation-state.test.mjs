@@ -35,7 +35,7 @@ test('pause blocks draining for one thread or all threads until resumed', () => 
 test('context uses the latest request snapshot and the real window, not cumulative totals', () => {
   const snapshot = contextSnapshot({ threadId: 't', turnId: 'u', tokenUsage: { total: { totalTokens: 900000 }, last: { totalTokens: 64000 }, modelContextWindow: 256000 } });
   assert.deepEqual(snapshot, { threadId: 't', turnId: 'u', used: 64000, window: 256000 });
-  const view = contextView(snapshot); assert.equal(view.known, true); assert.equal(view.percentLeft, 75); assert.equal(view.label, '75%');
+  const view = contextView(snapshot); assert.equal(view.known, true); assert.equal(view.percentLeft, 75); assert.equal(view.label, '25%'); assert.equal(view.percentUsed,25);
   const unknownWindow = contextView(contextSnapshot({ threadId: 't', tokenUsage: { last: { totalTokens: 10 }, total: { totalTokens: 10 }, modelContextWindow: null } }));
   assert.equal(unknownWindow.known, false); assert.doesNotMatch(unknownWindow.label, /%/);
   assert.equal(contextView(null).known, false);

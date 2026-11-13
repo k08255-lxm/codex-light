@@ -1,5 +1,5 @@
 /* Conversation turns. One reading column; process detail is quiet and collapsible. */
-.turn { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding-bottom: 28px; }
+.turn { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding-bottom: 24px; }
 .message { min-width: 0; }
 .userMessage { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
 .userMessage .message-text { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; max-width: 85%; }
@@ -8,26 +8,29 @@
 .message-tag { font-size: .75rem; color: var(--tertiary); }
 .message-media { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .media-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 220px; padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--secondary); font-size: .75rem; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.agentMessage .message-text { white-space: normal; }
+.agentMessage .message-text { white-space: normal; color:var(--text); }
 .agentMessage.streaming .message-text { white-space: pre-wrap; }
 
-/* "用时 18s ⌄" — the turn's process, collapsed after completion. */
-.turn-process { min-width: 0; color: var(--tertiary); font-size: .875rem; line-height: 1.55; }
+/* Consecutive operations between visible utterances; collapsed by default, including live work. */
+.turn-process { min-width: 0; color: var(--tertiary); font-size: .8125rem; line-height: 1.5; }
 .turn-process > summary { display: flex; align-items: center; gap: 6px; width: fit-content; max-width: 100%; min-height: 28px; padding: 2px 0; list-style: none; cursor: pointer; color: var(--tertiary); font-variant-numeric: tabular-nums; border-radius: var(--radius-control); }
 .turn-process > summary::-webkit-details-marker { display: none; }
+.turn-process-label { flex:none; }
+.turn-process-latest { min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--tertiary);font-size:.75rem; }
+.turn-process:not([open]) > .turn-process-items { display:none; }
 .turn-process > summary > .ui-icon { width: 14px; height: 14px; flex: none; color: var(--muted); }
 .turn-process[open] > summary > .ui-icon { transform: rotate(180deg); }
 .turn-process[data-running="true"] > summary { color: var(--secondary); }
 .turn-process[data-running="true"] .turn-process-label::before { content: ''; display: inline-block; width: 6px; height: 6px; margin: 0 8px 2px 1px; border-radius: 50%; background: var(--accent); vertical-align: middle; }
-.turn-process.first[open] > summary { width: 100%; padding-bottom: 8px; margin-bottom: 4px; border-bottom: 1px solid var(--border); border-radius: 0; }
+.turn-process.first[open] > summary { width: 100%; padding-bottom: 4px; margin-bottom: 2px; border-bottom: 1px solid var(--border); border-radius: 0; }
 .turn-process.empty > summary { cursor: default; }
 .turn-process.empty > summary > .ui-icon { display: none; }
-.turn-process-items { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.process-note .message-text { color: var(--secondary); font-size: .9375rem; padding: 4px 0; }
+.turn-process-items { display: flex; flex-direction: column; gap: 0; min-width: 0; }
+.process-note .message-text { color: var(--secondary); font-size: .875rem; padding: 2px 0; }
 
 /* A single step: icon · verb · target · state. */
 .step { min-width: 0; }
-.step > summary { display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 2px 0; list-style: none; cursor: pointer; min-width: 0; border-radius: var(--radius-control); }
+.step > summary { display: flex; align-items: center; gap: 6px; min-height: 25px; padding: 1px 0; list-style: none; cursor: pointer; min-width: 0; border-radius: var(--radius-control); }
 .step > summary::-webkit-details-marker { display: none; }
 .step-icon { display: inline-flex; flex: none; color: var(--muted); }
 .step-icon .ui-icon { width: 14px; height: 14px; }

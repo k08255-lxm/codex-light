@@ -1,15 +1,18 @@
 import fs from 'node:fs/promises';
 import {constants} from 'node:fs';
 import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {imageType} from './uploads.mjs';
 import {isAbsoluteWorkingDirectory} from './security.mjs';
 
-export const ARTIFACT_LIMITS=Object.freeze({bytes:8*1024*1024,svgBytes:1024*1024,dimension:4096,pixels:16000000,frames:128,animationPixels:32000000,concurrent:4});
+export const ARTIFACT_LIMITS=Object.freeze({bytes:10*1024*1024,svgBytes:1024*1024,dimension:4096,pixels:16000000,frames:128,animationPixels:32000000,concurrent:4});
 const allowed=new Set(['.png','.jpg','.jpeg','.webp','.gif','.ico','.svg']);
 const fail=(message,code,status=400)=>Object.assign(new Error(message),{code,status,outcome:'notExecuted'});
 const unsupported=()=>fail('文件不是支持的图片，或无法确认图片尺寸','ARTIFACT_FORMAT_UNSUPPORTED',415);
 const safeId=value=>typeof value==='string'&&value.length>0&&value.length<=256&&!/[\x00-\x20\x7f]/.test(value);
 const equal=(a,b)=>process.platform==='win32'?a.toLowerCase()===b.toLowerCase():a===b;
+const pathKey=value=>process.platform==='win32'?value.toLowerCase():value;
+const validImagePath=value=>typeof value==='string'&&value.length>0&&value.length<=4096&&!/[\x00-\x1f\x7f]/.test(value)&&!/^\\\\[?.]\\/.test(value)&&!value.replace(/^[A-Za-z]:[\\/]/,'').includes(':')&&allowed.has(path.extname(value).toLowerCase());
 const inside=(root,file)=>{const relative=path.relative(root,file);return relative!==''&&!path.isAbsolute(relative)&&relative!=='..'&&!relative.startsWith('..'+path.sep);};
 function dimensions(width,height){
  if(!Number.isFinite(width)||!Number.isFinite(height)||width<=0||height<=0)throw unsupported();
@@ -114,15 +117,33 @@ async function checkPath(target,file=false){
 }
 
 export class ArtifactPreviewService {
- constructor({projects}={}){this.projects=projects;this.threads=new Map();this.pending=new Set();this.closed=false;}
- bindThread(thread){if(safeId(thread?.id)&&typeof thread.cwd==='string'&&thread.cwd.length<=4096&&isAbsoluteWorkingDirectory(thread.cwd)){this.threads.delete(thread.id);this.threads.set(thread.id,thread.cwd);while(this.threads.size>1000)this.threads.delete(this.threads.keys().next().value);}}
+ constructor({projects}={}){this.projects=projects;this.threads=new Map();this.references=new Map();this.referenceCount=0;this.pending=new Set();this.closed=false;}
+ bindThread(thread){if(safeId(thread?.id)&&typeof thread.cwd==='string'&&thread.cwd.length<=4096&&isAbsoluteWorkingDirectory(thread.cwd)){this.threads.delete(thread.id);this.threads.set(thread.id,thread.cwd);while(this.threads.size>1000){const oldest=this.threads.keys().next().value;this.threads.delete(oldest);this.dropReferences(oldest);}}}
+ dropReferences(threadId){this.referenceCount-=this.references.get(threadId)?.size||0;this.references.delete(threadId);}
+ /** Only trusted RPC items or accepted uploads may add exact external image references. */
+ observe(threadId,item){
+  if(this.closed||!safeId(threadId)||!item||typeof item!=='object')return;
+  const paths=[];
+  if(item.type==='imageView')paths.push(item.path);
+  if(item.type==='imageGeneration')paths.push(item.savedPath);
+  if(item.type==='userMessage')for(const part of (Array.isArray(item.content)?item.content:[]).slice(0,20))if(part?.type==='localImage')paths.push(part.path);
+  for(const source of paths.slice(0,20)){
+   if(!validImagePath(source)||!path.isAbsolute(source))continue;
+   const key=pathKey(path.resolve(source));let refs=this.references.get(threadId);
+   if(!refs){refs=new Set();this.references.set(threadId,refs);}
+   if(refs.has(key))continue;
+   refs.add(key);this.referenceCount++;
+   while(refs.size>128){refs.delete(refs.values().next().value);this.referenceCount--;}
+   while(this.referenceCount>4096)this.dropReferences(this.references.keys().next().value);
+  }
+ }
  async root(input){
   if((input.threadId===undefined)===(input.projectId===undefined))throw fail('预览需唯一的已知对话或项目','ARTIFACT_SCOPE_REQUIRED');
   let root;
   if(input.threadId!==undefined){if(!safeId(input.threadId))throw fail('对话标识无效','ARTIFACT_SCOPE_INVALID');root=this.threads.get(input.threadId);}
   else{if(!safeId(input.projectId))throw fail('项目标识无效','ARTIFACT_SCOPE_INVALID');root=(await this.projects?.list())?.projects?.find(project=>project.id===input.projectId)?.path;}
   if(!root)throw fail('尚未授权该项目或绑定对话目录，请先打开对应项目或对话','ARTIFACT_SCOPE_UNKNOWN',403);
-  root=path.resolve(root);if(equal(root,path.parse(root).root))throw fail('不提供整个磁盘根目录的图片预览','ARTIFACT_ROOT_REFUSED',403);return root;
+  return path.resolve(root);
  }
  async preview(input){
   if(this.closed)throw fail('产物预览服务正在关闭','ARTIFACT_CLOSED',409);
@@ -133,13 +154,21 @@ export class ArtifactPreviewService {
  async read(input){
   let handle;
   try{
-   const root=await this.root(input),source=input.path;
-   if(typeof source!=='string'||!source||source.length>4096||/[\x00-\x1f\x7f]/.test(source)||/^\\\\[?.]\\/.test(source)||source.replace(/^[A-Za-z]:[\\/]/,'').includes(':'))throw fail('只能预览项目内本地图片路径','ARTIFACT_PATH_INVALID',403);
-   if(process.platform!=='win32'&&/^[A-Za-z]:[\\/]/.test(source))throw fail('图片不属于当前项目目录','ARTIFACT_OUTSIDE_ROOT',403);
+   const projectRoot=await this.root(input);
+   let source=input.path;
+   if(typeof source!=='string'||!source||source.length>4096)throw fail('图片路径无效','ARTIFACT_PATH_INVALID',400);
+   if(/^file:\/\//i.test(source)){
+    try{source=fileURLToPath(source);}catch{throw fail('本地图片地址无效','ARTIFACT_PATH_INVALID',400);}
+   }
+   if(process.platform==='win32'&&/^\/[A-Za-z]:[\\/]/.test(source))source=source.slice(1);
+   if(/[\x00-\x1f\x7f]/.test(source)||/^\\\\[?.]\\/.test(source)||source.replace(/^[A-Za-z]:[\\/]/,'').includes(':'))throw fail('需要有效的本地图片路径','ARTIFACT_PATH_INVALID',400);
+   if(process.platform!=='win32'&&/^[A-Za-z]:[\\/]/.test(source))throw fail('当前系统无法读取 Windows 路径','ARTIFACT_PATH_INVALID',400);
    const extension=path.extname(source).toLowerCase();if(!allowed.has(extension))throw unsupported();
-   const filename=path.resolve(root,source);if(!inside(root,filename))throw fail('图片不属于当前项目目录','ARTIFACT_OUTSIDE_ROOT',403);
+   const filename=path.resolve(projectRoot,source);
+   // Local preview accepts absolute image paths outside the workspace as well.
+   const root=path.dirname(filename);
    await checkPath(root);await checkPath(filename,true);
-   const canonicalRoot=await fs.realpath(root),canonicalFile=await fs.realpath(filename);if(!equal(canonicalRoot,root)||!inside(canonicalRoot,canonicalFile))throw fail('图片不属于当前项目目录或目录身份已变化','ARTIFACT_OUTSIDE_ROOT',403);
+   const canonicalRoot=await fs.realpath(root),canonicalFile=await fs.realpath(filename);if(!equal(canonicalRoot,root)||!inside(canonicalRoot,canonicalFile))throw fail('图片目录身份已变化，请重新预览','ARTIFACT_PATH_CHANGED',409);
    const rootStat=await fs.lstat(root),before=await fs.lstat(filename);
    if(!before.isFile()||before.nlink>1)throw fail('仅预览普通且无硬链接的图片文件','ARTIFACT_FILE_REFUSED',403);
    const max=extension==='.svg'?ARTIFACT_LIMITS.svgBytes:ARTIFACT_LIMITS.bytes;if(before.size<=0||before.size>max)throw fail('图片文件超过预览大小限制','ARTIFACT_SIZE_LIMIT',413);
@@ -153,5 +182,5 @@ export class ArtifactPreviewService {
   }catch(error){if(error.code==='ENOENT'||error.code==='ENOTDIR')throw fail('产物图片不存在或已移动','ARTIFACT_NOT_FOUND',404);if(['EACCES','EPERM','ELOOP'].includes(error.code))throw fail('无法安全读取产物图片','ARTIFACT_ACCESS_DENIED',403);throw error;}
   finally{await handle?.close();}
  }
- async close(){this.closed=true;await Promise.allSettled([...this.pending]);this.threads.clear();}
+ async close(){this.closed=true;await Promise.allSettled([...this.pending]);this.threads.clear();this.references.clear();this.referenceCount=0;}
 }

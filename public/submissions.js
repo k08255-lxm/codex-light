@@ -1,6 +1,8 @@
 // Mutation identity + minimal durable markers. No prompt, cwd, credentials or result is persisted.
 const METHODS = new Set(['thread/start', 'turn/start', 'turn/steer', 'thread/compact/start', 'turn/interrupt', 'thread/name/set', 'thread/archive', 'thread/unarchive', 'thread/fork', 'review/start', 'remoteControl/enable', 'remoteControl/disable', 'remoteControl/pairing/start', 'remoteControl/client/revoke', 'terminal/open', 'account/start', 'account/cancel', 'account/logout', 'plugin/apply', 'git/apply', 'config/apply', 'runtime/upgrade']);
 // Both start and steer carry the same owned attachment envelope.
+METHODS.add('account/rateLimitResetCredit/consume');
+METHODS.add('app-update/download');METHODS.add('app-update/install');
 const ATTACHMENT_METHODS = new Set(['turn/start', 'turn/steer']);
 const STABLE_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const stableVersion = value => typeof value === 'string' && value.length <= 256 && STABLE_VERSION.test(value);
@@ -10,6 +12,7 @@ const KEY = 'codex-light-pending-v1';
 function metadata(record) {
   return { requestId: record.requestId, method: record.method, serverInstance: record.serverInstance,
     createdAt: record.createdAt, threadId: record.threadId || null, turnId: record.turnId || null,
+    ...(record.method?.startsWith('app-update/') && stableVersion(record.appVersion) ? {appVersion:record.appVersion} : {}),
     status: record.status === 'pending' ? 'pending' : record.status === 'inFlight' ? 'inFlight' : 'unknown' };
 }
 export function makeMutation(serverInstance, method, params, { now = Date.now(), uuid = globalThis.crypto.randomUUID(), attachmentIds = [], fileAttachmentIds = [], confirmedFileAttachmentIds = [], confirmed = false } = {}) {
@@ -20,10 +23,11 @@ export function makeMutation(serverInstance, method, params, { now = Date.now(),
   for (const ids of [fileAttachmentIds, confirmedFileAttachmentIds]) if (!Array.isArray(ids) || ids.length > 5 || new Set(ids).size !== ids.length || ids.some(id => !UUID.test(id)) || (ids.length && !ATTACHMENT_METHODS.has(method))) throw new Error('文件附件请求标识无效。');
   if (attachmentIds.length + fileAttachmentIds.length > 5 || confirmedFileAttachmentIds.some(id => !fileAttachmentIds.includes(id))) throw new Error('附件总数或风险确认无效。');
   const clone = JSON.parse(JSON.stringify(params));
+  if(method.startsWith('app-update/')&&!stableVersion(clone?.version))throw new Error('应用更新版本无效。');
   const requestId = `${serverInstance}:${now}:${uuid}`;
   return { envelope: { requestId, method, params: clone, ...(confirmed === true ? {confirmed:true} : {}), ...(attachmentIds.length ? {attachmentIds: [...attachmentIds]} : {}), ...(fileAttachmentIds.length ? {fileAttachmentIds:[...fileAttachmentIds]} : {}), ...(confirmedFileAttachmentIds.length ? {confirmedFileAttachmentIds:[...confirmedFileAttachmentIds]} : {}) }, marker: { requestId, method, serverInstance, createdAt: now,
     threadId: typeof clone.threadId === 'string' ? clone.threadId : null,
-    turnId: typeof clone.turnId === 'string' ? clone.turnId : null, status: 'inFlight' } };
+    turnId: typeof clone.turnId === 'string' ? clone.turnId : null, ...(method.startsWith('app-update/')?{appVersion:clone.version}:{}), status: 'inFlight' } };
 }
 export function serializeMarkers(records) { return JSON.stringify([...records].map(metadata)); }
 export function restoreMarkers(raw) {
@@ -35,6 +39,7 @@ export function restoreMarkers(raw) {
     const parts = typeof row?.requestId === 'string' ? row.requestId.split(':') : [];
     if (!METHODS.has(row?.method) || !INSTANCE.test(row?.serverInstance || '') || parts.length !== 3 || parts[0] !== row.serverInstance || !/^\d+$/.test(parts[1]) || !UUID.test(parts[2]) || !Number.isSafeInteger(row.createdAt) || String(row.createdAt) !== parts[1]) throw new Error('待确认请求标识无效，已暂停发送。');
     for (const key of ['threadId', 'turnId']) if (row[key] != null && (typeof row[key] !== 'string' || row[key].length > 256)) throw new Error('待确认请求关联信息无效。');
+    if(row.appVersion!==undefined&&(!row.method.startsWith('app-update/')||!stableVersion(row.appVersion)))throw new Error('待确认应用版本无效。');
     return { ...metadata(row), status: 'unknown', restored: true };
   });
 }
@@ -85,6 +90,8 @@ export function lookupDecision(marker, response) {
   if (response.state === 'succeeded' && marker.method === 'git/apply') return response.result?.outcome === 'completed' ? (response.result.exitCode === 0 ? 'succeeded' : 'failed') : response.result?.outcome === 'notExecuted' ? 'notExecuted' : 'unknown';
   if (response.state === 'succeeded' && ['plugin/apply','config/apply'].includes(marker.method)) return response.result?.outcome === 'succeeded' ? 'succeeded' : response.result?.outcome === 'not-executed' ? 'notExecuted' : 'unknown';
   if (response.state === 'succeeded' && marker.method === 'runtime/upgrade') { const result = response.result; if (result?.outcome === 'succeeded') return stableVersion(result.installedVersion) && result.restartRequired === true ? 'succeeded' : 'unknown'; if (result?.outcome === 'not-executed' || result?.outcome === 'notExecuted') return 'notExecuted'; return 'unknown'; }
+  if (response.state === 'succeeded' && marker.method === 'app-update/download') return response.result?.phase === 'ready' && stableVersion(marker.appVersion) && response.result.preparedVersion === marker.appVersion ? 'succeeded' : 'unknown';
+  if (response.state === 'succeeded' && marker.method === 'app-update/install') return response.result?.phase === 'launched' && stableVersion(marker.appVersion) && response.result.preparedVersion === marker.appVersion ? 'succeeded' : 'unknown';
   if (response.state === 'succeeded') return 'succeeded';
   if (response.state === 'failed' && response.outcome === 'notExecuted') return 'notExecuted';
   if (response.state === 'failed' && response.outcome === 'failed') return 'failed';
@@ -96,7 +103,8 @@ const SCOPE_METHODS = Object.freeze({
   git: new Set(['git/apply']),
   config: new Set(['config/apply']),
   plugin: new Set(['plugin/apply']),
-  runtime: new Set(['runtime/upgrade'])
+  runtime: new Set(['runtime/upgrade']),
+  'app-update': new Set(['app-update/download','app-update/install'])
 });
 const CHAT_THREAD_METHODS = new Set(['turn/start','turn/steer','review/start','thread/compact/start']);
 const THREAD_METHODS = new Set(['thread/name/set','thread/archive','thread/unarchive','thread/fork','review/start']);
@@ -247,10 +255,10 @@ export class ConnectionBootstrap {
 // Exactly one hook for a connection loss. A failing terminal callback is not
 // swallowed: the caller must report it while still completing other cleanup.
 export function notifyConnectionLost(view){if(!view||typeof view.connectionLost!=='function')return false;view.connectionLost();return true;}
-const SESSION_DEFAULT_FIELDS=['model','modelProvider','reasoningEffort'];
+const SESSION_DEFAULT_FIELDS=['model','modelProvider','reasoningEffort','approvalsReviewer','sandbox','serviceTier'];
 function sessionDefaultText(value){return typeof value==='string'&&value.trim()?value.trim().slice(0,512):null;}
 // Only the three documented fields are ever accepted; anything else is dropped.
-export function sanitizeSessionDefaults(raw){const clean={model:null,modelProvider:null,reasoningEffort:null};if(!raw||typeof raw!=='object'||Array.isArray(raw))return clean;for(const key of SESSION_DEFAULT_FIELDS)clean[key]=sessionDefaultText(raw[key]);return clean;}
+export function sanitizeSessionDefaults(raw){const clean={model:null,modelProvider:null,reasoningEffort:null};if(!raw||typeof raw!=='object'||Array.isArray(raw))return clean;for(const key of SESSION_DEFAULT_FIELDS)clean[key]=sessionDefaultText(raw[key]);for(const key of ['approvalPolicy','sandboxPolicy'])if(raw[key]!=null)clean[key]=structuredClone(raw[key]);return clean;}
 export class SessionDefaultsBridge {
  constructor(load,{onChange=()=>{}}={}){if(typeof load!=='function')throw new TypeError('defaults load callback required');this.load=load;this.onChange=onChange;this.generation=0;this.key=null;this.args=null;this.value=null;this.error=null;this.loading=false;}
  snapshot(){return {value:this.value,error:this.error,loading:this.loading};}

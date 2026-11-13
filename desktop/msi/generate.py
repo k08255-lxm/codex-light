@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ET
 p = argparse.ArgumentParser()
 p.add_argument('payload', type=Path)
 p.add_argument('output', type=Path)
-p.add_argument('--version', default='0.3.0')
+p.add_argument('--version', default='0.4.0')
 a = p.parse_args()
 host_source = (Path(__file__).resolve().parent.parent/'WebViewRuntime.cs').read_text(encoding='utf-8')
 minimum = re.search(r'const int MinimumMajor\s*=\s*(\d+)\s*;', host_source)

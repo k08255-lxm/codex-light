@@ -84,7 +84,7 @@ test('double click sends once; failure keeps input for retry; stale 409 drops ca
   let release, calls = 0;
   const x = setup({ api: async () => { calls++; if (calls === 1) await new Promise(resolve => { release = resolve; }); if (calls === 2) throw Object.assign(new Error('写入失败'), { code: 'INPUT_BACKPRESSURE' }); return { ok: true }; } });
   x.add({ id: 5, method: 'item/commandExecution/requestApproval', params: { threadId, turnId, itemId: 'c', command: 'echo hi', availableDecisions: ['accept', 'decline'] } });
-  const accept = byText(card(x, 5), '仅允许这一次');
+  const accept = byText(card(x, 5), '允许一次');
   const first = click(accept); for (const listener of accept.listeners.click) listener({});
   assert.equal(accept.disabled, true); release(); await first; assert.equal(calls, 1);
   x.add(ask(6, [{ id: 'a', header: 'A', question: 'Free', options: null }]));
@@ -111,15 +111,15 @@ test('humanCommand is a fresh one-time human decision; no persistent options', a
   x.add({ id: 'h', method: 'item/commandExecution/requestApproval', params: { threadId, turnId, itemId: 'h', kind: 'humanCommand', command: 'deploy', availableDecisions: ['accept', 'acceptForSession', 'decline', 'cancel'] } });
   const node = card(x, 'h');
   assert.match(visibleText(node), /人工检查点/); assert.match(visibleText(node), /不会启动命令/);
-  assert.deepEqual(buttons(node).map(b => b.textContent).filter(t => t !== '查看完整请求详情'), ['我确认，仅本次', '拒绝', '拒绝并停止本轮']);
-  await click(byText(node, '我确认，仅本次')); assert.deepEqual(x.posted[0].result, { decision: 'accept' });
+  assert.deepEqual(buttons(node).map(b => b.textContent).filter(t => t !== '查看完整请求详情'), ['允许一次', '拒绝', '停止本轮']);
+  await click(byText(node, '允许一次')); assert.deepEqual(x.posted[0].result, { decision: 'accept' });
   x.add({ id: 'u', method: 'item/commandExecution/requestApproval', params: { threadId, turnId, itemId: 'u', kind: 'futureKind' } });
-  assert.equal(byText(card(x, 'u'), '仅允许这一次'), undefined, 'unknown kind cannot be approved');
+  assert.equal(byText(card(x, 'u'), '允许一次'), undefined, 'unknown kind cannot be approved');
 });
 
 test('legacy exec/applyPatch send native approved / denied / abort', async () => {
   const x = setup();
-  for (const [id, method, label, result] of [['l1', 'execCommandApproval', '仅允许这一次', { decision: 'approved' }], ['l2', 'applyPatchApproval', '拒绝', { decision: { denied: { rejection: 'rejected by user' } } }], ['l3', 'execCommandApproval', '拒绝并停止本轮', { decision: 'abort' }]]) {
+  for (const [id, method, label, result] of [['l1', 'execCommandApproval', '允许', { decision: 'approved' }], ['l2', 'applyPatchApproval', '拒绝', { decision: { denied: { rejection: 'rejected by user' } } }], ['l3', 'execCommandApproval', '停止本轮', { decision: 'abort' }]]) {
     x.add({ id, method, params: { conversationId: threadId, callId: id, command: ['echo', 'a b'], cwd: 'C:\\w', fileChanges: { 'C:\\w\\a.md': { type: 'update' } } } });
     await click(byText(card(x, id), label)); assert.deepEqual(x.posted.at(-1).result, result);
   }
@@ -129,7 +129,7 @@ test('permissions: unchecked default, modern entries subset keeps deny, legacy s
   const params = { threadId, turnId, itemId: 'p', permissions: { network: { enabled: true }, fileSystem: { entries: [
     { access: 'read', path: { type: 'path', path: 'C:\\proj' } }, { access: 'write', path: { type: 'path', path: 'C:\\proj\\out' } }, { access: 'deny', path: { type: 'path', path: 'C:\\proj\\private' } }] } } };
   const x = setup(); x.add({ id: 'p', method: 'item/permissions/requestApproval', params });
-  const node = card(x, 'p'), boxes = inputs(node, 'checkbox'), grant = byText(node, '仅本轮授予所选权限');
+  const node = card(x, 'p'), boxes = inputs(node, 'checkbox'), grant = byText(node, '允许所选');
   assert.equal(boxes.length, 3); assert.ok(boxes.every(box => !box.checked)); assert.equal(grant.disabled, true);
   assert.match(visibleText(node), /始终保留：禁止访问 C:\\proj\\private/);
   boxes[1].checked = true; all(node).find(child => child.tag === 'fieldset').dispatch('change');
@@ -217,14 +217,15 @@ test('modern fileChange: shows correlated files and diff, or states they were no
   x.add({ id: 'f1', method: 'item/fileChange/requestApproval', params: { threadId, turnId, itemId: 'fc' } });
   const node = card(x, 'f1');
   assert.match(visibleText(node), /没有载入这次要修改的文件和内容（对话中还没有收到这次修改）/);
-  assert.equal(byText(node, '仍然允许这一次') !== undefined, true, 'accept label says material is missing');
+  assert.ok(byText(node,'允许'),'allow is still explicit and separate from the missing-material warning');
+  assert.equal(all(node).find(child=>child.tag==='select').value,'once','broader scope is never the default');
   material = { changes: [{ path: 'C:\\w\\a.md', kind: { type: 'update', move_path: null }, diff: '-old\n+new' }, { path: 'C:\\w\\b.md', kind: { type: 'add' }, diff: '+b' }] };
   x.deps.rerender();
   assert.equal(card(x, 'f1'), node, 'same card updated in place');
   assert.match(visibleText(node), /C:\\w\\a\.md · 修改/); assert.match(visibleText(node), /C:\\w\\b\.md · 新增/);
   const diff = all(node).find(child => child.classList.contains('approval-diff')); diff.open = true;
   assert.equal(diff.children[1].textContent, '-old\n+new');
-  assert.ok(byText(node, '仅允许这一次')); assert.doesNotMatch(visibleText(node), /没有载入/);
+  assert.ok(byText(node, '允许')); assert.doesNotMatch(visibleText(node), /没有载入/);
   const y = setup(); y.add({ id: 'f2', method: 'item/fileChange/requestApproval', params: { threadId, turnId, itemId: 'fc' } });
   assert.match(visibleText(card(y, 'f2')), /没有载入这次要修改的文件和内容/, 'no lookup available is stated too');
   y.add({ id: 'lp', method: 'applyPatchApproval', params: { conversationId: threadId, callId: 'c', fileChanges: { 'C:\\w\\c.md': { type: 'update', unified_diff: '-1\n+2' } } } });

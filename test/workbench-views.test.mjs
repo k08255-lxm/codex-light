@@ -93,7 +93,7 @@ test('conversation renders native agents and artifacts outside the collapsed pro
   const { mountConversation } = await import('../public/activity-feed.js');
   const document = createDocument(); const host = document.createElement('div');
   const artifacts = mountArtifacts({ document, fetchPreview: async () => ({ blob: {}, width: 1, height: 1 }), onOpen() {} });
-  const view = mountConversation(host, { artifacts });
+  const opened=[];const view = mountConversation(host, { artifacts,onOpenAgent:(...args)=>opened.push(args) });
   const ledger = new TurnLedger(); ledger.merge({ id: 't', status: 'completed', durationMs: 5000 });
   const items = [{ id: 'u', type: 'userMessage', content: [{ type: 'text', text: 'x' }], _turnId: 't' },
     { id: 'c', type: 'collabAgentToolCall', tool: 'spawnAgent', status: 'completed', receiverThreadIds: ['a'], agentsStates: { a: { status: 'running' } }, _turnId: 't', _complete: true },
@@ -101,8 +101,9 @@ test('conversation renders native agents and artifacts outside the collapsed pro
     { id: 'f', type: 'agentMessage', phase: 'final_answer', text: '完成 ![预览](out/b.png)', _turnId: 't', _complete: true }];
   view.render(buildTurns(items, ledger));
   const process = host.querySelector('.turn-process'); assert.equal(process.open, false);
-  const agents = host.querySelector('.agent-list'); const strip = host.querySelector('.artifact-strip');
-  assert.ok(agents && !process.contains(agents)); assert.ok(strip && !process.contains(strip));
+  const agentStep=process.querySelector('.step');agentStep.querySelector('summary').click();assert.deepEqual(opened,[['a','native']]);
+  const strip = host.querySelector('.artifact-strip');
+  assert.equal(host.querySelector('.agent-list'),null,'no duplicate agent cards outside operation group');assert.ok(strip && !process.contains(strip));
   assert.equal(strip.querySelectorAll('.artifact').length, 2);
 });
 
@@ -117,7 +118,7 @@ test('pill uses the running/latest edited turn and never sums or cancels across 
   const turns = buildTurns(items, ledger, { cwd: 'C:/p' });
   assert.equal(turns[0].files.count, 1, 'turn 1 card keeps its own +3');
   const pill = pillChanges(turns);
-  assert.equal(pill.turnId, 't2'); assert.equal(pill.count, 0, 'turn 2 net is empty; nothing is fabricated from turn 1');
+  assert.equal(pill.turnId, null); assert.equal(pill.count, 0, 'terminal changes remain solely in the transcript summary');
   ledger.merge({ id: 't3', status: 'inProgress' });
   const running = buildTurns([...items, { id: 'u3', type: 'userMessage', content: [], _turnId: 't3' }, { id: 'e3', type: 'fileChange', status: 'inProgress', changes: [{ path: 'C:/p/b.md', kind: { type: 'add' }, diff: 'a\n' }], _turnId: 't3' }], ledger, { activeTurnId: 't3', cwd: 'C:/p' });
   const live = pillChanges(running); assert.equal(live.turnId, 't3'); assert.equal(live.running, true); assert.equal(live.count, 1); assert.equal(live.added, 1);
@@ -151,13 +152,13 @@ test('statistics pager enables Next after load and keeps one frozen time window 
   assert.doesNotMatch(metrics, /TTFT|API 请求|字\/秒|字\/s/, 'no character-rate or API-request metrics in the primary strip');
   assert.match(metrics, /回合平均输出12.5 tok\/s/); assert.doesNotMatch(metrics, /900/, 'the character-rate number is never relabelled as tok/s');
   assert.match(h.host.querySelector('.perf-strip').innerTitle ?? h.host.querySelector('.perf-strip').children[2].title, /整轮耗时/);
-  assert.match(h.host.textContent, /仅 0\/3 条有价格/);
+  assert.match(h.host.textContent, /已计价 0 · 未计价 3/);
 });
 test('statistics query anchors time, and cost coverage is honest', () => {
   const q = statisticsQuery({ scope: 'local', range: '24h', anchor: Date.parse('2026-11-12T00:00:00Z'), model: 'm', cursor: 'x' });
   assert.deepEqual(q, { scope: 'local', bucket: 'hour', limit: 30, from: '2026-11-11T00:00:00.000Z', to: '2026-11-12T00:01:00.000Z', model: 'm', cursor: 'x' });
   assert.equal(statisticsQuery({ range: 'all' }).from, undefined);
-  assert.equal(costCoverage({ pricedRows: 3, totalRows: 3, complete: true }), '3/3 条已计价'); assert.equal(costCoverage(null), '价格覆盖未知');
+  assert.equal(costCoverage({ pricedRows: 3, totalRows: 3, complete: true }), '已计价 3 · 未计价 0'); assert.equal(costCoverage(null), '价格覆盖未知');
 });
 test('chart draws null as a gap, never fabricates zero bars, and lays out at real pixel width', () => {
   const document = createDocument();
@@ -263,7 +264,7 @@ async function composerHarness({ mutation } = {}) {
   const followUps = new FollowUpQueue();
   const empty = { values: () => [], ids: () => [], remove() {} };
   const composer = createComposer({ document,
-    session: { state, followUps, sessionFor: id => id === 't' && state.busy ? { activeTurnId: state.turnId } : null },
+    session: { state, followUps,sessionControls:{snapshot:()=>({permission:null,serviceTier:null}),params:()=>({})}, sessionFor: id => id === 't' && state.busy ? { activeTurnId: state.turnId } : null },
     drafts: { attachmentDraft: empty, fileAttachmentDraft: empty, attachmentPreviews: new Map(), queuedPreviews: new Map(), clearSubmittedDraft: env => { if ($('prompt').value.trim() === env.params.input[0].text) $('prompt').value = ''; }, renderAttachments() {}, autosizePrompt() {} },
     ledger: { performMutation: async (method, params) => { calls.push([method, structuredClone(params)]); return mutation ? mutation(method, params) : method === 'turn/steer' ? { turnId: 'turn-1' } : { turn: { id: 'turn-2', status: 'inProgress' } }; }, pendingMutations: { storageError: null }, scopedPending: () => [], currentSendAvailability: () => ({ disabled: false }), renderPendingMutations() {} },
     thread: { restoreThreadReasoning() {}, loadThreads: async () => {}, syncStatus: async () => {}, resetThreadDsh() {} },

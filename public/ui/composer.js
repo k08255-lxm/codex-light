@@ -1,7 +1,6 @@
 // Composer submission controller: first send (draft → thread/start → turn/start), steer into a
 // running turn, and the per-thread follow-up queue. Drafts are cleared only after a confirmed
 // acknowledgement; an unknown outcome is never resubmitted automatically.
-import { itemText } from '../store.js';
 import { steerParams } from '../state.js';
 import { outcomeFromError } from '../submissions.js';
 import { reasoningParameter } from '../reasoning.js';
@@ -15,11 +14,11 @@ import { reasoningParameter } from '../reasoning.js';
  * - view: `$`, `el`, `notice`, `activity`, `updateControls`, `renderMessages`, `scheduleRender`, `scrollBottom`, `renderContext`, `openProjectDialog`, `openInlineCwd`
  */
 export function createComposer({ document, session, drafts, ledger, thread, view }) {
-  const { state, followUps, sessionFor } = session;
+  const { state, followUps, sessionFor, sessionControls } = session;
   const { attachmentDraft, fileAttachmentDraft, attachmentPreviews, queuedPreviews, clearSubmittedDraft, renderAttachments, autosizePrompt } = drafts;
   const { performMutation, pendingMutations, scopedPending, currentSendAvailability, renderPendingMutations } = ledger;
   const { restoreThreadReasoning, loadThreads, syncStatus, resetThreadDsh } = thread;
-  const { $, el, notice, activity, confirm, updateControls, renderMessages, scheduleRender, scrollBottom, renderContext, openProjectDialog, openInlineCwd } = view;
+  const { $, el, notice, activity, confirm, openImage, updateControls, renderMessages, scheduleRender, scrollBottom, renderContext, openProjectDialog, openInlineCwd } = view;
   // ---------- Composer: send, steer, queue ----------
   function draftSnapshot() {
     return { text: $('prompt').value.trim(), images: attachmentDraft.values(), files: fileAttachmentDraft.values() };
@@ -34,7 +33,7 @@ export function createComposer({ document, session, drafts, ledger, thread, view
   function runningInputAvailable() {
     // Steer is only valid for a turn this bridge owns; reading history of someone else's task never subscribes.
     const owned = sessionFor(state.thread?.id)?.activeTurnId === state.turnId;
-    return !!(owned && state.busy && state.thread && state.turnId && state.connected && state.serverInstance && !state.sending && !state.loadingThread && !pendingMutations.storageError);
+    return !!(owned && state.busy && state.thread && state.turnId && state.connected && state.serverInstance && !state.sending && !state.loadingThread && !state.uploadingImages && !pendingMutations.storageError && !scopedPending('chat',{threadId:state.thread.id}).length);
   }
   function confirmRiskyFiles(files) {
     const risky = files.filter(file => file.riskWarning);
@@ -47,6 +46,7 @@ export function createComposer({ document, session, drafts, ledger, thread, view
     return images.length && Array.isArray(selectedModel?.inputModalities) && !selectedModel.inputModalities.includes('image') ? '所选模型未声明图片输入能力。请选择支持图片的模型，或移除附件。' : '';
   }
   async function send(mode = 'auto') {
+    if(state.sending)return;
     if (state.busy && state.thread && mode !== 'start') return mode === 'queue' ? queueDraft() : steerDraft();
     const availability=currentSendAvailability();if(availability.disabled){notice(availability.reason);if(availability.action==='cwd')openInlineCwd();else if(availability.action==='pending')$('pending-submissions').scrollIntoView({block:'nearest'});return;}
     const draft = draftSnapshot(); if (!draft.text && !draft.images.length && !draft.files.length) return;
@@ -55,15 +55,19 @@ export function createComposer({ document, session, drafts, ledger, thread, view
     const confirmed = confirmRiskyFiles(draft.files); if (confirmed === null) return;
     // One immutable logical submission: navigation/model/cwd edits cannot retarget its second stage.
     const submission = { cwd: state.cwd, model: $('model').value, effort: reasoningParameter(state.reasoning), text: draft.text, attachmentIds: attachmentDraft.ids(), fileAttachmentIds:fileAttachmentDraft.ids(), confirmedFileAttachmentIds:confirmed };
+    try { submission.controls=sessionControls.snapshot(); } catch(error){notice(error.message,true);return;}
     state.sending = true; updateControls(); activity('正在发送…'); const generation = state.openGeneration;
     try {
       if (!state.thread) {
         // The draft becomes a real thread only now, immediately before its first turn.
         const params = { cwd: submission.cwd }; if (submission.model) params.model = submission.model;
+        Object.assign(params,sessionControls.params(submission.controls,'thread'));
         const result = await performMutation('thread/start', params); if (generation !== state.openGeneration) { notice('新对话已创建；你已切换页面，因此消息未继续发送。'); return; }
+        sessionControls.adopt(result.thread.id);
         state.thread = result.thread; restoreThreadReasoning(result, submission.effort); resetThreadDsh(state.thread.id); $('thread-title').textContent = submission.text.slice(0, 55) || '附件对话'; $('welcome').classList.add('hidden'); renderContext();
       }
       const params = { threadId: state.thread.id, cwd: submission.cwd, input: [{ type: 'text', text: submission.text }] }; if (submission.model) params.model = submission.model; if (submission.effort) params.effort = submission.effort;
+      Object.assign(params,sessionControls.params(submission.controls,'turn'));
       const result = await performMutation('turn/start', params, { attachmentIds: submission.attachmentIds, fileAttachmentIds:submission.fileAttachmentIds, confirmedFileAttachmentIds:submission.confirmedFileAttachmentIds });
       clearSubmittedDraft({ method: 'turn/start', params, attachmentIds: submission.attachmentIds, fileAttachmentIds:submission.fileAttachmentIds });
       if (generation !== state.openGeneration) { notice('消息已发送到原对话，未发送到当前页面。'); return; }
@@ -94,13 +98,16 @@ export function createComposer({ document, session, drafts, ledger, thread, view
     const threadId = state.thread.id, turnId = state.turnId;
     let params; try { params = steerParams(threadId, turnId, draft.text); } catch (error) { notice(error.message, true); return; }
     const extras = { attachmentIds: attachmentDraft.ids(), fileAttachmentIds: fileAttachmentDraft.ids(), confirmedFileAttachmentIds: confirmed };
+    const beforeIds=state.store.values().filter(item=>item.type==='userMessage'&&!item._local).map(item=>item.id);
+    const echoId=`steer:${globalThis.crypto.randomUUID()}`;
     state.sending = true; updateControls(); activity('正在补充到当前任务…');
     try {
       const result = await performMutation('turn/steer', params, extras);
       clearSubmittedDraft({ method: 'turn/steer', params, ...extras });
-      // Steer emits no turn/started. Show the confirmed text until the native user item arrives.
-      if (state.thread?.id === threadId && !state.store.values().some(item => item.type === 'userMessage' && item._turnId === (result.turnId || turnId) && itemText(item).trim() === draft.text)) {
-        state.store.upsert({ id: `steer:${Date.now()}`, type: 'userMessage', content: [{ type: 'text', text: draft.text }], _turnId: result.turnId || turnId, _complete: true, _local: true });
+      // The store reconciles canonical items arriving before OR after this acknowledgement.
+      // Attachment envelopes are expanded by the server, so only its real user item can represent them.
+      if (state.thread?.id === threadId && !extras.attachmentIds.length && !extras.fileAttachmentIds.length) {
+        state.store.confirmUserEcho({id:echoId,turnId:result.turnId||turnId,text:draft.text,beforeIds});
         scheduleRender();
       }
       activity('');
@@ -113,12 +120,12 @@ export function createComposer({ document, session, drafts, ledger, thread, view
   }
   /** Moves the draft into this thread's ordered queue. Nothing is sent yet. */
   function queueDraft() {
-    if (!state.thread) return;
+    if (!state.thread || state.sending || pendingMutations.storageError || scopedPending('chat',{threadId:state.thread.id}).length) return;
     const draft = draftSnapshot(); if (!draft.text && !draft.images.length && !draft.files.length) return;
     const capability = imageCapabilityError(draft.images); if (capability) { notice(capability, true); return; }
     const confirmed = confirmRiskyFiles(draft.files); if (confirmed === null) return;
     try {
-      const item = followUps.add(state.thread.id, { text: draft.text, images: draft.images, files: draft.files, confirmedFileAttachmentIds: confirmed, cwd: state.thread.cwd || state.cwd, model: $('model').value, effort: reasoningParameter(state.reasoning) });
+      const item = followUps.add(state.thread.id, { controls:sessionControls.snapshot(), text: draft.text, images: draft.images, files: draft.files, confirmedFileAttachmentIds: confirmed, cwd: state.thread.cwd || state.cwd, model: $('model').value, effort: reasoningParameter(state.reasoning) });
       // Ownership of attachments and their previews moves to the queued item.
       for (const image of draft.images) { const url = attachmentPreviews.get(image.id); if (url) queuedPreviews.set(image.id, url); attachmentPreviews.delete(image.id); attachmentDraft.remove(image.id); }
       for (const file of draft.files) fileAttachmentDraft.remove(file.id);
@@ -138,6 +145,7 @@ export function createComposer({ document, session, drafts, ledger, thread, view
     draining.add(threadId); followUps.update(threadId, item.id, { status: 'sending', error: '' }); renderQueue();
     const params = { threadId, cwd: item.cwd, input: [{ type: 'text', text: item.text }] }; if (item.model) params.model = item.model; if (item.effort) params.effort = item.effort;
     try {
+      Object.assign(params,sessionControls.params(item.controls,'turn'));
       const result = await performMutation('turn/start', params, { attachmentIds: item.images.map(image => image.id), fileAttachmentIds: item.files.map(file => file.id), confirmedFileAttachmentIds: item.confirmedFileAttachmentIds });
       followUps.update(threadId, item.id, { status: 'sent' }); followUps.remove(threadId, item.id); releaseQueuedPreviews(item);
       acceptStartedTurn(threadId, result.turn);
@@ -155,7 +163,8 @@ export function createComposer({ document, session, drafts, ledger, thread, view
     if (!rows.length) { host.replaceChildren(); return; }
     const head = el('div', 'queue-head');
     const paused = followUps.pausedReason(threadId);
-    head.append(el('span', 'queue-title', `已排队 ${rows.length} 条`), el('span', 'queue-note', paused ? `已暂停 · ${paused}` : '当前任务完成后按顺序发送'));
+    head.append(el('span', 'queue-title', `已排队 ${rows.length} 条`));
+    if(paused)head.append(el('span','queue-note',`已暂停 · ${paused}`));
     if (paused) {
       const resume = el('button', 'queue-action', '继续发送'); resume.type = 'button';
       resume.disabled = rows[0]?.status !== 'queued';
@@ -174,6 +183,7 @@ export function createComposer({ document, session, drafts, ledger, thread, view
       if (row.status === 'failed') meta.push('未发送：' + row.error);
       if (row.status === 'unknown') meta.push('结果未知，可能已发送：' + row.error);
       li.append(body); if (meta.length) li.append(el('small', 'queue-meta', meta.join(' · ')));
+      if(row.images.length){const media=el('div','queue-images');for(const image of row.images){const url=queuedPreviews.get(image.id);if(!url)continue;const button=el('button','attachment-preview');button.type='button';button.setAttribute('aria-label','预览 '+image.name);const preview=el('img');preview.src=url;preview.alt=image.name||'排队图片';button.append(preview);button.addEventListener('click',()=>openImage?.({url,name:image.name||'图片'}));media.append(button);}li.append(media);}
       const actions = el('div', 'queue-item-actions');
       if (row.status !== 'sending') {
         const edit = el('button', 'queue-action', '编辑'); edit.type = 'button';

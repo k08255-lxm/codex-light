@@ -63,14 +63,15 @@ test('image upload remains local and only opaque owned IDs become localImage inp
 });
 test('DSH refresh never exposes arbitrary MCP execution and stays bound to thread',async t=>{
  const {DemoClient}=await import('../src/demo.mjs');const a=await createServer({client:new DemoClient(),demo:false,cwd:process.cwd()});await a.started;t.after(()=>a.close());
- const calls=[];const original=a.rpc.call.bind(a.rpc);a.rpc.call=async(method,params)=>{calls.push({method,params});if(method==='mcpServer/tool/call')return {structuredContent:{agent_id:'agent-a',events:[{type:'assistant/final',text:'fixture event'}]}};return original(method,params);};
+ const calls=[];const original=a.rpc.call.bind(a.rpc);a.rpc.call=async(method,params)=>{calls.push({method,params});if(method==='thread/start'&&params.ephemeral)return {thread:{id:'reader-internal',cwd:params.cwd}};if(method==='thread/unsubscribe'&&params.threadId==='reader-internal')return {};if(method==='mcpServer/tool/call')return {structuredContent:{agent_id:'agent-a',events:[{type:'assistant/final',text:'fixture event'}]}};return original(method,params);};
  assert.equal((await post(a,'/api/dsh/read',{threadId:'t',agentId:'agent-a',kind:'status'})).status,400);
+ a.dsh.bindThread({id:'t',cwd:process.cwd()});
  a.rpc.emit('event',{method:'item/completed',params:{threadId:'t',item:{id:'call-a',type:'mcpToolCall',server:'dsh_subagent',tool:'dsh_start',status:'completed',result:{structuredContent:{agent_id:'agent-a',status:'running'}}}}});
  assert.equal((await post(a,'/api/dsh/read',{threadId:'other',agentId:'agent-a',kind:'status'})).status,400);
  assert.equal((await post(a,'/api/dsh/read',{threadId:'t',agentId:'agent-a',kind:'start'})).status,400);
  assert.equal((await post(a,'/api/dsh/read',{threadId:'t',agentId:'agent-a',kind:'result'})).status,400);
  const result=await post(a,'/api/dsh/read',{threadId:'t',agentId:'agent-a',kind:'events',after:'1:2:3'});assert.equal(result.status,200);const body=await result.json();assert.equal(body.tool,'dsh_events');assert.equal(body.result.structuredContent.events[0].text,'fixture event');
- assert.deepEqual(calls,[{method:'mcpServer/tool/call',params:{threadId:'t',server:'dsh_subagent',tool:'dsh_events',arguments:{agent_id:'agent-a',include_progress:true,include_tool_events:true,include_descendants:true,limit:100,max_chars:12000,after:'1:2:3'}}}]);
+ assert.deepEqual(calls,[{method:'thread/start',params:{cwd:process.cwd(),ephemeral:true,sandbox:'read-only',approvalPolicy:'never'}},{method:'mcpServer/tool/call',params:{threadId:'reader-internal',server:'dsh_subagent',tool:'dsh_events',arguments:{agent_id:'agent-a',include_progress:true,include_tool_events:true,include_descendants:true,limit:100,max_chars:12000,after:'1:2:3'}}}]);
 });
 test('successful mutation replay survives cwd removal; invalid reuse never claims original not executed',async t=>{
  const {mkdtemp,rm}=await import('node:fs/promises');const os=await import('node:os');const path=await import('node:path');

@@ -1,8 +1,14 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {DshReadService} from '../src/dsh-read.mjs';
+import path from 'node:path';
 
 const cwd=process.cwd();
 const item=(agentId='a',tool='dsh_start',result={structuredContent:{agent_id:agentId,status:'running'}})=>({id:`call-${agentId}-${tool}`,type:'mcpToolCall',server:'dsh_subagent',tool,status:'completed',arguments:{},result});
-const client=call=>({connected:true,call});
+const client=call=>({connected:true,lifecycle:[],async call(method,params){
+ if(method==='thread/start'){assert.deepEqual(params,{cwd:params.cwd,ephemeral:true,sandbox:'read-only',approvalPolicy:'never'});this.lifecycle.push({method,params});return {thread:{id:'reader-1',cwd:params.cwd}};}
+ if(method==='thread/unsubscribe'){this.lifecycle.push({method,params});return {};}
+ assert.equal(method,'mcpServer/tool/call');assert.equal(params.threadId,'reader-1');return call(method,params);
+}});
+const tick=()=>new Promise(resolve=>setImmediate(resolve));
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b;});return {promise,resolve,reject};};
 
 test('bindThread follows the host absolute-path policy and rejects Windows root-relative paths',()=>{
@@ -21,7 +27,7 @@ test('monitor binds only the real thread cwd, lists tasks into the thread store,
  const calls=[];const s=new DshReadService(client(async(method,params)=>{
   calls.push({method,params});
   if(params.tool==='dsh_list')return {structuredContent:{items:[{agent_id:'listed',status:'running',name:'Listed'}]}};
-  return {structuredContent:{agent_id:'a',status:'idle',answer:'done'}};
+  return {structuredContent:{agent_id:params.arguments.agent_id,parent_thread_id:'thread1',status:'idle',answer:'done'}};
  }));
  s.observe('thread1',item('a'));
  assert.equal(s.bindThread({id:'thread1',cwd}),true);
@@ -29,15 +35,15 @@ test('monitor binds only the real thread cwd, lists tasks into the thread store,
  const monitor=await s.monitor({threadId:'thread1'});
  assert.deepEqual(Object.keys(monitor).sort(),['checkedAt','cwd','result','threadId','tool']);
  assert.equal(monitor.threadId,'thread1');assert.equal(monitor.cwd,cwd);assert.equal(monitor.tool,'dsh_list');assert.match(monitor.checkedAt,/^\d{4}-\d\d-\d\dT.*Z$/);
- assert.deepEqual(calls[0],{method:'mcpServer/tool/call',params:{threadId:'thread1',server:'dsh_subagent',tool:'dsh_list',arguments:{cwd,legacy:false,limit:50,max_chars:16000}}});
+ assert.deepEqual(calls[0],{method:'mcpServer/tool/call',params:{threadId:'reader-1',server:'dsh_subagent',tool:'dsh_list',arguments:{cwd,legacy:false,limit:50,max_chars:16000}}});
  assert.ok(s.threads.get('thread1').values().some(task=>task.agentId==='listed'),'list result must authorize a read target');
  assert.equal(s.threads.get('thread1').values().find(task=>task.agentId==='a').status,'running','binding must not reset observed tasks');
  const read=await s.read({threadId:'thread1',agentId:'listed',kind:'status'});
- assert.equal(read.agentId,'listed');assert.equal(calls[1].params.arguments.agent_id,'listed');
+ assert.equal(read.agentId,'listed');assert.equal(calls.at(-1).params.arguments.agent_id,'listed');
  // DSH item arguments are not provenance for a monitor cwd.
  s.observe('thread1',{...item('b'),arguments:{cwd:'C:\\unrelated'}});
  await s.monitor({threadId:'thread1'});
- assert.equal(calls.at(-1).params.arguments.cwd,cwd);
+ assert.equal(calls.findLast(call=>call.params.tool==='dsh_list').params.arguments.cwd,cwd);
  assert.equal(s.bindThread({id:'thread3',cwd}),true);
  assert.equal(s.bindings.get('thread3'),cwd);
 });
@@ -62,13 +68,13 @@ test('monitor and read are strict about keys, ids, kinds, and cursors',async()=>
 
 test('status and events use fixed readonly arguments, including both cursor forms; result is never called',async()=>{
  const calls=[];const s=new DshReadService(client(async(method,params)=>{
-  calls.push({method,params});return {structuredContent:{agent_id:'a',status:'running',events:[{type:'assistant/final',text:'prior'}]}};
+  calls.push({method,params});return {structuredContent:{agent_id:'a',...(params.tool==='dsh_status'?{status:'running'}:{events:[{type:'assistant/final',text:'prior'}]})}};
  }));
  s.bindThread({id:'t',cwd});s.observe('t',item('a'));
  const status=await s.read({threadId:'t',agentId:'a',kind:'status'});
  assert.deepEqual(Object.keys(status).sort(),['agentId','checkedAt','result','threadId','tool']);
  assert.equal(status.tool,'dsh_status');
- assert.deepEqual(calls[0],{method:'mcpServer/tool/call',params:{threadId:'t',server:'dsh_subagent',tool:'dsh_status',arguments:{agent_id:'a',legacy:false}}});
+ assert.deepEqual(calls[0],{method:'mcpServer/tool/call',params:{threadId:'reader-1',server:'dsh_subagent',tool:'dsh_status',arguments:{agent_id:'a',legacy:true}}});
  await s.read({threadId:'t',agentId:'a',kind:'events',after:12});
  assert.deepEqual(calls[1].params.arguments,{agent_id:'a',include_progress:true,include_tool_events:true,include_descendants:true,limit:100,max_chars:12000,after:12});
  await s.read({threadId:'t',agentId:'a',kind:'events',after:'1:2:3'});
@@ -83,13 +89,16 @@ test('same-thread monitor and same kind+cursor reads coalesce; a different curso
  }));
  s.bindThread({id:'t',cwd});s.observe('t',item('a'));
  const m1=s.monitor({threadId:'t'}),m2=s.monitor({threadId:'t'});
+ await tick();
  assert.equal(calls.length,1);
  const r1=s.read({threadId:'t',agentId:'a',kind:'events'}),r2=s.read({threadId:'t',agentId:'a',kind:'events'});
- assert.equal(calls.length,2);
+ assert.equal(calls.length,1,'reader serializes MCP reads');
  const r3=s.read({threadId:'t',agentId:'a',kind:'events',after:3});
- assert.equal(calls.length,3);
- gates[0].resolve({structuredContent:{items:[{agent_id:'listed',status:'idle'}]}});
+ assert.equal(calls.length,1);
+ assert.equal(s.pending.size,3,'matching queries coalesce before entering reader queue');
+ gates[0].resolve({structuredContent:{items:[]}});await tick();
  gates[1].resolve({structuredContent:{agent_id:'a',status:'running'}});
+ await tick();
  gates[2].resolve({structuredContent:{agent_id:'a',status:'running'}});
  const [mon1,mon2,read1,read2,read3]=await Promise.all([m1,m2,r1,r2,r3]);
  assert.equal(mon1.threadId,'t');assert.equal(mon2.threadId,'t');assert.equal(read1.agentId,'a');assert.equal(read2.agentId,'a');assert.equal(read3.tool,'dsh_events');
@@ -103,7 +112,7 @@ test('shared 16-operation cap rejects the seventeenth monitor/read',async()=>{
  assert.equal(s.pending.size,16);
  await assert.rejects(s.read({threadId:'t',agentId:'a16',kind:'status'}),/同时查询过多/);
  await assert.rejects(s.monitor({threadId:'t'}),/同时查询过多/);
- for(const gate of gates)gate.resolve({structuredContent:{status:'running'}});
+ for(let index=0;index<16;index++){await tick();gates[index].resolve({structuredContent:{status:'running'}});}
  await Promise.all(pending);assert.equal(s.pending.size,0);
 });
 
@@ -121,10 +130,11 @@ test('clear prevents late read responses from reauthorizing or overwriting a re-
  const gate=deferred();const s=new DshReadService(client(()=>gate.promise));
  s.bindThread({id:'t',cwd});s.observe('t',item('a'));
  const lateRead=s.read({threadId:'t',agentId:'a',kind:'status'});
- s.clear();assert.equal(s.threads.size,0);assert.equal(s.bindings.size,0);
+ await tick();const cleared=s.clear();assert.equal(s.threads.size,0);assert.equal(s.bindings.size,0);
  s.bindThread({id:'t',cwd});s.observe('t',item('a','dsh_status',{structuredContent:{agent_id:'a',status:'idle'}}));
  gate.resolve({structuredContent:{agent_id:'a',status:'completed',answer:'stale'}});
  await assert.rejects(lateRead,/失效/);
+ await cleared;
  assert.equal(s.threads.get('t').values().find(task=>task.agentId==='a').status,'idle');
  assert.equal(s.pending.size,0);
 });
@@ -133,10 +143,11 @@ test('clear prevents a late monitor response from injecting agents into a new au
  const gate=deferred();const s=new DshReadService(client(()=>gate.promise));
  s.bindThread({id:'t',cwd});
  const lateMonitor=s.monitor({threadId:'t'});
- s.clear();s.bindThread({id:'t',cwd});
+ await tick();const cleared=s.clear();s.bindThread({id:'t',cwd});
  assert.equal(s.threads.get('t').values().length,0);
  gate.resolve({structuredContent:{items:[{agent_id:'late',status:'running'}]}});
  await assert.rejects(lateMonitor,/失效/);
+ await cleared;
  assert.equal(s.threads.get('t').values().length,0);
  await assert.rejects(s.read({threadId:'t',agentId:'late',kind:'status'}),/尚未观察到/);
 });
@@ -154,4 +165,44 @@ test('disconnected rpc rejects monitor and read before any tool call',async()=>{
  await assert.rejects(s.monitor({threadId:'t'}),/尚未连接/);
  await assert.rejects(s.read({threadId:'t',agentId:'a',kind:'status'}),/尚未连接/);
  assert.equal(calls,0);
+});
+
+test('same cwd never grants another parent thread tasks and uses one internal reader',async()=>{
+ const rpc=client(async(method,params)=>params.tool==='dsh_list'
+  ?{structuredContent:{items:[{agent_id:'mine',status:'running'},{agent_id:'foreign',status:'running'}]}}
+  :{structuredContent:{agent_id:params.arguments.agent_id,parent_thread_id:params.arguments.agent_id==='mine'?'one':'two',status:'running'}});
+ const s=new DshReadService(rpc);s.bindThread({id:'one',cwd});s.bindThread({id:'two',cwd});
+ const first=await s.monitor({threadId:'one'}),second=await s.monitor({threadId:'two'});
+ assert.deepEqual(first.result.structuredContent.items.map(row=>row.agent_id),['mine']);
+ assert.deepEqual(second.result.structuredContent.items.map(row=>row.agent_id),['foreign']);
+ await assert.rejects(s.read({threadId:'one',agentId:'foreign',kind:'status'}),/尚未观察到/);
+ assert.equal(rpc.lifecycle.filter(call=>call.method==='thread/start').length,1);
+ await s.close();assert.deepEqual(rpc.lifecycle.at(-1),{method:'thread/unsubscribe',params:{threadId:'reader-1'}});
+});
+
+test('closing a busy reader invalidates its result and releases only the internal thread',async()=>{
+ const gate=deferred(),rpc=client(()=>gate.promise),s=new DshReadService(rpc);s.bindThread({id:'history',cwd});s.observe('history',item('a'));
+ const pending=s.read({threadId:'history',agentId:'a',kind:'events'});await tick();
+ const rejected=assert.rejects(pending,/失效/),closed=s.close();gate.resolve({structuredContent:{events:[]}});
+ await rejected;await closed;
+ await assert.rejects(s.read({threadId:'history',agentId:'a',kind:'events'}),/尚未观察到/);
+ assert.deepEqual(rpc.lifecycle.map(call=>call.method),['thread/start','thread/unsubscribe']);
+});
+
+test('a directory rebound while status provenance is pending discards the old monitor',async()=>{
+ const status=deferred();let reached=false;
+ const rpc=client(async(method,params)=>{if(params.tool==='dsh_list')return {structuredContent:{items:[{agent_id:'a',status:'running'}]}};reached=true;return status.promise;});
+ const s=new DshReadService(rpc);s.bindThread({id:'history',cwd});const pending=s.monitor({threadId:'history'});await tick();assert.equal(reached,true);
+ const rejected=assert.rejects(pending,/失效/);s.bindThread({id:'history',cwd:path.join(cwd,'another-directory')});status.resolve({structuredContent:{agent_id:'a',parent_thread_id:'history',status:'running'}});await rejected;
+ assert.equal(s.observed.get('history')?.size||0,0);assert.equal(s.threads.get('history').values().length,0);await s.close();
+});
+
+test('directory-specific reader configurations never reuse another cwd provenance cache',async()=>{
+ let activeCwd=cwd,statusReads=0;const other=path.join(cwd,'another-directory');
+ const rpc=client(async(method,params)=>{
+  if(params.tool==='dsh_list'){activeCwd=params.arguments.cwd;return {structuredContent:{items:[{agent_id:'same-id',status:'running',updated_at:'same-stamp'}]}};}
+  statusReads++;return {structuredContent:{agent_id:'same-id',parent_thread_id:activeCwd===cwd?'one':'foreign',status:'running'}};
+ });
+ const s=new DshReadService(rpc);s.bindThread({id:'one',cwd});assert.equal((await s.monitor({threadId:'one'})).result.structuredContent.items.length,1);
+ s.bindThread({id:'one',cwd:other});assert.equal((await s.monitor({threadId:'one'})).result.structuredContent.items.length,0);assert.equal(statusReads,2);await s.close();
 });

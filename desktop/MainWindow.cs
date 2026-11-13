@@ -54,7 +54,19 @@ internal sealed class MainWindow : CaptionWindow {
    WriteStartupReport(session.Attempts,true);
    if(closing)return;
    var core=view.CoreWebView2;var settings=core.Settings;
-   settings.AreDevToolsEnabled=false;settings.AreDefaultContextMenusEnabled=false;settings.AreBrowserAcceleratorKeysEnabled=false;
+   settings.AreDevToolsEnabled=false;settings.AreDefaultContextMenusEnabled=true;settings.AreBrowserAcceleratorKeysEnabled=false;
+   // Keep WebView2's native editing commands and clipboard handling, without browser navigation/search actions.
+   // AreBrowserAcceleratorKeysEnabled=false does not disable Ctrl+C/X/V/A/Z.
+   core.ContextMenuRequested+=(_,e)=>{
+    var target=e.ContextMenuTarget;
+    if(!target.HasSelection&&!target.IsEditable){e.Handled=true;return;}
+    for(int i=e.MenuItems.Count-1;i>=0;i--){
+     string name=e.MenuItems[i].Name;
+     bool keep=(name is "copy" or "selectAll")||(target.IsEditable&&(name is "cut" or "paste" or "undo" or "redo" or "delete"));
+     if(!keep)e.MenuItems.RemoveAt(i);
+    }
+    if(e.MenuItems.Count==0)e.Handled=true;
+   };
    settings.IsWebMessageEnabled=false;settings.IsStatusBarEnabled=false;settings.IsPasswordAutosaveEnabled=false;settings.IsGeneralAutofillEnabled=false;
    core.PermissionRequested+=(_,e)=>{e.State=CoreWebView2PermissionState.Deny;e.Handled=true;};
    core.DownloadStarting+=(_,e)=>{e.Cancel=true;e.Handled=true;};
@@ -95,6 +107,13 @@ internal sealed class MainWindow : CaptionWindow {
     if(type.GetString()=="pickFolder"){
      if(message.EnumerateObject().Count()!=2||!message.TryGetProperty("requestId",out var request)||request.ValueKind!=JsonValueKind.String||!Guid.TryParseExact(request.GetString(),"D",out var id))throw new InvalidDataException();
      await PickFolderAsync(id.ToString("D"));continue;
+    }
+    if(type.GetString()=="launchInstaller"){
+     if(message.EnumerateObject().Count()!=4||!message.TryGetProperty("requestId",out var request)||request.ValueKind!=JsonValueKind.String||!Guid.TryParseExact(request.GetString(),"D",out var id)
+        ||!message.TryGetProperty("path",out var installer)||installer.ValueKind!=JsonValueKind.String||!message.TryGetProperty("sha256",out var digest)||digest.ValueKind!=JsonValueKind.String)throw new InvalidDataException();
+     string installerPath=installer.GetString()!,sha256=digest.GetString()!;
+     if(installerPath.Length==0||installerPath.Length>4096||installerPath.Contains('\0')||!Path.IsPathFullyQualified(installerPath)||sha256.Length!=64||sha256.Any(c=>!((c>='0'&&c<='9')||(c>='a'&&c<='f'))))throw new InvalidDataException();
+     await LaunchInstallerAsync(id.ToString("D"),installerPath,sha256);continue;
     }
     int fields=message.EnumerateObject().Count();
     if(type.GetString()!="theme"||(fields!=2&&fields!=3)||!message.TryGetProperty("theme",out var theme)||theme.ValueKind!=JsonValueKind.String)throw new InvalidDataException();
@@ -152,6 +171,14 @@ internal sealed class MainWindow : CaptionWindow {
   string? path=picker.ShowDialog(this)==DialogResult.OK?picker.SelectedPath:null;
   if(path!=null&&(path.Length==0||path.Length>4096||!Path.IsPathFullyQualified(path)||path.Contains('\0')))throw new InvalidDataException("Invalid folder selection");
   await WriteHostAsync(JsonSerializer.Serialize(new{action="folderPicked",requestId,path}));
+ }
+ async Task LaunchInstallerAsync(string requestId,string installerPath,string sha256){
+  if(closing)return;
+  string? error=null;
+  try{AppUpdateLauncher.Launch(installerPath,sha256);}
+  catch(AppUpdateLaunchUnknownException){error="APP_UPDATE_LAUNCH_UNKNOWN";}
+  catch{error="APP_UPDATE_NOT_EXECUTED";} // No exception paths or local details cross the protocol.
+  await WriteHostAsync(JsonSerializer.Serialize(new{action="installerLaunched",requestId,error}));
  }
  async Task WriteHostAsync(string message){
   await hostWrites.WaitAsync();

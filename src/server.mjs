@@ -1,4 +1,5 @@
 import http from 'node:http';
+import {spawn} from 'node:child_process';
 import {ConfigSettingsService} from './config-settings.mjs';
 import {DesktopState} from './desktop-state.mjs';
 import {ProjectStore} from './projects.mjs';
@@ -10,10 +11,11 @@ import os from 'node:os';
 import {GitCommandActions} from './git-command-actions.mjs';
 import {nativeCodex,resolveCodexRuntime} from './runtime-path.mjs';
 import {RuntimeManager} from './runtime-manager.mjs';
+import {AppUpdateService} from './app-update.mjs';
 import {PluginActionService} from './plugin-actions.mjs';
 import {FileAttachmentStore} from './file-attachments.mjs';
 import {AccountLoginService} from './account-login.mjs';
-import {scanLocalCodexUsage} from './local-usage-scan.mjs';
+import {scanLocalCodexUsage,discoverLocalCodexUsageDirectories} from './local-usage-scan.mjs';
 import {PricingService} from './pricing.mjs';
 import {StatisticsService,defaultStatisticsRoot} from './statistics.mjs';
 import {ArtifactPreviewService} from './artifacts.mjs';
@@ -37,10 +39,18 @@ import { createReopener } from './reopen.mjs';
 const publicDir=fileURLToPath(new URL('../public/',import.meta.url));
 const publicFiles={'/config-settings-panel.js':'config-settings-panel.js','/preferences.js':'preferences.js','/plugin-actions-panel.js':'plugin-actions-panel.js','/account-login-panel.js':'account-login-panel.js','/local-usage-panel.js':'local-usage-panel.js','/usage-statistics.js':'usage-statistics.js','/token-pricing.js':'token-pricing.js','/plugins.js':'plugins.js','/plugins.css':'plugins.css','/pr-review-panel.js':'pr-review-panel.js','/terminal.js':'terminal.js','/vendor/xterm.mjs':'vendor/xterm.mjs','/vendor/addon-fit.mjs':'vendor/addon-fit.mjs','/vendor/xterm.css':'vendor/xterm.css','/approval-schemas.js':'approval-schemas.js','/':'index.html','/index.html':'index.html','/app.js':'app.js','/styles.css':'styles.css','/style.css':'style.css','/store.js':'store.js','/dsh.js':'dsh.js','/dsh-live.js':'dsh-live.js','/runtime-panel.js':'runtime-panel.js','/markdown.js':'markdown.js','/submissions.js':'submissions.js','/attachments.js':'attachments.js','/account.js':'account.js','/reasoning.js':'reasoning.js','/remote.js':'remote.js','/icons.js':'icons.js','/state.js':'state.js','/icon.svg':'icon.svg'};
 const types={'.mjs':'text/javascript; charset=utf-8','.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml'};
+publicFiles['/session-controls.js']='session-controls.js';publicFiles['/session-controls.css']='session-controls.css';
+publicFiles['/ui/agent-inspector.js']='ui/agent-inspector.js';
+publicFiles['/account-quota.js']='account-quota.js';publicFiles['/ui/account-view.css']='ui/account-view.css';
+publicFiles['/delegated-changes.js']='delegated-changes.js';publicFiles['/agent-changes.js']='agent-changes.js';publicFiles['/ui/tool-activity.js']='ui/tool-activity.js';
+publicFiles['/delegation-monitor.js']='delegation-monitor.js';
+publicFiles['/agent-history.js']='agent-history.js';
+for(const file of ['about-view.js','about-view.css','notifications.js'])publicFiles['/ui/'+file]='ui/'+file;
+publicFiles['/ui/panel-resize.js']='ui/panel-resize.js';publicFiles['/ui/panel-resize.css']='ui/panel-resize.css';publicFiles['/project-name-dialog.js']='project-name-dialog.js';
 for(const file of ['format.js','chart.js','stats-view.js','account-view.js','live-changes.js','views.css','paste.js','artifacts.js','agents.js','access.js','lan-view.js','viewport.js','approvals-view.js','composer.js','dsh-view.js','preferences-view.js','remote-view.js','slash-menu.js','workbench-view.js','dsh-config-view.js','dsh-connection-view.js'])publicFiles['/ui/'+file]='ui/'+file;
 for(const file of ['activity-feed.js','activity-feed.css','projects.js','project-navigation.js','project-navigation.css'])publicFiles['/'+file]=file;
 async function body(req){let data='';for await(const chunk of req){data+=chunk;if(data.length>512*1024)throw new Error('请求太大');}try{return JSON.parse(data||'{}');}catch{throw new Error('无效 JSON');}}
-export async function createServer({client,cwd='',command='codex',demo=false,port=0,reopen=false,desktop=false,onDesktopTheme,onDesktopPickFolder,desktopStateRoot,projectStore,projectsRoot,fileAttachmentRoot,token=randomBytes(32).toString('hex'),prReviewService,runtimeManager,statisticsRoot,lanOptions,dshConfigSourcesService,dshConnectionService}={}){
+export async function createServer({client,cwd='',command='codex',demo=false,port=0,reopen=false,desktop=false,onDesktopTheme,onDesktopPickFolder,onDesktopLaunchInstaller,desktopStateRoot,projectStore,projectsRoot,fileAttachmentRoot,token=randomBytes(32).toString('hex'),prReviewService,runtimeManager,appUpdateService,statisticsRoot,lanOptions,dshConfigSourcesService,dshConnectionService}={}){
  let runtimeSource='configured';
  if(!client&&!demo){
   if(!command||command==='codex'||command==='codex.exe'){const resolved=resolveCodexRuntime();command=resolved.path;runtimeSource=resolved.source==='npm'||resolved.source==='desktop'?resolved.source:'configured';}
@@ -51,13 +61,27 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
  const temporaryProjects=demo&&!projectStore&&!projectsRoot?await mkdtemp(path.join(os.tmpdir(),'codex-light-demo-projects-')):null;
  const projects=projectStore||new ProjectStore({root:projectsRoot||temporaryProjects||undefined});
  const rpc=client || (demo?new DemoClient():new RpcClient({command,cwd:cwd||os.homedir()}));
- const sessions=new ThreadSessions(rpc,{onEvent:message=>broadcast(message)});
+ const sessions=new ThreadSessions(rpc,{onEvent:message=>broadcast(message),onThreadLoaded:result=>statistics.thread(result?.thread,result)});
  const artifacts=new ArtifactPreviewService({projects});
  const git=new GitService();
  const gitActions=new GitCommandActions();
  const pricing=new PricingService();
  const statistics=new StatisticsService({pricing,root:statisticsRoot??(!demo&&!client?defaultStatisticsRoot():null)});await statistics.load();
- let usageScan=null;
+ let usageScan=null,usageScanPromise=null,usageScanDirectory=null,modelRecovery=null,modelRecoveryError=null,dshResetError=null;
+ function importUsageDirectory(directory){
+  if(usageScanPromise){
+   if(path.resolve(directory).toLowerCase()===path.resolve(usageScanDirectory).toLowerCase())return usageScanPromise;
+   throw new Error('已有其他目录的扫描正在进行');
+  }
+  const controller=new AbortController();usageScan=controller;usageScanDirectory=directory;
+  const timeout=setTimeout(()=>controller.abort(),60000);
+  usageScanPromise=(async()=>{
+   const scan=await scanLocalCodexUsage(directory,{signal:controller.signal});
+   if(!scan.filesRead)throw new Error(scan.diagnosticCounts?.['access-denied']?'无法读取 Codex 日志目录':scan.diagnosticCounts?.cancelled?'扫描已取消，请重试':'目录中没有可读取的 Codex 日志');
+   statistics.importLocal(scan);modelRecoveryError=null;return scan;
+  })().finally(()=>{clearTimeout(timeout);usageScan=null;usageScanPromise=null;usageScanDirectory=null;});
+  return usageScanPromise;
+ }
  const terminal=new TerminalService(rpc);
  const accountLogin=new AccountLoginService(rpc);
  const pluginActions=new PluginActionService({rpc});
@@ -70,6 +94,11 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
  const prReview=prReviewService||new PrReviewService();
  const fileUploads=new FileAttachmentStore(fileAttachmentRoot?{root:fileAttachmentRoot}:{});
  const loginTimers=new Set();
+ const appVersion=JSON.parse(await readFile(new URL('../package.json',import.meta.url),'utf8')).version;
+ const appUpdates=appUpdateService||new AppUpdateService({currentVersion:appVersion,...(desktop?{launchFn:async(file,metadata)=>{
+  if(typeof onDesktopLaunchInstaller!=='function')throw Object.assign(new Error('当前桌面宿主不支持启动应用安装程序'),{outcome:'notExecuted',code:'APP_UPDATE_HOST_UNAVAILABLE'});
+  return onDesktopLaunchInstaller(file,metadata);
+ }}:{})});
  const dsh=new DshReadService(rpc);const uploads=new UploadStore();const streams=new Set();const operations=new OperationStore({hooks:desktopState?{before:r=>desktopState.before(r),after:r=>desktopState.after(r)}:undefined});const runtime=runtimeManager||new RuntimeManager({currentPath:command,currentSource:runtimeSource,operations,rpc});let origin;let stopping=false;let closing;let serviceShutdown;let shutdownError=null;let engineStopped=false;let reopener;let reopenError=null;let remoteEnvironment=null;const remoteClients=new Set();let remotePairing=null;let pairingTimer;
  function clearPairing(){clearTimeout(pairingTimer);remotePairing=null;for(const entry of operations.entries.values())if(entry.method==='remoteControl/pairing/start'&&entry.result){delete entry.result.pairingCode;delete entry.result.manualPairingCode;entry.result.expired=true;}}
  const json=(res,status,data)=>{if(res.destroyed || res.writableEnded)return;res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(data));};
@@ -87,13 +116,14 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
    if(Buffer.byteLength(auth)!==Buffer.byteLength(expected)||!timingSafeEqual(Buffer.from(auth),Buffer.from(expected))){json(res,401,{error:'访问凭据已失效，请重新启动 GUI'});return;}
    try{
     if(['/api/dsh/config-sources/','/api/dsh/connection/'].some(prefix=>url.pathname.startsWith(prefix))&&requestAccess!=='local'){json(res,403,{error:'DSH 配置和连接管理仅限本机',code:'LOCAL_ONLY',outcome:'notExecuted'});return;}
+    if(url.pathname.startsWith('/api/app-update/')&&requestAccess!=='local'){json(res,403,{error:'应用更新仅限本机操作',code:'LOCAL_ONLY',outcome:'notExecuted'});return;}
     if(stopping&&req.method==='POST'&&url.pathname!=='/api/shutdown')throw Object.assign(new Error('Light 正在关闭，此请求未发送'),{code:'CLIENT_CLOSING',outcome:'notExecuted',status:409});
     if(url.pathname==='/api/events' && req.method==='GET'){
      res.writeHead(200,{'Content-Type':'text/event-stream','Connection':'keep-alive'});res.write(': connected\n\n');streams.add(res);
      const heartbeat=setInterval(()=>{if(res.writableLength>4*1024*1024)res.destroy();else res.write(': keepalive\n\n');},15000);
      req.on('close',()=>{streams.delete(res);clearInterval(heartbeat);});return;
     }
-    if(url.pathname==='/api/status' && req.method==='GET'){json(res,200,{connected:rpc.connected,demo,desktop:requestDesktop,access:requestAccess,stopping,engineStopped,shutdownError,threadSessions:sessions.snapshot(),persistenceWarning:operations.persistenceWarning||desktopState?.persistenceWarning||null,version:rpc.version||null,error:rpc.lastError||null,pendingRequests:[...rpc.requests.values()].map(presentRequest),serverInstance:operations.serverInstance,operationRetentionMs:operations.retentionMs,reopenAvailable:requestAccess==='local'&&!!reopener,reopenError:requestAccess==='local'?reopenError:null});return;}
+    if(url.pathname==='/api/status' && req.method==='GET'){json(res,200,{connected:rpc.connected,demo,desktop:requestDesktop,access:requestAccess,stopping,engineStopped,shutdownError,threadSessions:sessions.snapshot(),persistenceWarning:operations.persistenceWarning||desktopState?.persistenceWarning||null,version:rpc.version||null,error:rpc.lastError||null,dshError:dsh.releaseError||dshResetError,pendingRequests:[...rpc.requests.values()].map(presentRequest),serverInstance:operations.serverInstance,operationRetentionMs:operations.retentionMs,reopenAvailable:requestAccess==='local'&&!!reopener,reopenError:requestAccess==='local'?reopenError:null});return;}
     if(url.pathname==='/api/operations' && req.method==='GET'){json(res,200,operations.get(url.searchParams.get('requestId')));return;}
     if(url.pathname==='/api/config' && req.method==='GET'){json(res,200,{cwd,codexCommand:command});return;}
     if(url.pathname==='/api/projects'&&req.method==='GET'){json(res,200,{...await projects.list(),canPickFolder:requestDesktop&&typeof onDesktopPickFolder==='function'});return;}
@@ -127,6 +157,20 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      json(res,200,await uploads.add(req,{filename}));return;
     }
     const input=await body(req);
+    if(url.pathname.startsWith('/api/app-update/')){
+     const action=url.pathname.slice('/api/app-update/'.length);
+     if(!input||typeof input!=='object'||Array.isArray(input))throw new Error('应用更新参数无效');
+     if(action==='status'||action==='check'){
+      if(Object.keys(input).length)throw new Error('应用更新参数无效');
+      const result=action==='status'?appUpdates.status():await appUpdates.check();json(res,200,{...result,demo});return;
+     }
+     if(!['download','install'].includes(action)){json(res,404,{error:'未知应用更新操作',outcome:'notExecuted'});return;}
+     if(demo)throw Object.assign(new Error('演示模式不能下载或安装真实应用更新'),{code:'APP_UPDATE_DEMO',outcome:'notExecuted'});
+     const keys=action==='download'?'requestId,version':'confirmed,requestId,version';
+     if(Object.keys(input).sort().join(',')!==keys)throw Object.assign(new Error('应用更新参数无效'),{code:'APP_UPDATE_INPUT_INVALID',outcome:'notExecuted'});
+     const {requestId,...params}=input;
+     const result=await operations.execute(requestId,'app-update/'+action,params,()=>appUpdates[action](params));json(res,200,{...result,demo});return;
+    }
     if(url.pathname.startsWith('/api/lan/')){
      if(requestAccess!=='local')throw Object.assign(new Error('此操作仅限本机窗口'),{status:403});
      const action=url.pathname.slice('/api/lan/'.length);
@@ -141,6 +185,20 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      const selected=await onDesktopPickFolder();
      if(selected!==null&&(typeof selected!=='string'||selected.length>4096||selected.includes('\0')||!path.isAbsolute(selected)))throw new Error('原生文件夹选择返回了无效路径');
      json(res,200,{path:selected});return;
+    }
+    if(url.pathname==='/api/projects/open'){
+     if(requestAccess!=='local')throw Object.assign(new Error('在资源管理器中打开仅限本机'),{status:403});
+     if(process.platform!=='win32')throw new Error('当前系统不支持 Windows 资源管理器');
+     if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).join(',')!=='id'||typeof input.id!=='string')throw new Error('项目参数无效');
+     const snapshot=await projects.list(),project=snapshot.projects.find(item=>item.id===input.id);if(!project)throw new Error('找不到该项目，请刷新项目列表。');
+     const directory=await projects.directory(project.path);
+     if(!path.win32.isAbsolute(directory)||directory.startsWith('/')||directory.startsWith('-'))throw new Error('项目文件夹路径无效');
+     await new Promise((resolve,reject)=>{const child=spawn(path.join(process.env.SystemRoot||'C:\\Windows','explorer.exe'),[directory],{shell:false,windowsHide:true,stdio:'ignore'});child.once('error',reject);child.once('spawn',()=>{child.unref();resolve();});});
+     json(res,200,{opened:true});return;
+    }
+    if(url.pathname==='/api/projects/update'){
+     if(!input||typeof input!=='object'||Array.isArray(input)||typeof input.id!=='string'||Object.keys(input).some(key=>!['id','name','pinned'].includes(key)))throw new Error('项目参数无效');
+     const {id,...changes}=input;json(res,200,await projects.updateMetadata(id,changes));return;
     }
     if(['/api/projects/add','/api/projects/select','/api/projects/remove'].includes(url.pathname)){
      const action=url.pathname.slice('/api/projects/'.length),field=action==='add'?'path':'id';
@@ -203,12 +261,28 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      res.setHeader('Content-Security-Policy',"sandbox; default-src 'none'; script-src 'none'; object-src 'none'; frame-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'");
      res.writeHead(200,{'Content-Type':image.mime,'Content-Length':image.bytes.length,'Content-Disposition':'attachment; filename="artifact.'+({'image/png':'png','image/jpeg':'jpg','image/webp':'webp','image/gif':'gif','image/vnd.microsoft.icon':'ico','image/svg+xml':'svg'})[image.mime]+'"','X-Artifact-Width':String(image.width),'X-Artifact-Height':String(image.height)});res.end(image.bytes);return;
     }
-    if(url.pathname==='/api/statistics/query'){json(res,200,statistics.query(input));return;}
+    if(url.pathname==='/api/statistics/query'){
+     let result=statistics.query(input);
+     if(!demo&&requestAccess==='local'&&input.scope!=='local'&&result.coverage?.unknownModelRows>0){
+      if(!modelRecovery)modelRecovery=(async()=>{
+       const found=await discoverLocalCodexUsageDirectories();
+       if(found.directory)await importUsageDirectory(found.directory);
+      })().catch(error=>{modelRecoveryError=error.message;modelRecovery=null;});
+      await modelRecovery;result=statistics.query(input);
+      if(modelRecoveryError)result.coverage.modelRecoveryError=modelRecoveryError;
+     }
+     json(res,200,result);return;
+    }
+    if(url.pathname==='/api/statistics/directories'){
+     if(Object.keys(input).length)throw new Error('目录发现参数无效');
+     if(requestAccess!=='local')throw Object.assign(new Error('本机日志目录仅限本机访问'),{status:403});
+     json(res,200,demo?{directory:null,directories:[]}:await discoverLocalCodexUsageDirectories());return;
+    }
     if(['/api/local-usage/scan','/api/statistics/import'].includes(url.pathname)){
      if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(k=>k!=='directory')||typeof input.directory!=='string'||input.directory.length>4096)throw new Error('扫描目录参数无效');
-     if(demo)throw new Error('演示模式不读取本机历史');if(usageScan)throw new Error('已有扫描正在进行');
-     const controller=new AbortController();usageScan=controller;const timeout=setTimeout(()=>controller.abort(),60000);const disconnect=()=>{if(!res.writableEnded)controller.abort();};res.once('close',disconnect);
-     try{const scan=await scanLocalCodexUsage(input.directory,{signal:controller.signal});statistics.importLocal(scan);json(res,200,url.pathname==='/api/statistics/import'?{imported:true,scan:{filesRead:scan.filesRead,bytesRead:scan.bytesRead,partial:scan.partial,diagnosticCounts:scan.diagnosticCounts},statistics:statistics.query({scope:'local'})}:scan);}finally{clearTimeout(timeout);res.off('close',disconnect);usageScan=null;}return;
+     if(demo)throw new Error('演示模式不读取本机历史');
+     const scan=await importUsageDirectory(input.directory);
+     json(res,200,url.pathname==='/api/statistics/import'?{imported:true,scan:{filesRead:scan.filesRead,bytesRead:scan.bytesRead,partial:scan.partial,diagnosticCounts:scan.diagnosticCounts},statistics:statistics.query({scope:'local'})}:scan);return;
     }
     if(url.pathname==='/api/pricing/status'){if(Object.keys(input).length)throw new Error('价格参数无效');json(res,200,pricing.status());return;}
     if(url.pathname==='/api/pricing/refresh'){if(Object.keys(input).length)throw new Error('价格参数无效');if(demo)throw new Error('演示模式不请求真实价格服务');json(res,200,await pricing.refresh());return;}
@@ -269,7 +343,9 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
       if(params.cwd){try{const info=await stat(params.cwd);if(!info.isDirectory())throw new Error('工作目录不是文件夹');}catch(error){error.outcome='notExecuted';throw error;}}
       if(!rpc.connected)throw Object.assign(new Error(rpc.lastError || 'Codex 正在连接，请稍后重试'),{code:'NOT_CONNECTED',outcome:'notExecuted'});
       if(input.method==='remoteControl/pairing/start')clearPairing();
-      const output=await sessions.call(input.method,params);statistics.acknowledge(input.method,params,output);if(output?.thread)artifacts.bindThread(output.thread);observeRemote(input.method,params,output);return output;
+      const output=await sessions.call(input.method,params);statistics.acknowledge(input.method,params,output);if(output?.thread)artifacts.bindThread(output.thread);
+      if(['turn/start','turn/steer'].includes(input.method))artifacts.observe(params.threadId,{type:'userMessage',content:params.input});
+      observeRemote(input.method,params,output);return output;
      };
      const dshGeneration=dsh.generation;
      const result = MUTATING_METHODS.has(input.method)
@@ -278,8 +354,9 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      if(input.method==='plugin/list')result.actionHandles=pluginActions.observeCatalog(params,result);
      if(dshGeneration===dsh.generation && input.method.startsWith('thread/'))dsh.bindThread(result?.thread);
      const historyThread=result?.thread?.id || params.threadId;
-     if(input.method==='thread/items/list')for(const row of [...(result?.data||[])].reverse())dsh.observe(historyThread,row.item||row,{older:true});
-     if(result?.thread?.turns)for(const turn of result.thread.turns)for(const item of turn.items||[])dsh.observe(historyThread,item,{older:true});
+     if(input.method==='thread/items/list')for(const row of [...(result?.data||[])].reverse()){dsh.observe(historyThread,row.item||row,{older:true});artifacts.observe(historyThread,row.item||row);}
+     if(input.method==='thread/turns/list')for(const turn of result?.data||[])for(const item of turn.items||[])artifacts.observe(historyThread,item);
+     if(result?.thread?.turns)for(const turn of result.thread.turns)for(const item of turn.items||[]){dsh.observe(historyThread,item,{older:true});artifacts.observe(historyThread,item);}
      json(res,200,result);return;
     }
     if(url.pathname==='/api/dsh/monitor'){
@@ -332,7 +409,20 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
  function broadcast(message){const exposed=message.id!==undefined&&typeof message.method==='string'?presentRequest(message):message;const event=`data: ${JSON.stringify(exposed)}\n\n`;for(const res of streams){if(res.destroyed){streams.delete(res);continue;}if(res.writableLength>4*1024*1024){streams.delete(res);res.destroy();}else res.write(event);}}
  accountLogin.on('event',event=>{if(['completed','failed','canceled','loggedOut','unknown','closed'].includes(event.params.state)){for(const entry of operations.entries.values())if(entry.method==='account/start'&&entry.result){delete entry.result.authUrl;delete entry.result.verificationUrl;delete entry.result.userCode;entry.result.redacted=true;}}broadcast(event);});
  terminal.on('event',broadcast);
- rpc.on('event',message=>{statistics.observe(message);sessions.observe(message);if(message.method==='account/updated'||(message.method==='bridge/status'&&message.params?.connected===false)){pluginActions.clear();configSettings.clear();dsh.clear();}accountLogin.observe(message);if(message.method==='account/login/completed'){dsh.clear();return;}terminal.observe(message);if(message.method==='bridge/status'&&message.params?.connected===false)terminal.disconnected();if(message.method==='remoteControl/status/changed')observeRemote('remoteControl/status/read',{},message.params);if(['item/started','item/completed'].includes(message.method))dsh.observe(message.params?.threadId,message.params?.item);broadcast(message);});
+ function clearDsh(){dsh.clear().then(()=>{dshResetError=null;},error=>{dshResetError=error?.message||'子代理读取会话清理失败';});}
+ rpc.on('event',message=>{
+  const threadId=message.params?.threadId||message.params?.thread?.id;
+  if(threadId&&dsh.isReaderThread(threadId))return;
+  statistics.observe(message);sessions.observe(message);
+  if(message.method==='account/updated'||(message.method==='bridge/status'&&message.params?.connected===false)){pluginActions.clear();configSettings.clear();clearDsh();}
+  accountLogin.observe(message);
+  if(message.method==='account/login/completed'){clearDsh();return;}
+  terminal.observe(message);
+  if(message.method==='bridge/status'&&message.params?.connected===false)terminal.disconnected();
+  if(message.method==='remoteControl/status/changed')observeRemote('remoteControl/status/read',{},message.params);
+  if(['item/started','item/completed'].includes(message.method)){dsh.observe(message.params?.threadId,message.params?.item);artifacts.observe(message.params?.threadId,message.params?.item);}
+  broadcast(message);
+ });
  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',resolve);});
  origin=`http://127.0.0.1:${server.address().port}`;
  if(reopen){try{reopener=await createReopener({url:`${origin}/#token=${token}`,serverInstance:operations.serverInstance});}catch{reopenError='安全重开通道不可用；关闭窗口后请恢复原窗口，不会通过不安全方式返回访问令牌';}}
@@ -341,8 +431,9 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
   if(serviceShutdown)return serviceShutdown;
   stopping=true;configSettings.clear();gitActions.plans.clear();pluginActions.clear();
   for(const timer of loginTimers)clearTimeout(timer);loginTimers.clear();usageScan?.abort();clearPairing();
-  serviceShutdown=Promise.all([lan.close(),terminal.close(),accountLogin.close(),Promise.resolve(runtime.close?.()),sessions.close().then(()=>rpc.close()).then(()=>{engineStopped=true;})]).then(async()=>{
-   dsh.clear();await Promise.all([uploads.close(),fileUploads.close(),statistics.close(),artifacts.close()]);
+  const stopEngine=(async()=>{try{await Promise.all([sessions.close(),dsh.close()]);}finally{await rpc.close();engineStopped=true;}})();
+  serviceShutdown=Promise.all([lan.close(),terminal.close(),accountLogin.close(),Promise.resolve(runtime.close?.()),Promise.resolve(appUpdates.close?.()),stopEngine]).then(async()=>{
+   await Promise.all([uploads.close(),fileUploads.close(),statistics.close(),artifacts.close()]);
    await desktopState?.queue;await projects.queue;
    if(temporaryState)await rm(temporaryState,{recursive:true,force:true});
    if(temporaryProjects)await rm(temporaryProjects,{recursive:true,force:true});
@@ -356,7 +447,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
   closing=Promise.all([stopped,new Promise(resolve=>server.close(resolve)),Promise.resolve(reopener?.close())]);return closing;
  }
  const started=rpc.start().catch(error=>{rpc.lastError=error.message;return null;});
- return {server,lan,rpc,sessions,statistics,artifacts,operations,uploads,fileUploads,dsh,terminal,runtime,projectStore:projects,reopenEndpoint:reopener?.endpoint,origin,token,url:`${origin}/#token=${token}`,close,started};
+ return {server,lan,rpc,sessions,statistics,artifacts,operations,uploads,fileUploads,dsh,terminal,runtime,appUpdates,projectStore:projects,reopenEndpoint:reopener?.endpoint,origin,token,url:`${origin}/#token=${token}`,close,started};
 }
 if(process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href===import.meta.url){
  const args=process.argv.slice(2);const get=key=>args.includes(key)?args[args.indexOf(key)+1]:undefined;

@@ -1,6 +1,8 @@
 import {MUTATING_REMOTE_METHODS} from './remote.mjs';
 import { createHash, randomBytes } from 'node:crypto';
 export const MUTATING_METHODS = new Set(['thread/start','turn/start','turn/steer','turn/interrupt','thread/compact/start','thread/name/set','thread/archive','thread/unarchive','thread/fork','review/start',...MUTATING_REMOTE_METHODS]);
+MUTATING_METHODS.add('account/rateLimitResetCredit/consume');
+MUTATING_METHODS.add('app-update/download');MUTATING_METHODS.add('app-update/install');
 const fail = (message,code,outcome='notExecuted',status=409) => Object.assign(new Error(message),{code,outcome,status});
 function canonical(value) {
   if(Array.isArray(value))return value.map(canonical);

@@ -45,8 +45,8 @@ function turnThroughput(row){
 }
 function cost(row,pricing){
  let estimate=null;
- if(row.provider==='openai'&&row.model&&row.model.length<=200){try{estimate=estimateTokenCost({...row.tokens,model:row.model},pricing.get(row.model));}catch{/* Exact model/provider or schema is unavailable; no price fallback. */}}
- return {kind:'reference-estimate',currency:'USD',usd:estimate?.complete?estimate.usd:null,complete:estimate?.complete===true&&row.tokensComplete===true};
+ if(row.provider&&row.model&&row.model.length<=200){try{estimate=estimateTokenCost({...row.tokens,model:row.model,provider:row.provider},pricing.get(row.model,row.provider));}catch{/* Exact model/provider or schema is unavailable; no price fallback. */}}
+ return {kind:'reference-estimate',currency:'USD',usd:estimate?.complete?estimate.usd:null,complete:estimate?.complete===true&&row.tokensComplete===true,components:estimate?.components||[],reason:estimate?.reason||(!row.model||!row.provider?'模型或供应商未知':null)};
 }
 function aggregate(rows){
  const tokenTotals=Object.fromEntries(TOKEN_KEYS.map(key=>{const known=rows.map(row=>n(row.tokens[key])).filter(value=>value!==null);const sum=known.reduce((a,b)=>a+b,0);return [key,known.length&&Number.isSafeInteger(sum)?sum:null];}));
@@ -59,7 +59,7 @@ function aggregate(rows){
  const submissions=rows.map(row=>n(row.submissionCount)).filter(value=>value!==null);
  return {rowCount:rows.length,turnCount:turns.length,submissionCount:submissions.length?submissions.reduce((sum,value)=>sum+value,0):rows.length?null:0,requestCount:null,...tokenTotals,cacheHitRate:input>0?cached/input:null,
   completedCount,failedCount,interruptedCount,runningCount:count('inProgress'),unknownCount:count('unknown'),successRate:terminal?completedCount/terminal:null,errorRate:terminal?failedCount/terminal:null,interruptionRate:terminal?interruptedCount/terminal:null,
-  estimatedCost:{kind:'reference-estimate',currency:'USD',usd:priced.length?priced.reduce((sum,row)=>sum+row.estimatedCost.usd,0):null,pricedRows:priced.length,totalRows:rows.length,complete:rows.length>0&&rows.every(row=>row.estimatedCost.complete)},
+  estimatedCost:{kind:'reference-estimate',currency:'USD',usd:priced.length?priced.reduce((sum,row)=>sum+row.estimatedCost.usd,0):null,pricedRows:priced.length,unpricedRows:rows.length-priced.length,totalRows:rows.length,complete:rows.length>0&&rows.every(row=>row.estimatedCost.complete)},
   performance:{...Object.fromEntries(METRICS.map(key=>[key,percentiles(turns.map(row=>row.performance[key]))])),turnOutputTokensPerSecond:percentiles(turns.map(row=>row.performance.turnOutputTokensPerSecond)),ttftMs:null,outputTokensPerSecond:null}};
 }
 
@@ -99,7 +99,7 @@ export class StatisticsService {
  }
  thread(thread,result={}){
   if(!id(thread?.id))return;
-  const prior=this.threads.get(thread.id)||{};const info={model:id(result.model)||id(thread.model)||prior.model||null,provider:providerId(thread.modelProvider)||prior.provider||null};
+  const prior=this.threads.get(thread.id)||{};const info={model:id(result.model)||id(thread.model)||prior.model||null,provider:providerId(result.modelProvider)||providerId(thread.modelProvider)||prior.provider||null};
   this.threads.set(thread.id,info);if(this.threads.size>1000)this.threads.delete(this.threads.keys().next().value);
  }
  rememberBaseline(threadId,value){this.baselines.set(threadId,value);while(this.baselines.size>1000){const oldest=this.baselines.keys().next().value;this.baselines.delete(oldest);this.blockedTokenThreads.delete(oldest);}}
@@ -109,11 +109,15 @@ export class StatisticsService {
   const turnId=id(result?.turn?.id)||id(result?.turnId)||[...this.rows.values()].find(row=>row.threadId===params.threadId&&row.status==='inProgress')?.turnId;if(!turnId)return;
   const key=keyFor(params.threadId,turnId);let row=this.rows.get(key);
   if(!row){row=blankRow(params.threadId,turnId,'light-events');row.timestamp=new Date(this.now()).toISOString();this.rows.set(key,row);}
-  row.submissionCount++;const info=this.threads.get(params.threadId)||{};row.model=id(params.model)||row.model||info.model||null;row.provider=row.provider||info.provider||null;this.changed();
+  row.submissionCount++;const info=this.threads.get(params.threadId)||{};row.model=id(params.model)||row.model||info.model||null;row.provider=row.provider||info.provider||null;
+  // An accepted explicit override becomes the thread's effective model for subsequent turns.
+  if(method==='turn/start'&&id(params.model))this.threads.set(params.threadId,{...info,model:id(params.model)});
+  this.changed();
  }
  observe(message){
   const p=message.params||{},threadId=id(p.threadId),turnId=id(p.turn?.id)||id(p.turnId),key=threadId&&turnId?keyFor(threadId,turnId):null;
-  if(message.method==='bridge/status'&&p.connected===false){for(const [k,a] of this.active){const row=this.rows.get(k);if(row?.status==='inProgress')row.status='unknown';}this.active.clear();this.changed();return;}
+  if(message.method==='bridge/status'&&p.connected===false){for(const [k,a] of this.active){const row=this.rows.get(k);if(row?.status==='inProgress')row.status='unknown';}this.active.clear();this.threads.clear();this.baselines.clear();this.blockedTokenThreads.clear();this.changed();return;}
+  if(message.method==='thread/started'){this.thread(p.thread);return;}
   if(!threadId)return;
   if(message.method==='thread/tokenUsage/updated'){
    const current=tokens(p.tokenUsage?.total),previous=this.baselines.get(threadId);this.rememberBaseline(threadId,current);
@@ -152,19 +156,43 @@ export class StatisticsService {
   }
  }
  finishStream(active,row,itemId){const stream=active.streams.get(itemId);if(!stream||stream.done)return;stream.done=true;const elapsed=stream.last-stream.first;if(elapsed>0&&stream.afterFirstChars>0){active.streamChars+=stream.afterFirstChars;active.streamMs+=elapsed;row.performance.textCharsPerSecond=active.streamChars/(active.streamMs/1000);}}
+ recoverLocalModels(scan){
+  const evidence=new Map();
+  for(const session of scan.sessions||[]){
+   if(session.turnAttribution==='deferred')continue;
+   for(const turn of session.turns||[]){
+    if(!id(session.threadId)||!id(turn.turnId))continue;
+    const key=keyFor(session.threadId,turn.turnId);let entry=evidence.get(key);if(!entry){entry={models:new Set(),providers:new Set()};evidence.set(key,entry);}
+    if(id(turn.model))entry.models.add(turn.model);if(providerId(turn.provider))entry.providers.add(turn.provider);
+   }
+  }
+  let updatedRows=0,modelRows=0,providerRows=0,ambiguousRows=0;
+  for(const row of this.rows.values()){
+   const entry=evidence.get(row.id);if(!entry)continue;let changed=false;
+   if(entry.models.size>1||entry.providers.size>1||(row.model&&entry.models.size===1&&!entry.models.has(row.model))){ambiguousRows++;continue;}
+   // Exact thread + turn context only. Never fill historical rows from current defaults or another turn.
+   if(!row.model&&entry.models.size===1){row.model=[...entry.models][0];modelRows++;changed=true;}
+   if(!row.provider&&entry.providers.size===1){row.provider=[...entry.providers][0];providerRows++;changed=true;}
+   if(changed)updatedRows++;
+  }
+  if(updatedRows)this.changed();
+  return {updatedRows,modelRows,providerRows,ambiguousRows};
+ }
  importLocal(scan){
+  const recovered=this.recoverLocalModels(scan);
   const overlap=new Set(scan.overlappingThreadIds||[]),out=new Map();let excluded=0;
   for(const session of scan.sessions||[]){
-   if(overlap.has(session.threadId)||session.attribution!=='observed-differences-only'){excluded++;continue;}
-   for(const t of session.turns||[]){const row=blankRow(session.threadId,t.turnId,'local-codex-jsonl');Object.assign(row,{submissionCount:null,model:id(t.model),provider:providerId(t.provider),startedAt:iso(t.startedAt),completedAt:iso(t.completedAt),status:statuses.has(t.status)&&t.status!=='inProgress'?t.status:'unknown'});row.timestamp=row.startedAt||row.completedAt;if(row.startedAt&&row.completedAt){const duration=Date.parse(row.completedAt)-Date.parse(row.startedAt);row.performance.durationMs=duration>=0?duration:null;}out.set(row.id,row);}
-   for(const inc of session.increments||[]){
+   if(session.attribution!=='observed-differences-only')excluded++;
+   for(const t of session.turns||[]){const row=out.get(keyFor(session.threadId,t.turnId))||blankRow(session.threadId,t.turnId,'local-codex-jsonl');Object.assign(row,{submissionCount:null,model:row.model||id(t.model),provider:row.provider||providerId(t.provider),startedAt:row.startedAt||iso(t.startedAt),completedAt:row.completedAt||iso(t.completedAt),status:statuses.has(t.status)&&!['inProgress','unknown'].includes(t.status)?t.status:row.status});row.timestamp=row.startedAt||row.completedAt;if(row.startedAt&&row.completedAt){const duration=Date.parse(row.completedAt)-Date.parse(row.startedAt);row.performance.durationMs=duration>=0?duration:null;}out.set(row.id,row);}
+   for(const inc of !overlap.has(session.threadId)&&session.attribution==='observed-differences-only'?session.increments||[]:[]){
     const turn=id(inc.turnId),key=turn?keyFor(session.threadId,turn):'usage:'+createHash('sha256').update(JSON.stringify([session.threadId,session.sourceId,inc.record])).digest('hex');let row=out.get(key);
     if(!row){row=blankRow(session.threadId,turn,'local-codex-jsonl');row.submissionCount=null;row.id=key;row.kind=turn?'turn':'usage-observation';row.timestamp=iso(inc.timestamp);row.model=id(inc.model);row.provider=providerId(inc.provider);out.set(key,row);}
     if(!row.timestamp)row.timestamp=iso(inc.timestamp);
     addUsage(row,tokens(inc.tokens));
    }
   }
-  this.localRows=[...out.values()].slice(-this.limit);this.localCoverage={partial:scan.partial||out.size>this.limit,excludedOverlappingThreads:overlap.size,excludedAmbiguousSessions:excluded};this.revision++;
+  for(const row of out.values())row.unknownTokenFields=TOKEN_KEYS.filter(key=>row.tokens[key]===null);
+  this.localRows=[...out.values()].sort((a,b)=>(b.timestamp||'').localeCompare(a.timestamp||'')).slice(0,this.limit);this.localCoverage={partial:scan.partial||out.size>this.limit||excluded>0||overlap.size>0,excludedOverlappingThreads:overlap.size,excludedAmbiguousSessions:excluded};this.revision++;return {recovered};
  }
  query(input={}){
   if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['scope','from','to','bucket','model','provider','cursor','limit'].includes(key)))throw error('统计查询参数无效');
@@ -184,7 +212,7 @@ export class StatisticsService {
   const buckets=new Map(),duration=bucket==='hour'?3600000:86400000;for(const row of rows){if(!row.timestamp)continue;const time=Math.floor(Date.parse(row.timestamp)/duration)*duration,start=new Date(time).toISOString();if(!buckets.has(start))buckets.set(start,[]);buckets.get(start).push(row);}
   const notes=['回合/提交数量不是上游模型API请求数。','Token仅累加有可验证基线的观察差分，首段缺失或重放不补猜。','回合平均输出为已完成回合的输出tokens/整轮秒数，包含思考、工具和等待，不是纯模型生成速度。','首次可见输出等待不是API TTFT；缺少对应推理耗时时不展示模型生成tok/s。','本地日志、本应用观测和官方账户统计不可相加。','费用仅为可匹配模型及provider的社区参考估算，不是账单。'];
   return {scope,generatedAt:new Date(this.now()).toISOString(),totals:aggregate(rows),trend:[...buckets].sort(([a],[b])=>a.localeCompare(b)).map(([start,items])=>({start,...aggregate(items)})),models:group('model'),providers:group('provider'),details:{data:rows.slice(offset,offset+limit),total:rows.length,nextCursor:offset+limit<rows.length?Buffer.from(JSON.stringify({id:snapshot.id,offset:offset+limit})).toString('base64url'):null},
-   coverage:{source:scope==='light'?'light-events':'local-codex-jsonl',partial:(scope==='light'?this.truncated:this.localCoverage.partial)||rows.some(row=>!row.tokensComplete),excludedOverlappingThreads:scope==='local'?this.localCoverage.excludedOverlappingThreads:0,excludedAmbiguousSessions:scope==='local'?this.localCoverage.excludedAmbiguousSessions:0,tokenRows:Object.fromEntries(TOKEN_KEYS.map(key=>[key,rows.filter(row=>row.tokens[key]!==null).length])),completeTokenRows:rows.filter(row=>row.tokensComplete).length,cacheHitRows:rows.filter(row=>row.tokens.inputTokens!==null&&row.tokens.cachedInputTokens!==null&&row.tokens.cachedInputTokens<=row.tokens.inputTokens).length,observedTurns:rows.filter(row=>row.kind==='turn').length,usageObservations:rows.filter(row=>row.kind==='usage-observation').length,retainedLimit:this.limit,persistenceWarning:this.persistenceWarning,notes},pricing:snapshot.pricing,dsh:{available:false,reason:'公开任务事件尚无已核实的用量和生成性能口径；不读取私有供应商账户或猜测费用。'}};
+   coverage:{source:scope==='light'?'light-events':'local-codex-jsonl',partial:(scope==='light'?this.truncated:this.localCoverage.partial)||rows.some(row=>!row.tokensComplete),knownModelRows:rows.filter(row=>row.model!==null).length,unknownModelRows:rows.filter(row=>row.model===null).length,excludedOverlappingThreads:scope==='local'?this.localCoverage.excludedOverlappingThreads:0,excludedAmbiguousSessions:scope==='local'?this.localCoverage.excludedAmbiguousSessions:0,tokenRows:Object.fromEntries(TOKEN_KEYS.map(key=>[key,rows.filter(row=>row.tokens[key]!==null).length])),completeTokenRows:rows.filter(row=>row.tokensComplete).length,cacheHitRows:rows.filter(row=>row.tokens.inputTokens!==null&&row.tokens.cachedInputTokens!==null&&row.tokens.cachedInputTokens<=row.tokens.inputTokens).length,observedTurns:rows.filter(row=>row.kind==='turn').length,usageObservations:rows.filter(row=>row.kind==='usage-observation').length,retainedLimit:this.limit,persistenceWarning:this.persistenceWarning,notes},pricing:snapshot.pricing,dsh:{available:false,reason:'公开任务事件尚无已核实的用量和生成性能口径；不读取私有供应商账户或猜测费用。'}};
  }
  async close(){for(const [key] of this.active){const row=this.rows.get(key);if(row?.status==='inProgress')row.status='unknown';}this.active.clear();await this.flush();}
 }

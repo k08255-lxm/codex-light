@@ -13,6 +13,38 @@ export const validRequestId=id=>typeof id==='string'||Number.isSafeInteger(id);
 export const requestKey=id=>JSON.stringify([typeof id,id]);
 export const requestThread=request=>request?.params?.threadId??request?.params?.conversationId??null;
 
+// Exact protocol decisions, shared by renderer and response validation. Never synthesize a rule.
+export function approvalDecisions(method, params={}) {
+ const command=method==='item/commandExecution/requestApproval',file=method==='item/fileChange/requestApproval';
+ const legacy=method==='execCommandApproval'||method==='applyPatchApproval';
+ if(!command&&!file&&!legacy)return [];
+ if(command&&!['command','writeStdin','humanCommand'].includes(params.kind??'command'))return [];
+ const listed=Array.isArray(params.availableDecisions)?params.availableDecisions:null;
+ const available=value=>!listed||listed.includes(value);
+ const choices=[];
+ const add=(id,label,decision,scope,rule=null)=>choices.push({id,label,decision,scope,rule});
+ if(legacy){
+  if(available('approved'))add('once','允许一次','approved','只批准当前操作。');
+  if(requestThread({params})&&available('approved_for_session'))add('session','本对话允许','approved_for_session','由 Codex 在当前会话的审批缓存中记住此选择；不修改全局权限。');
+ }else{
+  if(available('accept'))add('once','允许一次','accept','只批准当前操作。');
+  if(requestThread({params})&&(params.kind??'command')!=='humanCommand'&&available('acceptForSession'))add('session','本对话允许','acceptForSession',file?'当前会话内对相同文件的后续修改免重复审批。':'由 Codex 在当前会话的审批缓存中记住此选择；不修改全局权限。');
+ }
+ const validRule=value=>Array.isArray(value)&&value.length>0&&value.length<=128&&value.every(part=>typeof part==='string'&&part.length>0&&part.length<=20000&&!part.includes('\0'));
+ if(command&&(params.kind??'command')==='command'){
+  const proposed=params.proposedExecpolicyAmendment;
+  const offered=(listed||[]).filter(value=>object(value)&&Object.keys(value).length===1&&object(value.acceptWithExecpolicyAmendment)&&Object.keys(value.acceptWithExecpolicyAmendment).join(',')==='execpolicy_amendment').map(value=>value.acceptWithExecpolicyAmendment.execpolicy_amendment);
+  const rules=listed?offered:validRule(proposed)?[proposed]:[];
+  for(const rule of rules){
+   if(!validRule(rule)||(proposed!=null&&(!validRule(proposed)||rule.length!==proposed.length||rule.some((part,index)=>part!==proposed[index]))))continue;
+   if(choices.some(choice=>choice.rule&&JSON.stringify(choice.rule)===JSON.stringify(rule)))continue;
+   add('rule:'+choices.length,'始终允许',{acceptWithExecpolicyAmendment:{execpolicy_amendment:[...rule]}},'保存 Codex 提议的命令前缀规则，未来匹配此规则的命令可免审批。仅应用下方规则。',[...rule]);
+  }
+ }
+ // Legacy request schemas carry no proposed rule; do not invent a permanent amendment.
+ return choices;
+}
+
 // Permissions: network on/off, legacy absolute read/write roots, or modern `entries` with plain absolute paths.
 // Deny entries are mandatory restrictions: never options, always kept next to any filesystem grant.
 export function permissionOptions(params){
@@ -40,7 +72,8 @@ export function permissionOptions(params){
  }
  return {supported:true,options,restrictions,mode,entries};
 }
-export function permissionResponse(params,selectedIds){
+export function permissionResponse(params,selectedIds,scope='turn'){
+ if(!['turn','session'].includes(scope))throw new Error('权限范围无效。');
  const definition=permissionOptions(params);if(!definition.supported)throw new Error(definition.reason);
  if(!Array.isArray(selectedIds)||new Set(selectedIds).size!==selectedIds.length||selectedIds.some(id=>!definition.options.some(option=>option.id===id)))throw new Error('只能选择原请求中的权限。');
  const chosen=definition.options.filter(option=>selectedIds.includes(option.id));const permissions={};
@@ -50,7 +83,7 @@ export function permissionResponse(params,selectedIds){
   if(definition.mode==='entries'){const picked=new Set(files.map(option=>option.entry));permissions.fileSystem={entries:definition.entries.filter((row,index)=>row.access==='deny'||picked.has(index)).map(row=>({access:row.access,path:{type:'path',path:row.path}}))};}
   else{permissions.fileSystem={};for(const option of files)(permissions.fileSystem[option.kind]||=[]).push(option.path);}
  }
- return {permissions,scope:'turn'};
+ return {permissions,scope};
 }
 
 // MCP elicitation forms: primitive fields only (string, number/integer, boolean, single/multi select).

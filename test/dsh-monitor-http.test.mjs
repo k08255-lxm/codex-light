@@ -11,12 +11,13 @@ class MockClient extends EventEmitter {
  async close(){this.connected=false;}
  async call(method,params){
   this.calls.push({method,params});
-  if(method==='thread/start')return {thread:{id:'thread-real',cwd:this.threadCwd,model:'mock'}};
+  if(method==='thread/start')return {thread:{id:params.ephemeral?'reader-internal':'thread-real',cwd:params.ephemeral?params.cwd:this.threadCwd,model:'mock'}};
+  if(method==='thread/unsubscribe')return {};
   if(method==='thread/read')return {thread:{id:params.threadId,cwd:this.threadCwd,turns:[]}};
   if(method==='mcpServer/tool/call'){
    if(params.tool==='dsh_list')return {structuredContent:{items:[{agent_id:'agent-real',status:'running',name:'Real task'}]}};
    if(params.tool==='dsh_events')return {structuredContent:{agent_id:'agent-real',events:[{type:'assistant/progress',text:'working'}]}};
-   if(params.tool==='dsh_status')return {structuredContent:{agent_id:'agent-real',status:'running'}};
+   if(params.tool==='dsh_status')return {structuredContent:{agent_id:'agent-real',parent_thread_id:'thread-real',status:'running'}};
   }
   throw new Error(`unexpected mock method ${method}`);
  }
@@ -48,13 +49,13 @@ test('HTTP monitor binds the actual thread result cwd, lists only that cwd, and 
  const monitor=await post(a,'/api/dsh/monitor',{threadId:'thread-real'});
  assert.equal(monitor.status,200);const monitorBody=await monitor.json();
  assert.equal(monitorBody.threadId,'thread-real');assert.equal(monitorBody.cwd,threadCwd);assert.equal(monitorBody.tool,'dsh_list');
- assert.deepEqual(client.calls.at(-1),{method:'mcpServer/tool/call',params:{threadId:'thread-real',server:'dsh_subagent',tool:'dsh_list',arguments:{cwd:threadCwd,legacy:false,limit:50,max_chars:16000}}});
+ assert.deepEqual(client.calls.find(call=>call.params?.tool==='dsh_list'),{method:'mcpServer/tool/call',params:{threadId:'reader-internal',server:'dsh_subagent',tool:'dsh_list',arguments:{cwd:threadCwd,legacy:false,limit:50,max_chars:16000}}});
  assert.ok(a.dsh.threads.get('thread-real').values().some(task=>task.agentId==='agent-real'),'list result must become a legal read target');
 
  const read=await post(a,'/api/dsh/read',{threadId:'thread-real',agentId:'agent-real',kind:'events',after:'1:2:3'});
  assert.equal(read.status,200);const readBody=await read.json();
  assert.equal(readBody.tool,'dsh_events');assert.match(readBody.checkedAt,/^\d{4}-\d\d-\d\dT.*Z$/);
- assert.deepEqual(client.calls.at(-1),{method:'mcpServer/tool/call',params:{threadId:'thread-real',server:'dsh_subagent',tool:'dsh_events',arguments:{agent_id:'agent-real',include_progress:true,include_tool_events:true,include_descendants:true,limit:100,max_chars:12000,after:'1:2:3'}}});
+ assert.deepEqual(client.calls.at(-1),{method:'mcpServer/tool/call',params:{threadId:'reader-internal',server:'dsh_subagent',tool:'dsh_events',arguments:{agent_id:'agent-real',include_progress:true,include_tool_events:true,include_descendants:true,limit:100,max_chars:12000,after:'1:2:3'}}});
 
  const before=client.calls.length;
  assert.equal((await post(a,'/api/dsh/monitor',{threadId:'thread-real',cwd:requestCwd})).status,400);

@@ -2,7 +2,7 @@
 // request_user_input questions. Nothing is answered automatically: every response is an explicit click,
 // carries the bridge instance token, and a request that ended or was replaced cannot be answered.
 // Cards are cached per request instance so drafts survive other requests arriving or resolving.
-import { permissionOptions, permissionResponse, formDefinition, formResponse, userInputDefinition, userInputResponse, requestKey, requestThread } from '../approval-schemas.js';
+import { permissionOptions, permissionResponse, formDefinition, formResponse, userInputDefinition, userInputResponse, requestKey, requestThread, approvalDecisions } from '../approval-schemas.js';
 
 const caches = new WeakMap();
 let sequence = 0;
@@ -96,24 +96,37 @@ function buildCard(key, request, initialDeps) {
   };
 }
 
-function decisionButtons(ctx, labels, decisions) {
+function scopedAllow(ctx, choices) {
+  const {document,el,body,actions,button,respond}=ctx;
+  if(!choices.length)return;
+  const hint=el('p','approval-scope');hint.id=ctx.uid+'-scope-hint';body.append(hint);
+  const rule=el('pre','approval-rule');rule.hidden=true;body.append(rule);
+  const select=document.createElement('select');select.className='approval-scope-select';select.setAttribute('aria-label','允许范围');select.setAttribute('aria-describedby',hint.id);
+  for(const choice of choices){const option=document.createElement('option');option.value=choice.id;option.textContent=choice.label;select.append(option);}
+  const selected=()=>choices.find(choice=>choice.id===select.value)||choices[0];
+  const sync=()=>{const choice=selected();hint.textContent=choice.scope;rule.hidden=!choice.rule;rule.textContent=choice.rule?'命令前缀规则：\n'+JSON.stringify(choice.rule):'';};
+  select.addEventListener('change',sync);sync();
+  if(choices.length>1)actions.append(select);
+  button(choices.length>1?'允许':choices[0].label,()=>respond({result:{decision:selected().decision}}),'accept');
+}
+
+function decisionButtons(ctx, choices, decisions) {
   const { button, respond } = ctx;
-  if (decisions.includes('accept')) button(labels.accept, () => respond({ result: { decision: 'accept' } }), 'accept');
+  scopedAllow(ctx,choices);
   if (decisions.includes('decline')) button('拒绝', () => respond({ result: { decision: 'decline' } }));
-  if (decisions.includes('cancel')) button('拒绝并停止本轮', () => respond({ result: { decision: 'cancel' } }));
+  if (decisions.includes('cancel')) button('停止本轮', () => respond({ result: { decision: 'cancel' } }));
 }
 
 function modernApproval(ctx, p, method) {
   const { title, line, boundedText, el, body } = ctx;
   const listed = Array.isArray(p.availableDecisions) ? p.availableDecisions.filter(decision => typeof decision === 'string') : null;
+  let choices=approvalDecisions(method,p);
   const once = ['accept', 'decline', 'cancel'].filter(decision => !listed || listed.includes(decision));
-  let accept = '仅允许这一次';
   if (method === MODERN_FILE) {
     title.textContent = '允许修改文件？';
     if (p.reason) line(boundedText(p.reason, 4000));
     // Params usually carry only itemId; the files and diff come from the correlated fileChange item.
     const holder = el('div', 'approval-changes'); body.append(holder);
-    const acceptLabel = () => ctx.fileMaterial?.() ? '仅允许这一次' : '仍然允许这一次';
     let signature = null;
     ctx.refreshFiles = lookup => {
       const material = lookup && typeof p.itemId === 'string' && p.itemId ? lookup(requestThread({ params: p }), p.itemId) : null;
@@ -127,23 +140,21 @@ function modernApproval(ctx, p, method) {
       else holder.append(el('p', 'inline-error', (typeof p.itemId === 'string' && p.itemId
         ? '没有载入这次要修改的文件和内容' + (material?.reason ? '（' + material.reason + '）' : '')
         : '请求没有提供关联的修改内容') + '。请求原文只包含请求标识，看不到具体修改；无法核对时请拒绝。'));
-      const acceptButton = ctx.actions.querySelector('button.accept'); if (acceptButton) acceptButton.textContent = acceptLabel();
     };
     ctx.refreshFiles(ctx.lookupFileChange);
-    accept = acceptLabel();
-    if (p.grantRoot) line('请求在本会话中允许写入：' + boundedText(String(p.grantRoot), 1000) + '。这里只批准本次修改，不授予该目录的会话级写入。', 'approval-scope');
+    if (p.grantRoot) line('请求写入目录：' + boundedText(String(p.grantRoot), 1000) + '。目录级授权是否生效由 Codex 决定；本对话允许针对相同文件。', 'approval-scope');
   } else {
     const kind = p.kind ?? 'command';
     if (kind === 'humanCommand') {
       title.textContent = '需要你本人确认';
       line('这是 Codex 要求的人工检查点，此提示本身不会启动命令。你的决定只对这一次有效，不会被记住。', 'approval-recipient');
-      accept = '我确认，仅本次';
     } else if (kind === 'writeStdin') { title.textContent = '向正在运行的终端发送输入？'; }
     else if (kind === 'command') { title.textContent = p.networkApprovalContext ? '允许网络访问？' : '允许运行命令？'; }
     else {
       title.textContent = '无法识别的审批类型';
       line('审批类型“' + boundedText(String(kind), 100) + '”无法在此确认，只能拒绝。', 'inline-error');
       once.splice(0, once.length, ...once.filter(decision => decision !== 'accept'));
+      choices=[];
     }
     if (p.reason) line(boundedText(p.reason, 4000));
     if (p.networkApprovalContext?.host) line('网络目标：' + boundedText(String(p.networkApprovalContext.host), 500) + (p.networkApprovalContext.protocol ? '（' + boundedText(String(p.networkApprovalContext.protocol), 40) + '）' : ''));
@@ -151,8 +162,7 @@ function modernApproval(ctx, p, method) {
     if (p.cwd) line('工作目录：' + boundedText(String(p.cwd), 1000));
     if (p.additionalPermissions) line('同时请求额外权限：' + boundedText(compact(p.additionalPermissions), 2000), 'approval-scope');
   }
-  if (Array.isArray(p.availableDecisions) && p.availableDecisions.some(decision => typeof decision !== 'string' || !['accept', 'decline', 'cancel'].includes(decision))) line('会话级或永久规则选项不在此提供。', 'approval-scope');
-  if (once.length) decisionButtons(ctx, { accept }, once);
+  if (choices.length||once.length) decisionButtons(ctx, choices, once);
   else {
     line('请求只提供此界面不支持的选项。可以拒绝，Codex 会按未批准处理。', 'inline-error');
     ctx.button('拒绝', () => ctx.respond({ error: { code: -32601 } }));
@@ -172,11 +182,11 @@ function legacyApproval(ctx, p, method) {
     const files = p.fileChanges && typeof p.fileChanges === 'object' && !Array.isArray(p.fileChanges) ? Object.entries(p.fileChanges) : [];
     if (files.length) renderChanges(ctx, body, files.map(([path, change]) => ({ path, kind: change?.type, movePath: change?.move_path, diff: change?.unified_diff ?? change?.content })));
     else line('请求没有列出要修改的文件，无法核对具体修改；无法确认时请拒绝。', 'inline-error');
-    if (p.grantRoot) line('请求在本会话中允许写入：' + boundedText(String(p.grantRoot), 1000) + '。这里只批准本次修改。', 'approval-scope');
+    if (p.grantRoot) line('请求在本会话中允许写入：' + boundedText(String(p.grantRoot), 1000) + '。目录授权是否生效由 Codex 决定。', 'approval-scope');
   }
-  button(p.fileChanges && Object.keys(p.fileChanges).length || method === 'execCommandApproval' ? '仅允许这一次' : '仍然允许这一次', () => respond({ result: { decision: 'approved' } }), 'accept');
+  scopedAllow(ctx,approvalDecisions(method,p));
   button('拒绝', () => respond({ result: LEGACY_DENIED }));
-  button('拒绝并停止本轮', () => respond({ result: { decision: 'abort' } }));
+  button('停止本轮', () => respond({ result: { decision: 'abort' } }));
 }
 
 // Lists every file with its change kind; each diff opens on demand and is shown in full up to TEXT_LIMIT.
@@ -208,7 +218,7 @@ function permissionsApproval(ctx, p) {
   const { title, line, boundedText, el, body, button, respond, uid, document, showError } = ctx;
   title.textContent = '授予额外权限？';
   if (p.reason) line(boundedText(p.reason, 4000));
-  line('只对当前任务的本轮有效，不保存为会话授权。', 'approval-scope');
+  line('仅授予勾选的权限；可以选择本轮或当前对话范围。', 'approval-scope');
   const definition = permissionOptions(p);
   if (!p.threadId || !p.turnId || !definition.supported) line(definition.reason || '缺少对话或任务标识，不能授予权限。', 'inline-error');
   else if (!definition.options.length) line('请求中没有可以选择的额外权限。');
@@ -219,9 +229,11 @@ function permissionsApproval(ctx, p) {
     for (const restriction of definition.restrictions) fields.append(el('p', 'permission-restriction', '始终保留：' + boundedText(restriction.label, 1200)));
     body.append(fields);
     const hint = el('p', 'approval-scope', '至少勾选一项才能授予。'); hint.id = uid + '-grant-hint'; body.append(hint);
-    const grant = button('仅本轮授予所选权限', async () => {
+    const scope=document.createElement('select');scope.className='approval-scope-select';scope.setAttribute('aria-label','权限有效范围');for(const [value,label]of [['turn','仅本轮'],['session','本对话']]){const option=document.createElement('option');option.value=value;option.textContent=label;scope.append(option);}ctx.actions.append(scope);
+    const scopeHint=el('p','approval-scope','本轮结束后授权失效。');scopeHint.id=uid+'-scope-description';body.append(scopeHint);scope.setAttribute('aria-describedby',scopeHint.id);scope.addEventListener('change',()=>{scopeHint.textContent=scope.value==='session'?'所选权限持续至当前 Codex 会话结束，不保存为永久权限。':'本轮结束后授权失效。';});
+    const grant = button('允许所选', async () => {
       const chosen = checks.filter(check => check.input.checked).map(check => check.id); if (!chosen.length) return;
-      let result; try { result = permissionResponse(p, chosen); } catch (error) { showError(error.message); return; }
+      let result; try { result = permissionResponse(p, chosen,scope.value); } catch (error) { showError(error.message); return; }
       await respond({ result });
     }, 'accept');
     grant.disabled = true; grant.dataset.hint = hint.id; grant.setAttribute('aria-describedby', hint.id);

@@ -18,6 +18,21 @@ const isActiveStatus = status => ACTIVE_STATUSES.has(String(status || '').toLowe
 const messageOf = error => String(error?.message || error || '未知错误').slice(0, 1000);
 const sameCursor = (left, right) => String(left ?? '') === String(right ?? '');
 const isoAt = (value, fallback) => typeof value === 'string' && value ? value : fallback;
+const snapshotIsOlder = (previous, next) => {
+  if (!previous || !next) return false;
+  const left = Date.parse(previous), right = Date.parse(next);
+  if (Number.isNaN(left) || Number.isNaN(right)) return String(next) < String(previous);
+  return right < left;
+};
+const isWindowsAbsolute = value => /^[A-Za-z]:[\\/]/.test(value) || /^\\\\/.test(value);
+function pathWithin(child, root) {
+  if (!child || !root) return true;
+  const normalize = value => String(value).replace(/\\/g, '/').replace(/\/+$/, '');
+  const left = normalize(child), right = normalize(root);
+  const fold = isWindowsAbsolute(String(child)) || isWindowsAbsolute(String(root));
+  const a = fold ? left.toLowerCase() : left, b = fold ? right.toLowerCase() : right;
+  return a === b || a.startsWith(b + '/');
+}
 
 /**
  * Pure, injectable scheduler for read-only DSH list/status/events refreshes.
@@ -75,7 +90,9 @@ export class DshLiveMonitor {
 
   _newAgent(agentId) {
     return {
-      agentId: String(agentId), name: '', cwd: '', status: '', updated_at: '', progress: '', last_event: '',
+      agentId: String(agentId), name: '', cwd: '', status: '', updated_at: '', created_at: '', started_at: '', progress: '', last_event: '',
+      finish_reason: '', error: '', context_tokens: null, context_limit_tokens: null, answer: '', partial_text: '', wait_outcome: '',
+      finalText: '', finalEventId: null,
       present: false, listCheckedAt: null, lastListSeen: 0,
       events: [], nextCursor: 0, hasMore: false, syncingHistory: false,
       eventError: null, eventStale: false, eventCheckedAt: null, eventFailures: 0, eventNextRetryAt: null,
@@ -123,7 +140,9 @@ export class DshLiveMonitor {
   _agentRow(agent) {
     return {
       agent_id: agent.agentId, name: agent.name, cwd: agent.cwd, status: agent.status,
-      updated_at: agent.updated_at, progress: agent.progress, last_event: agent.last_event,
+      updated_at: agent.updated_at, created_at: agent.created_at, started_at: agent.started_at, progress: agent.progress, last_event: agent.last_event,
+      finish_reason: agent.finish_reason, error: agent.error, context_tokens: agent.context_tokens, context_limit_tokens: agent.context_limit_tokens,
+      final_text: agent.finalText, final_event_id: agent.finalEventId,
       present: agent.present, checked_at: agent.listCheckedAt,
       event_error: agent.eventError, event_stale: agent.eventStale,
       event_checked_at: agent.eventCheckedAt, has_more: agent.hasMore,
@@ -135,6 +154,7 @@ export class DshLiveMonitor {
   _selectedSnapshot(agent) {
     return {
       ...this._agentRow(agent), events: agent.events.map(event => ({ ...event })),
+      answer: agent.answer, partial_text: agent.partial_text, wait_outcome: agent.wait_outcome,
       next_cursor: agent.nextCursor, has_more: agent.hasMore,
       syncing_history: agent.syncingHistory, event_loading: agent.eventLoading,
       event_failures: agent.eventFailures, next_retry_at: agent.eventNextRetryAt,
@@ -372,10 +392,12 @@ export class DshLiveMonitor {
         const projection = dshListSnapshot(data?.result);
         if (!projection.available) throw new Error('DSH 列表返回格式无法识别');
         const checkedAt = isoAt(data?.checkedAt, new Date(this.now()).toISOString());
-        const poked = this._applyList(projection, { checkedAt, cwd: data?.cwd || null });
+        const listedCwd = data?.cwd || null;
+        if (listedCwd) projection.items = projection.items.filter(row => !row.cwd || pathWithin(row.cwd, listedCwd));
+        const poked = this._applyList(projection, { checkedAt, cwd: listedCwd });
         this.list.loading = false;
         this.list.checkedAt = checkedAt;
-        this.list.cwd = data?.cwd || this.list.cwd;
+        this.list.cwd = listedCwd || this.list.cwd;
         this.list.count = projection.count;
         this.list.matched = projection.matched;
         this.list.total = projection.total;
@@ -384,7 +406,7 @@ export class DshLiveMonitor {
         this.list.stale = false;
         this.list.failures = 0;
         this.list.nextRetryAt = null;
-        this._notify('onList', { threadId: op.threadId, cwd: data?.cwd || null, list: projection, checkedAt }, { failChannel: true });
+        this._notify('onList', { threadId: op.threadId, cwd: listedCwd, list: projection, checkedAt }, { failChannel: true });
         this._emit('list');
         this._scheduleList(this.listInterval);
         if (poked && this.selectedAgentId) {
@@ -429,7 +451,13 @@ export class DshLiveMonitor {
       agent.stalled = false;
     }
     if (nextActive) { agent.eventsStopped = false; agent.stalled = false; }
-    if (resumed || terminalUpdated) agent.finalClearedAt = new Date(this.now()).toISOString();
+    if (resumed || terminalUpdated) {
+      // A new lifecycle round owns a new final display. The event history and cursor stay.
+      agent.finalClearedAt = new Date(this.now()).toISOString();
+      agent.answer = '';
+      agent.finalText = '';
+      agent.finalEventId = null;
+    }
     return { invalidated, resumed, terminalTransition, terminalUpdated };
   }
 
@@ -448,17 +476,22 @@ export class DshLiveMonitor {
     for (const row of projection.items) {
       const id = row.agent_id;
       if (!id) continue;
+      if (cwd && row.cwd && !pathWithin(row.cwd, cwd)) continue;
       seen.add(id);
       const agent = this._agent(id);
-      const transition = this._noteStatus(agent, row.status, row.updated_at);
+      const stale = snapshotIsOlder(agent.updated_at, row.updated_at);
+      const transition = stale ? { invalidated: false } : this._noteStatus(agent, row.status, row.updated_at);
       agent.present = true;
       agent.listCheckedAt = checkedAt;
       agent.lastListSeen = this.listSequence;
       if (cwd) agent.cwd = cwd;
-      for (const field of ['name', 'cwd', 'status', 'updated_at', 'progress', 'last_event']) {
+      for (const field of ['name', 'cwd', 'status', 'updated_at', 'created_at', 'started_at', 'progress', 'last_event', 'finish_reason', 'error', 'context_tokens', 'context_limit_tokens']) {
+        if (stale && ['status', 'updated_at', 'progress', 'last_event', 'finish_reason', 'error', 'context_tokens', 'context_limit_tokens'].includes(field)) continue;
         if (row[field] !== undefined && row[field] !== null && row[field] !== '') agent[field] = row[field];
       }
       if (transition.invalidated && id === this.selectedAgentId) pokeSelected = true;
+      if (String(agent.status).toLowerCase() === 'completed' && !agent.answer && agent.finalText) agent.answer = agent.finalText;
+      if (isActiveStatus(agent.status)) { agent.answer = ''; agent.wait_outcome = ''; }
     }
     for (const agent of this.agents.values()) if (!seen.has(agent.agentId)) agent.present = false;
     this._trimAgents(seen);
@@ -466,10 +499,15 @@ export class DshLiveMonitor {
   }
 
   _applyStatus(agent, status, checkedAt) {
-    const transition = this._noteStatus(agent, status.status, status.updated_at);
-    for (const field of ['name', 'cwd', 'status', 'updated_at', 'progress', 'last_event']) {
+    const stale = snapshotIsOlder(agent.updated_at, status.updated_at);
+    const transition = stale ? { invalidated: false } : this._noteStatus(agent, status.status, status.updated_at);
+    for (const field of ['name', 'cwd', 'status', 'updated_at', 'created_at', 'started_at', 'progress', 'last_event', 'finish_reason', 'error', 'context_tokens', 'context_limit_tokens', 'partial_text', 'wait_outcome']) {
+      if (stale && ['status', 'updated_at', 'progress', 'last_event', 'finish_reason', 'error', 'context_tokens', 'context_limit_tokens', 'partial_text', 'wait_outcome'].includes(field)) continue;
       if (status[field] !== undefined && status[field] !== null && status[field] !== '') agent[field] = status[field];
     }
+    if (String(status.status).toLowerCase() === 'completed' && status.answer) agent.answer = status.answer;
+    if (String(status.status).toLowerCase() === 'completed' && !agent.answer && agent.finalText) agent.answer = agent.finalText;
+    if (isActiveStatus(status.status)) { agent.answer = ''; agent.wait_outcome = ''; }
     agent.statusCheckedAt = checkedAt;
     agent.statusError = null;
     agent.statusStale = false;
@@ -494,6 +532,7 @@ export class DshLiveMonitor {
         if (toolError) throw new Error(toolError);
         const projection = dshStatusSnapshot(data?.result);
         if (!projection.available) throw new Error('DSH 状态返回格式无法识别');
+        if (projection.agent_id && projection.agent_id !== agentId) throw new Error('DSH 状态返回了其他 agent，已丢弃');
         const checkedAt = isoAt(data?.checkedAt, new Date(this.now()).toISOString());
         const invalidated = this._applyStatus(agent, projection, checkedAt);
         this._notify('onStatus', { threadId: op.threadId, agentId, status: projection, checkedAt }, { failChannel: true });
@@ -542,8 +581,9 @@ export class DshLiveMonitor {
           if (data?.agentId && data.agentId !== agentId) throw new Error('DSH 事件返回了其他 agent，已丢弃');
           const toolError = dshResultError(data?.result);
           if (toolError) throw new Error(toolError);
-          const projection = dshEventsSnapshot(data?.result);
+          const projection = dshEventsSnapshot(data?.result, { after: cursor });
           if (!projection.available) throw new Error('DSH 事件返回格式无法识别');
+          if (projection.agent_id && projection.agent_id !== agentId) throw new Error('DSH 事件返回了其他 agent，已丢弃');
           const checkedAt = isoAt(data?.checkedAt, new Date(this.now()).toISOString());
           const previousCursor = cursor;
           const merged = mergeDshEvents(agent.events, projection.events);
@@ -551,6 +591,10 @@ export class DshLiveMonitor {
           agent.nextCursor = projection.next_cursor;
           agent.hasMore = projection.has_more;
           hasMore = projection.has_more;
+          const finalEvent = [...merged].reverse().find(event => /(?:^|\/)assistant\/(?:final|final_answer)$/i.test(event.type || '') && event.text);
+          if (finalEvent) { agent.finalText = finalEvent.text; agent.finalEventId = finalEvent.event_id ?? null; }
+          else if (projection.final_text) { agent.finalText = projection.final_text; agent.finalEventId = projection.final_event_id ?? null; }
+          if (String(agent.status).toLowerCase() === 'completed' && agent.finalText && !agent.answer) agent.answer = agent.finalText;
           agent.eventCheckedAt = checkedAt;
           agent.eventError = null;
           agent.eventStale = false;
@@ -562,7 +606,7 @@ export class DshLiveMonitor {
           this._notify('onEvents', {
             threadId: op.threadId, agentId, events: projection.events, allEvents: merged,
             checkedAt, nextCursor: agent.nextCursor, hasMore: agent.hasMore,
-            syncingHistory: agent.hasMore,
+            syncingHistory: agent.hasMore, finalText: agent.finalText, finalEventId: agent.finalEventId,
           }, { failChannel: true });
           this._emit('events');
           if (!agent.hasMore) break;

@@ -1,8 +1,9 @@
 import path from 'node:path';import os from 'node:os';import test from 'node:test';import assert from 'node:assert/strict';import {validateRpc,validateResponse} from '../src/security.mjs';
-test('limits exposed RPC and blocks security override',()=>{
+test('limits exposed RPC and validates explicit session permission choices',()=>{
  for(const m of ['command/exec','account/login/start','config/value/write','thread/archive'])assert.throws(()=>validateRpc(m,{}));
- assert.throws(()=>validateRpc('turn/start',{threadId:'x',cwd:path.resolve(os.tmpdir()),input:[{type:'text',text:'hi'}],approvalPolicy:'never'}));
- assert.throws(()=>validateRpc('thread/start',{cwd:path.resolve(os.tmpdir()),approvalPolicy:'never',sandbox:'danger-full-access'}));
+ assert.doesNotThrow(()=>validateRpc('turn/start',{threadId:'x',cwd:path.resolve(os.tmpdir()),input:[{type:'text',text:'hi'}],approvalPolicy:'never'}));
+ assert.doesNotThrow(()=>validateRpc('thread/start',{cwd:path.resolve(os.tmpdir()),approvalPolicy:'never',sandbox:'danger-full-access'}));
+ assert.throws(()=>validateRpc('thread/start',{cwd:path.resolve(os.tmpdir()),approvalPolicy:'invalid',sandbox:'danger-full-access'}));
  assert.doesNotThrow(()=>validateRpc('thread/start',{cwd:path.resolve(os.tmpdir()),approvalPolicy:'on-request',sandbox:'workspace-write'}));
 });
 test('requires explicit absolute cwd and bounded content',()=>{
@@ -53,11 +54,13 @@ test('review feature is explicit local uncommitted inline only',()=>{
  assert.throws(()=>validateRpc('review/start',{threadId:'t',target:{type:'custom',instructions:'do anything'},delivery:'inline'}));
  assert.throws(()=>validateRpc('review/start',{threadId:'t',target:{type:'uncommittedChanges'},delivery:'detached'}));
 });
-test('permission grants must be exact requested subset with turn scope',()=>{
- const req={method:'item/permissions/requestApproval',params:{permissions:{network:{enabled:true},fileSystem:{read:['/work/a'],write:['/work/b']}}}};
+test('permission grants must be exact requested subset with explicit turn or session scope',()=>{
+ const req={method:'item/permissions/requestApproval',params:{threadId:'thread',turnId:'turn',permissions:{network:{enabled:true},fileSystem:{read:['/work/a'],write:['/work/b']}}}};
  assert.doesNotThrow(()=>validateResponse(req,{scope:'turn',permissions:{fileSystem:{read:['/work/a']}}}));
  for(const permissions of [{network:{enabled:true,extra:true}},{fileSystem:{read:['/etc']}},{fileSystem:{write:['/work/a']}},{fileSystem:{read:['/work/a','/work/a']}},{fileSystem:{entries:[]}}])assert.throws(()=>validateResponse(req,{scope:'turn',permissions}));
- assert.throws(()=>validateResponse(req,{scope:'session',permissions:{network:{enabled:true}}}));
+ assert.doesNotThrow(()=>validateResponse(req,{scope:'session',permissions:{network:{enabled:true}}}));
+ assert.throws(()=>validateResponse({...req,params:{permissions:req.params.permissions}},{scope:'session',permissions:{network:{enabled:true}}}));
+ assert.throws(()=>validateResponse(req,{scope:'always',permissions:{network:{enabled:true}}}));
  assert.throws(()=>validateResponse({method:req.method,params:{permissions:{fileSystem:{entries:[]}}}},{scope:'turn',permissions:{network:{enabled:true}}}));
 });
 test('MCP forms validate original schema server-side and refusals cannot send content',()=>{

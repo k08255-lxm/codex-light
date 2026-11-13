@@ -1,0 +1,24 @@
+.composer-tools{position:relative}
+#permissions-info{gap:5px;border-radius:8px;font-size:.75rem;min-width:0;max-width:100%;flex-shrink:1}
+#permissions-info .label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.permission-chip-icon{display:inline-flex;align-items:center;flex:none}
+#permissions-info[data-warning="true"],.permission-danger{color:#f0ac68}
+.permission-menu{position:fixed;width:320px;max-width:calc(100vw - 16px);box-sizing:border-box;padding:7px;border-radius:16px;background:var(--raised,#292729);box-shadow:var(--shadow-popover,0 12px 40px #0005),0 0 0 1px var(--border,#ffffff13);z-index:160;overflow-y:auto;overscroll-behavior:contain}
+.permission-menu-heading{padding:8px 10px 9px;color:var(--tertiary,#aaa3a9);font-size:.8125rem;font-weight:500}
+.permission-menu button{display:grid;grid-template-columns:20px minmax(0,1fr) 18px;align-items:center;text-align:left;gap:10px;width:100%;padding:10px;border:0;border-radius:9px;background:transparent;color:var(--text);font:inherit;cursor:pointer}
+.permission-choice-copy{display:flex;flex-direction:column;gap:3px;min-width:0}
+.permission-choice-title{font-size:.875rem;line-height:1.4;font-weight:500}
+.permission-choice-check{visibility:hidden;color:var(--secondary)}
+.permission-menu button[aria-checked="true"] .permission-choice-check{visibility:visible}
+.permission-menu button:focus-visible{outline:2px solid var(--accent,#82b7f6);outline-offset:-2px}
+.permission-menu small{font-size:.75rem;color:var(--tertiary,#aaa3a9);line-height:1.5;overflow-wrap:anywhere}
+.permission-menu .permission-danger{color:#f0ac68}
+.permission-menu .permission-danger small{color:inherit}
+.fast-toggle[aria-pressed="true"]{color:#e9b567;background:#b37c2926}
+.reasoning-heading .fast-toggle{width:30px;height:30px;padding:5px;flex-shrink:0;border-radius:7px}
+@media(hover:hover){.permission-menu button:hover{background:var(--selected,#383538)}}
+@media(pointer:coarse){.permission-menu button{min-height:48px}.fast-toggle{min-width:44px;min-height:44px}}
+.approval .actions{align-items:center}
+.approval .actions button{white-space:nowrap}
+.approval-scope-select{max-width:100%;min-width:0;min-height:32px;padding:5px 28px 5px 9px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font:inherit;font-size:.8125rem}
+.approval-rule{font-size:.8125rem;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}

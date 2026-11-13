@@ -40,7 +40,19 @@ namespace CodexLight.Bootstrap {
   [DllImport("msi.dll",CharSet=CharSet.Unicode)]static extern int MsiGetProductInfo(string product,string property,StringBuilder value,ref uint length);
  }
  internal sealed class SetupEngine {
-  public static string MsiArguments(string msi,string target,string log)=>"/i \""+msi+"\" /qn /norestart /L*v \""+log+"\" SETUP_PREREQUISITES_VERIFIED=1 INSTALLFOLDER=\""+target+"\"";
+  public static string PackageFileName(string version){
+   if(!System.Text.RegularExpressions.Regex.IsMatch(version??"",@"^\d{1,3}\.\d{1,3}\.\d{1,5}$")||!Version.TryParse(version,out var parsed)||parsed.Major>255||parsed.Minor>255||parsed.Build>65535)throw new InvalidOperationException("嵌入 MSI 的产品版本无效。");
+   return "CodexLight-"+version+"-x64.msi";
+  }
+  public static string MsiArguments(string msi,string target,string log,bool reinstall=false)=>"/i \""+msi+"\" /qn /norestart /L*v \""+log+"\" SETUP_PREREQUISITES_VERIFIED=1 MSIRESTARTMANAGERCONTROL=DisableShutdown INSTALLFOLDER=\""+target+"\""+(reinstall?" REINSTALL=ALL REINSTALLMODE=vomus":"");
+  // The authored MSI filename must survive extraction: secure repair resolves this name in SourceDir.
+  // Read identity from the embedded package, not the bootstrapper assembly/build input filename.
+  internal static async Task<EmbeddedPackage> ExtractPackage(Stream input,string cache,CancellationToken token){
+   string temporary=Path.Combine(cache,"embedded.msi");
+   using(var output=new FileStream(temporary,FileMode.CreateNew,FileAccess.Write,FileShare.None))await input.CopyToAsync(output,65536,token);
+   token.ThrowIfCancellationRequested();
+   var package=EmbeddedPackage.Read(temporary);string final=Path.Combine(cache,PackageFileName(package.Version));File.Move(temporary,final);package.Path=final;return package;
+  }
   public async Task<int> Run(string target,bool registered,Action<string> progress,Action<bool> canCancel,CancellationToken token){
    target=InstallPaths.Validate(target,registered);
    var states=await Task.Run(()=>Detection.Read(target));int restart=0;
@@ -56,19 +68,48 @@ namespace CodexLight.Bootstrap {
    if(!(await Task.Run(()=>Detection.Read(target))).All(x=>x.Compatible))throw new InvalidOperationException("运行环境复查未通过，尚未开始安装应用。");
    canCancel(true);token.ThrowIfCancellationRequested();
    string cache=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"CodexLight","SetupLogs",DateTime.Now.ToString("yyyyMMdd-HHmmss")+"-"+Guid.NewGuid().ToString("N").Substring(0,8));
-   Directory.CreateDirectory(cache);string package=Path.Combine(cache,"CodexLight.msi"),log=Path.Combine(cache,"install.log");
+   Directory.CreateDirectory(cache);string log=Path.Combine(cache,"install.log");EmbeddedPackage package;
    // Extract only the embedded MSI. Windows Installer owns every installed application file.
    using(var input=Assembly.GetExecutingAssembly().GetManifestResourceStream("CodexLight.Application.msi")){
     if(input==null)throw new InvalidOperationException("安装包缺少嵌入的 MSI。");
-    using(var output=new FileStream(package,FileMode.CreateNew,FileAccess.Write,FileShare.None))await input.CopyToAsync(output,65536,token);
+    package=await ExtractPackage(input,cache,token);
    }
    token.ThrowIfCancellationRequested();canCancel(false);progress("正在安装 Codex Light…"+Environment.NewLine+"Windows Installer 日志："+log);
    try{
-    using(var process=Process.Start(new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"msiexec.exe"),MsiArguments(package,target,log)){UseShellExecute=false,CreateNoWindow=true})){
+    using(var process=Process.Start(new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"msiexec.exe"),MsiArguments(package.Path,target,log,package.InstalledForCurrentUser())){UseShellExecute=false,CreateNoWindow=true})){
      if(process==null)throw new InvalidOperationException("Windows Installer 未启动。");await Task.Run(()=>process.WaitForExit());ExitCodePolicy.RequireSuccess(process.ExitCode,"Codex Light");return process.ExitCode==0?restart:process.ExitCode;
     }
    }catch(Win32Exception e)when(e.NativeErrorCode==1223){throw new OperationCanceledException("系统授权已取消。",e);}
    finally{progress("安装日志保留在："+cache);}
   }
+ }
+ internal sealed class EmbeddedPackage {
+  public string Path="",Version="",ProductCode="";
+  public static EmbeddedPackage Read(string file){
+   uint database=0;
+   try{
+    Check(MsiOpenDatabase(file,IntPtr.Zero,out database));
+    var package=new EmbeddedPackage{Path=file,Version=Property(database,"ProductVersion"),ProductCode=Property(database,"ProductCode")};
+    SetupEngine.PackageFileName(package.Version);
+    if(!Guid.TryParse(package.ProductCode,out _)||!string.Equals(Property(database,"UpgradeCode"),InstallPaths.UpgradeCode,StringComparison.OrdinalIgnoreCase))throw new InvalidOperationException("嵌入 MSI 不属于 Codex Light 产品系列。");
+    return package;
+   }finally{if(database!=0)MsiCloseHandle(database);}
+  }
+  static string Property(uint database,string name){
+   uint view=0,record=0;
+   try{
+    Check(MsiDatabaseOpenView(database,"SELECT `Value` FROM `Property` WHERE `Property`='"+name+"'",out view));Check(MsiViewExecute(view,0));Check(MsiViewFetch(view,out record));
+    var text=new StringBuilder(1024);uint length=1024;Check(MsiRecordGetString(record,1,text,ref length));if(text.Length==0)throw new InvalidOperationException("嵌入 MSI 缺少必要产品信息。");return text.ToString();
+   }finally{if(record!=0)MsiCloseHandle(record);if(view!=0)MsiCloseHandle(view);}
+  }
+  static void Check(uint code){if(code!=0)throw new InvalidOperationException("无法读取嵌入 MSI 产品信息（"+code+"）。");}
+  public bool InstalledForCurrentUser(){int state=MsiQueryProductState(ProductCode);if(state==-2)throw new InvalidOperationException("MSI 产品标识无效。");return state==5;}
+  [DllImport("msi.dll",CharSet=CharSet.Unicode)]static extern uint MsiOpenDatabase(string file,IntPtr persist,out uint database);
+  [DllImport("msi.dll",CharSet=CharSet.Unicode)]static extern uint MsiDatabaseOpenView(uint database,string query,out uint view);
+  [DllImport("msi.dll")]static extern uint MsiViewExecute(uint view,uint record);
+  [DllImport("msi.dll")]static extern uint MsiViewFetch(uint view,out uint record);
+  [DllImport("msi.dll",CharSet=CharSet.Unicode)]static extern uint MsiRecordGetString(uint record,uint field,StringBuilder value,ref uint length);
+  [DllImport("msi.dll")]static extern uint MsiCloseHandle(uint handle);
+  [DllImport("msi.dll",CharSet=CharSet.Unicode)]static extern int MsiQueryProductState(string productCode);
  }
 }

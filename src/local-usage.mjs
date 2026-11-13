@@ -14,10 +14,10 @@ export function parseLocalCodexUsage(input, {sourceId} = {}) {
   const diagnose = (code, record) => { counts.set(code, (counts.get(code) ?? 0) + 1); if (diagnostics.length < 100) diagnostics.push({code, record}); };
   const raw = typeof input === 'string' ? input.split('\n') : input;
   let declaredVersion = null;
-  let threadId = null, model = null, provider = null, turnId = null, baseline = null, snapshot = null, blocked = false, metadataSeen = false;
+  let threadId = null, model = null, provider = null, turnId = null, baseline = null, snapshot = null, blocked = false, identityBlocked = false, metadataSeen = false;
   const turns=new Map();
   const instant=value=>typeof value==='string'&&Number.isFinite(Date.parse(value))?new Date(value).toISOString():null;
-  const turn=id=>{if(!string(id))return null;let row=turns.get(id);if(!row){row={turnId:id,model,provider,startedAt:null,completedAt:null,status:'unknown'};turns.set(id,row);}return row;};
+  const turn=id=>{if(!string(id))return null;let row=turns.get(id);if(!row){row={turnId:id,model:null,provider,startedAt:null,completedAt:null,status:'unknown'};turns.set(id,row);}return row;};
   let firstTimestamp = null, lastTimestamp = null, tokenEvents = 0, duplicateEvents = 0;
   const increments = [], seen = new Set();
   if (raw.length > MAX_RECORDS) { diagnose('record-limit',MAX_RECORDS); blocked = true; }
@@ -31,14 +31,16 @@ export function parseLocalCodexUsage(input, {sourceId} = {}) {
     const payload = row.payload;
     if (row.type === 'session_meta') {
       const id = uuid(payload?.id);
-      if (metadataSeen) { diagnose('repeated-session-meta',i+1); blocked = true; }
+      if (metadataSeen) { diagnose('repeated-session-meta',i+1); blocked = true; identityBlocked = true; }
       metadataSeen = true;declaredVersion = string(payload?.cli_version);
       provider=typeof payload?.model_provider==='string'&&/^[a-zA-Z0-9_.-]{1,100}$/.test(payload.model_provider)?payload.model_provider:null;
-      if (!id) { diagnose('invalid-thread-id',i+1); blocked = true; }
-      else if (threadId && threadId !== id) { diagnose('mixed-thread-input',i+1); blocked = true; }
+      if (!id) { diagnose('invalid-thread-id',i+1); blocked = true; identityBlocked = true; }
+      else if (threadId && threadId !== id) { diagnose('mixed-thread-input',i+1); blocked = true; identityBlocked = true; }
       else threadId = id;
       if (payload?.parent_thread_id != null || payload?.forked_from_id != null || payload?.source?.subagent?.thread_spawn?.parent_thread_id != null) { diagnose('parent-baseline-unresolved',i+1); blocked = true; }
-      if (payload?.history_mode === 'paginated' || payload?.history_base != null) { diagnose('continuation-baseline-unresolved',i+1); blocked = true; }
+      // Pagination is a storage format, not evidence that adjacent observed cumulative counters are invalid.
+      if (payload?.history_mode === 'paginated') diagnose('paginated-storage',i+1);
+      if (payload?.history_base != null) { diagnose('continuation-baseline-unresolved',i+1); blocked = true; }
       const sourceName = typeof payload?.source === 'string' ? payload.source : '';
       if (/workbuddy|deepseek|(^|[^a-z])(?:wb|dsh)(?:[^a-z]|$)/i.test(sourceName)) { diagnose('excluded-non-codex-source',i+1); blocked = true; }
       // No metadata model or source-name guessing. Only documented turn context sets model.
@@ -76,8 +78,9 @@ export function parseLocalCodexUsage(input, {sourceId} = {}) {
     if (difference.totalTokens > 0) {
       if (blocked) diagnose('increment-deferred',i+1);
       else {
-        increments.push({record:i+1,timestamp,model,provider,turnId,modelAttribution:model === null ? 'unknown' : 'observed-context',tokens:difference,kind:'observed-cumulative-difference'});
-        if (!model) diagnose('model-unknown',i+1);
+        const turnModel=turnId?turns.get(turnId)?.model||null:model;
+        increments.push({record:i+1,timestamp,model:turnModel,provider,turnId,modelAttribution:turnModel === null ? 'unknown' : 'observed-context',tokens:difference,kind:'observed-cumulative-difference'});
+        if (!turnModel) diagnose('model-unknown',i+1);
       }
     } else if (Object.values(difference).some(n => n !== null && n > 0)) { diagnose('inconsistent-counters',i+1); blocked = true; }
     baseline = current;
@@ -86,7 +89,7 @@ export function parseLocalCodexUsage(input, {sourceId} = {}) {
   // Ambiguity discovered late invalidates attribution for the whole supplied timeline.
   if (blocked && increments.length) { diagnose('timeline-attribution-deferred',0); increments.length = 0; }
   return {source:'local-codex-jsonl',sourceId,threadId,declaredVersion,compatibilityNotice:counts.has('declared-version-cache-write-default')?'按会话声明的 0.157.1 协议，将缺失缓存写入字段按默认 0 兼容；恢复后的逐条写入版本未核实。':null,snapshot:counts.has('excluded-non-codex-source') ? null : snapshot,firstTimestamp,lastTimestamp,tokenEvents,duplicateEvents,increments,
-    provider,turns:blocked?[]:[...turns.values()],attribution:blocked || !threadId ? 'deferred' : 'observed-differences-only',
+    provider,turns:identityBlocked||!threadId||counts.has('excluded-non-codex-source')?[]:[...turns.values()],turnAttribution:identityBlocked||!threadId?'deferred':'observed-turn-records',attribution:blocked || !threadId ? 'deferred' : 'observed-differences-only',
     diagnostics,diagnosticCounts:Object.fromEntries(counts),
     notice:'仅传入本地记录的观察值；不是官方全局统计或账单，不与其他来源相加。首个累计快照不分摊到模型；缓存与推理不另加到总量。'};
 }

@@ -17,6 +17,7 @@ docs/legacy-repair-v7-evidence.json
 # Local investigations, temporary tools and personal handoff records.
 /.repair-review/
 /.tmp/
+/.tmp-runtime-schema/
 /.tools/
 /.interface-design/
 /HANDOFF.md

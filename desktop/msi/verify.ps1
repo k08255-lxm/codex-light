@@ -1,4 +1,4 @@
-param([string]$Output = (Join-Path $PSScriptRoot 'out-release-0.3.0'), [string]$Version = '0.3.0')
+param([string]$Output = (Join-Path $PSScriptRoot 'out-release-0.4.0'), [string]$Version = '0.4.0')
 $ErrorActionPreference = 'Stop'
 $Output = (Resolve-Path -LiteralPath $Output).Path
 $msi = Join-Path $Output "CodexLight-$Version-x64.msi"

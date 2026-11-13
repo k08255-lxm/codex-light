@@ -17,6 +17,32 @@ internal static class Tests {
  static int checks, renders;
  static void Assert(bool condition, string message) { checks++; if (!condition) throw new InvalidOperationException(message); }
  static void Fails(Action action, string message) { try { action(); } catch (InvalidOperationException) { checks++; return; } throw new Exception(message); }
+ static void PackageContracts(){
+  Assert(SetupEngine.PackageFileName("0.3.0")=="CodexLight-0.3.0-x64.msi","published MSI source filename preserved");
+  Assert(SetupEngine.PackageFileName("0.4.0")=="CodexLight-0.4.0-x64.msi","next MSI source filename follows embedded version");
+  foreach(string version in new[]{"","0.4","0.4.0.1","0.4.0+commit","../0.4.0","256.0.0","0.256.0","0.4.65536"})Fails(()=>SetupEngine.PackageFileName(version),"invalid package version refused");
+  string fresh=SetupEngine.MsiArguments(@"C:\cache\CodexLight-0.4.0-x64.msi",@"C:\Apps\CodexLight",@"C:\cache\install.log");
+  string repair=SetupEngine.MsiArguments(@"C:\cache\CodexLight-0.4.0-x64.msi",@"C:\Apps\CodexLight",@"C:\cache\install.log",true);
+  Assert(!fresh.Contains("REINSTALL="),"fresh/major upgrade must not use REINSTALL=ALL");
+  Assert(repair.Contains("REINSTALL=ALL REINSTALLMODE=vomus"),"same product repair re-caches exact source package");
+  Assert(fresh.Contains("MSIRESTARTMANAGERCONTROL=DisableShutdown")&&repair.Contains("MSIRESTARTMANAGERCONTROL=DisableShutdown"),"never request automatic application shutdown");
+ }
+ static int PackageOnly(string source,string evidence){
+  PackageContracts();Directory.CreateDirectory(evidence);
+  var original=EmbeddedPackage.Read(source);
+  byte[] Hash(string file){using(var input=File.OpenRead(file))using(var sha=System.Security.Cryptography.SHA256.Create())return sha.ComputeHash(input);}
+  byte[] expected=Hash(source);
+  for(int i=0;i<3;i++){
+   string cache=Path.Combine(evidence,"extract-"+i+"-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(cache);
+   EmbeddedPackage extracted;using(var input=File.OpenRead(source))extracted=SetupEngine.ExtractPackage(input,cache,System.Threading.CancellationToken.None).GetAwaiter().GetResult();
+   Assert(Path.GetFileName(extracted.Path)==SetupEngine.PackageFileName(original.Version),"actual extracted filename matches MSI source convention");
+   Assert(extracted.Version==original.Version&&extracted.ProductCode==original.ProductCode,"embedded identity retained across repeated extractions");
+   Assert(expected.SequenceEqual(Hash(extracted.Path)),"extracted MSI bytes preserved");
+   Assert(!File.Exists(Path.Combine(cache,"CodexLight.msi"))&&!File.Exists(Path.Combine(cache,"embedded.msi")),"ambiguous extraction filenames never reach msiexec");
+  }
+  File.WriteAllText(Path.Combine(evidence,"package-source-report.json"),System.Text.Json.JsonSerializer.Serialize(new{passed=true,assertions=checks,version=original.Version,repeatedExtractions=3,sourceHashUnchanged=expected.SequenceEqual(Hash(source)),installersStarted=0,installedStateChanged=false}));
+  Console.WriteLine($"PASS: {checks} MSI source/identity/repair-contract assertions; three actual package extractions. No installer or product started; no installed-state changes.");return 0;
+ }
  static IEnumerable<DependencyObject> Descendants(DependencyObject parent) {
   for (int i=0;i<VisualTreeHelper.GetChildrenCount(parent);i++) { var child=VisualTreeHelper.GetChild(parent,i); yield return child; foreach(var descendant in Descendants(child)) yield return descendant; }
  }
@@ -66,6 +92,8 @@ internal static class Tests {
  }
  [STAThread] static int Main(string[] args) {
   try {
+   if(args.Length==3&&args[0]=="--package-only")return PackageOnly(Path.GetFullPath(args[1]),Path.GetFullPath(args[2]));
+   PackageContracts();
    string preview=args.Length>0?Path.GetFullPath(args[0]):Path.Combine(AppContext.BaseDirectory,"previews"); Directory.CreateDirectory(preview);
    Assert(ExitCodePolicy.IsSuccess(0)&&ExitCodePolicy.IsSuccess(3010)&&ExitCodePolicy.IsSuccess(1641),"success/reboot codes");
    foreach(int code in new[]{1603,1618,1638}) Fails(()=>ExitCodePolicy.RequireSuccess(code,"test"),"must surface installer failure");

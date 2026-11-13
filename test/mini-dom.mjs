@@ -19,6 +19,12 @@ export class MiniNode {
   set textContent(value) { this._text = String(value ?? ''); for (const child of this.children) child.parentElement = null; this.children = []; }
   set innerHTML(_) { throw new Error('innerHTML is forbidden'); }
   get firstChild() { return this.children[0] || null; }
+  get childNodes() { return this.children; }
+  get firstElementChild() { return this.children[0] || null; }
+  get childElementCount() { return this.children.length; }
+  get isConnected() { return this.ownerDocument.body?.contains(this) || this===this.ownerDocument.documentElement; }
+  get value() { return this._value!==undefined?this._value:this.tag==='select'?this.options[0]?.value||'':''; }
+  set value(value) { this._value=String(value); }
   get options() { return this.children.filter(child => child.tag === 'option'); }
   append(...nodes) { for (const node of nodes) this.insertBefore(typeof node === 'string' ? this.ownerDocument.createTextNode(node) : node, null); }
   insertBefore(node, reference) {
@@ -35,10 +41,13 @@ export class MiniNode {
   getAttribute(key) { return key in this.attributes ? this.attributes[key] : null; }
   removeAttribute(key) { delete this.attributes[key]; }
   addEventListener(name, callback) { (this.listeners[name] ||= []).push(callback); }
+  removeEventListener(name, callback) { this.listeners[name]=(this.listeners[name]||[]).filter(value=>value!==callback); }
   dispatch(name, event = {}) { const e = { type: name, target: this, preventDefault() { this.defaultPrevented = true; }, stopPropagation() {}, ...event }; for (const callback of this.listeners[name] || []) callback(e); return e; }
-  click() { return this.dispatch('click'); }
+  click() { if(!this.disabled)return this.dispatch('click'); }
   focus() { this.ownerDocument.activeElement = this; }
   scrollIntoView() {}
+  closest(selector) { for(let node=this;node;node=node.parentElement)if(matches(node,selector))return node;return null; }
+  getBoundingClientRect() { return {left:0,top:0,right:100,bottom:32,width:100,height:32}; }
   get descendants() { return [this, ...this.children.flatMap(child => child.descendants)]; }
   querySelectorAll(selector) { return this.descendants.slice(1).filter(node => matches(node, selector)); }
   querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
@@ -46,6 +55,10 @@ export class MiniNode {
 function matches(node, selector) {
   return selector.split(',').some(part => {
     const s = part.trim();
+    const not=/^(.*):not\((.*)\)$/.exec(s);
+    if(not)return matches(node,not[1]||'*')&&!matches(node,not[2]);
+    if(s==='*')return true;
+    if(s===':disabled')return !!node.disabled;
     if (s.startsWith('#')) return node.id === s.slice(1) || node.attributes.id === s.slice(1);
     const m = /^([a-z]*)((?:\.[\w-]+)*)(?:\[([\w-]+)(?:="([^"]*)")?\])?$/i.exec(s);
     if (!m) throw new Error('unsupported selector ' + s);
@@ -56,12 +69,18 @@ function matches(node, selector) {
   });
 }
 export function createDocument() {
-  const document = { activeElement: null, defaultView: { navigator: {} } };
+  const eventTarget=()=>({listeners:{},addEventListener(name,callback){(this.listeners[name]||=[]).push(callback);},removeEventListener(name,callback){this.listeners[name]=(this.listeners[name]||[]).filter(item=>item!==callback);}});
+  const document = { ...eventTarget(), activeElement: null, defaultView: { ...eventTarget(),navigator: {} } };
   document.createElement = tag => new MiniNode(document, tag);
   document.createElementNS = (_, tag) => new MiniNode(document, tag);
   document.createTextNode = text => new MiniNode(document, '#text', String(text));
   document.createDocumentFragment = () => new MiniNode(document, '#fragment');
   document.body = new MiniNode(document, 'body');
+  document.documentElement=new MiniNode(document,'html');document.documentElement.append(document.body);
+  document.documentElement.clientWidth=1280;document.documentElement.clientHeight=900;
+  document.querySelector=selector=>document.documentElement.querySelector(selector);
+  document.querySelectorAll=selector=>document.documentElement.querySelectorAll(selector);
+  document.getElementById=id=>document.documentElement.descendants.find(node=>node.id===id)||null;
   return document;
 }
 export const visibleText = node => node.hidden ? '' : node.tag === '#text' ? node._text : node._text + node.children.map(visibleText).join('');

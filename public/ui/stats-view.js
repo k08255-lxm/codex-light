@@ -32,25 +32,34 @@ export function statisticsQuery(ui, now = ui.anchor ?? Date.now()) {
 export function costCoverage(cost) {
   if (!cost || typeof cost.totalRows !== 'number') return '价格覆盖未知';
   if (!cost.totalRows) return '无可计价记录';
-  if (cost.complete) return `${cost.pricedRows}/${cost.totalRows} 条已计价`;
-  return `仅 ${cost.pricedRows}/${cost.totalRows} 条有价格`;
+  return `已计价 ${cost.pricedRows} · 未计价 ${cost.unpricedRows??cost.totalRows-cost.pricedRows}${cost.complete?'':' · 部分估算'}`;
 }
 
 export function mountStatistics(host, { api, notice = () => {}, onPickFolder = null }) {
   const document = host.ownerDocument;
   const ui = { scope: 'light', range: '30d', metric: 'tokens', tab: 'details', model: '', provider: '', cursor: null, history: [], sort: null, anchor: null };
-  let data = null, loading = false, generation = 0, active = false;
+  let data = null, dataBucket='day', loading = false, generation = 0, active = false, importing = false, discovered = false, localImported = false, importingPrices=false;
 
   host.classList.add('stats');
   const header = el(document, 'header', 'page-head');
   const titles = el(document, 'div', 'page-titles');
   titles.append(el(document, 'h1', '', '用量与性能'), el(document, 'p', 'page-sub', ''));
   const controls = el(document, 'div', 'page-controls');
-  const scope = segmented([['light', '本应用观测'], ['local', '导入的 Codex 日志']], ui.scope, value => { ui.scope = value; resetPaging(); load(); });
+  const scope = segmented([['light', '本应用观测'], ['local', 'Codex 日志']], ui.scope, value => {
+    ui.scope = value; ui.model = ''; ui.provider = ''; resetPaging();
+    if (value === 'local' && !localImported) discoverAndImport(); else load();
+  });
   const range = segmented(RANGES.map(row => [row[0], row[1]]), ui.range, value => { ui.range = value; resetPaging(); load(); });
   const refresh = el(document, 'button', 'btn icon-only'); refresh.type = 'button'; refresh.title = '刷新'; refresh.setAttribute('aria-label', '刷新统计'); refresh.append(icon(document, 'refresh', { size: 16 }));
-  refresh.addEventListener('click', () => { resetPaging(); load(); });
-  controls.append(scope.node, range.node, refresh);
+  refresh.addEventListener('click', () => { resetPaging(); if (ui.scope === 'local' && importInput.value.trim()) importDirectory(); else load(); });
+  const priceImport=el(document,'button','btn small','导入 models.dev 价格');priceImport.type='button';priceImport.title='显式获取公共参考单价，不发送对话或账户信息';
+  priceImport.addEventListener('click',async()=>{
+    if(importingPrices)return;importingPrices=true;priceImport.disabled=true;priceImport.setAttribute('aria-busy','true');
+    try{const result=await api('/api/pricing/refresh',{});resetPaging();await load();setStatus(`已导入 ${integer(result.modelCount)} 个模型的参考价格；按供应商与模型精确匹配，手工价格优先。`);}
+    catch(error){setStatus('价格导入失败：'+error.message,true);}
+    finally{importingPrices=false;priceImport.disabled=false;priceImport.removeAttribute('aria-busy');}
+  });
+  controls.append(scope.node, range.node, priceImport, refresh);
   header.append(titles, controls);
 
   const importBar = el(document, 'form', 'import-bar hidden');
@@ -59,22 +68,46 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
   const importGo = el(document, 'button', 'btn primary', '导入'); importGo.type = 'submit';
   importBar.append(icon(document, 'folder', { size: 16 }), importInput, importPick, importGo);
   importPick.hidden = !onPickFolder;
-  importPick.addEventListener('click', async () => { try { const path = await onPickFolder(); if (path) importInput.value = path; } catch (error) { notice(error.message, true); } });
-  importBar.addEventListener('submit', async event => {
-    event.preventDefault(); const directory = importInput.value.trim(); if (!directory) return;
-    importGo.disabled = true; setStatus('正在扫描所选目录…');
+  importPick.addEventListener('click', async () => { try { const path = await onPickFolder(); if (path) { importInput.value = path; await importDirectory(); } } catch (error) { setStatus(error.message, true); } });
+  importBar.addEventListener('submit', event => { event.preventDefault(); importDirectory(); });
+  async function discoverAndImport() {
+    importBar.classList.remove('hidden');
+    if (!discovered && !importInput.value.trim()) {
+      setStatus('正在查找 Codex 日志…');
+      try {
+        const result = await api('/api/statistics/directories', {});
+        discovered = true;
+        if (!importInput.value.trim() && result.directory) importInput.value = result.directory;
+      } catch (error) { setStatus('查找失败：' + error.message, true); return; }
+    }
+    if (!active || ui.scope !== 'local') return;
+    if (importInput.value.trim()) await importDirectory();
+    else { await load(); setStatus('未找到 Codex 日志，请选择 sessions 目录。'); }
+  }
+  async function importDirectory() {
+    const directory = importInput.value.trim(); if (!directory || importing) return;
+    const mine = ++generation;
+    importing = true; loading = true; importGo.disabled = true; importPick.disabled = true; importInput.disabled = true; refresh.disabled = true;
+    host.setAttribute('aria-busy', 'true'); setStatus('正在读取 Codex 日志…');
     try {
       const result = await api('/api/statistics/import', { directory });
-      ui.scope = 'local'; scope.set('local'); resetPaging();
-      const message = result.scan?.partial ? `已导入（部分）：读取 ${integer(result.scan.filesRead)} 个文件` : `已导入 ${integer(result.scan?.filesRead)} 个文件`;
-      // The import response is the unfiltered default projection; re-query with the selected range/filters.
-      await load(); setStatus(message);
+      localImported = true;
+      if (mine !== generation || !active) return;
+      ui.scope = 'local'; ui.range = 'all'; ui.model = ''; ui.provider = ''; ui.sort = null;
+      scope.set('local'); range.set('all'); resetPaging();
+      // Show the actual imported snapshot, without stale filters hiding the result.
+      data = result.statistics;dataBucket='day'; render();
+      const total = data?.details?.total || 0;
+      setStatus(total ? `已读取 ${integer(result.scan?.filesRead)} 份日志，导入 ${integer(total)} 条记录${result.scan?.partial?'；部分日志未计入':''}。` : '日志中没有可确认的回合或用量记录。');
     }
-    catch (error) { setStatus('导入失败：' + error.message, true); }
-    finally { importGo.disabled = false; }
-  });
+    catch (error) { if (mine === generation && active) setStatus('导入失败：' + error.message, true); }
+    finally {
+      importing = false; importGo.disabled = false; importPick.disabled = false; importInput.disabled = false;
+      if (mine === generation) { loading = false; refresh.disabled = false; host.removeAttribute('aria-busy'); renderPager(); }
+    }
+  }
 
-  const status = el(document, 'p', 'page-status'); status.setAttribute('role', 'status');
+  const status = el(document, 'p', 'page-status'); status.setAttribute('role', 'status');status.style.minHeight='1.5em';
   const overview = el(document, 'section', 'stats-overview');
   const kpis = el(document, 'div', 'kpi-row'); kpis.setAttribute('role', 'tablist'); kpis.setAttribute('aria-label', '图表指标');
   const chartBox = el(document, 'div', 'chart-box');
@@ -112,31 +145,31 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
     const node = el(document, 'div', 'segmented'); node.setAttribute('role', 'radiogroup');
     const buttons = options.map(([key, label]) => {
       const button = el(document, 'button', '', label); button.type = 'button'; button.dataset.value = key; button.setAttribute('role', 'radio');
-      button.addEventListener('click', () => { if (loading || button.getAttribute('aria-checked') === 'true') return; set(key); onChange(key); });
+      button.addEventListener('click', () => { if (importing || button.getAttribute('aria-checked') === 'true') return; set(key); onChange(key); });
       node.append(button); return button;
     });
     const set = key => { for (const button of buttons) button.setAttribute('aria-checked', String(button.dataset.value === key)); };
     set(value); return { node, set };
   }
-  function setStatus(text, error = false) { status.textContent = text; status.classList.toggle('error', error); status.hidden = !text; }
+  function setStatus(text, error = false) { status.textContent = text; status.classList.toggle('error', error);status.hidden=false; }
   // A fresh query: new time anchor, first page. Paging keeps both.
   function resetPaging() { ui.cursor = null; ui.history = []; ui.anchor = null; }
 
   async function load() {
-    if (!active) return;
+    if (!active || importing) return;
     const mine = ++generation; loading = true; refresh.disabled = true; host.setAttribute('aria-busy', 'true');
     if (ui.anchor === null) ui.anchor = Date.now();
     renderPager();
     importBar.classList.toggle('hidden', ui.scope !== 'local');
-    setStatus('正在读取…');
+    refresh.setAttribute('aria-label','正在更新统计');if(!data)setStatus('正在读取…');
     try {
-      const result = await api('/api/statistics/query', statisticsQuery(ui));
+      const query=statisticsQuery(ui);const result = await api('/api/statistics/query', query);
       if (mine !== generation) return;
-      loading = false; data = result; setStatus(''); render();
+      loading = false; data = result;dataBucket=query.bucket; setStatus(''); render();
     } catch (error) {
       if (mine !== generation) return;
       loading = false; setStatus('统计读取失败：' + error.message, true); render();
-    } finally { if (mine === generation) { loading = false; refresh.disabled = false; host.removeAttribute('aria-busy'); renderPager(); } }
+    } finally { if (mine === generation) { loading = false; refresh.disabled = false;refresh.setAttribute('aria-label','刷新统计'); host.removeAttribute('aria-busy'); renderPager(); } }
   }
 
   function render() {
@@ -161,16 +194,17 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
     kpis.replaceChildren(
       kpi('tokens', 'Tokens', compact(t.totalTokens), io, '总 tokens（输入含缓存 + 输出）'),
       kpi('turns', '回合', integer(t.turnCount), `${integer(t.submissionCount)} 次提交 · 成功 ${percent(t.successRate)}`, '观测到的回合与提交（包括立即补充）；上游 API 请求次数不公开'),
-      kpi('cost', '估算成本', usd(t.estimatedCost?.usd), costCoverage(t.estimatedCost), '按公开参考价估算，非账单'),
+      kpi('cost', '估算总成本', usd(t.estimatedCost?.usd), costCoverage(t.estimatedCost), '当前筛选范围已计价记录之和；未计价项不作零，非账单或实际扣款'),
       kpi('cache', '缓存命中', percent(t.cacheHitRate), `缓存 ${compact(t.cachedInputTokens)} / 输入 ${compact(t.inputTokens)}`, '缓存输入 ÷ 输入'),
     );
   }
-  function bucketLabel(iso) { const hour = statisticsQuery(ui).bucket === 'hour'; return localTime(iso, { date: !hour, time: hour }); }
+  function bucketLabel(iso) { const hour = dataBucket === 'hour'; return localTime(iso, { date: !hour, time: hour }); }
   function renderChart() {
     const metric = METRICS[ui.metric] || METRICS.tokens;
     const trend = Array.isArray(data?.trend) ? data.trend : [];
-    chartTitle.textContent = `${metric.label} · ${statisticsQuery(ui).bucket === 'hour' ? '按小时' : '按天'}`;
+    chartTitle.textContent = `${metric.label} · ${dataBucket === 'hour' ? '按小时' : '按天'}`;
     chartNote.textContent = trend.length ? `${trend.length} 个有数据的时间段（无数据的时段不补零）` : '';
+    chartHost.style.minHeight='200px';chartHost.firstElementChild?.dispose?.();
     chartHost.replaceChildren(barChart(document, trend.map(row => ({ label: bucketLabel(row.start), value: metric.value(row), title: `${localTime(row.start)} · ${metric.format(metric.value(row))} · ${integer(row.turnCount)} 回合` })), { format: metric.format }));
   }
   function perfCell(label, stat, format, help) {
@@ -262,7 +296,17 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
     for (const row of rows) {
       const line = el(document, 'tr');
       if (row.status) line.dataset.status = row.status;
-      for (const [key, , text, , kind] of columns) { const td = el(document, 'td', [kind, key === 'model' ? 'mono' : ''].filter(Boolean).join(' '), text(row)); line.append(td); }
+      for (const [key, , text, , kind] of columns) {
+        const td = el(document, 'td', [kind, key === 'model' ? 'mono' : ''].filter(Boolean).join(' '), text(row));
+        if(detail&&key==='cost'){
+          const cost=row.estimatedCost,details=el(document,'details'),summary=el(document,'summary','',cost?.usd===null?'未计价':usd(cost?.usd));summary.title='展开该回合参考成本分项；不是底层每次模型 API 请求成本';details.append(summary);
+          const labels={input:'未缓存输入',cacheRead:'缓存读取',cacheWrite:'缓存写入',output:'输出',reasoning:'推理输出'};
+          for(const part of cost?.components||[])details.append(el(document,'p','',`${labels[part.kind]||part.kind}：${compact(part.tokens)} tokens × ${usd(part.pricePerMillion)} / 百万 = ${usd(part.usd)}`));
+          if(cost?.usd!==null&&!cost?.complete)details.append(el(document,'p','','仅估算已观测的 Token 片段，可能不是完整回合成本。'));
+          if(cost?.reason)details.append(el(document,'p','',cost.reason));td.replaceChildren(details);
+        }
+        line.append(td);
+      }
       body.append(line);
     }
     tableNode.append(head, body);
@@ -286,7 +330,8 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
     lines.push('“首次可见输出等待”包含思考与工具时间，不是 API 首 token。“回合平均输出 tok/s”= 已完成回合输出 tokens ÷ 整轮耗时（含思考、工具与等待），不是纯模型生成速度；当前协议不提供纯推理耗时，因此纯生成速度与 TTFT 不显示。');
     if (pricing) lines.push(`价格：${pricing.available ? `${pricing.source || '参考价格'}${pricing.fetchedAt ? '，' + localTime(pricing.fetchedAt) + ' 获取' : ''}` : '未获取参考价格，成本不可估算'}。估算不是账单。`);
     if (c?.partial) lines.push('覆盖不完整：部分记录被排除或截断。');
-    if (c?.excludedOverlappingThreads || c?.excludedAmbiguousSessions) lines.push(`排除重叠对话 ${integer(c.excludedOverlappingThreads)}，歧义会话 ${integer(c.excludedAmbiguousSessions)}。`);
+    if(Number.isFinite(c?.knownModelRows))lines.push(`模型已确认 ${integer(c.knownModelRows)} 条，未知 ${integer(c.unknownModelRows)} 条。历史未知仅按相同对话与回合的日志上下文恢复，不套用当前默认模型。`);
+    if (c?.excludedOverlappingThreads || c?.excludedAmbiguousSessions) lines.push(`Token 归属暂缓：重叠对话 ${integer(c.excludedOverlappingThreads)}，歧义会话 ${integer(c.excludedAmbiguousSessions)}；可确认的回合仍保留。`);
     if (data?.dsh && data.dsh.available === false) lines.push('DSH 子代理：' + (data.dsh.reason || '暂无可验证的用量数据'));
     for (const note of Array.isArray(c?.notes) ? c.notes.slice(0, 6) : []) lines.push(String(note));
     if (c?.persistenceWarning) lines.push(String(c.persistenceWarning));
@@ -296,7 +341,7 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
 
   render();
   return {
-    activate() { active = true; load(); },
+    activate() { active = true; if (ui.scope === 'local' && !localImported) discoverAndImport(); else load(); },
     deactivate() { active = false; generation++; loading = false; },
     reset() { data = null; resetPaging(); render(); },
   };

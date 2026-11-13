@@ -27,12 +27,12 @@ export function projectThreadGroups(projects, threads, {selectedPath = '', searc
   for (const project of projects) {
     const key = projectPathKey(project.path);
     if (!key || groups.has(key)) continue;
-    groups.set(key, {key, path: project.path, name: project.name || projectName(project.path), projectId: project.id, saved: true, selected: key === selectedKey, threads: []});
+    groups.set(key, {key, path: project.path, name: project.name || projectName(project.path), pinned: project.pinned === true, projectId: project.id, saved: true, selected: key === selectedKey, threads: []});
   }
   for (const thread of threads) {
     const key = projectPathKey(thread.cwd);
     if (!groups.has(key)) groups.set(key, {key, path: key ? thread.cwd : '', name: key ? projectName(thread.cwd) : '其他对话', projectId: null, saved: false, selected: Boolean(key) && key === selectedKey, threads: []});
     groups.get(key).threads.push(thread);
   }
-  return [...groups.values()].filter(group => !searching || group.threads.length);
+  return [...groups.values()].filter(group => !searching || group.threads.length).sort((a,b) => Number(b.pinned === true) - Number(a.pinned === true));
 }

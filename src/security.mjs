@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
-import { permissionOptions, permissionResponse, formResponse } from '../public/approval-schemas.js';
+import { permissionOptions, permissionResponse, formResponse, approvalDecisions } from '../public/approval-schemas.js';
 import path from 'node:path';
 export function isAbsoluteWorkingDirectory(value,platform=process.platform){
  if(typeof value!=='string'||!value||value.includes('\0'))return false;
@@ -7,8 +7,23 @@ export function isAbsoluteWorkingDirectory(value,platform=process.platform){
  return path.isAbsolute(value);
 }
 const plainObject=value=>!!value && typeof value==='object' && !Array.isArray(value);
+export function validApprovalPolicy(value){
+ if(['on-request','untrusted','never'].includes(value))return true;
+ if(!plainObject(value)||Object.keys(value).join(',')!=='granular'||!plainObject(value.granular))return false;
+ const keys=['mcp_elicitations','rules','sandbox_approval','request_permissions','skill_approval'];
+ return ['mcp_elicitations','rules','sandbox_approval'].every(key=>typeof value.granular[key]==='boolean')&&Object.entries(value.granular).every(([key,item])=>keys.includes(key)&&typeof item==='boolean');
+}
+export function validSandboxPolicy(value){
+ if(!plainObject(value))return false;
+ const keys=value.type==='workspaceWrite'?['type','writableRoots','networkAccess','excludeSlashTmp','excludeTmpdirEnvVar']:value.type==='readOnly'?['type','networkAccess']:value.type==='dangerFullAccess'?['type']:[];
+ if(!keys.length||Object.keys(value).some(key=>!keys.includes(key)))return false;
+ for(const key of ['networkAccess','excludeSlashTmp','excludeTmpdirEnvVar'])if(value[key]!==undefined&&typeof value[key]!=='boolean')return false;
+ return value.writableRoots===undefined||(Array.isArray(value.writableRoots)&&value.writableRoots.length<=100&&value.writableRoots.every(root=>isAbsoluteWorkingDirectory(root)));
+}
 const METHODS = new Set(['model/list','thread/list','thread/read','thread/items/list','thread/turns/list','thread/start','thread/resume','thread/unsubscribe','thread/loaded/list','thread/compact/start','skills/list','turn/start','turn/steer','turn/interrupt','mcpServerStatus/list','thread/name/set','thread/archive','thread/unarchive','thread/fork','account/read','account/rateLimits/read','review/start','plugin/list','plugin/read','account/usage/read']);
+METHODS.add('account/rateLimitResetCredit/consume');
 const fields = {
+ 'account/rateLimitResetCredit/consume':['creditId','idempotencyKey'],
  'plugin/list':['cwds','marketplaceKinds','forceRefetch'],
  'plugin/read':['pluginName','marketplacePath','remoteMarketplaceName'],
  'account/usage/read':['threadId'],
@@ -17,7 +32,7 @@ const fields = {
  'thread/read':['threadId','includeTurns'],
  'thread/items/list':['threadId','turnId','cursor','limit','sortDirection'],
  'thread/turns/list':['threadId','cursor','limit','sortDirection','itemsView'],
- 'thread/start':['cwd','model','approvalPolicy','sandbox'],
+ 'thread/start':['cwd','model','approvalPolicy','approvalsReviewer','sandbox','serviceTier'],
  'thread/resume':['threadId','excludeTurns'],
  'thread/unsubscribe':['threadId'],
  'thread/loaded/list':['cursor','limit'],
@@ -28,9 +43,9 @@ const fields = {
  'thread/unarchive':['threadId'],
  'thread/fork':['threadId','excludeTurns'],
  'account/read':['refreshToken'],
- 'account/rateLimits/read':[],
+ 'account/rateLimits/read':['excludeResetCreditDetails'],
  'review/start':['threadId','target','delivery'],
- 'turn/start':['threadId','input','cwd','model','effort'],
+ 'turn/start':['threadId','input','cwd','model','effort','approvalPolicy','approvalsReviewer','sandboxPolicy','serviceTier'],
  'turn/steer':['threadId','expectedTurnId','input'],
  'turn/interrupt':['threadId','turnId'],
 };
@@ -61,14 +76,24 @@ export function validateRpc(method,params,{hasAttachments=false}={}) {
  if(method==='review/start' && (!plainObject(params.target)||params.target.type!=='uncommittedChanges'||Object.keys(params.target).length!==1||params.delivery!=='inline'))throw new Error('此版本只支持在当前对话审查本地未提交改动');
  if(method==='thread/name/set' && (typeof params.name!=='string'||!params.name.trim()||params.name.length>200))throw new Error('对话名称须为1–200字符');
  if(method==='account/read' && params.refreshToken!==undefined && params.refreshToken!==false)throw new Error('此界面只读取账号状态，不主动刷新或更换登录');
+ if(method==='account/rateLimits/read'&&params.excludeResetCreditDetails!==undefined&&typeof params.excludeResetCreditDetails!=='boolean')throw new Error('额度读取参数无效');
+ if(method==='account/rateLimitResetCredit/consume'){
+  if(typeof params.idempotencyKey!=='string'||! /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(params.idempotencyKey))throw new Error('重置操作需要稳定的幂等标识');
+  if(typeof params.creditId!=='string'||!params.creditId||params.creditId.length>512||/[\x00-\x1f\x7f]/.test(params.creditId))throw new Error('请选择具体可用的重置卡');
+ }
  for(const key of ['includeTurns','excludeTurns','archived'])if(params[key]!==undefined&&typeof params[key]!=='boolean')throw new Error('布尔参数无效');
  if(params.limit!==undefined && (!Number.isInteger(params.limit)||params.limit<1||params.limit>100))throw new Error('分页大小须为 1–100');
  if(params.cwd!==undefined && !isAbsoluteWorkingDirectory(params.cwd))throw new Error('工作目录必须为本机绝对路径');
  if(method==='turn/interrupt'&&!params.turnId)throw new Error('停止任务需要明确的 turnId');
  if(method==='thread/start') {
    if(!params.cwd)throw new Error('请选择工作目录');
-   if(params.approvalPolicy!==undefined&&!['on-request','untrusted'].includes(params.approvalPolicy))throw new Error('新对话必须保留人工审批');
-   if(params.sandbox!==undefined&&!['workspace-write','read-only'].includes(params.sandbox))throw new Error('新对话必须启用沙箱');
+   if(params.sandbox!==undefined&&!['workspace-write','read-only','danger-full-access'].includes(params.sandbox))throw new Error('沙箱模式无效');
+ }
+ if(['thread/start','turn/start'].includes(method)){
+  if(params.approvalPolicy!==undefined&&!validApprovalPolicy(params.approvalPolicy))throw new Error('批准策略无效');
+  if(params.approvalsReviewer!==undefined&&!['user','auto_review','guardian_subagent'].includes(params.approvalsReviewer))throw new Error('批准审查方无效');
+  if(params.serviceTier!==undefined&&!['fast','default'].includes(params.serviceTier))throw new Error('服务速度无效');
+  if(params.sandboxPolicy!==undefined&&!validSandboxPolicy(params.sandboxPolicy))throw new Error('沙箱策略无效');
  }
  if(method==='turn/start'||method==='turn/steer') {
    if(method==='turn/start'&&!params.cwd)throw new Error('发送前必须确认工作目录');
@@ -94,22 +119,24 @@ export function validateResponse(request,result) {
  if(!result||typeof result!=='object'||Array.isArray(result))throw new Error('审批结果格式无效');
  const method=request.method;
  if(['item/commandExecution/requestApproval','item/fileChange/requestApproval'].includes(method)){
-   if(!['accept','decline','cancel'].includes(result.decision)||Object.keys(result).length!==1)throw new Error('仅支持本次批准或拒绝');
+   if(Object.keys(result).length!==1)throw new Error('审批结果包含未知字段');
    const allowed=request.params?.availableDecisions;
-   if(Array.isArray(allowed) && !allowed.includes(result.decision))throw new Error('该请求不允许此决定');
+   const refusal=['decline','cancel'].includes(result.decision)&&(!Array.isArray(allowed)||allowed.includes(result.decision));
+   if(!refusal&&!approvalDecisions(method,request.params).some(choice=>isDeepStrictEqual(choice.decision,result.decision)))throw new Error('该请求不允许此决定或规则与原请求不一致');
  }else if(['execCommandApproval','applyPatchApproval'].includes(method)){
    if(Object.keys(result).length!==1)throw new Error('旧版审批结果包含未知字段');
    const decision=result.decision;
-   if(decision!=='approved'&&decision!=='abort'&&!(plainObject(decision)&&Object.keys(decision).length===1&&plainObject(decision.denied)&&Object.keys(decision.denied).length===1&&typeof decision.denied.rejection==='string'&&decision.denied.rejection.length<=20000))throw new Error('旧版审批仅支持本次批准、拒绝或取消');
+   if(decision!=='abort'&&!approvalDecisions(method,request.params).some(choice=>isDeepStrictEqual(choice.decision,decision))&&!(plainObject(decision)&&Object.keys(decision).length===1&&plainObject(decision.denied)&&Object.keys(decision.denied).length===1&&typeof decision.denied.rejection==='string'&&decision.denied.rejection.length<=20000))throw new Error('旧版审批决定无效');
  }else if(method==='item/permissions/requestApproval'){
-   if(result.scope!=='turn'||!plainObject(result.permissions)||Object.keys(result).some(k=>!['scope','permissions'].includes(k)))throw new Error('权限响应仅支持本次 turn 范围');
+   if(!['turn','session'].includes(result.scope)||!plainObject(result.permissions)||Object.keys(result).some(k=>!['scope','permissions'].includes(k)))throw new Error('权限响应仅支持 turn 或 session 范围');
    // Empty permissions remain a safe refusal even when the requested schema is unsupported.
    if(Object.keys(result.permissions).length){
+    if(typeof request.params?.threadId!=='string'||!request.params.threadId||typeof request.params?.turnId!=='string'||!request.params.turnId)throw new Error('权限授予缺少原请求的对话或任务标识');
     const definition=permissionOptions(request.params);if(!definition.supported)throw new Error(definition.reason);
     // Derive each grant from the shared canonical builder, including modern entries.
     const subset=(wanted,actual)=>Array.isArray(wanted)?Array.isArray(actual)&&wanted.every(value=>actual.some(entry=>isDeepStrictEqual(value,entry))):plainObject(wanted)?plainObject(actual)&&Object.entries(wanted).every(([key,value])=>Object.hasOwn(actual,key)&&subset(value,actual[key])):isDeepStrictEqual(wanted,actual);
     const selected=definition.options.filter(option=>subset(permissionResponse(request.params,[option.id]).permissions,result.permissions)).map(option=>option.id);
-    const expected=permissionResponse(request.params,selected);
+    const expected=permissionResponse(request.params,selected,result.scope);
     if(!isDeepStrictEqual(expected,result))throw new Error('只能授予原请求中明确选择的权限子集，不能扩大或变更结构');
     if(result.permissions.fileSystem){const denied=request.params?.permissions?.fileSystem?.entries?.filter(entry=>entry.access==='deny')||[];if(denied.some(entry=>!result.permissions.fileSystem.entries?.some(value=>isDeepStrictEqual(value,entry))))throw new Error('文件权限授予必须保留原请求的全部 deny 限制');}
     return expected;
