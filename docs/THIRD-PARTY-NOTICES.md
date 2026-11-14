@@ -10,6 +10,7 @@ retain their respective copyright, license and distribution terms.
 | [jsdiff](https://github.com/kpdecker/jsdiff) | 9.0.0, minimal vendored ESM files | Applied DSH edit fragment statistics; [BSD license](../public/vendor/jsdiff/LICENSE), retained under `app/public/vendor/jsdiff` in the Windows payload |
 | [Microsoft WebView2 SDK](https://www.nuget.org/packages/Microsoft.Web.WebView2/1.0.4314.35) | 1.0.4314.35, restored and redistributed | Desktop web control and native loader; exact package LICENSE.txt and NOTICE.txt copied into the installed licenses directory |
 | [.NET](https://github.com/dotnet/runtime) / [Windows Forms](https://github.com/dotnet/winforms) | .NET 10 target, exact apphost version recorded at build | Desktop framework and application host; exact apphost LICENSE.TXT and THIRD-PARTY-NOTICES.TXT accompany the payload |
+| [Velopack](https://github.com/velopack/velopack/tree/1.3.39-g8d2844f) | 1.3.39-g8d2844f, Windows installer/updater and managed client | MIT; upstream license retained in `desktop/velopack/LICENSE-Velopack.txt` and installed as `licenses/Velopack-LICENSE.txt`; tool-vendor notices are copied as `licenses/Velopack-VENDOR-NOTICES.md` |
 | [WiX Toolset](https://github.com/wixtoolset/wix) | 6.0.2, build tool only | Builds the internal MSI; see the build-tool terms below |
 | [Lucide](https://github.com/lucide-icons/lucide) / Feather | Earlier icon geometry | Historical ISC/MIT notices retained below |
 | [dsh-subagent-mcp](https://github.com/dqtz5vpvj9-create/dsh-subagent-mcp) | 0.8.0 upstream; bundled integration 0.8.0-light.1 | MIT bridge source and DeepSeek MIT desktop overlay; exact dependency versions and notices retained in the component |
@@ -40,13 +41,25 @@ records each exact version, license and retained notice path.
 
 ## Runtime and build-tool boundaries
 
+Velopack's tool-vendor notice file describes additional tools in the build
+distribution. It is not a claim that all of those tools ship with this application,
+nor a complete inventory of libraries compiled into the upstream native updater.
+See [the distribution audit](LICENSE-AUDIT.md) for the verified scope and remaining
+upstream dependency/provenance checks.
+
 Node.js, .NET Desktop Runtime and WebView2 Runtime are prerequisite installations
 managed by their official installers; their binaries are not vendored into the
 source repository. Their own licenses apply. The application uses installed
 system fonts and does not redistribute Microsoft or Noto font files.
 
 The official Codex engine and the DSH application are external programs accessed
-through their protocols; their application binaries are not bundled. The small
+through their protocols; their application binaries are not bundled in the main
+application payload. Dependency setup may obtain an unmodified official Codex
+platform package into a private tools directory. For the pinned 0.169.0 version,
+the upstream Apache-2.0 `LICENSE` and `NOTICE` are retained under
+`licenses/codex-0.169.0/`. The platform package's own voice-library licenses,
+notices and source manifests must also remain intact; the Apache license does
+not replace those separate terms. The small
 DSH compatibility overlay is distributed under its retained MIT license as part
 of the bundled bridge. Interface references to Codex, Claude and CC Switch do not imply
 affiliation or permission to redistribute their branding or source code.
@@ -146,3 +159,17 @@ SOFTWARE.
 
 - qrcode-generator 1.4.4, Copyright (c) 2009 Kazuhiko Arase, MIT. Vendored browser module; see `public/vendor/QRCODE-LICENSE.txt`.
 - ZXing core 3.5.3, Apache-2.0. Vendored Android decoder, hash pinned in `android/build.ps1`; see `android/libs/ZXING-LICENSE.txt` and APK `assets/licenses/ZXING-LICENSE.txt`.
+
+## Android distribution
+
+The native Android client packages its own MIT license and Android-specific
+third-party inventory in `assets/licenses/CodexLight-LICENSE.txt` and
+`assets/licenses/THIRD-PARTY-NOTICES.txt`, alongside ZXing's full license.
+`android/verify-licenses.ps1` checks those source assets and, after signing, their
+exact contents in the APK. The Android system/WebView and build SDK/JDK are not
+bundled. Desktop-only DSH, xterm, WebView2 and Velopack binaries are not in the APK.
+
+Android arrow-back, refresh, paste and settings drawable icons are adapted from
+Google Material Icons (Apache-2.0). Their source revision and local changes are
+recorded in the Android-specific notices, and the full license is packaged as
+`assets/licenses/MATERIAL-ICONS-LICENSE.txt`.

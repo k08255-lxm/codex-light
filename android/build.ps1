@@ -8,6 +8,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+& (Join-Path $PSScriptRoot "verify-licenses.ps1")
 $QrJar = Join-Path $PSScriptRoot "libs\zxing-core-3.5.3.jar"
 if ((Get-FileHash -LiteralPath $QrJar -Algorithm SHA256).Hash.ToLowerInvariant() -ne "8d8064c1636fdaef7189dd9055c7d59950a8940a12f2293956446ec3c109fd82") { throw "Pinned ZXing dependency checksum mismatch" }
 
@@ -145,6 +146,7 @@ if ($LASTEXITCODE -ne 0) { throw "apksigner failed" }
 
 cmd.exe /c "`"$ApkSigner`" verify -v `"$FinalApk`"" | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "apk signature verification failed" }
+& (Join-Path $PSScriptRoot "verify-licenses.ps1") -ApkPath $FinalApk
 
 $Hash = (Get-FileHash -Algorithm SHA256 $FinalApk).Hash.ToLowerInvariant()
 "$Hash  codex-light.apk" | Set-Content -Encoding ascii -NoNewline "$FinalApk.sha256"

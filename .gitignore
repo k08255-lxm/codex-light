@@ -85,3 +85,4 @@ docs/legacy-repair-v7-evidence.json
 # Release user documentation.
 !/docs/QR-PAIRING-AND-UPDATES.md
 !/docs/RELEASE-0.4.3.md
+!/docs/LICENSE-AUDIT.md

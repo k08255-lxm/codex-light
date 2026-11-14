@@ -1,0 +1,27 @@
+Codex Light Android - third-party notices
+
+Codex Light's own Java client and bundled connection page are distributed under
+the MIT license in CodexLight-LICENSE.txt. Third-party components retain their
+own licenses; this file does not relicense them.
+
+ZXing core 3.5.3
+Source: https://github.com/zxing/zxing/tree/zxing-3.5.3/core
+Artifact: com.google.zxing:core:3.5.3
+License: Apache License 2.0 (full text in ZXING-LICENSE.txt)
+The unmodified core JAR is compiled into DEX for QR scanning. Its SHA-256 is
+8d8064c1636fdaef7189dd9055c7d59950a8940a12f2293956446ec3c109fd82.
+The upstream license file is preserved without pruning its supplemental text.
+
+Google Material Design Icons
+Source revision: 10ecc14790612ca8fd164e3f4ffe9c16fc50d5b7
+Source: https://github.com/google/material-design-icons
+License: Apache License 2.0 (full text in MATERIAL-ICONS-LICENSE.txt)
+Android drawable ic_arrow_back, ic_refresh, ic_paste and ic_settings derive from
+the 24px Material Icons arrow_back, refresh, content_paste and settings paths.
+They are adapted to Android VectorDrawable XML, use application theme colors,
+omit the empty SVG background path and contain local path syntax adjustments.
+
+Android and Android System WebView are supplied by the user's device, not this
+APK. The Android SDK tools and JDK are build tools and are not included in it.
+The remote desktop interface, when loaded, is served by the paired computer and
+has its own third-party notices; it is not embedded into this APK's assets.

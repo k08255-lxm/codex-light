@@ -7,6 +7,8 @@
 # Keep textual diffs available; these are not binary-file declarations.
 /public/vendor/** -text -whitespace
 /licenses/xterm/** -text -whitespace
+/licenses/codex-0.169.0/** -text -whitespace
+/android/app/src/main/assets/licenses/MATERIAL-ICONS-LICENSE.txt -text -whitespace
 /components/dsh-bridge/LICENSE -text -whitespace
 /components/dsh-bridge/assets/** -text -whitespace
 /components/dsh-bridge/licenses/** -text -whitespace
