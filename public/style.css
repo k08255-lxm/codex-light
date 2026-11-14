@@ -23,6 +23,8 @@
   --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-6:24px; --space-8:32px;
   --content-width:760px; --rail-width:52px; --sidebar-width:272px; --topbar-height:48px; --sidebar-row-height:34px;
   --page-width:1120px;
+  --ease-out:cubic-bezier(0.23, 1, 0.32, 1);
+  --motion-feedback:140ms; --motion-panel:180ms;
   background: var(--canvas); color: var(--text);
 }
 :root[data-visual-style="claude"] {
@@ -849,3 +851,37 @@ dialog::backdrop { background: var(--overlay); }
 #desktop-close-preference .pref-row { border-bottom: 0; }
 #desktop-close-status { margin: 0; }
 #desktop-close-status:empty { display: none; }
+
+/* Occasional settings/disclosure motion only. No message/list/scroll animation.
+   Existing explicit reduced-motion preferences override all
+   transitions, including explicit app preferences and the system preference. */
+:root :is(#settings-general,#settings-storage,#settings-about,#settings-appearance) {
+  opacity: 1; transform: none;
+  transition: opacity var(--motion-panel) var(--ease-out), transform var(--motion-panel) var(--ease-out);
+}
+@starting-style {
+  :root :is(#settings-general,#settings-storage,#settings-about,#settings-appearance):not(.hidden) { opacity: 0; transform: translateY(4px); }
+}
+.storage-settings .storage-categories { display: grid; gap: 12px; margin-top: 16px; }
+.storage-settings .storage-categories .pref-row { flex-wrap: wrap; }
+.storage-settings .storage-categories .pref-row > div { flex: 1 1 240px; }
+.storage-settings .storage-categories .pref-row > button { flex: 0 0 auto; }
+.storage-settings .storage-categories p { margin: 8px 0 0; }
+:root .storage-settings .storage-categories { transition: opacity var(--motion-feedback) var(--ease-out); }
+.storage-settings[aria-busy="true"] .storage-categories { opacity: .65; }
+:root .update-indicator-badge { transition: transform var(--motion-feedback) var(--ease-out), opacity var(--motion-feedback) var(--ease-out); }
+.update-indicator[data-busy="true"] .update-indicator-badge { opacity: .7; }
+@media (hover:hover) and (pointer:fine) {
+  :root .update-indicator:active:not(:focus-visible) .update-indicator-badge { transform: scale(.96); }
+  :root :is(#desktop-close-preference select,.storage-settings .btn) { transition: opacity var(--motion-feedback) var(--ease-out); }
+  :root :is(#desktop-close-preference select,.storage-settings .btn):active:not(:focus-visible) { opacity: .75; }
+}
+@media (max-width:760px) {
+  :root .sidebar { opacity: 0; transform: translateX(-8px); transition: transform 200ms var(--ease-out), opacity 200ms var(--ease-out), visibility 200ms; }
+  :root .app.sidebar-open .sidebar { opacity: 1; transform: none; visibility: visible; }
+}
+
+
+/* A newly available update is a quiet state change, not a repeating pulse. */
+.update-indicator { opacity: 1; transform: none; transition: opacity var(--motion-panel) var(--ease-out), transform var(--motion-panel) var(--ease-out); }
+@starting-style { .update-indicator:not([hidden]) { opacity: 0; transform: translateY(-3px); } }
