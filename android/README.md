@@ -23,7 +23,7 @@
 ### 安装与升级
 
 - 最低系统版本为 Android 7.0（API 24），Manifest 的 target SDK 为 34。需要可用的 Android System WebView；不要把 target SDK 当作最低 Android 版本。
-- 可从贡献者的 [Android Release](https://github.com/lastbaigeiapi/codex-light/releases/tag/v0.4.1-android) 获取 `codex-light.apk` 和对应的 `.sha256`，也可以按下文从源码构建。Release 二进制与 PR 最新源码不一定同步，下载前核对该发布的提交和说明。
+- 从本项目的 [Releases](https://github.com/k08255-lxm/codex-light/releases) 下载同版本 Windows 安装器和 APK，也可以按下文从源码构建。Android 0.4.2 使用 versionCode 402，高于早期测试包的 100；应用内显示版本、原生桥和 User-Agent 均为 0.4.2。下载时核对发布说明与校验文件。
 - 将 APK 传到手机，用系统安装器打开；如系统提示，仅为当前使用的文件管理器或浏览器允许安装该来源的应用。安装后即可关闭这项许可。
 - 若要核对下载文件，在 Windows 执行 `Get-FileHash .\codex-light.apk -Algorithm SHA256`，与同一发布的 `.sha256` 对比。哈希只校验文件一致性，不能代替对发布者和签名的信任。
 - 覆盖升级需要相同应用 ID 和签名证书。作者发布包、自行构建包及其他机器生成的调试密钥不保证互相兼容；签名不匹配时不要直接卸载来强行升级，因为卸载会清除手机保存的连接地址和令牌。请优先使用同一来源、同一签名的更新包。
