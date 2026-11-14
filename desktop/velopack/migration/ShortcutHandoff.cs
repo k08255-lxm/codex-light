@@ -16,6 +16,7 @@ internal sealed class ShortcutHandoff {
  bool Ours(string path){var target=codec.Target(path);return !string.IsNullOrWhiteSpace(target)&&(Is(target,oldExe)||Is(target,stub));}
  IEnumerable<string> Links(string directory){MigrationStorage.Canonical(directory);foreach(var p in Directory.EnumerateFileSystemEntries(directory)){MigrationStorage.Canonical(p);if(Directory.Exists(p)){foreach(var child in Links(p))yield return child;}else if(Path.GetExtension(p).Equals(".lnk",StringComparison.OrdinalIgnoreCase))yield return p;}}
  public void Prepare(){
+  if(File.Exists(Path.Combine(recovery,"shortcut-handoff-plan.json")))throw new IOException("Prior shortcut handoff exists; reconcile before retry");
   if(!File.Exists(stub))throw new IOException("Verified new shortcut target missing");
   foreach(var p in new[]{formal,fallback}){MigrationStorage.Canonical(p);if(Directory.Exists(p)||File.Exists(p)&&!Ours(p))throw new IOException("Foreign shortcut occupies migration entry: "+p);}
   foreach(var path in Links(programs)){
@@ -39,5 +40,6 @@ internal sealed class ShortcutHandoff {
  }
  public void PreserveEntry(){foreach(var p in new[]{formal,fallback})if(File.Exists(p)&&Is(codec.Target(p),stub))return;Publish(fallback);}
 }
+
 
 
