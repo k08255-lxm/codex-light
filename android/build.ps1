@@ -8,6 +8,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$QrJar = Join-Path $PSScriptRoot "libs\zxing-core-3.5.3.jar"
+if ((Get-FileHash -LiteralPath $QrJar -Algorithm SHA256).Hash.ToLowerInvariant() -ne "8d8064c1636fdaef7189dd9055c7d59950a8940a12f2293956446ec3c109fd82") { throw "Pinned ZXing dependency checksum mismatch" }
 
 $AndroidDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $AppDir = Join-Path $AndroidDir "app\src\main"
@@ -88,7 +90,7 @@ if ($LASTEXITCODE -ne 0) { throw "aapt2 link failed" }
 Write-Host "[3/6] Compiling Java sources..."
 $JavaSources = Get-ChildItem -Path "$AppDir\java", "$BuildDir\gen" -Filter "*.java" -Recurse | Select-Object -ExpandProperty FullName
 & $Javac -encoding UTF-8 `
-    -cp $AndroidJar `
+    -cp "$AndroidJar;$AndroidDir\libs\zxing-core-3.5.3.jar" `
     -d "$BuildDir\classes" `
     -source 8 -target 8 `
     $JavaSources
@@ -98,7 +100,7 @@ Write-Host "[4/6] Converting classes to DEX with d8..."
 & $Jar cf "$BuildDir\classes.jar" -C "$BuildDir\classes" .
 if ($LASTEXITCODE -ne 0) { throw "jar packaging failed" }
 
-cmd.exe /c "`"$D8`" --output `"$BuildDir\dex`" --lib `"$AndroidJar`" `"$BuildDir\classes.jar`""
+cmd.exe /c "`"$D8`" --output `"$BuildDir\dex`" --lib `"$AndroidJar`" `"$BuildDir\classes.jar`" `"$AndroidDir\libs\zxing-core-3.5.3.jar`""
 if ($LASTEXITCODE -ne 0) { throw "d8 execution failed" }
 
 Write-Host "[5/6] Packaging DEX bytecode and assets..."

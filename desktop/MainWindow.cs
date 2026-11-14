@@ -229,7 +229,7 @@ internal sealed class MainWindow : CaptionWindow {
   e.Cancel=true;if(closing||choosingClose)return;
   if(!exitRequested&&e.CloseReason==CloseReason.UserClosing){
    choosingClose=true;CloseChoice choice;
-   try{using var dialog=new CloseChoiceDialog(BackColor,ForeColor,Font);dialog.ShowDialog(this);choice=dialog.Choice;}finally{choosingClose=false;}
+   try{using var dialog=new CloseChoiceDialog(BackColor,ForeColor);dialog.ShowDialog(this);choice=dialog.Choice;}finally{choosingClose=false;}
    if(closing||IsDisposed)return;
    if(choice==CloseChoice.Cancel)return;
    if(choice==CloseChoice.Tray){MoveToTray();return;}

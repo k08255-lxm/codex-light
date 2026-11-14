@@ -168,7 +168,7 @@ public class MainActivity extends Activity {
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
 
         String defaultUa = settings.getUserAgentString();
-        settings.setUserAgentString(defaultUa + " CodexLightMobile/0.4.2");
+        settings.setUserAgentString(defaultUa + " CodexLightMobile/0.4.3");
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             settings.setSafeBrowsingEnabled(false);
@@ -283,12 +283,13 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        AppUpdateChecker.start(this);
         if (webView != null) webView.onResume();
     }
 
     @Override
     protected void onPause() {
-        super.onPause();
+        AppUpdateChecker.stop(this);super.onPause();
         if (webView != null) webView.onPause();
     }
 

@@ -1,5 +1,6 @@
 // LAN access settings (this computer only). Default off. The access URL comes only from the
 // authenticated local management response; it is shown on demand and never stored.
+import qrcode from '../vendor/qrcode.js';
 import { el } from './format.js';
 
 export function mountLanAccess(host, { api, notice = () => {} }) {
@@ -22,8 +23,20 @@ export function mountLanAccess(host, { api, notice = () => {} }) {
   const show = el(document, 'button', 'btn', '显示链接'); show.type = 'button';
   const copy = el(document, 'button', 'btn primary', '复制链接'); copy.type = 'button';
   const rotate = el(document, 'button', 'btn', '轮换令牌'); rotate.type = 'button'; rotate.title = '生成新链接并让旧链接与已连接的手机立即失效';
-  linkActions.append(show, copy, rotate);
-  linkRow.append(link, linkActions);
+  const qrButton=el(document,'button','btn','二维码配对');qrButton.type='button';
+  const qrPanel=el(document,'div','lan-qr hidden');let qrTimer=null;
+  function clearQr(){clearTimeout(qrTimer);qrPanel.replaceChildren();qrPanel.classList.add('hidden');}
+  qrButton.addEventListener('click',async()=>{
+   if(busy)return;const mine=++generation;qrButton.disabled=true;clearQr();
+   try{const result=await api('/api/lan/pairing',{});if(mine!==generation)return;const qr=qrcode(0,'M');qr.addData(result.url);qr.make();
+    const canvas=document.createElement('canvas'),count=qr.getModuleCount(),scale=5;canvas.width=canvas.height=(count+8)*scale;canvas.style.width='min(260px,100%)';canvas.style.height='auto';canvas.setAttribute('role','img');canvas.setAttribute('aria-label','手机连接二维码，有效期两分钟，仅可使用一次');
+    const ctx=canvas.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.fillStyle='#000';for(let y=0;y<count;y++)for(let x=0;x<count;x++)if(qr.isDark(y,x))ctx.fillRect((x+4)*scale,(y+4)*scale,scale,scale);
+    const close=el(document,'button','btn','取消配对');close.type='button';close.onclick=()=>{clearQr();api('/api/lan/cancelPairing',{}).catch(()=>{});};
+    qrPanel.append(canvas,el(document,'p','fine','使用手机相机扫描。两分钟有效，仅限一次；仅在可信局域网使用。'),close);qrPanel.classList.remove('hidden');qrTimer=setTimeout(()=>{clearQr();say('二维码已过期，请重新生成。');},Math.max(0,result.expiresAt-Date.now()));
+   }catch(error){say(error.message,true);}finally{qrButton.disabled=false;}
+  });
+  linkActions.append(qrButton,show, copy, rotate);
+  linkRow.append(link, linkActions,qrPanel);
   const message = el(document, 'p', 'fine'); message.setAttribute('role', 'status');
   panel.append(state, addressRow, linkRow);
   host.replaceChildren(intro, panel, message);
@@ -44,10 +57,10 @@ export function mountLanAccess(host, { api, notice = () => {} }) {
     linkRow.classList.toggle('hidden', !enabled || !status?.url);
     link.textContent = status?.url ? (reveal ? status.url : masked(status.url)) : '';
     show.textContent = reveal ? '隐藏链接' : '显示链接';
-    for (const button of [show, copy, rotate]) button.disabled = busy;
+    for (const button of [qrButton,show, copy, rotate]) button.disabled = busy;
   }
   async function call(path, body) {
-    const mine = ++generation; busy = true; render();
+    clearQr(); const mine = ++generation; busy = true; render();
     try { const result = await api(path, body); if (mine === generation) { status = result; } return result; }
     catch (error) { if (mine === generation) say(error.message, true); throw error; }
     finally { if (mine === generation) { busy = false; render(); } }
@@ -71,7 +84,7 @@ export function mountLanAccess(host, { api, notice = () => {} }) {
   render();
   return {
     async activate() { reveal = false; say(''); try { await call('/api/lan/status', {}); } catch {} },
-    deactivate() { reveal = false; generation++; busy = false; render(); },
+    deactivate() { clearQr(); api('/api/lan/cancelPairing',{}).catch(()=>{}); reveal = false; generation++; busy = false; render(); },
     snapshot: () => status,
   };
 }

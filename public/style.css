@@ -216,7 +216,7 @@ dialog::backdrop { background: var(--overlay); }
 .welcome { text-align: center; width: 100%; max-width: var(--content-width); }
 .welcome-mark { display: inline-grid; place-items: center; width: 44px; height: 44px; margin-bottom: 14px; border-radius: 12px; background: var(--surface); color: var(--brand); }
 .welcome-mark .ui-icon { width: 26px; height: 26px; stroke-width: 2.2; }
-.welcome h1 { font-size: 1.375rem; line-height: 1.3; font-weight: 500; margin: 0; }
+.welcome h1 { text-wrap: balance; padding-inline: 16px; min-height: 2.6em; display: grid; place-items: center; font-size: 1.375rem; line-height: 1.3; font-weight: 500; margin: 0; }
 .welcome p { font-size: .8125rem; color: var(--tertiary); margin: 10px 0 0; }
 #messages { width: 100%; }
 .message-head { display: none; }
@@ -808,3 +808,26 @@ dialog::backdrop { background: var(--overlay); }
   :is(.step, .turn-process, .agent-operation-group)[data-running="true"] > summary::before { animation:none; transform:none; }
 }
 :root[data-reduced-motion="true"] :is(.step, .turn-process, .agent-operation-group)[data-running="true"] > summary::before { animation:none; transform:none; }
+
+/* Config uses the same restrained typography and rows as the other settings. */
+.config-settings-panel { padding:20px; }
+.config-settings-panel > .section-title { margin:0 0 8px; font-size:.875rem; font-weight:600; }
+.config-settings-panel > .fine { margin:0 0 16px; line-height:1.6; }
+.config-settings-panel .config-settings-status { color:var(--secondary); }
+.config-settings-fields { gap:0; margin:8px 0 20px; }
+.config-settings-field { padding:16px 0; border-top:1px solid var(--border); }
+.config-settings-field:first-child { border-top:0; }
+.config-settings-field label { font-weight:500; }
+.config-settings-field select { min-height:36px; width:240px; max-width:55%; }
+.config-settings-diff { padding:16px; margin-block:16px; border:1px solid var(--border); border-radius:var(--r-md); background:var(--canvas); }
+.config-settings-consent { display:flex; align-items:flex-start; gap:10px; font-size:.8125rem; line-height:1.6; }
+.config-settings-consent input { flex:0 0 auto; margin-top:4px; }
+.config-settings-consent[hidden],.config-settings-diff[hidden],.config-settings-fields[hidden],.config-settings-controls button[hidden] { display:none; }
+.config-settings-controls { gap:8px; margin-top:16px; }
+.config-settings-controls button { min-height:34px; }
+@media(max-width:480px) {
+ .config-settings-panel { padding:16px; }
+ .config-settings-field label { align-items:stretch; flex-direction:column; gap:8px; }
+ .config-settings-field select { width:100%; max-width:100%; }
+ .config-settings-diff dl { grid-template-columns:1fr; }
+}

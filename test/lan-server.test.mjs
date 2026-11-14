@@ -20,7 +20,7 @@ async function fixture(t){
 async function owner(app,action,body={},token=app.token){const response=await fetch(app.origin+'/api/lan/'+action,{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify(body)});return {status:response.status,body:await response.json()};}
 function request(state,{pathname='/api/status',method='GET',token=capability(state),body,headers={}}={}){
  return new Promise((resolve,reject)=>{
-  const wire=body===undefined?null:JSON.stringify(body),req=http.request({hostname:'127.0.0.1',port:state.port,path:pathname,method,headers:{Host:new URL(state.origin).host,Origin:state.origin,...(token?{Authorization:'Bearer '+token}:{}),...(wire?{'Content-Type':'application/json','Content-Length':Buffer.byteLength(wire)}:{}),...headers}},res=>{const chunks=[];res.on('data',chunk=>chunks.push(chunk));res.on('end',()=>resolve({status:res.statusCode,headers:res.headers,bytes:Buffer.concat(chunks)}));res.on('error',reject);});req.on('error',reject);req.end(wire);
+  const wire=body===undefined?null:JSON.stringify(body),req=http.request({hostname:'127.0.0.1',agent:false,port:state.port,path:pathname,method,headers:{Host:new URL(state.origin).host,Origin:state.origin,...(token?{Authorization:'Bearer '+token}:{}),...(wire?{'Content-Type':'application/json','Content-Length':Buffer.byteLength(wire)}:{}),...headers}},res=>{const chunks=[];res.on('data',chunk=>chunks.push(chunk));res.on('end',()=>resolve({status:res.statusCode,headers:res.headers,bytes:Buffer.concat(chunks)}));res.on('error',reject);});req.on('error',reject);req.end(wire);
  });
 }
 async function sse(state){
@@ -66,4 +66,16 @@ test('owner rotation revokes LAN SSE and old bearer, disable/close reclaim only 
  const secondStream=await sse(second);assert.equal((await owner(app,'disable')).body.enabled,false);await bounded(secondStream.closed);
  await assert.rejects(request(second),e=>e.code==='ECONNREFUSED');assert.equal(app.rpc.connected,true,'disabling mobile access must not stop the engine');
  const third=(await owner(app,'enable',{address})).body;assert.notEqual(capability(third),capability(second));const thirdStream=await sse(third);await app.close();await bounded(thirdStream.closed);await assert.rejects(request(third),e=>e.code==='ECONNREFUSED');
+});
+
+test('QR redemption authenticates the real LAN application and preserves browser remote access',async t=>{
+ const {app}=await fixture(t);const enabled=await owner(app,'enable',{address});const lan=enabled.body;
+ const issued=await owner(app,'pairing');assert.equal(issued.status,200);const ticket=new URL(issued.body.url).hash.slice(6);
+ const response=await request(lan,{pathname:'/api/pairing/redeem',method:'POST',token:null,body:{ticket}});assert.equal(response.status,200);
+ const token=JSON.parse(response.bytes).token;assert.notEqual(token,app.token);
+ const status=await request(lan,{token});assert.equal(status.status,200);assert.equal(JSON.parse(status.bytes).access,'lan');
+ assert.equal((await request(lan,{pathname:'/ui/pairing.js',token:null})).status,200);
+ assert.equal((await request(lan,{pathname:'/api/lan/pairing',method:'POST',token,body:{}})).status,403);
+ assert.equal((await request(lan,{pathname:'/api/pairing/redeem',method:'POST',token:null,body:{ticket}})).status,401);
+ await owner(app,'rotate');assert.equal((await request(lan,{token})).status,401);
 });

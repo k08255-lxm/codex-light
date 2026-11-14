@@ -120,3 +120,9 @@ test('stale or injected update parameters are rejected before filesystem or laun
  let now=1700000000000;const {service}=await fixture(t,{now:()=>now});await service.check();await assert.rejects(service.download({version:'../0.4.0'}),/选择/);await assert.rejects(service.download({version:'0.4.0',url:'https://evil.example/'}),/参数/);
  now+=60*60000+1;await assert.rejects(service.download({version:'0.4.0'}),/过期/);
 });
+
+
+test('0.4.2 detects 0.4.3 with matching versioned installer and release notes',()=>{
+ const raw={tag_name:'v0.4.3',draft:false,prerelease:false,html_url:'https://github.com/k08255-lxm/codex-light/releases/tag/v0.4.3',body:'QR pairing and automatic update checks',assets:[{name:'CodexLight-Setup-0.4.3-x64.exe',size:4096,browser_download_url:'https://github.com/k08255-lxm/codex-light/releases/download/v0.4.3/CodexLight-Setup-0.4.3-x64.exe'},{name:'SHA256SUMS.txt',size:256,browser_download_url:'https://github.com/k08255-lxm/codex-light/releases/download/v0.4.3/SHA256SUMS.txt'}]};
+ const result=parseAppRelease(raw,'0.4.2');assert.equal(result.available,true);assert.equal(result.version,'0.4.3');assert.equal(parseAppRelease(raw,'0.4.3').available,false);
+});

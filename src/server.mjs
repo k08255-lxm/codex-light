@@ -39,6 +39,7 @@ import {REMOTE_METHODS,validateRemote} from './remote.mjs';
 import { createReopener } from './reopen.mjs';
 const publicDir=fileURLToPath(new URL('../public/',import.meta.url));
 const publicFiles={'/config-settings-panel.js':'config-settings-panel.js','/preferences.js':'preferences.js','/plugin-actions-panel.js':'plugin-actions-panel.js','/account-login-panel.js':'account-login-panel.js','/local-usage-panel.js':'local-usage-panel.js','/usage-statistics.js':'usage-statistics.js','/token-pricing.js':'token-pricing.js','/plugins.js':'plugins.js','/plugins.css':'plugins.css','/pr-review-panel.js':'pr-review-panel.js','/terminal.js':'terminal.js','/vendor/xterm.mjs':'vendor/xterm.mjs','/vendor/addon-fit.mjs':'vendor/addon-fit.mjs','/vendor/xterm.css':'vendor/xterm.css','/approval-schemas.js':'approval-schemas.js','/':'index.html','/index.html':'index.html','/app.js':'app.js','/styles.css':'styles.css','/style.css':'style.css','/store.js':'store.js','/dsh.js':'dsh.js','/dsh-live.js':'dsh-live.js','/runtime-panel.js':'runtime-panel.js','/markdown.js':'markdown.js','/submissions.js':'submissions.js','/attachments.js':'attachments.js','/account.js':'account.js','/reasoning.js':'reasoning.js','/remote.js':'remote.js','/icons.js':'icons.js','/state.js':'state.js','/icon.svg':'icon.svg'};
+publicFiles['/vendor/qrcode.js']='vendor/qrcode.js';publicFiles['/ui/pairing.js']='ui/pairing.js';publicFiles['/ui/auto-update.js']='ui/auto-update.js';publicFiles['/ui/welcome-greeting.js']='ui/welcome-greeting.js';
 const types={'.mjs':'text/javascript; charset=utf-8','.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml'};
 publicFiles['/session-controls.js']='session-controls.js';publicFiles['/session-controls.css']='session-controls.css';
 publicFiles['/ui/agent-inspector.js']='ui/agent-inspector.js';
@@ -195,7 +196,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      const action=url.pathname.slice('/api/lan/'.length);
      if(!input||typeof input!=='object'||Array.isArray(input))throw new Error('局域网参数无效');
      if(action==='enable'){json(res,200,await lan.enable(input));return;}
-     if(!['status','disable','rotate'].includes(action)||Object.keys(input).length)throw new Error('局域网操作参数无效');
+     if(!['status','disable','rotate','pairing','cancelPairing'].includes(action)||Object.keys(input).length)throw new Error('局域网操作参数无效');
      json(res,200,await lan[action]());return;
     }
     if(url.pathname==='/api/desktop/pick-folder'){

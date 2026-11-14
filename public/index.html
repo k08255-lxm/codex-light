@@ -172,7 +172,7 @@
 
   <!-- ===== Settings ===== -->
   <main id="settings-dialog" class="stage page settings hidden" aria-label="设置">
-    <header class="stage-bar"><div class="crumbs"><strong>设置</strong></div><div class="stage-actions"><button id="settings-back" class="btn ghost small"><span data-icon="back"></span><span class="label">返回对话</span></button></div></header>
+    <header class="stage-bar"><div class="crumbs"><strong>设置</strong></div><div class="stage-actions"><button id="settings-back" aria-label="返回对话" title="返回对话" class="btn ghost small"><span data-icon="back"></span><span class="label">返回对话</span></button></div></header>
     <div class="page-body settings-content">
       <div id="settings-notice" class="notice hidden" role="status"><span></span></div>
       <section id="settings-general" class="settings-section">
@@ -190,13 +190,15 @@
             <div class="work-row end"><button id="settings-cancel" type="button" class="btn">取消</button><button id="save-settings" type="submit" class="btn primary">保存工作目录</button></div>
           </div>
           <div id="runtime-panel"></div>
-          <h2 id="settings-dsh-heading" class="section-title">DSH 与 MCP</h2>
-          <div class="panel row-panel"><div><strong id="dsh-settings-label">尚未检查 DSH 连接</strong><small id="dsh-settings-details" class="fine">只读检查，不发送任务。</small></div><button id="refresh-dsh-settings" type="button" class="btn"><span data-icon="refresh"></span>检查</button></div>
-          <div id="dsh-connection-root" class="local-only"></div>
-<div id="dsh-config-root" class="local-only"></div>
           <h2 class="section-title">服务</h2>
           <div class="panel row-panel"><p id="runtime-close-info" class="fine">关闭窗口不等于停止服务。</p><button id="shutdown" type="button" class="btn danger">停止服务</button></div>
         </form>
+      </section>
+      <section id="settings-dsh" class="settings-section hidden">
+          <h1 id="settings-dsh-heading">DSH 与 MCP</h1>
+          <div class="panel row-panel"><div><strong id="dsh-settings-label">尚未检查 DSH 连接</strong><small id="dsh-settings-details" class="fine">只读检查，不发送任务。</small></div><button id="refresh-dsh-settings" type="button" class="btn"><span data-icon="refresh"></span>检查</button></div>
+          <div id="dsh-connection-root" class="local-only"></div>
+<div id="dsh-config-root" class="local-only"></div>
       </section>
       <section id="settings-appearance" class="settings-section hidden">
         <h1>外观</h1>

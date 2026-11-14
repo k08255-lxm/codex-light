@@ -21,7 +21,7 @@ function respond(res,status,message){
 
 /** An opt-in second listener for the same application handler, never a proxy. */
 export class LanAccess {
- #handler;#publicPaths;#networkInterfaces;#serverFactory;#session=null;#queue=Promise.resolve();#closed=false;
+ #handler;#publicPaths;#networkInterfaces;#serverFactory;#session=null;#queue=Promise.resolve();#closed=false;#pairing=null;
  constructor({handler,publicPaths=['/','/index.html'],networkInterfaces=os.networkInterfaces,serverFactory=listener=>http.createServer(listener)}={}){
   if(typeof handler!=='function'||typeof networkInterfaces!=='function'||typeof serverFactory!=='function')throw new TypeError('LAN handler and providers must be functions');
   if(!Array.isArray(publicPaths)||publicPaths.some(value=>typeof value!=='string'||!value.startsWith('/')||/[?#]/.test(value)||value.startsWith('/api/')))throw new TypeError('LAN public paths must contain static paths only');
@@ -42,6 +42,7 @@ export class LanAccess {
  #serial(run){const next=this.#queue.then(run,run);this.#queue=next.catch(()=>{});return next;}
  #invalidate(session=this.#session){
   if(!session)return;
+  this.#pairing=null;
   session.token=null;
   for(const socket of session.sockets)socket.destroy();
  }
@@ -88,6 +89,14 @@ export class LanAccess {
    }
   });
  }
+ pairing(){
+  const session=this.#session;
+  if(!session?.token)throw failure('请先开启局域网访问','LAN_NOT_ENABLED',409);
+  const ticket=randomBytes(32).toString('hex'),expiresAt=Date.now()+120000;
+  this.#pairing={ticket,expiresAt};
+  return {url:session.origin+'/#pair='+ticket,expiresAt};
+ }
+ cancelPairing(){this.#pairing=null;return {cancelled:true};}
  rotate(){
   this.#invalidate();
   return this.#serial(()=>{
@@ -107,6 +116,15 @@ export class LanAccess {
   let url;try{url=new URL(req.url,session.origin);}catch{respond(res,400,'无效请求地址');return;}
   if(url.origin!==session.origin){respond(res,403,'拒绝外部来源');return;}
   if(url.hash||[...url.searchParams].some(([key,value])=>['token','access_token','authorization'].includes(key.toLowerCase())||value===session.token)){respond(res,400,'访问凭据只能通过 Authorization 请求头发送');return;}
+  if(url.pathname==='/api/pairing/redeem'){
+   if(req.method!=='POST'||!String(req.headers['content-type']||'').startsWith('application/json')){respond(res,405,'配对需要 JSON POST');return;}
+   let raw='';for await(const chunk of req){raw+=chunk;if(raw.length>256){respond(res,413,'配对请求过大');return;}}
+   let input;try{input=JSON.parse(raw);}catch{respond(res,400,'配对请求无效');return;}
+   const pairing=this.#pairing;
+   if(!plain(input)||Object.keys(input).length!==1||typeof input.ticket!=='string'||!pairing||pairing.expiresAt<=Date.now()||!/^[a-f0-9]{64}$/.test(input.ticket)||!timingSafeEqual(Buffer.from(input.ticket),Buffer.from(pairing.ticket))){respond(res,401,'二维码已失效，请在电脑上重新生成');return;}
+   this.#pairing=null;
+   res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store','Referrer-Policy':'no-referrer'});res.end(JSON.stringify({token:session.token}));return;
+  }
   if(forbidden(url.pathname)){respond(res,403,'此操作仅限本机窗口');return;}
   const publicRead=['GET','HEAD'].includes(req.method)&&this.#publicPaths.has(url.pathname);
   if(!publicRead){

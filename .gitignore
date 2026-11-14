@@ -81,3 +81,7 @@ docs/legacy-repair-v7-evidence.json
 /android/build/
 /android/screenshots/
 /start-lan-server.mjs
+
+# Release user documentation.
+!/docs/QR-PAIRING-AND-UPDATES.md
+!/docs/RELEASE-0.4.3.md

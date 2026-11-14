@@ -141,3 +141,8 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## QR pairing
+
+- qrcode-generator 1.4.4, Copyright (c) 2009 Kazuhiko Arase, MIT. Vendored browser module; see `public/vendor/QRCODE-LICENSE.txt`.
+- ZXing core 3.5.3, Apache-2.0. Vendored Android decoder, hash pinned in `android/build.ps1`; see `android/libs/ZXING-LICENSE.txt` and APK `assets/licenses/ZXING-LICENSE.txt`.

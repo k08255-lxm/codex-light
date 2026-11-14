@@ -485,3 +485,19 @@
     display: none;
   }
 }
+
+/* The same accessible toggle moves, rather than creating competing controls. */
+@media (max-width:760px) {
+  .stage-actions > #rail-sidebar,
+  :root[data-mobile-shell="android"] .stage-actions > #rail-sidebar {
+    display:inline-flex; flex:0 0 40px; width:40px; height:40px; min-height:40px;
+    margin:0; padding:8px; align-items:center; justify-content:center;
+  }
+  .stage-actions > #rail-sidebar::after { content:none !important; }
+  .stage-bar .crumbs { min-width:0; flex:1 1 0; overflow:hidden; }
+  .stage-bar .stage-actions { flex:0 0 auto; }
+}
+
+.lan-qr { margin-top:16px; }
+.lan-qr canvas { display:block; }
+.lan-qr .fine { margin:10px 0; }

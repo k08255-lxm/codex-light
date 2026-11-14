@@ -1,3 +1,6 @@
+import { mountWelcomeGreeting } from './ui/welcome-greeting.js';
+import { redeemPairing } from './ui/pairing.js';
+import { startUpdateChecks } from './ui/auto-update.js';
 import { bootstrapToken } from './ui/access.js';
 import { mountConfigSettingsPanel } from './config-settings-panel.js';
 import { createNotifications } from './ui/notifications.js';
@@ -50,9 +53,12 @@ const attachmentPreviews = new Map();
 const dshTasks = new DshTaskStore();
 const $ = id => document.getElementById(id);
 hydrateIcons(document);
+mountWelcomeGreeting(document.querySelector('#welcome h1'));
 let localSession; try { localSession = sessionStorage; } catch { localSession = {getItem(){throw new Error('会话存储不可用');},setItem(){throw new Error('会话存储不可用');},removeItem(){throw new Error('会话存储不可用');}}; }
 const readSession = key => { try { return localSession.getItem(key); } catch { return null; } };
 // Token bootstrap: loopback keeps a session copy; LAN (phone) keeps it in memory only.
+let pairingError=null;
+try { await redeemPairing(location, url=>history.replaceState(null,'',url)); } catch(error) { pairingError=error; }
 const access = bootstrapToken(location, localSession, url => history.replaceState(null, '', url));
 const token = access.token;
 // LAN pages cannot use local management (shutdown, runtime, desktop, LAN links). Applied before any request.
@@ -79,6 +85,8 @@ const reconcilableRecords=()=>allPendingRecords().filter(row=>row.status!=='inFl
 // sidebar-controller:start
 const sidebarController = (() => {
   const app=$('app'), sidebar=$('sidebar'), overlay=$('sidebar-overlay');
+  const sidebarButton=$('rail-sidebar'), sidebarHome=document.createComment('sidebar toggle home');
+  sidebarButton.before(sidebarHome);
   const media=window.matchMedia('(max-width:760px)');
   let open=false, returnFocus=null, mode='chat';
   const desktopOpen={chat:true,settings:true};
@@ -87,6 +95,9 @@ const sidebarController = (() => {
   const focusable=()=>[...sidebar.querySelectorAll('button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),a[href],[tabindex]:not([tabindex="-1"])')].filter(node=>node.getClientRects().length);
   function sync(){
     const available=mode==='chat'||mode==='settings';
+    const topActions=narrow()&&available?document.querySelector(mode==='settings'?'#settings-dialog .stage-actions':'#chat-page .stage-actions'):null;
+    if(topActions){if(sidebarButton.parentNode!==topActions)topActions.prepend(sidebarButton);}
+    else if(sidebarButton.previousSibling!==sidebarHome)sidebarHome.after(sidebarButton);
     const effectiveOpen=available&&open;
     const overlayOpen=narrow()&&effectiveOpen;
     app.classList.toggle('sidebar-open',overlayOpen);
@@ -1122,12 +1133,11 @@ for (const button of document.querySelectorAll('[data-settings-section]')) butto
 function selectSettingsSection(section = 'general') {
   if(section==='account'||section==='usage'){route(section);return;}
   if(section==='lan')section='remote';
-  const page = section === 'dsh' ? 'general' : (section==='about' && state.lan) ? 'general' : ['general','archived','remote','plugins','appearance','notifications','shortcuts','configuration','about'].includes(section) ? section : 'general'; state.settingsPage = page;
-  for (const name of ['general','archived','remote','plugins','appearance','notifications','shortcuts','configuration','about']) $('settings-' + name).classList.toggle('hidden', name !== page);
+  const page = (section==='about' && state.lan) ? 'general' : ['general','dsh','archived','remote','plugins','appearance','notifications','shortcuts','configuration','about'].includes(section) ? section : 'general'; state.settingsPage = page;
+  for (const name of ['general','dsh','archived','remote','plugins','appearance','notifications','shortcuts','configuration','about']) $('settings-' + name).classList.toggle('hidden', name !== page);
   for (const item of document.querySelectorAll('[data-settings-section]')) item.classList.toggle('active', item.dataset.settingsSection === section);
   document.querySelector('.settings-content').scrollTop = 0;
-  if (section === 'dsh') $('settings-dsh-heading').scrollIntoView({ behavior: 'instant', block: 'start' });
-  if (page === 'general' && !state.lan) { dshConnectionView.activate(); dshConfigView.activate(); } else { dshConnectionView.deactivate(); dshConfigView.deactivate(); }
+  if (page === 'dsh' && !state.lan) { dshConnectionView.activate(); dshConfigView.activate(); } else { dshConnectionView.deactivate(); dshConfigView.deactivate(); }
   if (page === 'appearance' && !state.lan) titleSettings.activate();
   if (page === 'archived') loadArchived().catch(e => notice(e.message, true));
   if(page==='plugins')pluginPanel.activate();else pluginPanel.deactivate();renderPluginPending();
@@ -1241,9 +1251,11 @@ $('prompt').addEventListener('focus', () => { if (matchMedia('(pointer:coarse)')
 async function init() {
   renderPendingMutations(); renderAttachments(); renderReasoning(); remoteControls(); updateControls();
   try {
+    if(pairingError)throw pairingError;
     const config = await api('/api/config'); await loadProjects({restore:!state.cwd&&!config.cwd}); setCwd(state.cwd || config.cwd); $('command-info').textContent = config.codexCommand || 'codex'; let status = await syncStatus();
     events();
     if(!status.connected)activity('正在等待 Codex 连接，连接成功后会自动加载模型与历史。');
   } catch (e) { setConnected(false); notice(e.message, true); activity('未发送任何模型请求'); }
 }
 init();
+if(!access.lan)startUpdateChecks({check:()=>api('/api/app-update/check',{}),notify:version=>notice('Codex Light v'+version+' 可用。打开设置 → 关于查看更新说明并下载。')});

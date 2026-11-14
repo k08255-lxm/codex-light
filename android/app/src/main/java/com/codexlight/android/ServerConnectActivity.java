@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Locale;
 
 public class ServerConnectActivity extends Activity {
+    private boolean pairingBusy=false;
     private EditText editHost;
     private EditText editPort;
     private EditText editToken;
@@ -39,6 +40,11 @@ public class ServerConnectActivity extends Activity {
         recentSection = findViewById(R.id.recentSection);
         recentListContainer = findViewById(R.id.recentListContainer);
 
+        Button scan=new Button(this);scan.setText("扫描电脑二维码");
+        ((LinearLayout)findViewById(R.id.btnQuickPaste).getParent()).addView(scan);
+        scan.setOnClickListener(v->startActivityForResult(new Intent(this,QrScanActivity.class),42));
+        Button updates=new Button(this);updates.setText("查看 APK 发布与更新");((LinearLayout)findViewById(R.id.btnQuickPaste).getParent()).addView(updates);
+        updates.setOnClickListener(v->startActivity(new Intent(Intent.ACTION_VIEW,android.net.Uri.parse("https://github.com/k08255-lxm/codex-light/releases"))));
         // Quick Paste action
         findViewById(R.id.btnQuickPaste).setOnClickListener(v -> pasteFromClipboard());
 
@@ -69,12 +75,23 @@ public class ServerConnectActivity extends Activity {
         }
     }
 
+    @Override protected void onResume(){super.onResume();AppUpdateChecker.start(this);}
+    @Override protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(request==42&&result==RESULT_OK&&data!=null)redeem(data.getStringExtra("pairing"));}
+    private void redeem(String link){
+        if(pairingBusy)return;
+        new android.app.AlertDialog.Builder(this).setTitle("连接这台电脑？").setMessage("只扫描你自己电脑上的二维码。配对会允许本手机使用该电脑的 Codex Light；HTTP 仅适用于可信局域网。").setNegativeButton("取消",null).setPositiveButton("配对",(dialog,which)->{
+         if(pairingBusy)return;pairingBusy=true;Toast.makeText(this,"正在配对…",Toast.LENGTH_SHORT).show();
+         new Thread(()->{try{ServerConfig cfg=PairingClient.redeem(link);runOnUiThread(()->{pairingBusy=false;if(isFinishing()||isDestroyed())return;editHost.setText(cfg.getHost());editPort.setText(String.valueOf(cfg.getPort()));editToken.setText(cfg.getToken());performConnect();});}catch(Exception e){runOnUiThread(()->{pairingBusy=false;if(!isFinishing())new android.app.AlertDialog.Builder(this).setTitle("配对失败").setMessage("请确认同一网络，并在电脑重新生成二维码后重试。也可粘贴手动连接链接。").setPositiveButton("知道了",null).show();});}},"pairing").start();
+        }).show();
+    }
+    @Override protected void onPause(){AppUpdateChecker.stop(this);super.onPause();}
     private void pasteFromClipboard() {
         try {
             ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
             if (cm != null && cm.hasPrimaryClip() && cm.getPrimaryClip().getItemCount() > 0) {
                 CharSequence text = cm.getPrimaryClip().getItemAt(0).getText();
                 if (text != null) {
+                    if(PairingClient.isPairing(text.toString())){redeem(text.toString());return;}
                     ServerConfig parsed = ServerConfig.parse(text.toString());
                     if (parsed != null) {
                         editHost.setText(parsed.getHost());
