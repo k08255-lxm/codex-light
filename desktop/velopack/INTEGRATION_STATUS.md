@@ -1,30 +1,65 @@
 # Integration status and verification boundaries
 
-This branch is development work, not a released replacement installer. Default MSI builds remain unchanged; Velopack support is explicitly opt-in.
+## Current state (2026-11-14)
 
-## Implemented
+0.4.4 adds a single migration-aware public bootstrap. It preserves the old
+client's versioned-asset, no-argument launch contract. Release publication is
+still a separate step; successful compilation is not installation acceptance.
 
-- The native host enables the Velopack transport only for a validated `CodexLightDesktop/current` installation with the external worker present. User data stays in the separate `CodexLight` directory.
-- The backend selects full packages from the fixed project release, verifies published SHA256 and exact version, reserves update execution, and blocks new mutations while unresolved.
-- Idle checks include turns, approvals, queues, terminals, DSH work and operation state. Missing or unknown state blocks installation.
-- Native package validation holds a read lease and checks install identity, exact cache path, ZIP metadata and contents.
-- The update worker is staged outside the program tree. It uses the official updater with `--norestart`; it never promises user-data rollback or automatically kills tasks.
-- Packaging verifies all staged file hashes in the full package and portable archive, verifies the Setup embedded package, and produces checksums without publishing.
+### Verified
 
-## Release blockers / evidence still required
+- A real current-user MSI 0.4.3 installation was migrated to Velopack 0.4.4 by
+  the public bootstrap's actual automatic worker, without a second manual
+  installer invocation. Runtime preflight, exact payload checks, full data/MSI
+  recovery copies, installation, post-install health, exact MSI retirement,
+  protected-data verification and post-retirement health all completed.
+- Old MSI registration and program directory were absent afterward. Exactly one
+  `Codex Light.lnk` remained in the user Start Menu, targeting the stable
+  Velopack root stub. Recovery material was retained. The user's Codex config
+  hash was unchanged. No inference/model call was made.
+- This was a non-foreground core-flow test. It did not click through the outer
+  installer UI or claim real-account/GUI acceptance. No fake GUI observation
+  receipt was created. Component acceptance is explicitly recorded as such.
+- An independent portable 0.4.3 copy successfully applied the final 0.4.4 full
+  package with the official updater and no restart. All 780 expected payload
+  hashes matched. The observed local apply was 3.435 seconds, excluding download,
+  task shutdown and migration; it is not a promised end-to-end update time.
+- A compiled standalone bootstrap, renamed to `CodexLight-Setup.exe` with no
+  adjacent payload and a different working directory, successfully executed its
+  production embedded-resource extraction routine. Main/UI/install were not
+  invoked by this resource test.
+- Released 0.4.3 checker source accepted the candidate release metadata and its
+  checksums. Current MSI and Velopack transports selected their distinct assets.
+  Android 0.4.4 has versionCode 404 and the same signing certificate as the
+  published 0.4.3 APK.
 
-- The parent/worker ready, cancellation, commit and graceful-exit handshake must be verified as a whole, including leftover job children and user exit after a timeout.
-- MSI migration must prove the exact legacy product and source, retain recovery material, preserve user data, and defer old MSI retirement until new-app health has actually been observed. A pure coordinator test is not a Windows Installer migration test.
-- Node prerequisites must be checked before a supported first installation. A bare vendor Setup does not install Node.
-- Permission-denied process inspection must fail closed. This may block updates on a machine until a safe way of establishing process absence is available.
-- Actual first installation, migration, process locks, interrupted update, new-app health, and recovery need an isolated Windows environment. They have not been exercised on the user's real installation, by design.
-- Packages are unsigned. Checksums fetched from the same release establish artifact integrity, not an independent publisher-signature trust root.
-- Publishing requires a new version for changed distributed contents. No release is created by the development scripts.
+### Boundaries and remaining release checks
 
-See README.md for the measured isolated directory-update timings and exclusions. Those figures are not measured production downtime, MSI migration time, or a controlled MSI-versus-Velopack speedup.
+- The outer native installer visual/interactive path is not fully exercised on
+  the user's desktop because tests must not interrupt their foreground work.
+- Fresh-machine dependency installation remains covered by controlled fixtures,
+  not a claim of a real pristine Windows-machine installation.
+- A previous direct developer-stage Setup launch failed while loading its own
+  embedded ZIP with OS error 5. The actual automatic worker later succeeded from
+  the product's normal extraction layout without permission changes or security
+  bypasses. The exact cause of that earlier failure is not established.
+- Packages are unsigned. GitHub release checksums provide integrity, not an
+  independent publisher-signature trust root.
+- Fixed upstream native binaries, observed crate notices and their hashes are
+  retained, but the notice inventory is not a certified complete linked SBOM.
+- Later versions must preserve the fixed-bridge compatibility contract in
+  `MIGRATION_RELEASE_POLICY.md`; merely leaving 0.4.4 in historical releases is
+  insufficient for clients that only query latest.
 
-## Selected dependency and isolated regression
+## Runtime safety
 
-The opt-in host and packer now both pin official **1.3.39-g8d2844f (prerelease)**, repository commit `8d2844f324a69bd848719ef465b1ae12c5060524`. The prior stable 1.2.161 Setup argument-forwarding issue is historical for this branch, not its current dependency. The migration execution gate remains closed pending actual migration acceptance.
+The host uses the Velopack transport only for a validated
+`CodexLightDesktop/current` installation with the external worker present. User
+state remains in a separate directory. Startup does not auto-apply pending
+packages. Full-package identity, published SHA256 and exact version are checked;
+unknown task/process state blocks updates. The worker performs the ready/commit
+handshake, graceful exit and `--norestart` apply, never a forced task kill.
 
-Real portable full-package application and forced new-directory replacement failure were tested in independent artificial-version roots. Full applies verified every expected installed file; the injected rename failure restored all old current hashes. This narrows the failure-handling uncertainty, but does not prove first MSI migration, interrupted-power recovery, real task-drain integration, or user-data recovery. Successful apply removes its old temporary backup. See TEST_REPORT.md for test scope and README.md for timing exclusions.
+The tool/runtime pin is official **1.3.39-g8d2844f (prerelease)**, upstream commit
+`8d2844f324a69bd848719ef465b1ae12c5060524`. The older stable 1.2.161 argument
+forwarding failure is historical, not the current dependency.
