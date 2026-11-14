@@ -7,7 +7,7 @@ using Microsoft.Web.WebView2.WinForms;
 namespace CodexLight.Desktop;
 internal sealed class MainWindow : CaptionWindow {
  WebView2 view=new(){Dock=DockStyle.Fill};
- readonly Label loading=new(){Dock=DockStyle.Fill,Text="正在启动本地 Codex Light…",TextAlign=ContentAlignment.MiddleCenter,ForeColor=Color.White,BackColor=Color.FromArgb(24,24,24)};
+ readonly StartupView loading=new();
  readonly bool demo; readonly string profile=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"CodexLight","WebView","Sessions",Guid.NewGuid().ToString("N"));
  readonly CancellationTokenSource hostMessages=new();
  readonly SemaphoreSlim hostWrites=new(1,1);
@@ -24,6 +24,7 @@ internal sealed class MainWindow : CaptionWindow {
  protected override void OnMove(EventArgs e){base.OnMove(e);placement?.Capture();}
  protected override void OnResize(EventArgs e){base.OnResize(e);placement?.Capture();}
  protected override void OnResizeEnd(EventArgs e){base.OnResizeEnd(e);placement.Capture();placement.Save();}
+ void SetStartupStage(string stage,StartupPhase phase){startupStage=stage;loading.SetProgress(phase,stage);}
  async Task StartAsync(){
   try {
    if(CodexLight.Runtime.ProcessIntegrity.ReadLevel()<0x2000){
@@ -34,7 +35,7 @@ internal sealed class MainWindow : CaptionWindow {
    var nodeRuntime=await Task.Run(()=>CodexLight.Runtime.NodeRuntimeDetection.FindCompatible(AppContext.BaseDirectory));
    if(nodeRuntime==null)throw new FileNotFoundException("未发现 Node.js 20+，请运行安装器补齐运行环境。");
    if(closing)return;
-   string node=nodeRuntime.Path;startupStage="创建后台进程";job=new ChildJob();
+   string node=nodeRuntime.Path;SetStartupStage("创建后台进程",StartupPhase.Backend);job=new ChildJob();
    var utf8=new UTF8Encoding(false);
    var start=new ProcessStartInfo(node){UseShellExecute=false,CreateNoWindow=true,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true,StandardInputEncoding=utf8,StandardOutputEncoding=utf8,StandardErrorEncoding=utf8,WorkingDirectory=root};
    start.Environment["CODEX_LIGHT_ACTIVE_WEBVIEW_PROFILE"]=profile;
@@ -42,17 +43,17 @@ internal sealed class MainWindow : CaptionWindow {
    backend=new Process{StartInfo=start,EnableRaisingEvents=true};
    backend.Exited+=(sender,eventArgs)=>{try{int code=((Process)sender!).ExitCode;if(!closing&&!updateShutdownAttempted&&stopTask==null&&IsHandleCreated)BeginInvoke((Action)(()=>{if(stopTask==null){ShowFailure($"本地后台退出（{startupStage}，退出码 {code}）。请重新打开应用。");_ = StopBackendAsync();}}));}catch(InvalidOperationException){}};
    if(!backend.Start())throw new InvalidOperationException("无法启动 Node 后台。");
-   startupStage="绑定后台进程";try{job.Assign(backend);}catch{backend.Kill(true);throw;}
+   SetStartupStage("绑定后台进程",StartupPhase.Backend);try{job.Assign(backend);}catch{backend.Kill(true);throw;}
    backend.ErrorDataReceived+=(_,_)=>{};backend.BeginErrorReadLine(); // never persist secrets/diagnostics
-   startupStage="后台握手";await WriteHostAsync(JsonSerializer.Serialize(new{action="start",updateTransport=VelopackApplyLauncher.Available?"velopack":"msi"}));
+   SetStartupStage("后台握手",StartupPhase.Backend);await WriteHostAsync(JsonSerializer.Serialize(new{action="start",updateTransport=VelopackApplyLauncher.Available?"velopack":"msi"}));
    using var timeout=CancellationTokenSource.CreateLinkedTokenSource(hostMessages.Token);timeout.CancelAfter(TimeSpan.FromSeconds(30));
    string line=await ReadBoundedLineAsync(backend.StandardOutput,timeout.Token);
    using var result=JsonDocument.Parse(line);string? url=result.RootElement.GetProperty("url").GetString();
    if(!Uri.TryCreate(url,UriKind.Absolute,out var uri)||uri.Scheme!="http"||uri.Host!="127.0.0.1"||uri.Port<=0||uri.AbsolutePath!="/"||uri.Query!=""||uri.UserInfo!=""||!Regex.IsMatch(uri.Fragment,"^#token=[a-f0-9]{64}$"))throw new InvalidOperationException("后台返回了无效本地地址。");
    if(closing)return;origin=new Uri(uri.GetLeftPart(UriPartial.Authority));
-   startupStage="初始化 WebView2";
+   SetStartupStage("初始化 WebView2",StartupPhase.Renderer);
    Controls.Remove(view);view.Dispose();
-   var session=await WebViewRuntime.StartAsync(this,profile,WebViewRuntime.Discover(AppContext.BaseDirectory),message=>{if(!closing&&!failed){loading.Text=message;loading.BringToFront();}},hostMessages.Token);
+   var session=await WebViewRuntime.StartAsync(this,profile,WebViewRuntime.Discover(AppContext.BaseDirectory),message=>{if(!closing&&!failed){loading.SetProgress(StartupPhase.Renderer,message);loading.BringToFront();}},hostMessages.Token);
    view=session.View;var environment=session.Environment;
    WriteStartupReport(session.Attempts,true);
    if(closing)return;
@@ -89,7 +90,7 @@ internal sealed class MainWindow : CaptionWindow {
     // Host-only style: preserve browser mode while removing the duplicate WebUI bar.
     await core.AddScriptToExecuteOnDocumentCreatedAsync("document.addEventListener('DOMContentLoaded',()=>{document.documentElement.classList.add('native-caption-integrated');});");
    }
-   startupStage="载入界面";core.Navigate(uri.AbsoluteUri);
+   SetStartupStage("载入界面",StartupPhase.Interface);core.Navigate(uri.AbsoluteUri);
    _ = ReadHostMessagesAsync(backend.StandardOutput);
   }catch(Exception error){
    if(error is WebViewStartupException web){WriteStartupReport(web.Attempts,false);if(!closing)ShowFailure("WebView2 无法启动。请查看启动诊断中的版本、错误码及应用数据目录权限。\n"+web.Details);}
@@ -248,7 +249,7 @@ internal sealed class MainWindow : CaptionWindow {
  }
  void ShowFailure(string message){
   if(closing||IsDisposed||failed)return;
-  failed=true;loading.Text=message;loading.Show();loading.BringToFront();
+  failed=true;loading.ShowFailure(message);loading.Show();loading.BringToFront();
   if(!Visible)RestoreFromTray();
  }
  void MoveToTray(){
