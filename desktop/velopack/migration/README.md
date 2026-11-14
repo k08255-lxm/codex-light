@@ -51,3 +51,9 @@ The production capture entry is fixed to this application's LocalAppData root. S
 Space budgeting uses actual captured file lengths plus verified caller-provided payload/package/MSI sizes and explicit headroom. The wrapper must still check every affected volume and temporary extraction requirements; this helper is not free-space or idle proof. Receipt atomic replacement is not a transaction over installation side effects or a guarantee against filesystem/hardware loss.
 
 The production Execute gate remains disabled. Neither pure storage tests nor benign stub health prove real native/backend readiness, schema compatibility, authenticated task idleness, shortcut ownership or production recovery.
+
+## Packaged component health probe
+
+The packaged host accepts `--backend-health-check` before UI, instance wake, or normal app startup. It starts its actual packaged Node/backend in a fresh temporary demo state, checks anonymous rejection and authenticated loopback status, and shuts that process down normally. Native and backend versions must agree. This was executed from an isolated staged payload: exit 0, 624 ms, Node 24.13.0; no account/model or DSH connection was made.
+
+The JSON deliberately reports `realAccountVerified: false`. This proves the native-to-Node/backend component path, not WebView rendering, real user-account connectivity, old-task idleness, or complete migration. It does not remove the production execution gate.
