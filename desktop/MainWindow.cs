@@ -269,7 +269,9 @@ internal sealed class MainWindow : CaptionWindow {
    trayIcon=TrayAppearance.CreateIcon(Math.Max(16,SystemInformation.SmallIconSize.Width),TrayAppearance.IsLightTaskbar());
    TrayAppearance.Apply(trayMenu,TrayAppearance.IsLightTaskbar());
    trayMenu.Opening+=(_,_)=>RefreshTrayAppearance();
-   tray=new NotifyIcon{Text="Codex Light",Icon=trayIcon,ContextMenuStrip=trayMenu};tray.DoubleClick+=(_,_)=>RestoreFromTray();
+   tray=new NotifyIcon{Text="Codex Light",Icon=trayIcon,ContextMenuStrip=trayMenu};// MouseClick fires for the first release; WinForms suppresses the double-click release.
+   // Do not also subscribe to DoubleClick: a double click must not restore twice.
+   tray.MouseClick+=(_,e)=>{if(e.Button==MouseButtons.Left&&e.Clicks==1)RestoreFromTray();};
   }
   tray.Visible=true;
   if(!tray.Visible)throw new InvalidOperationException("Tray icon unavailable");

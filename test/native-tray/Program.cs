@@ -21,7 +21,16 @@ internal static class NativeTrayTests {
    Check(Tray(window).Visible,"foreground window has tray immediately after load");
    Check(Field("backend").GetValue(window)==null,"test never starts backend");
    var tray=Tray(window);Call(window,"ShowTray");Check(ReferenceEquals(tray,Tray(window)),"repeated show reuses icon");
-   window.Hide();window.RestoreFromTray();
+   window.Hide();
+   var mouseClick=typeof(NotifyIcon).GetMethod("OnMouseClick",Instance)!;
+   mouseClick.Invoke(tray,[new MouseEventArgs(MouseButtons.Right,1,0,0,0)]);
+   Check(!window.Visible,"right click does not restore window");
+   mouseClick.Invoke(tray,[new MouseEventArgs(MouseButtons.Left,1,0,0,0)]);
+   Check(window.Visible,"left single click restores hidden window");
+   window.Hide();
+   mouseClick.Invoke(tray,[new MouseEventArgs(MouseButtons.Left,2,0,0,0)]);
+   Check(!window.Visible,"double click event cannot repeat restoration");
+   window.RestoreFromTray();
    Check(window.Visible&&Tray(window).Visible,"restore retains tray icon");
    window.WindowState=FormWindowState.Minimized;window.RestoreFromTray();
    Check(window.WindowState==FormWindowState.Normal&&Tray(window).Visible,"minimized restore retains icon");
