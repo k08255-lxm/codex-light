@@ -1,6 +1,7 @@
 import { mountWelcomeGreeting } from './ui/welcome-greeting.js';
 import { redeemPairing } from './ui/pairing.js';
 import { startUpdateChecks } from './ui/auto-update.js';
+import { mountUpdateIndicator } from './ui/update-indicator.js';
 import { bootstrapToken } from './ui/access.js';
 import { mountConfigSettingsPanel } from './config-settings-panel.js';
 import { createNotifications } from './ui/notifications.js';
@@ -386,7 +387,8 @@ const accountView = mountAccount($('account-root'), {
 });
 const lanView = mountLanAccess($('lan-root'), { api, notice });
 const titleSettings=mountTitleSettings($('title-settings-root'),{api,notice});
-const aboutView = mountAbout($('about-root'), { api, mutate: (method, params) => {
+const updateIndicator = !access.lan ? mountUpdateIndicator(document.querySelector('.rail'), {onOpen:()=>route('settings',{section:'about'})}) : null;
+const aboutView = mountAbout($('about-root'), { api, onStatus:status=>updateIndicator?.update(status), mutate: (method, params) => {
   if(pendingMutations.storageError||scopedPending('app-update').length)throw Object.assign(new Error('应用更新操作仍待确认，请先核对已有操作。'),{outcome:'notExecuted'});
   return performMutation(method, params);
 } });
@@ -1258,4 +1260,4 @@ async function init() {
   } catch (e) { setConnected(false); notice(e.message, true); activity('未发送任何模型请求'); }
 }
 init();
-if(!access.lan)startUpdateChecks({check:()=>api('/api/app-update/check',{}),notify:version=>notice('Codex Light v'+version+' 可用。打开设置 → 关于查看更新说明并下载。')});
+if(!access.lan)startUpdateChecks({check:()=>api('/api/app-update/check',{}),onStatus:status=>updateIndicator?.update(status),notify:version=>notice('Codex Light v'+version+' 可用。打开设置 → 关于查看更新说明并下载。')});

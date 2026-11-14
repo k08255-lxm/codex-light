@@ -4,7 +4,7 @@ const RELEASES='https://github.com/k08255-lxm/codex-light/releases';
 const PHASE={idle:'随时检查新版本',checking:'正在检查更新…',available:'有新版本可用',upToDate:'当前已是最新版本',downloading:'正在下载安装包…',ready:'安装包已下载并通过校验',launching:'正在打开安装程序…',launched:'安装程序已打开',launchUnknown:'安装程序启动结果待确认',failed:'应用更新未完成'};
 const bytes=value=>Number.isFinite(value)?`${(value/1024/1024).toFixed(1)} MB`:'';
 
-export function mountAbout(host,{api,mutate}){
+export function mountAbout(host,{api,mutate,onStatus=()=>{}}){
  const document=host.ownerDocument;
  let active=false,generation=0,status=null,busy=null,error=null,timer=null,polling=false,confirmInstall=false,uncertainInstall=false;
  host.classList.add('about-page');
@@ -12,6 +12,7 @@ export function mountAbout(host,{api,mutate}){
   const node=el(document,'button','btn'+(primary?' primary':''),text);node.type='button';node.disabled=disabled;node.addEventListener('click',action);return node;
  }
  function render(){
+  onStatus(status);
   const header=el(document,'header','page-head');const titles=el(document,'div','page-titles');titles.append(el(document,'h1','','关于'),el(document,'p','page-sub','Codex Light 应用与版本更新'));header.append(titles);
   const intro=el(document,'section','about-intro');
   const title=el(document,'div','about-brand');title.append(el(document,'h2','','Codex Light'));

@@ -831,3 +831,13 @@ dialog::backdrop { background: var(--overlay); }
  .config-settings-field select { width:100%; max-width:100%; }
  .config-settings-diff dl { grid-template-columns:1fr; }
 }
+
+/* A single quiet update affordance, visible only when a confirmed update exists. */
+.update-indicator { background: var(--selected); flex-shrink: 0; }
+.update-indicator[hidden] { display: none; }
+.update-indicator-badge { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: #087bea; color: #fff; }
+.update-indicator .ui-icon { width: 20px; height: 20px; }
+.update-indicator:hover .update-indicator-badge { background: #0066cc; }
+.update-indicator:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+.update-indicator[data-busy="true"] .update-indicator-badge { background: #315d91; }
+@media (forced-colors: active) { .update-indicator-badge { background: Highlight; color: HighlightText; } }
