@@ -12,6 +12,14 @@ Check(Routing.Choose(0,false,true,false,false,true),Route.Blocked);
 Check(Routing.Choose(0,false,false,true,false,true),Route.Blocked);
 Check(Routing.Choose(0,false,false,false,false,true),Route.Blocked);
 Check(Routing.Choose(0,false,false,false,true,false),Route.Blocked);
+
+foreach(var location in new[]{@"C:\Users\Example\AppData\Local\Programs\CodexLight",@"D:\Custom Apps\Codex Light"}){
+ var resolved=Routing.ValidateLegacyRoot(location,_=>true,p=>p.EndsWith("CodexLight.exe"));
+ if(resolved!=location)throw new Exception("Registered root changed");
+ Check(Routing.Choose(1,resolved.Length>0,false,false,false,true),Route.Migrate);
+}
+foreach(var location in new[]{"",@"C:relative",@"\relative",@"\\server\share\app",@"C:\"}){try{Routing.ValidateLegacyRoot(location,_=>true,_=>true);throw new Exception("Invalid registered root accepted");}catch(System.IO.IOException){count++;}}
+foreach(var missing in new[]{"directory","exe"}){try{Routing.ValidateLegacyRoot(@"D:\Custom Apps\Codex Light",_=>missing!="directory",_=>missing!="exe");throw new Exception("Missing installation accepted");}catch(System.IO.IOException){count++;}}
 Console.WriteLine($"PASS {count} installation routing cases; no installation executed.");
 
 var host=new Fake();if(BootstrapFlow.Run(host)!=0||string.Join(",",host.Calls)!="stage,retire,outcome")throw new Exception("Flow order");
