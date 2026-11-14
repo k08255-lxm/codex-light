@@ -32,11 +32,29 @@ test('success notices are neutral while error, approval and primary semantics st
  for(const selector of ['\\.primary, \\.accept','\\.send'])rule(selector,'background:\\s*var\\(--accent\\)[^}]*color:\\s*var\\(--accent-contrast\\)');
 });
 
-test('motion is immediate, never scales or slides, and respects reduced motion',()=>{
- assert.doesNotMatch(css,/scale\(|--motion-press|transition:\s*all|translate[XY]\(|@keyframes\s+fade-in|animation:\s*fade-in|menu-enter|panel-enter|page-enter/);
+test('low-frequency settings motion is scoped; conversation scrolling remains immediate',()=>{
+ // The owner explicitly requested visible settings/disclosure motion. Do not
+ // restore the old global scale/slide ban or permit it on conversation content.
+ assert.doesNotMatch(css,/--motion-press|transition:\s*all|@keyframes\s+fade-in|animation:\s*fade-in|menu-enter|panel-enter|page-enter/);
+ const approved=new Map([
+  [':root :is(#settings-general,#settings-storage,#settings-about,#settings-appearance):not(.hidden)',/transform:\s*translateY\(4px\)/],
+  [':root .update-indicator:active:not(:focus-visible) .update-indicator-badge',/transform:\s*scale\(\.96\)/],
+  [':root .sidebar',/transform:\s*translateX\(-8px\)/],
+  ['.update-indicator:not([hidden])',/transform:\s*translateY\(-3px\)/],
+ ]);
+ const seen=new Set();
+ for(const [,raw,body] of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)){
+  if(!/(?:scale|translate[XY])\(/.test(body))continue;
+  const selector=raw.replace(/\/\*[\s\S]*?\*\//g,'').trim();
+  assert.ok(approved.has(selector),`unapproved spatial motion: ${selector}`);
+  assert.match(body,approved.get(selector));seen.add(selector);
+  assert.doesNotMatch(selector,/[.#](?:thread|message|timeline|feed|turn|conversation)(?:[-\s.#:[>]|$)/);
+ }
+ assert.equal(seen.size,approved.size,'all approved low-frequency motion remains present');
  assert.match(css,/button:not\(:disabled\):active\s*\{\s*background-color:\s*var\(--selected\)/);
  rule('button','transition:\\s*none');assert.match(css,/\.thread[^{}]*\{[^}]*transition:\s*none/);
  assert.match(css,/@media\s*\(prefers-reduced-motion:reduce\)/);assert.match(css,/animation:\s*none\s*!important/);
+ assert.match(css,/data-reduced-motion="true"[^}]*transition:\s*none\s*!important/s);
 });
 
 test('model popover is width-capped with natural height and its own contained scroll',()=>{
