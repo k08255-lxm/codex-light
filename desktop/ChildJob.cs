@@ -13,7 +13,17 @@ internal sealed class ChildJob : IDisposable {
   catch{handle.Dispose();throw;}finally{Marshal.FreeHGlobal(pointer);}
  }
  public void Assign(System.Diagnostics.Process process){if(!AssignProcessToJobObject(handle,process.Handle))throw new Win32Exception();}
+ // A backend exit does not prove its descendants have left this kill-on-close job.
+ // Query failure is deliberately not an empty job.
+ public bool IsEmpty {
+  get {
+   if(handle.IsClosed||handle.IsInvalid)return false;
+   return QueryInformationJobObject(handle,1,out var info,(uint)Marshal.SizeOf<Accounting>(),IntPtr.Zero)&&info.ActiveProcesses==0;
+  }
+ }
  public void Dispose()=>handle.Dispose();
+ [StructLayout(LayoutKind.Sequential)] struct Accounting {public long TotalUserTime,TotalKernelTime,ThisPeriodTotalUserTime,ThisPeriodTotalKernelTime;public uint TotalPageFaultCount,TotalProcesses,ActiveProcesses,TotalTerminatedProcesses;}
+ [DllImport("kernel32.dll",SetLastError=true)][return:MarshalAs(UnmanagedType.Bool)]static extern bool QueryInformationJobObject(SafeFileHandle job,int infoClass,out Accounting info,uint size,IntPtr returnedLength);
  [StructLayout(LayoutKind.Sequential)] struct BasicLimit { public long PerProcessUserTimeLimit,PerJobUserTimeLimit;public uint LimitFlags;public UIntPtr MinimumWorkingSetSize,MaximumWorkingSetSize;public uint ActiveProcessLimit;public UIntPtr Affinity;public uint PriorityClass,SchedulingClass; }
  [StructLayout(LayoutKind.Sequential)] struct IoCounters{public ulong ReadOperationCount,WriteOperationCount,OtherOperationCount,ReadTransferCount,WriteTransferCount,OtherTransferCount;}
  [StructLayout(LayoutKind.Sequential)] struct ExtendedLimit{public BasicLimit BasicLimitInformation;public IoCounters IoInfo;public UIntPtr ProcessMemoryLimit,JobMemoryLimit,PeakProcessMemoryUsed,PeakJobMemoryUsed;}

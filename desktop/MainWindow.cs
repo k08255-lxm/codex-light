@@ -12,7 +12,7 @@ internal sealed class MainWindow : CaptionWindow {
  readonly CancellationTokenSource hostMessages=new();
  readonly SemaphoreSlim hostWrites=new(1,1);
  NotifyIcon? tray;ContextMenuStrip? trayMenu;Icon? trayIcon;
- Process? backend;ChildJob? job;Uri? origin;bool closing,allowClose,exitRequested,choosingClose,resourcesDisposed,failed;
+ Process? backend;ChildJob? job;Uri? origin;bool closing,allowClose,exitRequested,choosingClose,resourcesDisposed,failed,updateShutdownAttempted;
  readonly WindowSessionEnd sessionEnd=new();
  Task? stopTask;
  string startupStage="检测运行环境";
@@ -37,11 +37,11 @@ internal sealed class MainWindow : CaptionWindow {
    var start=new ProcessStartInfo(node){UseShellExecute=false,CreateNoWindow=true,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true,StandardInputEncoding=utf8,StandardOutputEncoding=utf8,StandardErrorEncoding=utf8,WorkingDirectory=root};
    start.ArgumentList.Add(script);if(demo)start.ArgumentList.Add("--demo");
    backend=new Process{StartInfo=start,EnableRaisingEvents=true};
-   backend.Exited+=(sender,eventArgs)=>{try{int code=((Process)sender!).ExitCode;if(!closing&&stopTask==null&&IsHandleCreated)BeginInvoke((Action)(()=>{if(stopTask==null){ShowFailure($"本地后台退出（{startupStage}，退出码 {code}）。请重新打开应用。");_ = StopBackendAsync();}}));}catch(InvalidOperationException){}};
+   backend.Exited+=(sender,eventArgs)=>{try{int code=((Process)sender!).ExitCode;if(!closing&&!updateShutdownAttempted&&stopTask==null&&IsHandleCreated)BeginInvoke((Action)(()=>{if(stopTask==null){ShowFailure($"本地后台退出（{startupStage}，退出码 {code}）。请重新打开应用。");_ = StopBackendAsync();}}));}catch(InvalidOperationException){}};
    if(!backend.Start())throw new InvalidOperationException("无法启动 Node 后台。");
    startupStage="绑定后台进程";try{job.Assign(backend);}catch{backend.Kill(true);throw;}
    backend.ErrorDataReceived+=(_,_)=>{};backend.BeginErrorReadLine(); // never persist secrets/diagnostics
-   startupStage="后台握手";await WriteHostAsync("{\"action\":\"start\"}");
+   startupStage="后台握手";await WriteHostAsync(JsonSerializer.Serialize(new{action="start",updateTransport=VelopackApplyLauncher.Available?"velopack":"msi"}));
    using var timeout=CancellationTokenSource.CreateLinkedTokenSource(hostMessages.Token);timeout.CancelAfter(TimeSpan.FromSeconds(30));
    string line=await ReadBoundedLineAsync(backend.StandardOutput,timeout.Token);
    using var result=JsonDocument.Parse(line);string? url=result.RootElement.GetProperty("url").GetString();
@@ -124,7 +124,7 @@ internal sealed class MainWindow : CaptionWindow {
     SetCaptionTheme(value=="light",style);loading.BackColor=BackColor;loading.ForeColor=ForeColor;
    }
   }catch(OperationCanceledException){}catch{
-   if(!closing&&!IsDisposed){ShowFailure("本地界面通信已中断。请关闭并重新打开应用；未自动重发任务。");await StopBackendAsync();}
+   if(!closing&&!IsDisposed&&!updateShutdownAttempted){ShowFailure("本地界面通信已中断。请关闭并重新打开应用；未自动重发任务。");await StopBackendAsync();}
   }
  }
  ToolStripMenuItem? fileMenu,viewMenu;
@@ -175,10 +175,40 @@ internal sealed class MainWindow : CaptionWindow {
  async Task LaunchInstallerAsync(string requestId,string installerPath,string sha256){
   if(closing)return;
   string? error=null;
-  try{AppUpdateLauncher.Launch(installerPath,sha256);}
+  bool velo=installerPath.EndsWith(".nupkg",StringComparison.OrdinalIgnoreCase);
+  VelopackApplyLauncher.StagedApply? staged=null;
+  try{if(velo)staged=await VelopackApplyLauncher.StageAsync(installerPath,sha256);else AppUpdateLauncher.Launch(installerPath,sha256);}
   catch(AppUpdateLaunchUnknownException){error="APP_UPDATE_LAUNCH_UNKNOWN";}
-  catch{error="APP_UPDATE_NOT_EXECUTED";} // No exception paths or local details cross the protocol.
-  await WriteHostAsync(JsonSerializer.Serialize(new{action="installerLaunched",requestId,error}));
+  catch{error="APP_UPDATE_NOT_EXECUTED";}
+  // Success here means worker validated and acknowledged readiness, not that an update applied.
+  try{
+   await WriteHostAsync(JsonSerializer.Serialize(new{action="installerLaunched",requestId,error}));
+   if(staged!=null){var apply=staged;BeginInvoke((Action)(async()=>await QuitForVerifiedUpdateAsync(apply)));}
+  }catch{staged?.Dispose();throw;}
+ }
+ async Task QuitForVerifiedUpdateAsync(VelopackApplyLauncher.StagedApply staged){
+  using(staged){
+   if(closing)return;
+   closing=true;updateShutdownAttempted=true;Enabled=false;
+   try{
+    // Do not use normal StopBackendAsync/ReleaseBackend: they intentionally force-stop jobs.
+    await GracefulShutdownAsync().WaitAsync(TimeSpan.FromSeconds(30));
+    if(backend!=null&&!backend.HasExited)throw new IOException("Backend still running.");
+    var deadline=DateTime.UtcNow.AddSeconds(30);
+    while(job!=null&&!job.IsEmpty&&DateTime.UtcNow<deadline)await Task.Delay(100);
+    if(job!=null&&!job.IsEmpty)throw new IOException("Backend descendant job did not drain.");
+    // Only a proven-empty job may be closed. Dispose can no longer terminate descendants.
+    job?.Dispose();job=null;backend?.Dispose();backend=null;
+    staged.Commit(); // Worker still requires this exact GUI process to exit; cancellation wins.
+    allowClose=true;Close();
+   }catch{
+    try{staged.Cancel();}catch{}
+    closing=false;Enabled=true;
+    // Shutdown may have closed stdin; keep automatic EOF/Exited cleanup disarmed.
+    // There is no Close/Dispose/force-stop fallback on update failure.
+    MessageBox.Show(this,"后台或其子任务未能安全退出，更新已取消，未强制结束任务。请检查任务后手动重新启动应用。","Codex Light",MessageBoxButtons.OK,MessageBoxIcon.Warning);
+   }
+  }
  }
  async Task WriteHostAsync(string message){
   await hostWrites.WaitAsync();

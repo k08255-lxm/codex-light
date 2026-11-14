@@ -9,9 +9,18 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)' == 'Release'"><DebugType>none</DebugType><DebugSymbols>false</DebugSymbols></PropertyGroup>
   <ItemGroup><PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" /></ItemGroup>
+  <!-- Experimental packaging opt-in: -p:EnableVelopackPrototype=true.
+       The default MSI build has no Velopack dependency or startup hook.
+       This does not migrate MSI installs or enable the production updater. -->
+  <PropertyGroup Condition="'$(EnableVelopackPrototype)' == 'true'">
+    <DefineConstants>$(DefineConstants);VELOPACK_PROTOTYPE</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(EnableVelopackPrototype)' == 'true'">
+    <PackageReference Include="Velopack" Version="1.2.161" />
+  </ItemGroup>
   <!-- WebView2 adds both UI frameworks; this host uses WinForms only. -->
   <Target Name="RemoveUnusedWebView2Wpf" BeforeTargets="ResolveAssemblyReferences">
     <ItemGroup><Reference Remove="@(Reference)" Condition="'%(Reference.Filename)' == 'Microsoft.Web.WebView2.Wpf'" /></ItemGroup>
   </Target>
-  <ItemGroup><Compile Remove="bootstrap/**/*.cs;setup/**/*.cs" /></ItemGroup>
+  <ItemGroup><Compile Remove="bootstrap/**/*.cs;setup/**/*.cs;velopack/**/*.cs" /></ItemGroup>
 </Project>

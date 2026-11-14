@@ -12,6 +12,7 @@ import {GitCommandActions} from './git-command-actions.mjs';
 import {nativeCodex,resolveCodexRuntime} from './runtime-path.mjs';
 import {RuntimeManager} from './runtime-manager.mjs';
 import {AppUpdateService} from './app-update.mjs';
+import {assertUpdateIdle,UpdateReservation} from './app-update-safety.mjs';
 import {PluginActionService} from './plugin-actions.mjs';
 import {FileAttachmentStore} from './file-attachments.mjs';
 import {AccountLoginService} from './account-login.mjs';
@@ -59,7 +60,7 @@ publicFiles['/ui/panel-resize.js']='ui/panel-resize.js';publicFiles['/ui/panel-r
 for(const file of ['format.js','chart.js','stats-view.js','account-view.js','live-changes.js','views.css','paste.js','artifacts.js','agents.js','access.js','lan-view.js','viewport.js','approvals-view.js','composer.js','dsh-view.js','preferences-view.js','remote-view.js','slash-menu.js','workbench-view.js','dsh-config-view.js','dsh-connection-view.js'])publicFiles['/ui/'+file]='ui/'+file;
 for(const file of ['activity-feed.js','activity-feed.css','projects.js','project-navigation.js','project-navigation.css'])publicFiles['/'+file]=file;
 async function body(req){let data='';for await(const chunk of req){data+=chunk;if(data.length>512*1024)throw new Error('请求太大');}try{return JSON.parse(data||'{}');}catch{throw new Error('无效 JSON');}}
-export async function createServer({client,cwd='',command='codex',demo=false,port=0,reopen=false,desktop=false,onDesktopTheme,onDesktopPickFolder,onDesktopLaunchInstaller,desktopStateRoot,projectStore,projectsRoot,fileAttachmentRoot,token=randomBytes(32).toString('hex'),prReviewService,runtimeManager,appUpdateService,statisticsRoot,lanOptions,dshConfigSourcesService,dshConnectionService}={}){
+export async function createServer({client,cwd='',command='codex',demo=false,port=0,reopen=false,desktop=false,desktopUpdateTransport='msi',onDesktopTheme,onDesktopPickFolder,onDesktopLaunchInstaller,desktopStateRoot,projectStore,projectsRoot,fileAttachmentRoot,token=randomBytes(32).toString('hex'),prReviewService,runtimeManager,appUpdateService,statisticsRoot,lanOptions,dshConfigSourcesService,dshConnectionService}={}){
  let runtimeSource='configured';
  if(!client&&!demo){
   if(!command||command==='codex'||command==='codex.exe'){const resolved=resolveCodexRuntime();command=resolved.path;runtimeSource=resolved.source==='npm'||resolved.source==='desktop'?resolved.source:'configured';}
@@ -115,7 +116,8 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
  const fileUploads=new FileAttachmentStore(fileAttachmentRoot?{root:fileAttachmentRoot}:{});
  const loginTimers=new Set();
  const appVersion=JSON.parse(await readFile(new URL('../package.json',import.meta.url),'utf8')).version;
- const appUpdates=appUpdateService||new AppUpdateService({currentVersion:appVersion,...(desktop?{launchFn:async(file,metadata)=>{
+ const updateReservation=new UpdateReservation();
+ const appUpdates=appUpdateService||new AppUpdateService({currentVersion:appVersion,updateTransport:desktop?desktopUpdateTransport:'msi',...(desktop?{launchFn:async(file,metadata)=>{
   if(typeof onDesktopLaunchInstaller!=='function')throw Object.assign(new Error('当前桌面宿主不支持启动应用安装程序'),{outcome:'notExecuted',code:'APP_UPDATE_HOST_UNAVAILABLE'});
   return onDesktopLaunchInstaller(file,metadata);
  }}:{})});
@@ -137,6 +139,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
    try{
     if(['/api/dsh/config-sources/','/api/dsh/connection/'].some(prefix=>url.pathname.startsWith(prefix))&&requestAccess!=='local'){json(res,403,{error:'DSH 配置和连接管理仅限本机',code:'LOCAL_ONLY',outcome:'notExecuted'});return;}
     if(url.pathname.startsWith('/api/app-update/')&&requestAccess!=='local'){json(res,403,{error:'应用更新仅限本机操作',code:'LOCAL_ONLY',outcome:'notExecuted'});return;}
+    if(desktopUpdateTransport==='velopack'&&req.method==='POST'&&!['/api/app-update/status','/api/shutdown'].includes(url.pathname))updateReservation.assertOpen();
     if(stopping&&req.method==='POST'&&url.pathname!=='/api/shutdown')throw Object.assign(new Error('Light 正在关闭，此请求未发送'),{code:'CLIENT_CLOSING',outcome:'notExecuted',status:409});
     if(url.pathname==='/api/events' && req.method==='GET'){
      res.writeHead(200,{'Content-Type':'text/event-stream','Connection':'keep-alive'});res.write(': connected\n\n');streams.add(res);
@@ -177,6 +180,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      json(res,200,await uploads.add(req,{filename}));return;
     }
     const input=await body(req);
+    if(desktopUpdateTransport==='velopack'&&!['/api/app-update/status','/api/shutdown'].includes(url.pathname))updateReservation.assertOpen();
     if(url.pathname.startsWith('/api/app-update/')){
      const action=url.pathname.slice('/api/app-update/'.length);
      if(!input||typeof input!=='object'||Array.isArray(input))throw new Error('应用更新参数无效');
@@ -189,7 +193,8 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      const keys=action==='download'?'requestId,version':'confirmed,requestId,version';
      if(Object.keys(input).sort().join(',')!==keys)throw Object.assign(new Error('应用更新参数无效'),{code:'APP_UPDATE_INPUT_INVALID',outcome:'notExecuted'});
      const {requestId,...params}=input;
-     const result=await operations.execute(requestId,'app-update/'+action,params,()=>appUpdates[action](params));json(res,200,{...result,demo});return;
+     const runUpdate=()=>appUpdates[action](params);
+     const result=await operations.execute(requestId,'app-update/'+action,params,()=>action==='install'&&desktopUpdateTransport==='velopack'?updateReservation.run(()=>assertUpdateIdle({rpc,sessions,terminal,dsh,operations,runtime,requestId}),runUpdate):runUpdate());json(res,200,{...result,demo});return;
     }
     if(url.pathname.startsWith('/api/lan/')){
      if(requestAccess!=='local')throw Object.assign(new Error('此操作仅限本机窗口'),{status:403});

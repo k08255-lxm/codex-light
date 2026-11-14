@@ -3,6 +3,13 @@ namespace CodexLight.Desktop;
 internal static class Program {
  static CodexLight.Shared.InstallMaintenance? AcquireMaintenance(){try{var lease=CodexLight.Shared.InstallMaintenance.Acquire(AppContext.BaseDirectory);if(File.Exists(Path.Combine(AppContext.BaseDirectory,"CodexLight.upgrade-journal.json"))||File.Exists(Path.Combine(AppContext.BaseDirectory,"CodexLight.upgrade-context.json"))){lease.Dispose();MessageBox.Show("此安装有未结束维护记录，请使用原安装包选择恢复或完成维护。不会启动后台。","Codex Light");return null;}return lease;}catch(Exception){MessageBox.Show("此安装正在运行或维护，请先正常关闭现有程序后重试。","Codex Light");return null;}}
  [STAThread] static void Main(string[] args) {
+#if VELOPACK_PROTOTYPE
+  // Opt-in packaging prototype only. Hooks must exit before UI or production wake/mutex handling.
+  // Explicit user-directed updates only; never apply a staged update merely on startup.
+  Velopack.VelopackApp.Build().SetArgs(args).SetAutoApplyOnStartup(false).Run();
+  // Migration staging is not a health check and must not initialize user state.
+  if(args.Length==1 && args[0]=="--migration-staged")return;
+#endif
   ApplicationConfiguration.Initialize();
   var sid=WindowsIdentity.GetCurrent().User?.Value ?? throw new InvalidOperationException("Windows user SID unavailable");
   var scope=new NamedWaitHandleOptions{CurrentUserOnly=true,CurrentSessionOnly=true};

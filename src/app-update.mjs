@@ -11,6 +11,9 @@ export const APP_RELEASES_URL='https://github.com/k08255-lxm/codex-light/release
 const REPO_DOWNLOAD='/k08255-lxm/codex-light/releases/download/';
 const SETUP='CodexLight-Setup.exe';
 const SUMS='SHA256SUMS.txt';
+const FULL_PACKAGE=/^CodexLightDesktop-(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-full\.nupkg$/;
+function transport(value){if(value!=='msi'&&value!=='velopack')throw fail('Unsupported application update transport','APP_UPDATE_TRANSPORT_INVALID');return value;}
+function cacheName(version,updateTransport){return updateTransport==='velopack'?`CodexLightDesktop-${version}-full.nupkg`:SETUP;}
 const MAX_SETUP=300*1024*1024;
 const VERSION=/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const fail=(message,code,outcome='notExecuted')=>Object.assign(new Error(message),{code,outcome});
@@ -41,18 +44,19 @@ function asset(release,name,{installer=false}={}){
  if(!Number.isSafeInteger(item.size)||item.size<1||item.size>(installer?MAX_SETUP:128*1024))throw fail('发布附件大小无效','APP_UPDATE_TOO_LARGE');
  return {name,url:url.href,size:item.size};
 }
-export function parseAppRelease(release,currentVersion){
+export function parseAppRelease(release,currentVersion,updateTransport='msi'){
+ transport(updateTransport);
  const version=typeof release?.tag_name==='string'?release.tag_name.replace(/^v/,''):'';
  if(!VERSION.test(version)||release.draft===true||release.prerelease===true)throw fail('没有可安装的稳定发布版本','APP_UPDATE_RELEASE_INVALID');
  const versionedSetup=`CodexLight-Setup-${version}-x64.exe`;
  // A present versioned asset must validate; never hide a bad or duplicate asset behind the legacy alias.
- const setupName=Array.isArray(release.assets)&&release.assets.some(item=>item?.name===versionedSetup)?versionedSetup:SETUP;
+ const setupName=updateTransport==='velopack'?cacheName(version,updateTransport):(Array.isArray(release.assets)&&release.assets.some(item=>item?.name===versionedSetup)?versionedSetup:SETUP);
  const setup=asset(release,setupName,{installer:true});const sums=asset(release,SUMS);
  if(release.html_url!==`https://github.com/k08255-lxm/codex-light/releases/tag/${encodeURIComponent(release.tag_name)}`)throw fail('发布页面来源无效','APP_UPDATE_SOURCE_INVALID');
- return {version,tag:release.tag_name,releaseUrl:release.html_url,notes:typeof release.body==='string'?release.body.slice(0,12000):'',publishedAt:typeof release.published_at==='string'?release.published_at:null,available:compareVersions(currentVersion,version)<0,setup,sums};
+ return {version,tag:release.tag_name,releaseUrl:release.html_url,notes:typeof release.body==='string'?release.body.slice(0,12000):'',publishedAt:typeof release.published_at==='string'?release.published_at:null,available:compareVersions(currentVersion,version)<0,setup,sums,...(updateTransport==='velopack'?{updateTransport}:{} )};
 }
 export function publishedSetupHash(text,name=SETUP){
- if(name!==SETUP&&!/^CodexLight-Setup-(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-x64\.exe$/.test(name))throw fail('发布安装包文件名无效','APP_UPDATE_CHECKSUM_INVALID');
+ if(name!==SETUP&&!/^CodexLight-Setup-(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-x64\.exe$/.test(name)&&!FULL_PACKAGE.test(name))throw fail('发布安装包文件名无效','APP_UPDATE_CHECKSUM_INVALID');
  const matches=String(text).replace(/^\uFEFF/,'').split(/\r?\n/).map(line=>/^([a-fA-F0-9]{64})\s+\*?(.+?)\s*$/.exec(line)).filter(match=>match&&match[2]===name);
  if(matches.length!==1)throw fail('发布校验文件缺少唯一的安装包 SHA256','APP_UPDATE_CHECKSUM_INVALID');
  return matches[0][1].toLowerCase();
@@ -68,15 +72,18 @@ async function launchInstaller(file){
 
 /** Application updates only. Never installs npm packages or touches conversation/data directories. */
 export class AppUpdateService{
- constructor({currentVersion,cacheRoot,platform=process.platform,arch=process.arch,fetchFn=globalThis.fetch,launchFn=launchInstaller,now=Date.now,checkTimeoutMs=15000,downloadTimeoutMs=15*60000}={}){
+ constructor({currentVersion,cacheRoot,platform=process.platform,arch=process.arch,fetchFn=globalThis.fetch,launchFn,updateTransport='msi',now=Date.now,checkTimeoutMs=15000,downloadTimeoutMs=15*60000}={}){
   if(!VERSION.test(currentVersion||''))throw fail('当前应用版本无效','APP_UPDATE_VERSION_INVALID');
-  Object.assign(this,{currentVersion,platform,arch,fetchFn,launchFn,now,checkTimeoutMs,downloadTimeoutMs});
+  transport(updateTransport);
+  if(launchFn!==undefined&&typeof launchFn!=='function')throw fail('Native update launcher must be a function','APP_UPDATE_LAUNCHER_INVALID');
+  this.nativeLaunchAvailable=updateTransport==='msi'||typeof launchFn==='function';
+  Object.assign(this,{currentVersion,platform,arch,fetchFn,launchFn:launchFn||(updateTransport==='msi'?launchInstaller:null),updateTransport,now,checkTimeoutMs,downloadTimeoutMs});
   this.cacheRoot=path.resolve(cacheRoot||path.join(platform==='win32'?(process.env.LOCALAPPDATA||path.join(os.homedir(),'AppData','Local')):os.tmpdir(),'CodexLight','Updates'));
   this.latest=null;this.phase='idle';this.error=null;this.checkedAt=null;this.receivedBytes=0;this.totalBytes=0;this.prepared=null;this.checking=null;this.downloading=null;this.installing=null;this.closed=false;this.abortController=null;
  }
  status(){
   const latest=this.latest?{version:this.latest.version,releaseUrl:this.latest.releaseUrl,notes:this.latest.notes,publishedAt:this.latest.publishedAt,available:this.latest.available}:null;
-  return {currentVersion:this.currentVersion,supported:this.platform==='win32'&&this.arch==='x64',phase:this.phase,checkedAt:this.checkedAt,latest,receivedBytes:this.receivedBytes,totalBytes:this.totalBytes,preparedVersion:this.prepared?.version||null,...(this.error?{error:this.error}:{}),releasesUrl:APP_RELEASES_URL};
+  return {currentVersion:this.currentVersion,...(this.updateTransport==='velopack'?{updateTransport:this.updateTransport}:{}),supported:this.platform==='win32'&&this.arch==='x64',phase:this.phase,checkedAt:this.checkedAt,latest,receivedBytes:this.receivedBytes,totalBytes:this.totalBytes,preparedVersion:this.prepared?.version||null,...(this.error?{error:this.error}:{}),releasesUrl:APP_RELEASES_URL};
  }
  async _fetch(url,signal,{api=false}={}){
   let target=trustedUrl(url,{api});
@@ -102,7 +109,7 @@ export class AppUpdateService{
    try{
     const response=await this._fetch(APP_RELEASES_API,AbortSignal.timeout(this.checkTimeoutMs),{api:true});
     let raw;try{raw=JSON.parse((await limitedBytes(response,2*1024*1024)).toString('utf8'));}catch(error){if(error.code)throw error;throw fail('发布信息无法解析','APP_UPDATE_RELEASE_INVALID');}
-    const latest=parseAppRelease(raw,this.currentVersion);const sums=await this._fetch(latest.sums.url,AbortSignal.timeout(this.checkTimeoutMs));
+    const latest=parseAppRelease(raw,this.currentVersion,this.updateTransport);const sums=await this._fetch(latest.sums.url,AbortSignal.timeout(this.checkTimeoutMs));
     const checksumBytes=await limitedBytes(sums,128*1024);
     if(checksumBytes.length!==latest.sums.size)throw fail('发布校验文件大小与元数据不一致','APP_UPDATE_CHECKSUM_INVALID');
     latest.sha256=publishedSetupHash(checksumBytes.toString('utf8'),latest.setup.name);
@@ -152,7 +159,7 @@ export class AppUpdateService{
     await handle.close();handle=null;
     if(this.receivedBytes!==latest.setup.size)throw fail('安装包下载不完整','APP_UPDATE_SIZE_MISMATCH');
     if(hash.digest('hex')!==latest.sha256)throw fail('安装包 SHA256 校验失败，已拒绝安装','APP_UPDATE_HASH_MISMATCH');
-    const file=path.join(directory,SETUP);await rename(partial,file);partial=null;
+    const file=path.join(directory,cacheName(latest.version,this.updateTransport));await rename(partial,file);partial=null;
     this.prepared={version:latest.version,sha256:latest.sha256,size:latest.setup.size,file};this.phase='ready';return this.status();
    }catch(error){this.phase='failed';this.error=error?.message||'安装包下载失败';throw error;}
    finally{clearTimeout(timeout);this.abortController=null;await handle?.close().catch(()=>{});if(partial)await rm(partial,{force:true}).catch(()=>{});this.downloading=null;}
@@ -162,12 +169,13 @@ export class AppUpdateService{
   const prepared=this.prepared;
   if(!prepared)throw fail('请先下载并校验安装包','APP_UPDATE_NOT_READY');
   const root=await this._safeRoot();const parent=path.dirname(prepared.file);const dirInfo=await lstat(parent);const info=await lstat(prepared.file);
-  if(dirInfo.isSymbolicLink()||info.isSymbolicLink()||!info.isFile()||info.size!==prepared.size||path.dirname(parent)!==root||path.basename(prepared.file)!==SETUP||await fileHash(prepared.file)!==prepared.sha256){this.prepared=null;throw fail('已下载的安装包发生变化，请重新检查并下载','APP_UPDATE_HASH_MISMATCH');}
+  if(dirInfo.isSymbolicLink()||info.isSymbolicLink()||!info.isFile()||info.size!==prepared.size||path.dirname(parent)!==root||path.basename(prepared.file)!==cacheName(prepared.version,this.updateTransport)||await fileHash(prepared.file)!==prepared.sha256){this.prepared=null;throw fail('已下载的安装包发生变化，请重新检查并下载','APP_UPDATE_HASH_MISMATCH');}
   return prepared;
  }
  async install(params){
   strict(params,['version','confirmed']);if(params.confirmed!==true)throw fail('请确认打开应用安装程序','APP_UPDATE_CONFIRM_REQUIRED');
   this._release(params);
+  if(!this.nativeLaunchAvailable)throw fail('Velopack requires the trusted native update launcher','APP_UPDATE_NATIVE_REQUIRED');
   if(this.phase==='launched')return this.status();
   if(this.phase==='launchUnknown')throw fail('安装程序启动结果未知，请人工核对；不会再次启动','APP_UPDATE_LAUNCH_UNKNOWN','unknown');
   if(this.installing)return this.installing;
@@ -176,7 +184,7 @@ export class AppUpdateService{
    let launching=false;
    try{
     const prepared=await this._verifyPrepared();this.phase='launching';this.error=null;launching=true;
-    await this.launchFn(prepared.file,{sha256:prepared.sha256});this.phase='launched';return this.status();
+    await this.launchFn(prepared.file,{sha256:prepared.sha256,...(this.updateTransport==='velopack'?{version:prepared.version,updateTransport:this.updateTransport}:{})});this.phase='launched';return this.status();
    }catch(error){
     const failure=error instanceof Error?error:new Error(String(error));
     this.phase=launching&&failure.outcome!=='notExecuted'?'launchUnknown':'failed';this.error=failure.message||'安装程序未能启动';

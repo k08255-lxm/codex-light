@@ -42,11 +42,11 @@ lines.on('line',async line=>{
   if(!uuid(message.requestId)||!pendingFolder||message.requestId!==pendingFolder.requestId||!(message.path===null||(typeof message.path==='string'&&message.path.length>0&&message.path.length<=4096&&!message.path.includes('\0')&&isAbsolute(message.path))))return shutdown();
   const pending=pendingFolder;pendingFolder=undefined;clearTimeout(pending.timeout);if(!pending.expired)pending.resolve(message.path);return;
  }
- if(!exact(message,['action'])||message.action!=='start'||starting)return shutdown();
+ if(!(exact(message,['action'])||exact(message,['action','updateTransport']))||message.action!=='start'||starting||!['msi','velopack'].includes(message.updateTransport??'msi'))return shutdown();
  starting=true;clearTimeout(timer);
  try{
   // The host assigns this process to its kill-on-close Job before sending start.
-  app=await createServer({demo:args.includes('--demo'),reopen:false,desktop:true,onDesktopPickFolder:pickFolder,onDesktopLaunchInstaller:(file,metadata)=>installers.launch(file,metadata),onDesktopTheme:(theme,visualStyle)=>{
+  app=await createServer({demo:args.includes('--demo'),reopen:false,desktop:true,desktopUpdateTransport:message.updateTransport??'msi',onDesktopPickFolder:pickFolder,onDesktopLaunchInstaller:(file,metadata)=>installers.launch(file,metadata),onDesktopTheme:(theme,visualStyle)=>{
    if(!['light','dark'].includes(theme)||(visualStyle!==undefined&&!['codex','claude'].includes(visualStyle)))throw new Error('无效原生主题');
    if(!stopping)process.stdout.write(JSON.stringify({type:'theme',theme,...(visualStyle===undefined?{}:{visualStyle})})+'\n');
   },cwd:'',command:args.includes('--demo')?'demo-unused':nativeCodex()});

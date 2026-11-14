@@ -13,11 +13,11 @@ import {makeMutation,restoreMarkers,serializeMarkers,lookupDecision,pendingForSc
 const setup=Buffer.from('update route fixture, not executable');
 const sum=createHash('sha256').update(setup).digest('hex')+'  CodexLight-Setup.exe\n';
 const base='https://github.com/k08255-lxm/codex-light/releases/download/v0.4.0/';
-async function fixture(t,{demo=false,unknown=false,lan=false}={}){
+async function fixture(t,{demo=false,unknown=false,lan=false,veloGuard=false}={}){
  const directory=await mkdtemp(path.join(os.tmpdir(),'app-update-route-'));let launches=0,fetches=0;
  const release={tag_name:'v0.4.0',html_url:'https://github.com/k08255-lxm/codex-light/releases/tag/v0.4.0',body:'Test notes',assets:[{name:'CodexLight-Setup.exe',size:setup.length,browser_download_url:base+'CodexLight-Setup.exe'},{name:'SHA256SUMS.txt',size:Buffer.byteLength(sum),browser_download_url:base+'SHA256SUMS.txt'}]};
  const service=new AppUpdateService({currentVersion:'0.3.0',platform:'win32',arch:'x64',cacheRoot:directory,fetchFn:async url=>{fetches++;return new Response(url===APP_RELEASES_API?JSON.stringify(release):url.endsWith('SHA256SUMS.txt')?sum:setup);},launchFn:async()=>{launches++;if(unknown)throw new Error('native acknowledgement timeout');}});
- const app=await createServer({client:new DemoClient(),demo,appUpdateService:service,...(lan?{lanOptions:{networkInterfaces:()=>({Synthetic:[{address:'192.168.75.20',family:'IPv4',internal:false}]}),serverFactory:handler=>{const server=http.createServer(handler),listen=server.listen.bind(server);server.listen=options=>listen({...options,host:'127.0.0.1'});return server;}}}:{})});
+ const app=await createServer({client:new DemoClient(),demo,desktopUpdateTransport:veloGuard?'velopack':'msi',appUpdateService:service,...(lan?{lanOptions:{networkInterfaces:()=>({Synthetic:[{address:'192.168.75.20',family:'IPv4',internal:false}]}),serverFactory:handler=>{const server=http.createServer(handler),listen=server.listen.bind(server);server.listen=options=>listen({...options,host:'127.0.0.1'});return server;}}}:{})});
  await app.started;t.after(async()=>{await app.close();await rm(directory,{recursive:true,force:true,maxRetries:3});});
  return {app,service,get launches(){return launches;},get fetches(){return fetches;}};
 }
@@ -65,4 +65,21 @@ test('application updater markers persist only identity and unknown reconciliati
  const restored=restoreMarkers(serializeMarkers([marker]));assert.equal(restored[0].status,'unknown');assert.equal(pendingForScope(restored,'app-update').length,1);assert.equal(restored[0].appVersion,'0.4.0');assert.equal(Object.hasOwn(restored[0],'params'),false);
  assert.equal(lookupDecision(marker,{serverInstance,state:'succeeded',method:'app-update/install',result:{phase:'launchUnknown'}}),'unknown');
  assert.equal(lookupDecision(marker,{serverInstance,state:'succeeded',method:'app-update/install',result:{phase:'launched',preparedVersion:'0.4.0'}}),'succeeded');
+});
+
+
+test('Velopack install gate blocks unresolved work without launching',async t=>{
+ const f=await fixture(t,{veloGuard:true});await prepare(f.app);
+ f.app.operations.entries.set('unresolved',{state:'unknown'});
+ const response=await post(f.app,'install',{version:'0.4.0',confirmed:true,requestId:id(f.app,'blocked')});
+ assert.notEqual(response.status,200);assert.equal(f.launches,0);
+ assert.equal((await response.json()).code,'APP_UPDATE_WORK_ACTIVE');
+});
+test('Velopack launch reservation blocks subsequent mutations but permits status',async t=>{
+ const f=await fixture(t,{veloGuard:true});await prepare(f.app);
+ const response=await post(f.app,'install',{version:'0.4.0',confirmed:true,requestId:id(f.app,'reserve')});
+ assert.equal(response.status,200);assert.equal(f.launches,1);
+ assert.equal((await post(f.app,'status')).status,200);
+ const blocked=await post(f.app,'download',{version:'0.4.0',requestId:id(f.app,'after')});
+ assert.equal((await blocked.json()).code,'APP_UPDATE_RESERVED');
 });
