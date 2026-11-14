@@ -20,14 +20,11 @@ internal static class SetupLogsTests {
   string old=make("20260101-120001-aabbccdd");File.WriteAllText(Path.Combine(old,"install.log.gz"),"old unowned archive");File.SetLastWriteTimeUtc(Path.Combine(old,"install.log.gz"),DateTime.UtcNow.AddDays(-100));
   for(int i=0;i<12;i++){string dir=make("20261114-13"+i.ToString("00")+"00-aabbccdd");File.WriteAllText(Path.Combine(dir,"install.log"),"success");File.WriteAllText(Path.Combine(dir,"keep.msi"),"MSI");SetupLogs.Complete(dir,3010,1,true,DateTime.UtcNow);}
   check(Directory.GetFiles(root,"log-policy.txt",SearchOption.AllDirectories).Length==13,"retention leaves ownership summaries");
-  check(Directory.GetFiles(root,"install.log.gz",SearchOption.AllDirectories).Length==11,"10 managed archives plus legacy archive retained");
+  check(Directory.GetFiles(root,"install.log.gz",SearchOption.AllDirectories).Length==14,"no permanent retention deletion");
   check(File.Exists(Path.Combine(old,"install.log.gz")),"unowned legacy archive never pruned");
   check(Directory.GetFiles(root,"keep.msi",SearchOption.AllDirectories).Length==13,"all source packages retained");
-  foreach(string log in Directory.GetFiles(root,"install.log.gz",SearchOption.AllDirectories).Where(p=>!p.StartsWith(old+Path.DirectorySeparatorChar)))File.SetLastWriteTimeUtc(log,DateTime.UtcNow.AddDays(-31));
-  SetupLogs.Prune(root,failed,DateTime.UtcNow);
-  check(Directory.GetFiles(root,"install.log.gz",SearchOption.AllDirectories).Length==1,"managed old archives expire after 30 days");
   check(SetupEngine.MsiArguments("a","b","c").Contains("/Lweamo")&&!SetupEngine.MsiArguments("a","b","c").Contains("/L*v"),"normal logging not verbose");
   check(SetupEngine.MsiArguments("a","b","c",false,true).Contains("/L*v"),"explicit diagnostic logging supported");
-  Console.WriteLine("PASS: log archive integrity, failure preservation, age/count retention, legacy/MSI preservation, logging modes. Fixtures: "+root);
+  Console.WriteLine("PASS: log archive integrity, failure preservation, no permanent retention deletion, legacy/MSI preservation, logging modes. Fixtures: "+root);
  }
 }

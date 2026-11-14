@@ -126,7 +126,7 @@ internal static class Tests {
    if(args.Length==3&&args[0]=="--package-only")return PackageOnly(Path.GetFullPath(args[1]),Path.GetFullPath(args[2]));
    PackageContracts();
    ProgressContracts();
-   checks += RunningApplicationTests.Run(); SetupLogsTests.Run();
+   checks += RunningApplicationTests.Run(); SetupLogsTests.Run(); SetupCacheCleanupTests.Run();
    string preview=args.Length>0?Path.GetFullPath(args[0]):Path.Combine(AppContext.BaseDirectory,"previews"); Directory.CreateDirectory(preview);
    Assert(ExitCodePolicy.IsSuccess(0)&&ExitCodePolicy.IsSuccess(3010)&&ExitCodePolicy.IsSuccess(1641),"success/reboot codes");
    foreach(int code in new[]{1603,1618,1638}) Fails(()=>ExitCodePolicy.RequireSuccess(code,"test"),"must surface installer failure");

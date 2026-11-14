@@ -118,7 +118,7 @@ namespace CodexLight.Bootstrap {
      if(process==null)throw new InvalidOperationException("Windows Installer 未启动。");await Task.Run(()=>process.WaitForExit());exitCode=process.ExitCode;ExitCodePolicy.RequireSuccess(process.ExitCode,"Codex Light");return process.ExitCode==0?restart:process.ExitCode;
     }
    }catch(Win32Exception e)when(e.NativeErrorCode==1223){throw new OperationCanceledException("系统授权已取消。",e);}
-   finally{installClock.Stop();if(exitCode.HasValue){try{SetupLogs.Complete(cache,exitCode.Value,installClock.ElapsedMilliseconds,verbose,DateTime.UtcNow);}catch(Exception e){progress("日志整理未完成，安装结果不变："+e.Message);}}progress("安装日志保留在："+cache);}
+   finally{installClock.Stop();if(exitCode.HasValue){try{SetupLogs.Complete(cache,exitCode.Value,installClock.ElapsedMilliseconds,verbose,DateTime.UtcNow);SetupCacheCleanup.Run(exitCode.Value==0?restart:exitCode.Value,package,target,progress);}catch(Exception e){progress("日志整理未完成，安装结果不变："+e.Message);}}progress("安装日志保留在："+cache);}
   }
  }
  internal sealed class EmbeddedPackage {
