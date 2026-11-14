@@ -363,7 +363,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      let params,titleInput;
      try {
       if((input.attachmentIds!==undefined||input.fileAttachmentIds!==undefined||input.confirmedFileAttachmentIds!==undefined) && !['turn/start','turn/steer'].includes(input.method))throw new Error('此操作不接受附件');
-      const attachmentInputs=input.attachmentIds===undefined?[]:uploads.resolve(input.attachmentIds);
+      const attachmentInputs=input.attachmentIds===undefined?[]:await uploads.resolveInline(input.attachmentIds);
       const files=input.fileAttachmentIds===undefined?[]:await fileUploads.resolve(input.fileAttachmentIds);
       if(files.length+attachmentInputs.length>5)throw new Error('每次最多五个图片和文件附件');
       const accepted=input.confirmedFileAttachmentIds??[];if(!Array.isArray(accepted)||new Set(accepted).size!==accepted.length||accepted.some(id=>!files.some(file=>file.id===id)))throw new Error('附件风险确认无效');

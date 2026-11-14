@@ -1,4 +1,4 @@
-import {mkdtemp,writeFile,rm} from 'node:fs/promises';
+import {mkdtemp,writeFile,rm,readFile} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
@@ -40,6 +40,21 @@ export class UploadStore {
    const name=String(filename).replace(/[\x00-\x1f\x7f]/g,'').split(/[\\/]/).at(-1).slice(0,160)||`image.${type.extension}`;
    const record={id,name,size:length,mime:type.mime,path:file};this.records.set(id,record);
    return {id,name,size:length,mime:type.mime};
+ }
+ async resolveInline(ids){
+  if(this.closed)throw new Error('Upload store closed');
+  this.resolve(ids);
+  // Keep the serialized message below the existing 32 MiB RPC response budget.
+  if(ids.reduce((n,id)=>n+this.records.get(id).size,0)>20*1024*1024)throw new Error('Images exceed 20 MiB per message');
+  return Promise.all(ids.map(async id=>{
+   const record=this.records.get(id);
+   if(!record.inlinePromise)record.inlinePromise=(async()=>{
+    const bytes=await readFile(record.path);const type=imageType(bytes);
+    if(bytes.length!==record.size||type?.mime!==record.mime)throw new Error('Uploaded image changed');
+    return {type:'image',url:`data:${record.mime};base64,${bytes.toString('base64')}`};
+   })();
+   return {...await record.inlinePromise};
+  }));
  }
  resolve(ids){
   if(!Array.isArray(ids)||ids.length>5||new Set(ids).size!==ids.length)throw new Error('每次最多发送 5 张不同图片');

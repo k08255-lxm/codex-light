@@ -1,3 +1,4 @@
+import {readInlineHistoryImage} from './inline-history.mjs';
 import fs from 'node:fs/promises';
 import {constants} from 'node:fs';
 import path from 'node:path';
@@ -117,8 +118,8 @@ async function checkPath(target,file=false){
 }
 
 export class ArtifactPreviewService {
- constructor({projects}={}){this.projects=projects;this.threads=new Map();this.references=new Map();this.referenceCount=0;this.pending=new Set();this.closed=false;}
- bindThread(thread){if(safeId(thread?.id)&&typeof thread.cwd==='string'&&thread.cwd.length<=4096&&isAbsoluteWorkingDirectory(thread.cwd)){this.threads.delete(thread.id);this.threads.set(thread.id,thread.cwd);while(this.threads.size>1000){const oldest=this.threads.keys().next().value;this.threads.delete(oldest);this.dropReferences(oldest);}}}
+ constructor({projects,rolloutRoots}={}){this.projects=projects;this.rolloutRoots=rolloutRoots;this.rollouts=new Map();this.threads=new Map();this.references=new Map();this.referenceCount=0;this.pending=new Set();this.closed=false;}
+ bindThread(thread){if(typeof thread?.path==='string'&&safeId(thread?.id)){this.rollouts.set(thread.id,thread.path);while(this.rollouts.size>1000)this.rollouts.delete(this.rollouts.keys().next().value);}if(safeId(thread?.id)&&typeof thread.cwd==='string'&&thread.cwd.length<=4096&&isAbsoluteWorkingDirectory(thread.cwd)){this.threads.delete(thread.id);this.threads.set(thread.id,thread.cwd);while(this.threads.size>1000){const oldest=this.threads.keys().next().value;this.threads.delete(oldest);this.dropReferences(oldest);}}}
  dropReferences(threadId){this.referenceCount-=this.references.get(threadId)?.size||0;this.references.delete(threadId);}
  /** Only trusted RPC items or accepted uploads may add exact external image references. */
  observe(threadId,item){
@@ -166,6 +167,13 @@ export class ArtifactPreviewService {
    const extension=path.extname(source).toLowerCase();if(!allowed.has(extension))throw unsupported();
    const filename=path.resolve(projectRoot,source);
    // Local preview accepts absolute image paths outside the workspace as well.
+   const rollout=input.threadId&&this.rollouts.get(input.threadId);
+   if(rollout&&this.references.get(input.threadId)?.has(pathKey(filename))){
+    try{
+     const inline=await readInlineHistoryImage({rollout,threadId:input.threadId,imagePath:filename,roots:this.rolloutRoots});
+     if(inline)return {bytes:inline.bytes,...inspectArtifact(inline.bytes,extension)};
+    }catch{/* A missing/unreadable rollout must not prevent safe file fallback. */}
+   }
    const root=path.dirname(filename);
    await checkPath(root);await checkPath(filename,true);
    const canonicalRoot=await fs.realpath(root),canonicalFile=await fs.realpath(filename);if(!equal(canonicalRoot,root)||!inside(canonicalRoot,canonicalFile))throw fail('图片目录身份已变化，请重新预览','ARTIFACT_PATH_CHANGED',409);
@@ -182,5 +190,5 @@ export class ArtifactPreviewService {
   }catch(error){if(error.code==='ENOENT'||error.code==='ENOTDIR')throw fail('产物图片不存在或已移动','ARTIFACT_NOT_FOUND',404);if(['EACCES','EPERM','ELOOP'].includes(error.code))throw fail('无法安全读取产物图片','ARTIFACT_ACCESS_DENIED',403);throw error;}
   finally{await handle?.close();}
  }
- async close(){this.closed=true;await Promise.allSettled([...this.pending]);this.threads.clear();this.references.clear();this.referenceCount=0;}
+ async close(){this.closed=true;await Promise.allSettled([...this.pending]);this.threads.clear();this.rollouts.clear();this.references.clear();this.referenceCount=0;}
 }

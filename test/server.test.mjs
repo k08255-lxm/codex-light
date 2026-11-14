@@ -51,13 +51,13 @@ test('mutation IDs are required and one operation executes once over HTTP',async
  const operation=await (await fetch(a.origin+'/api/operations?requestId='+encodeURIComponent(requestId),{headers:{Authorization:`Bearer ${a.token}`}})).json();assert.equal(operation.state,'succeeded');
  const conflict=await post(a,'/api/rpc',{method:'thread/start',params:{...params,model:'different'},requestId});assert.equal(conflict.status,409);assert.equal((await conflict.json()).outcome,'unknown');assert.equal(a.rpc.threads.size,1);
 });
-test('image upload remains local and only opaque owned IDs become localImage input',async t=>{
+test('image upload uses opaque owned IDs and durable inline RPC input',async t=>{
  const a=await fixture(t);const png=Buffer.from([137,80,78,71,13,10,26,10,1,2,3]);
  const unauth=await fetch(a.origin+'/api/uploads',{method:'POST',body:png});assert.equal(unauth.status,401);
  const uploaded=await fetch(a.origin+'/api/uploads',{method:'POST',headers:{Authorization:`Bearer ${a.token}`,'X-Filename':encodeURIComponent('demo.png')},body:png});assert.equal(uploaded.status,200);const attachment=await uploaded.json();assert.ok(attachment.id);assert.equal(attachment.path,undefined);
  const created=await post(a,'/api/rpc',{method:'thread/start',params:{cwd:process.cwd(),approvalPolicy:'on-request',sandbox:'workspace-write'}});const {thread}=await created.json();
  const sent=await post(a,'/api/rpc',{method:'turn/start',params:{threadId:thread.id,cwd:process.cwd(),input:[{type:'text',text:''}]},attachmentIds:[attachment.id]});assert.equal(sent.status,200);
- const user=a.rpc.items.get(thread.id)[0].item;assert.equal(user.content[0].type,'localImage');assert.ok(user.content[0].path.endsWith('.png'));
+ const user=a.rpc.items.get(thread.id)[0].item;assert.equal(user.content[0].type,'image');assert.ok(user.content[0].url.startsWith('data:image/png;base64,'));
  const invalid=await post(a,'/api/rpc',{method:'turn/start',params:{threadId:thread.id,cwd:process.cwd(),input:[{type:'text',text:'x'}]},attachmentIds:['../../secret']});assert.equal(invalid.status,400);
  const wrongMethod=await post(a,'/api/rpc',{method:'thread/list',params:{},attachmentIds:[attachment.id]});assert.equal(wrongMethod.status,400);
 });
