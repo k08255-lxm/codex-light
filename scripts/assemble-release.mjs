@@ -22,7 +22,7 @@ async function checked(directory,name){
  if(matches.length!==1||matches[0][1].toLowerCase()!==digest)throw Error('Missing/stale checksum: '+name);
  return {file,name,size:bytes.length,sha256:digest};
 }
-export async function assembleRelease({version,msiDirectory,velopackDirectory,apk,output}){
+export async function assembleRelease({version,setupDirectory,velopackDirectory,apk,output}){
  if(!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version))throw Error('Invalid release version');
  // Both transports are mandatory: never strand existing installations on a new latest release.
  const setup=`CodexLight-Setup-${version}-x64.exe`,full=`CodexLightDesktop-${version}-full.nupkg`;
@@ -34,7 +34,10 @@ export async function assembleRelease({version,msiDirectory,velopackDirectory,ap
   try{await lstat(path.join(velopackDirectory,marker));throw Error('Migration staging output cannot be released');}
   catch(e){if(e.code!=='ENOENT')throw e;}
  }
- const files=await Promise.all([checked(msiDirectory,setup),checked(velopackDirectory,full),checked(velopackDirectory,fresh),checked(velopackDirectory,'releases.win.json')]);
+ const files=await Promise.all([checked(setupDirectory,setup),checked(velopackDirectory,full),checked(velopackDirectory,fresh),checked(velopackDirectory,'releases.win.json')]);
+ const bootstrap=await json(path.join(setupDirectory,'release-bootstrap-receipt.json'));
+ if(bootstrap.schema!==1||bootstrap.version!==version||bootstrap.migrationSupported!==true||bootstrap.bootstrapName!==setup||bootstrap.bootstrapSha256!==files[0].sha256||
+  !['migrationBundleSha256','vendorSetupSha256','migrationManifestSha256'].every(k=>/^[a-f\d]{64}$/.test(bootstrap[k]??'')))throw Error('Verified migration-aware bootstrap required; legacy MSI Setup is insufficient');
  const recorded=verification.artifacts?.filter(a=>a.name===full);
  if(recorded?.length!==1||recorded[0].sha256!==files[1].sha256||recorded[0].size!==files[1].size)throw Error('Stale package verification');
  await plain(apk);if(path.basename(apk)!==apkName)throw Error('APK must have exact versioned name');
@@ -54,7 +57,7 @@ export async function assembleRelease({version,msiDirectory,velopackDirectory,ap
  return release;
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href){
- const [version,msiDirectory,velopackDirectory,apk,output]=process.argv.slice(2);
- if(!output)throw Error('Usage: node scripts/assemble-release.mjs VERSION MSI_RELEASE_DIR VELOPACK_RELEASE_DIR VERSIONED_APK NEW_OUTPUT');
- console.log(JSON.stringify(await assembleRelease({version,msiDirectory,velopackDirectory,apk,output}),null,2));
+ const [version,setupDirectory,velopackDirectory,apk,output]=process.argv.slice(2);
+ if(!output)throw Error('Usage: node scripts/assemble-release.mjs VERSION BOOTSTRAP_RELEASE_DIR VELOPACK_RELEASE_DIR VERSIONED_APK NEW_OUTPUT');
+ console.log(JSON.stringify(await assembleRelease({version,setupDirectory,velopackDirectory,apk,output}),null,2));
 }

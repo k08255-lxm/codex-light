@@ -18,7 +18,9 @@ async function fixture(t){
  const name=entries[1][1],bytes=await readFile(path.join(velopackDirectory,name));
  await writeFile(path.join(velopackDirectory,'verification.json'),JSON.stringify({version,packageId:'CodexLightDesktop',fullOnly:true,workerPresent:true,allPayloadHashesMatch:true,portableMatches:true,setupEmbedsExactPackage:true,artifacts:[{name,size:bytes.length,sha256:hash(bytes)}]}));
  const apk=path.join(root,`codex-light-${version}.apk`);await writeFile(apk,'PK fake signing tested separately');
- return {version,msiDirectory,velopackDirectory,apk,output:path.join(root,'release')};
+ const bootstrapName=entries[0][1];
+ await writeFile(path.join(msiDirectory,'release-bootstrap-receipt.json'),JSON.stringify({schema:1,version,migrationSupported:true,bootstrapName,bootstrapSha256:hash(await readFile(path.join(msiDirectory,bootstrapName))),migrationBundleSha256:'a'.repeat(64),vendorSetupSha256:'b'.repeat(64),migrationManifestSha256:'c'.repeat(64)}));
+ return {version,setupDirectory:msiDirectory,velopackDirectory,apk,output:path.join(root,'release')};
 }
 test('one release routes MSI and Velopack separately, keeping versioned APK and no bare vendor Setup',async t=>{
  const f=await fixture(t),r=await assembleRelease(f);
@@ -34,8 +36,12 @@ test('reject stale verified package, before creating output',async t=>{
 test('never publish migration-stage or incomplete single-transport outputs',async t=>{
  const f=await fixture(t);await writeFile(path.join(f.velopackDirectory,'MIGRATION-STAGE-ONLY.txt'),'stage');
  await assert.rejects(assembleRelease(f),/staging/);
- await rm(path.join(f.velopackDirectory,'MIGRATION-STAGE-ONLY.txt'));await rm(path.join(f.msiDirectory,'CodexLight-Setup-0.4.4-x64.exe'));
+ await rm(path.join(f.velopackDirectory,'MIGRATION-STAGE-ONLY.txt'));await rm(path.join(f.setupDirectory,'CodexLight-Setup-0.4.4-x64.exe'));
  await assert.rejects(assembleRelease(f),{code:'ENOENT'});
+});
+test('reject legacy MSI-only setup receipts',async t=>{
+ const f=await fixture(t);await writeFile(path.join(f.setupDirectory,'release-bootstrap-receipt.json'),JSON.stringify({version,migrationSupported:false}));
+ await assert.rejects(assembleRelease(f),/migration-aware/);
 });
 test('released 0.4.3 desktop checker accepts the combined metadata',async t=>{
  let source;try{source=execFileSync('git',['show','v0.4.3:src/app-update.mjs'],{encoding:'utf8',stdio:['ignore','pipe','ignore']});}catch{t.skip('Release tag unavailable in this checkout');return;}
