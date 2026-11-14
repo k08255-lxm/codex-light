@@ -21,3 +21,4 @@
 /components/dsh-bridge/src/provider-sources.mjs -text whitespace=trailing-space,space-before-tab,cr-at-eol
 # Keep the application core byte-identical to its adapter-manifest-covered copy.
 /src/dsh-provider-sources.mjs -text whitespace=trailing-space,space-before-tab,cr-at-eol
+/licenses/velopack-native-1.3.39-g8d2844f/** -text -whitespace

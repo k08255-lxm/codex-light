@@ -1,4 +1,4 @@
-﻿param(
+param(
  [Parameter(Mandatory=$true)][string]$PayloadPath,
  [Parameter(Mandatory=$true)][string]$VelopackHostPath,
  [Parameter(Mandatory=$true)][string]$WorkerPath,
@@ -67,6 +67,8 @@ Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'LICENSE-Velopack.txt') -Destina
 $vendor=Join-Path (Split-Path $tool -Parent) '.store/vpk/1.3.39-g8d2844f/vpk/1.3.39-g8d2844f/vendor/THIRD_PARTY_NOTICES.md'
 if(!(Test-Path -LiteralPath $vendor)){throw 'Pinned vpk vendor notices missing; pass a dotnet --tool-path installation'}
 Copy-Item -LiteralPath $vendor -Destination (Join-Path $stage 'licenses/Velopack-VENDOR-NOTICES.md')
+& python (Join-Path $PSScriptRoot 'native_notices.py') --payload $stage --vendor (Split-Path $vendor -Parent)
+if($LASTEXITCODE -ne 0){throw 'Pinned native binary/notices verification failed'}
 # CLI validation normally invokes the app; skip it to guarantee no app/window/model startup.
 # The build verifies the referenced runtime but live fast-hook behavior is a separate integration gate.
 $shortcuts=if($MigrationStage){'None'}else{'StartMenuRoot'}

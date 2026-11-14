@@ -3,6 +3,7 @@ import argparse, hashlib, json, re, zipfile
 from pathlib import Path, PurePosixPath
 import xml.etree.ElementTree as ET
 from stage import validate_worker,WORKER_FILES
+from native_notices import validate as validate_native_notices, NAME as NATIVE_NOTICES_NAME
 
 ID = 'CodexLightDesktop'
 def sha(data): return hashlib.sha256(data).hexdigest()
@@ -32,6 +33,7 @@ def verify(release, payload, version, manifest=None):
     for f in files.values():
         if f.is_symlink():raise ValueError('Payload link')
     if not {'Velopack.dll','licenses/Velopack-LICENSE.txt','licenses/Velopack-VENDOR-NOTICES.md','app/package.json','CodexLight.exe'}<=files.keys():raise ValueError('Missing runtime/licenses')
+    validate_native_notices(payload/'licenses'/NATIVE_NOTICES_NAME)
     validate_worker(payload/'update-worker',version)
     if {n for n in files if n.startswith('update-worker/')} != {'update-worker/'+n for n in WORKER_FILES}:raise ValueError('Unexpected worker content')
     if manifest is not None:

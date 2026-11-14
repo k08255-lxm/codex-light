@@ -82,3 +82,26 @@ Downloading the original upstream package is distinct from republishing those
 binaries in our release. Any future repackaging must reassess corresponding
 source availability and Microsoft redistribution terms instead of assuming
 the project's MIT license supplies those rights.
+
+## Supplemental fixed-native notices (2026-11-14)
+
+The Windows x64 fixed vendor Update/Setup/stub binaries have exact SHA256 and
+positive embedded crate-source-path evidence in
+`licenses/velopack-native-1.3.39-g8d2844f/binary-evidence.json`.
+Notices for 92 positively identified crates, nested zstd code and the basic
+Rust standard-library licenses are retained with source provenance. Missing
+crate-archive notices were fetched at their `.cargo_vcs_info.json` revision.
+For fs_at, the exact Apache-2.0 manifest declaration and canonical Apache text
+are retained; no copyright notice was fabricated.
+
+The rustc source commit embedded in all three binaries matches the official
+Rust std 1.97.1 Windows x64 archive's git-commit-hash. The archive SHA256 is
+05f356609926e663a81e9697077214236514b2f9ff7a36e63b0070f43f073f66.
+
+Packaging rejects changed pinned vendor hashes and missing/changed notice files,
+and verifies that notices survive full-package, portable and Setup embedding.
+This is an evidence-backed supplemental subset, NOT an exhaustive native SBOM.
+No source-path string does not prove a crate absent. Exact target/feature
+resolution, generated detailed Rust std third-party notices and static CRT
+terms remain to be reconciled. Neither the Windows nor available cloud
+environment had Cargo; no toolchain was installed for this audit.

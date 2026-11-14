@@ -1,11 +1,13 @@
-import hashlib,json,tempfile,unittest,zipfile
+import hashlib,json,tempfile,unittest,zipfile,shutil
 from pathlib import Path
 from verify import verify,ID
+from native_notices import ROOT as NOTICE_ROOT,NAME as NOTICE_NAME
 class VerificationTests(unittest.TestCase):
  def setUp(self):
   self.t=tempfile.TemporaryDirectory();self.root=Path(self.t.name);self.p=self.root/'payload';self.r=self.root/'release';self.p.mkdir();self.r.mkdir();self.v='0.4.3'
   for name in ('Velopack.dll','licenses/Velopack-LICENSE.txt','licenses/Velopack-VENDOR-NOTICES.md','app/package.json','CodexLight.exe'):
    f=self.p/name;f.parent.mkdir(parents=True,exist_ok=True);f.write_bytes(name.encode())
+  shutil.copytree(NOTICE_ROOT,self.p/'licenses'/NOTICE_NAME)
   worker=self.p/'update-worker';worker.mkdir()
   (worker/'CodexLight.UpdateWorker.exe').write_bytes(b'MZfixture')
   (worker/'CodexLight.UpdateWorker.dll').write_bytes(b'fixture-dll')
