@@ -29,7 +29,7 @@ Stop all app/profile writers first. Per-file metadata/hash checks and pre/post m
 
 ## Validation scope
 
-56 pure fixture checks pass (coordinator order/failure/retirement gates, storage byte restore/lock/atomic-write safety, stage manifest policy). They do not run the production stage. The benign uniquely identified MSI/Velopack fixture completed reviewed Run+Resume health/failure/restore/retirement and normal cleanup; see fixture/README.md. Its timing and results are not real-app migration performance.
+72 pure fixture checks pass (coordinator order/failure/retirement gates, storage byte restore/lock/atomic-write safety, stage manifest policy). They do not run the production stage. The benign uniquely identified MSI/Velopack fixture completed reviewed Run+Resume health/failure/restore/retirement and normal cleanup; see fixture/README.md. Its timing and results are not real-app migration performance.
 
 The user has authorized formal-app tests without changing Codex configuration, subject to idle proof and backups. Production stage has not yet been executed or accepted; first-run/GUI/account and actual retirement/recovery execution remain unverified. Disposable VM snapshots remain preferred for destructive failure cases.
 
@@ -55,3 +55,30 @@ A real stage attempt returned exit 1 with no expected setup.log or new destinati
 At fixed upstream commit 8d2844f324a69bd848719ef465b1ae12c5060524, setup.rs108 makes EXE_ARGS optional, lines122-123 return Option, and the test at356-358 accepts `--silent` without `--`. install.rs252-255 starts the app only when not silent. Thus the absence of trailing `-- --migration-staged` is not evidence of this failure and adding it is not a verified fix. setup.rs127-140 parses arguments and initializes the requested log before package install. No log suggests an earlier failure or logging initialization issue, but exit1 alone does not identify which. The earlier benign fixture used quoted Start-Process arguments and a trailing marker; the production runner uses ProcessStartInfo.ArgumentList. Those differences have not been shown to cause failure.
 
 Source: https://github.com/velopack/velopack/blob/8d2844f324a69bd848719ef465b1ae12c5060524/src/bins/src/setup.rs and https://github.com/velopack/velopack/blob/8d2844f324a69bd848719ef465b1ae12c5060524/src/bins/src/commands/install.rs . Current stage remains unaccepted; collect actual diagnostics only through a separately permitted invocation, never work around an execution denial.
+
+## Register a separately completed manual installation
+
+`reconcile-manual FAILED_RECEIPT MANIFEST MANIFEST_SHA SETUP_SHA` defaults to read-only inspection. It never invokes Setup, retries stage, creates shortcuts, retires MSI or changes Codex configuration. It verifies the trusted release, fixed new root/current/root updater/stub/registration, exact old MSI and original rollback/source data backups. A user report alone is not technical success.
+
+Only after the user reports the ordinary installation handoff actually completed, all work finishes and the app exits normally, append **both** `--record-manual-complete --tasks-completed`. This acquires the desktop/installation locks, checks process/profile idleness, runs only the account-free native/backend component health mode, and writes new recovery evidence and a fresh verified application-data copy. This recording mode is not filesystem-read-only: its writes are exclusively fresh migration evidence/backup paths (and the component test's isolated temporary state), never install/user configuration replacement. No original backup or failed receipt is overwritten.
+
+The normal installer may launch the app and change WebView/state/recovery files. Reconciliation therefore records added/removed/changed file and directory counts and byte totals, not an assertion that old and new data are identical. It prints no file names or private file contents in that difference summary. Both old and post-manual snapshots are retained; nothing is restored over current data.
+
+A fresh `manual-reconciled-<id>.json` records the verified StagedOldPreserved state and cryptographically links the untouched RecoveryRequired receipt, new snapshot manifest and component-health evidence. Subsequent SafeRetire inspection verifies those links and copied bytes, while retaining the original source backup requirements. Use this **new** receipt for later GUI observation and retirement planning. Real GUI/account acceptance and explicit retirement remain separate; successful reconciliation does not uninstall anything or claim full migration completion.
+
+Only fixture difference/phase/partial-chain/receipt-preservation tests have been run for this command. Actual manual install reconciliation has not been executed by this implementation task.
+
+## Authorize a newer manual-handoff package without rewriting history
+
+When the trusted package changes after a failed stage, do not edit the failed receipt or feed the new hash into the old same-package reconciliation command.
+
+`prepare-manual-plan FAILED_RECEIPT NEW_MANIFEST NEW_MANIFEST_SHA NEW_SETUP_SHA` defaults to inspection. After explicit authorization of that exact new package and completed tasks, append `--authorize-new-package --tasks-completed`. It verifies the new trusted package, original failed record/source/backups and unchanged installed old MSI, requires the fixed new destination/registration still absent, takes the same exclusion locks/idleness checks, and writes a new immutable `ManualHandoffPlanned` record linking old failure hash to the new package hashes/version. It never executes any installer. The command prints the new plan path and its hash for the authorized handoff.
+
+A full current app-data manifest is compared with the already verified baseline. If exactly equal, that existing recovery copy is reused and reverified, avoiding another redundant backup. If changed, a fresh verified `manual-plan-data-<id>` copy is required; it never pretends the old snapshot represents current data. Original source and snapshots remain untouched.
+
+After the user actually completes this handoff, use:
+`reconcile-manual-plan PLAN TRUSTED_PLAN_SHA MANIFEST MANIFEST_SHA SETUP_SHA [--record-manual-complete --tasks-completed]`
+
+The plan hash, failed-source hash, new package hashes, exact old MSI identity/root and verified baseline are all checked. The subsequent reconciled receipt preserves the old failure link **and** the prepared-plan hash; SafeRetire validates both links. A changed setup without a prepared plan, substituted/tampered plan, different source identity or downgrade is rejected. Same-package legacy `reconcile-manual` remains strict and is not a backdoor to replacing hashes.
+
+Only fixture policy/tamper/link tests ran during this change; no actual plan preparation, data backup or installation was performed.
