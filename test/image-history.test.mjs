@@ -25,3 +25,12 @@ test('artifact API prefers authorized inline bytes even when path is absent',asy
  const f=await history(t),a=new ArtifactPreviewService({rolloutRoots:[f.root]});t.after(()=>a.close());a.bindThread({id:'t1',cwd:f.root,path:f.rollout});a.observe('t1',{type:'userMessage',content:[{type:'localImage',path:f.imagePath}]});
  const result=await a.preview({threadId:'t1',path:f.imagePath});assert.deepEqual(result.bytes,png);assert.equal(result.width,1);await assert.rejects(stat(f.imagePath));
 });
+
+test('image upload and selection share the 6 MiB preview-safe limit',async t=>{
+ const {IMAGE_LIMITS,validateImageSelection,AttachmentDraft}=await import('../public/attachments.js');
+ const store=new UploadStore();t.after(()=>store.close());assert.equal(store.maxFile,6*1024*1024);assert.equal(IMAGE_LIMITS.bytes,store.maxFile);
+ validateImageSelection([{name:'limit.png',type:'image/png',size:store.maxFile}]);
+ assert.throws(()=>validateImageSelection([{name:'large.png',type:'image/png',size:store.maxFile+1}]),/6 MiB/);
+ await assert.rejects(store.add(Readable.from([Buffer.alloc(store.maxFile+1)])),/6 MiB/);
+ const draft=new AttachmentDraft();assert.throws(()=>draft.add({id:'11111111-1111-4111-8111-111111111111',name:'large.png',mime:'image/png',size:store.maxFile+1}));
+});

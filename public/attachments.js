@@ -1,9 +1,9 @@
-export const IMAGE_LIMITS = Object.freeze({ count: 5, bytes: 10 * 1024 * 1024 });
+export const IMAGE_LIMITS = Object.freeze({ count: 5, bytes: 6 * 1024 * 1024 });
 const TYPES = new Set(['image/png','image/jpeg','image/webp','image/gif']);
 export function validateImageSelection(files, existing = 0) {
   if (existing + files.length > IMAGE_LIMITS.count) throw new Error('每次最多附带 5 张图片。请减少选择后重试。');
   for (const file of files) {
-    if (!Number.isFinite(file.size) || file.size <= 0 || file.size > IMAGE_LIMITS.bytes) throw new Error(`${String(file.name).slice(0,160)}：图片须大于 0 且不超过 10 MiB。`);
+    if (!Number.isFinite(file.size) || file.size <= 0 || file.size > IMAGE_LIMITS.bytes) throw new Error(`${String(file.name).slice(0,160)}：图片须大于 0 且不超过 6 MiB。`);
     if (!TYPES.has(file.type) && !(file.type === '' && /\.(png|jpe?g|webp|gif)$/i.test(file.name))) throw new Error(`${String(file.name).slice(0,160)}：只支持 PNG、JPEG、WebP、GIF 图片。`);
   }
 }

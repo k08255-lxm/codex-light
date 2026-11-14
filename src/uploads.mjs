@@ -2,7 +2,7 @@ import {mkdtemp,writeFile,rm,readFile} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
-const MAX_FILE=10*1024*1024, MAX_TOTAL=50*1024*1024, MAX_FILES=20;
+const MAX_FILE=6*1024*1024, MAX_TOTAL=50*1024*1024, MAX_FILES=20;
 export function imageType(buffer){
  if(buffer.length>=8 && buffer.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])))return {extension:'png',mime:'image/png'};
  if(buffer.length>=3 && buffer[0]===0xff && buffer[1]===0xd8 && buffer[2]===0xff)return {extension:'jpg',mime:'image/jpeg'};
@@ -20,7 +20,7 @@ export class UploadStore {
   if(this.records.size+this.reserved>=this.maxFiles)throw new Error('附件数量已达上限，请在当前任务结束后重启以清理附件');
   this.reserved++;const chunks=[];let length=0;
   try{
-   for await(const chunk of stream){const bytes=Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk);length+=bytes.length;if(length>this.maxFile)throw new Error('单张图片不能超过 10 MiB');chunks.push(bytes);}
+   for await(const chunk of stream){const bytes=Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk);length+=bytes.length;if(length>this.maxFile)throw new Error('单张图片不能超过 6 MiB');chunks.push(bytes);}
    if(this.closed)throw new Error('附件服务已关闭');
    if(this.total+length>this.maxTotal)throw new Error('本次会话附件总量已达上限');
    const bytes=Buffer.concat(chunks);const type=imageType(bytes);if(!type)throw new Error('只支持 PNG、JPEG、WebP 或 GIF 图片，不接受 SVG/可执行文件');

@@ -180,7 +180,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
     }
     if(url.pathname==='/api/uploads'){
      const header=req.headers['x-filename'];const filename=header?decodeURIComponent(String(header)):'image';
-     if(Number(req.headers['content-length'])>uploads.maxFile)throw new Error('单张图片不能超过 10 MiB');
+     if(Number(req.headers['content-length'])>uploads.maxFile)throw new Error('单张图片不能超过 6 MiB');
      json(res,200,await uploads.add(req,{filename}));return;
     }
     const input=await body(req);

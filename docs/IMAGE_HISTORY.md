@@ -12,8 +12,8 @@ Sources: OpenAI Codex app-server-protocol `v2/turn.rs`, `UserInput::Image`, flat
 https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/src/protocol/v2/turn.rs
 
 This is protocol/source compatibility, not a claim that a real paid model turn
-or official desktop end-to-end rendering has been tested. The existing 10 MiB
-per-file limit remains; total image bytes per message are capped at 20 MiB to
+or official desktop end-to-end rendering has been tested. The unified 6 MiB
+per-file upload/selection limit matches the preview decoder; total image bytes per message are capped at 20 MiB to
 stay below Light's 32 MiB serialized RPC response budget after base64 expansion.
 
 For legacy localImage cards, an already-bound thread's trusted rollout path can
