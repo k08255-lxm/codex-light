@@ -43,3 +43,13 @@ All failures and partial outcomes retain recoverable copies when possible and ar
 reported; original files changed during processing are retained. This is not a
 privileged service or a defense against a hostile concurrent process running as
 the same OS user. All validation tests use disposable fixtures, not user data.
+
+## Native WebView layout
+
+Cache detection supports both legacy direct session profiles and the native
+`WebView/Sessions/<outer UUID32>/<inner UUID32>/EBWebView/` layout. It examines
+at most 256 outer and 256 inner directory entries per profile, then only the
+existing Cache/Code Cache/GPUCache whitelist. GPUPersistentCache, Cookies,
+Local Storage and unknown directories remain untouched. The whole active outer
+session is protected, including sibling inner profiles. Unknown active identity
+protects all session caches. Restore uses the same layout and active-session rule.

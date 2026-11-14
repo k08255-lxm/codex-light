@@ -14,3 +14,26 @@ test('permanent action restricted to fresh confirmed regenerable cache',async t=
 test('image becoming referenced after plan is protected',async t=>{const {make,service}=await fixture(t);const f=await make('images/22222222-2222-2222-2222-222222222222.png');let eligible=true;service.imageFiles=async()=>[{path:f,cleanupEligible:eligible}];const p=await service.plan({category:'images'});eligible=false;const r=await service.apply({...p,confirmed:true});assert.equal(r.removedFiles,0);assert.equal(r.outcome,'partial');assert.equal(await readFile(f,'utf8'),'fixture');});
 
 test('restore refuses the current WebView profile and unknown profile identity',async t=>{const {root,service}=await fixture(t);const a=path.join(root,'WebView','Sessions','a'.repeat(32));const f=path.join(a,'Default','Cache','data');assert.equal(await service.restoreAllowed('cache',f),false);service.activeProfile=a;assert.equal(await service.restoreAllowed('cache',f),false);service.activeProfile=path.join(root,'WebView','Sessions','b'.repeat(32));assert.equal(await service.restoreAllowed('cache',f),true);});
+
+test('native nested UUID EBWebView cache layout is bounded and protects entire active session',async t=>{
+ const {root,make,service}=await fixture(t);
+ const live='a'.repeat(32),old='b'.repeat(32),inner='c'.repeat(32),sibling='d'.repeat(32);
+ const prefix=id=>`WebView/Sessions/${id}/${inner}/EBWebView`;
+ const retained=[];
+ for(const rel of [`${prefix(live)}/Default/Cache/data`,`WebView/Sessions/${live}/${sibling}/EBWebView/Default/GPUCache/data`,`${prefix(old)}/Default/Cookies`,`${prefix(old)}/Default/Local Storage/leveldb/data`,`${prefix(old)}/GPUPersistentCache/data`,`WebView/Sessions/${old}/not-a-uuid/EBWebView/Default/Cache/data`,`${prefix(old)}/Default/attachments/user.txt`])retained.push(await make(rel,'protected'));
+ const removed=[];
+ for(const rel of ['Default/Cache/data','Default/Code Cache/js/data','Default/GPUCache/data','GPUCache/data'])removed.push(await make(`${prefix(old)}/${rel}`,'old cache'));
+ service.activeProfile=path.join(root,'WebView','Sessions',live);
+ let row=(await service.scan()).categories[0];assert.equal(row.cleanableBytes,36);assert.equal(row.protectedBytes,18);
+ const p=await service.plan({category:'cache'});assert.equal(p.fileCount,4);
+ const result=await service.apply({...p,confirmed:true});assert.equal(result.removedFiles,4);
+ for(const file of retained)assert.equal(await readFile(file,'utf8'),'protected');
+ for(const file of removed)await assert.rejects(lstat(file),{code:'ENOENT'});
+ assert.equal((await service.restore({recoveryId:result.recoveryId,confirmed:true})).restoredFiles,4);
+ // Even if host provides a deeper profile, every nested profile of its outer session stays protected.
+ service.activeProfile=path.join(root,'WebView','Sessions',live,inner,'EBWebView');
+ row=(await service.scan()).categories[0];assert.equal(row.cleanableBytes,36);assert.equal(row.protectedBytes,18);
+ assert.equal(await service.restoreAllowed('cache',retained[1]),false);
+ assert.equal(await service.restoreAllowed('cache',removed[0]),true);
+ service.activeProfile=path.join(root,'unknown-profile');assert.equal((await service.scan()).categories[0].cleanableBytes,0);
+});

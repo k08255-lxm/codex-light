@@ -21,8 +21,21 @@ export class StorageMaintenance {
   const walk=async(dir,eligible,depth=0)=>{if(depth>8||visited>10000){warnings.push('扫描范围过大，结果不完整');return;}try{await plain(dir);for(const e of await readdir(dir,{withFileTypes:true})){if(e.isSymbolicLink()){warnings.push('已跳过链接');continue;}const p=path.join(dir,e.name);if(e.isDirectory())await walk(p,eligible,depth+1);else if(e.isFile())await add(p,eligible);}}catch(e){if(e.code!=='ENOENT')warnings.push('部分目录不可访问');}};
   if(category==='cache'){
    const base=path.join(this.root,'WebView','Sessions');let dirs=[];try{await plain(base);dirs=await readdir(base,{withFileTypes:true});}catch(e){if(e.code!=='ENOENT')warnings.push('浏览器缓存不可访问');}
-   for(const d of dirs){if(!d.isDirectory()||!session.test(d.name))continue;const profile=path.join(base,d.name);const safe=!!this.activeProfile&&profile.toLowerCase()!==this.activeProfile.toLowerCase();for(const rel of ['Default/Cache','Default/Code Cache','Default/GPUCache','GPUCache'])await walk(path.join(profile,rel),safe);}
-   if(!this.activeProfile)warnings.push('无法确认当前浏览器目录，缓存仅统计，不允许清理');
+   const activeRelative=this.activeProfile?path.relative(base,this.activeProfile):'';
+   const activeId=activeRelative.split(path.sep)[0];
+   const knownActive=!!activeRelative&&!path.isAbsolute(activeRelative)&&session.test(activeId);
+   if(dirs.length>256)warnings.push('WebView profile scan limited to 256 entries');
+   for(const d of dirs.slice(0,256)){
+    if(!d.isDirectory()||d.isSymbolicLink()||!session.test(d.name))continue;
+    const profile=path.join(base,d.name),safe=knownActive&&d.name.toLowerCase()!==activeId.toLowerCase();
+    const scanCache=async(cacheRoot)=>{for(const rel of ['Default/Cache','Default/Code Cache','Default/GPUCache','GPUCache'])await walk(path.join(cacheRoot,rel),safe);};
+    await scanCache(profile); // Legacy direct profile layout.
+    // Native WebViewRuntime adds exactly one UUID and EBWebView. No broad recursion.
+    try{await plain(profile);const nested=await readdir(profile,{withFileTypes:true});if(nested.length>256)warnings.push('Nested WebView scan limited to 256 entries');
+     for(const n of nested.slice(0,256)){if(n.isDirectory()&&!n.isSymbolicLink()&&session.test(n.name))await scanCache(path.join(profile,n.name,'EBWebView'));}
+    }catch(e){if(e.code!=='ENOENT')warnings.push('Some WebView profiles could not be inspected');}
+   }
+   if(!knownActive)warnings.push('无法确认当前浏览器目录，缓存仅统计，不允许清理');
   }else if(category==='images'){
    for(const item of await this.imageFiles())await add(typeof item==='string'?item:item.path,typeof item==='object'&&item.cleanupEligible===true,typeof item==='object'&&item.ownedTemp===true);warnings.push('历史内联图片属于 Codex 会话，不单独扫描或删除；当前临时图片及未知引用图片受保护'); // Store supplies owned paths only, never scan Codex history.
   }else if(category==='install'){
@@ -65,5 +78,5 @@ export class StorageMaintenance {
    return{outcome:failures.length?'partial':'succeeded',restoredFiles:restored,failures:[...new Set(failures)],note:'归档继续保留，不自动删除。'};
   });}finally{this.running=false;}
  }
- async restoreAllowed(category,target){if(category==='cache'&&(!this.activeProfile||path.resolve(target).toLowerCase().startsWith(this.activeProfile.toLowerCase()+path.sep)))return false;const rel=this.inside(target).split(path.sep).join('/');if(category==='images')return (await this.imageFiles()).some(x=>(typeof x==='string'?x:x.path)===target)||/^images\/[0-9a-f-]{36}\.(png|jpg|webp|gif)$/i.test(rel);if(category==='install')return /^Updates\/\d+\.\d+\.\d+-[a-f0-9]{16}\/(CodexLight-Setup\.exe|[0-9a-f-]{36}\.partial)$/.test(rel);return category==='cache'&&/^WebView\/Sessions\/[0-9a-f]{32}\/(Default\/(Cache|Code Cache|GPUCache)|GPUCache)\//.test(rel);}
+ async restoreAllowed(category,target){if(category==='cache'){const base=path.join(this.root,'WebView','Sessions'),active=this.activeProfile?path.relative(base,this.activeProfile).split(path.sep)[0]:'';const candidate=path.relative(base,target).split(path.sep)[0];if(!session.test(active)||candidate.toLowerCase()===active.toLowerCase())return false;}const rel=this.inside(target).split(path.sep).join('/');if(category==='images')return (await this.imageFiles()).some(x=>(typeof x==='string'?x:x.path)===target)||/^images\/[0-9a-f-]{36}\.(png|jpg|webp|gif)$/i.test(rel);if(category==='install')return /^Updates\/\d+\.\d+\.\d+-[a-f0-9]{16}\/(CodexLight-Setup\.exe|[0-9a-f-]{36}\.partial)$/.test(rel);return category==='cache'&&/^WebView\/Sessions\/[0-9a-f]{32}\/(?:[0-9a-f]{32}\/EBWebView\/)?(Default\/(Cache|Code Cache|GPUCache)|GPUCache)\//.test(rel);}
 }
