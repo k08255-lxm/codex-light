@@ -143,7 +143,7 @@ $manifestJson = @{ directory = (Split-Path $out -Leaf) } | ConvertTo-Json -Compr
 try {
     [IO.File]::WriteAllText($manifestTemp, $manifestJson, [Text.UTF8Encoding]::new($false))
     if (Test-Path -LiteralPath $manifest) {
-        [IO.File]::Replace($manifestTemp, $manifest, $null)
+        [IO.File]::Replace($manifestTemp, $manifest, [NullString]::Value)
     } else {
         [IO.File]::Move($manifestTemp, $manifest)
     }
