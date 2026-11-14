@@ -613,7 +613,12 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     const node = el(document, 'section', 'turn');
     node.dataset.turnId = id;
     const footer = el(document, 'p', 'turn-footer');
-    return { node, footer, segments: new Map(), messages: new Map(), compactions: new Map(), files: null, agents: null, agentsSig: null, art: null, artSig: null };
+    const work = el(document, 'details', 'turn-work');
+    const summary = el(document, 'summary', 'turn-work-summary');
+    const workLabel = el(document, 'span', 'turn-work-label');
+    summary.append(workLabel, icon(document, 'right', { size: 14 }));
+    const workBody = el(document, 'div', 'turn-work-body'); work.append(summary, workBody);
+    return { node, footer, work, workLabel, workBody, segments: new Map(), messages: new Map(), compactions: new Map(), files: null, agents: null, agentsSig: null, art: null, artSig: null };
   }
   function releaseSegment(view){for(const row of view.rows.values())row.images?.release?.();}
   function releaseTurn(view){view.art?.release?.();for(const segment of view.segments.values())releaseSegment(segment);for(const message of view.messages.values())message.media?.release?.();}
@@ -681,8 +686,26 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
       const footer = turn.status === 'interrupted' ? '已停止' : turn.status === 'failed' ? `任务失败${turn.error ? '：' + turn.error : ''}` : turn.finished&&turn.timing.durationMs!==null?timingLabel(turn,now):'';
       setText(view.footer, footer);
       view.footer.dataset.kind = turn.status;
-      if (footer) children.push(view.footer);
-      reconcile(view.node, children);
+      if (turn.finished) {
+        // Keep the prompt and final answer outside; completed intermediate work is one disclosure
+        // above the answer. Its DOM survives re-renders, preserving an explicit expansion.
+        const answerIds = new Set(turn.segments.flatMap(segment => segment.answers.map(answer => answer.id)));
+        const firstUser = children.find(child => child.classList.contains('userMessage'));
+        const intermediates = children.filter(child => child !== firstUser && !answerIds.has(child.dataset.itemId) && child !== view.files?.node && child !== view.art);
+        const rest = children.filter(child => !intermediates.includes(child));
+        const insertion = firstUser ? rest.indexOf(firstUser) + 1 : 0;
+        if (intermediates.length) {
+          setText(view.workLabel, footer || ('已处理 ' + turn.processCount + ' 步'));
+          view.work.dataset.kind = turn.status;
+          reconcile(view.workBody, intermediates);
+          rest.splice(insertion, 0, view.work);
+        } else if (footer) { rest.splice(insertion, 0, view.footer); }
+        reconcile(view.node, rest);
+      } else {
+        view.work.open = false; // every running → completed transition starts collapsed
+        if (footer) children.push(view.footer);
+        reconcile(view.node, children);
+      }
       nodes.push(view.node);
     }
     for (const [id, view] of turns) if (!keep.has(id)) { releaseTurn(view); turns.delete(id); }

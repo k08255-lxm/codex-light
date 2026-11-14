@@ -346,7 +346,6 @@ export class FollowUpQueue {
 export const SLASH_COMMANDS = Object.freeze([
   { id: 'new', name: 'new', icon: 'compose', title: '新聊天', detail: '开始新的草稿对话' },
   { id: 'compact', name: 'compact', icon: 'archive', title: '压缩上下文', detail: '让 Codex 总结并压缩当前对话上下文' },
-  { id: 'review', name: 'review', icon: 'review', title: '审查本地改动', detail: '用当前对话审查未提交改动（消耗额度）' },
   { id: 'fork', name: 'fork', icon: 'branch', title: '创建对话分支', detail: '复制当前对话，不调用模型' },
   { id: 'rename', name: 'rename', icon: 'compose', title: '重命名对话', detail: '修改当前对话名称' },
   { id: 'model', name: 'model', icon: 'bolt', title: '模型与思考强度', detail: '打开模型选择' },

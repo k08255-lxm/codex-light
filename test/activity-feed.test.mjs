@@ -59,18 +59,18 @@ test('reasoning durations use a real start and tick text without opening its ope
   assert.equal(group.open,false);assert.match(group.querySelector('.turn-process-latest').textContent,/3 秒/);
 });
 
-test('completed turn keeps commentary visible and collapses operations, with exact duration in footer', () => {
+test('completed turn collapses intermediate work beneath timing above final answer', () => {
   const ledger = new TurnLedger(); ledger.merge({ id: 't1', status: 'completed', durationMs: 18000 });
   const items = [user('u1', 't1', '整理文档'), agent('c1', 't1', '我先看一下文件。', 'commentary'), { id: 'r1', type: 'reasoning', summary: ['检查结构'], _turnId: 't1', _complete: true }, cmd('x1', 't1'), agent('f1', 't1', '已完成 **整理**。', 'final_answer')];
   const { host, view } = mount(); view.render(buildTurns(items, ledger));
   const process = q(host, '.turn-process')[0];
   assert.equal(process.open, false, 'finished process collapses by default');
   assert.equal(process.querySelector('.turn-process-label').textContent, '2 项操作');
-  assert.equal(q(host,'.turn-footer')[0].textContent,'用时 18s');
+  assert.equal(q(host,'.turn-work-label')[0].textContent,'用时 18s');
   const answers = q(host, '.agentMessage').filter(node => !node.classList.contains('process-note'));
   assert.equal(answers.length, 2); assert.equal(answers[1].dataset.itemId, 'f1');
   assert.ok(!process.contains(answers[0]), 'final answer is outside the collapsed process');
-  assert.ok(!process.contains(answers[0]), 'commentary remains visible outside operation group');
+  const work=host.querySelector('.turn-work'); assert.equal(work.open,false); assert.ok(work.contains(answers[0]), 'commentary folds into work'); assert.ok(!work.contains(answers[1]), 'final stays visible'); assert.ok(host.querySelector('.turn').children.indexOf(work)<host.querySelector('.turn').children.indexOf(answers[1])); work.open=true; view.render(buildTurns(items,ledger)); assert.equal(work.open,true,'manual expansion survives rendering');
   assert.equal(q(host, '.step').length, 2, 'reasoning + command are steps');
   assert.equal(answers[1].querySelector('strong').textContent, '整理');
 });
@@ -163,7 +163,7 @@ test('history without server duration uses item timestamps as approximate, and u
   const ledger = new TurnLedger(); ledger.merge({ id: 'h', status: 'completed' });
   const approx = [user('u', 'h', 'x'), { ...cmd('c', 'h'), _startedAtMs: 1000, _completedAtMs: 13000 }, agent('f', 'h', 'done')];
   let { host, view } = mount(); view.render(buildTurns(approx, ledger));
-  assert.equal(q(host, '.turn-footer')[0].textContent, '用时约 12s');
+  assert.equal(q(host, '.turn-work-label')[0].textContent, '用时约 12s');
   ({ host, view } = mount()); view.render(buildTurns([user('u', 'h', 'x'), cmd('c', 'h'), agent('f', 'h', 'done')], ledger));
   const label = q(host, '.turn-process-label')[0].textContent;
   assert.doesNotMatch(label, /0s/); assert.equal(label, '1 项操作');assert.equal(q(host,'.turn-footer').length,0);
@@ -192,7 +192,7 @@ test('steered user messages stay attributed to the running turn and are marked',
 test('interrupted and failed turns show their real status', () => {
   const ledger = new TurnLedger(); ledger.merge({ id: 'i', status: 'interrupted' }); ledger.merge({ id: 'f', status: 'failed', error: { message: 'quota' } });
   const { host, view } = mount(); view.render(buildTurns([user('u', 'i', 'a'), cmd('c', 'i'), user('v', 'f', 'b')], ledger));
-  assert.deepEqual(q(host, '.turn-footer').map(node => node.textContent), ['已停止', '任务失败：quota']);
+  assert.deepEqual([...q(host, '.turn-work-label'), ...q(host, '.turn-footer')].map(node => node.textContent), ['已停止', '任务失败：quota']);
 });
 
 test('edited files card: count, +/- totals, first three then expand, real diff view', () => {

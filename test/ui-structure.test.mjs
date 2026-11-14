@@ -18,7 +18,7 @@ test('app shell and view modules build DOM without HTML or code strings',()=>{
 });
 
 test('single mounts for review, menus and the separate terminal/Git/usage/account surfaces',()=>{
- for(const id of ['review-view','pr-review-panel','menu-file','menu-view','menu-help','menu-app','terminal-page','terminal-container','terminal-git-workspace','usage-page','stats-root','account-page','account-root','settings-plugins','settings-appearance','settings-notifications','settings-shortcuts'])mountedOnce(id);
+ for(const id of ['menu-file','menu-view','menu-help','menu-app','terminal-page','terminal-container','terminal-git-workspace','usage-page','stats-root','account-page','account-root','settings-plugins','settings-appearance','settings-notifications','settings-shortcuts'])mountedOnce(id);
  assert.doesNotMatch(html,/id="review-page"|id="menu-edit"|编辑菜单尚未实现|<button[^>]*disabled[^>]*>\s*编辑\s*<\/button>/);
 });
 

@@ -49,8 +49,8 @@
       <button id="new-thread" class="new-chat"><span data-icon="compose"></span><span>新对话</span><kbd>Ctrl N</kbd></button>
       <label class="side-search"><span data-icon="search"></span><input id="search" placeholder="搜索对话" aria-label="搜索对话"></label>
       <div class="side-section"><span>项目</span><span class="side-actions"><button id="add-project" class="btn icon-only ghost" title="添加项目" aria-label="添加项目"><span data-icon="plus"></span></button><button id="refresh" class="btn icon-only ghost" title="刷新对话列表" aria-label="刷新对话列表"><span data-icon="refresh"></span></button></span></div>
-      <nav id="thread-list" class="thread-list" aria-label="项目与对话"><p class="muted empty-list">正在连接…</p></nav>
-      <button id="more-threads" class="btn ghost hidden">加载更多对话</button>
+      <div id="thread-scroll" class="thread-list"><nav id="thread-list" class="thread-list-content" aria-label="项目与对话"><p class="muted empty-list">正在连接…</p></nav>
+      <button id="more-threads" type="button" class="btn ghost hidden">加载更多对话</button><p id="thread-load-status" class="history-load-status" role="status" aria-live="polite"></p></div>
       <div class="side-foot"><span class="conn"><i id="connection-dot"></i><span id="connection-text">连接中</span></span><button id="settings" class="btn ghost small" title="连接与设置">设置</button></div>
     </div>
     <div id="settings-sidebar" class="side-pane hidden">
@@ -81,11 +81,12 @@
         <button id="toggle-details" class="btn ghost small" aria-pressed="false" aria-controls="details" aria-label="工具活动" title="工具活动"><span data-icon="activity"></span><span class="label">活动</span></button>
         <button id="thread-menu-button" class="btn icon-only ghost" aria-label="对话操作" aria-haspopup="menu" aria-expanded="false" title="对话操作"><span data-icon="more"></span></button>
       </div>
-      <div id="thread-menu" class="menu hidden" role="menu" aria-label="对话操作"><button id="rename-thread" role="menuitem">重命名</button><button id="fork-thread" role="menuitem">创建分支</button><button id="review-thread" role="menuitem">代码审查…</button><button id="archive-thread" role="menuitem">归档</button></div>
+      <div id="thread-menu" class="menu hidden" role="menu" aria-label="对话操作"><button id="rename-thread" role="menuitem">重命名</button><button id="fork-thread" role="menuitem">创建分支</button><button id="archive-thread" role="menuitem">归档</button></div>
     </header>
     <div id="notice" class="notice hidden" role="status"><span></span><button id="dismiss-notice" class="btn icon-only ghost" aria-label="关闭提示"><span data-icon="close"></span></button></div>
     <section id="conversation" class="conversation" aria-label="对话内容" tabindex="0">
-      <button id="earlier" class="btn ghost small earlier hidden">加载更早的内容</button>
+      <button id="earlier" type="button" class="btn ghost small earlier hidden">加载更早的内容</button>
+      <p id="history-load-status" class="history-load-status" role="status" aria-live="polite"></p>
       <div id="welcome" class="welcome"><span class="welcome-mark"><span data-icon="brand"></span></span><h1>今天要做什么？</h1><p>描述任务，或输入 <kbd>/</kbd> 查看命令与技能</p></div>
       <div id="messages"></div>
     </section>
@@ -161,13 +162,6 @@
   </main>
 
   <!-- ===== Review ===== -->
-  <main id="review-view" class="stage page hidden" aria-label="代码审查">
-    <header class="stage-bar"><div class="crumbs"><strong>代码审查</strong></div><div class="stage-actions"><button id="review-back" type="button" class="btn ghost small"><span data-icon="back"></span><span class="label">返回对话</span></button></div></header>
-    <div class="page-body review-body">
-      <section class="review-local"><div><h2 class="section-title">审查本地未提交改动</h2><p class="fine">使用当前对话的模型审查工作目录改动，会消耗额度。</p></div><button id="review-local-action" type="button" class="btn primary">开始审查…</button></section>
-      <section id="pr-review-panel"></section>
-    </div>
-  </main>
 
   <!-- ===== Settings ===== -->
   <main id="settings-dialog" class="stage page settings hidden" aria-label="设置">

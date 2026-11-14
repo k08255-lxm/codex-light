@@ -35,7 +35,7 @@ import { ItemStore, boundedText, itemText } from './store.js';
 import { DshTaskStore } from './dsh.js';
 import { DshLiveMonitor } from './dsh-live.js';
 import { PendingMutations, pendingForScope, PendingReconciler, outcomeFromError, lookupDecision, sendAvailability, ConnectionBootstrap, SessionDefaultsBridge } from './submissions.js';
-import { mountPrReviewPanel } from './pr-review-panel.js';
+import { mountHistoryAutoLoad, mountThreadAutoLoad, captureHistoryAnchor, restoreHistoryAnchor } from './ui/history-auto-load.js';
 import { mountRuntimePanel } from './runtime-panel.js';
 import { AttachmentDraft, FileAttachmentDraft, validateFileSelection, validateImageSelection } from './attachments.js';
 import { mountConversation, renderDiff } from './activity-feed.js';
@@ -196,7 +196,7 @@ function releaseThread(threadId) {
   rpc('thread/unsubscribe', { threadId }).catch(error => notice('离开对话时未能释放会话订阅：' + error.message + '。关闭应用时会统一释放。', true));
 }
 function resetThreadView() {
-  state.store.clear(); state.ledger.clear(); conversation.clear(); state.nextItems = null; state.nextTurns = null; state.historyFallback = false; state.pager = null;
+  historyAutoLoad?.reset(); state.store.clear(); state.ledger.clear(); conversation.clear(); state.nextItems = null; state.nextTurns = null; state.historyFallback = false; state.pager = null;
 }
 const projectNavigation=mountProjectNavigation($('thread-list'),{
   onSelect:group=>selectProject(group),
@@ -247,7 +247,6 @@ async function pluginApi(path,body){
  const {requestId,...params}=body;const operation=performMutation('plugin/apply',params);pluginLogicalCalls.set(logicalId,operation);return operation;
 }
 const pluginPanel = mountPluginsPanel($('settings-plugins'), {rpc,api:pluginApi,getContext:()=>({connected:state.connected,cwd:state.cwd,serverInstance:state.serverInstance})});
-const prReviewPanel = $('pr-review-panel') ? mountPrReviewPanel($('pr-review-panel'), {api}) : null;
 function runtimePendingMarker(){return pendingMutations.values().find(row=>row.method==='runtime/upgrade')||null;}
 // runtime-pending:start
 async function queryRuntimePending(){
@@ -397,7 +396,7 @@ const aboutView = mountAbout($('about-root'), { api, onStatus:status=>updateIndi
 const dshConfigView = mountDshConfig($('dsh-config-root'), { api });
 const dshConnectionView = mountDshConnection($('dsh-connection-root'), { api, onChange: () => refreshDsh() });
 function resetUsage(){statsView.reset();accountView.reset();if(currentRoute==='usage')statsView.activate();if(currentRoute==='account')accountView.activate();}
-function resetAccountScopedViews(reason='账户已改变'){accountQuota.reset();if(state.connected)accountQuota.refresh();resetUsage();configPanel.reset();pluginPanel.reset();prReviewPanel?.reset();resetRuntimePanel();remoteReset({statusMessage:reason+'，请重新读取远控状态。',pairMessage:reason+'，本机配对码显示已清除；不会撤销原账户或环境设备。',devicesMessage:reason+'，旧设备显示已清除；不会撤销原账户或环境设备。'});sessionDefaults.clear();state.dshReadGeneration++;state.dshReads.clear();state.dshReadErrors.clear();state.dshOpenDetails.clear();dshTasks.reset(state.thread?.id||null);state.dshConnection=null;renderDshConnection();dshLive.reset();syncDshLiveContext();if(state.connected)syncSessionDefaults();}
+function resetAccountScopedViews(reason='账户已改变'){accountQuota.reset();if(state.connected)accountQuota.refresh();resetUsage();configPanel.reset();pluginPanel.reset();resetRuntimePanel();remoteReset({statusMessage:reason+'，请重新读取远控状态。',pairMessage:reason+'，本机配对码显示已清除；不会撤销原账户或环境设备。',devicesMessage:reason+'，旧设备显示已清除；不会撤销原账户或环境设备。'});sessionDefaults.clear();state.dshReadGeneration++;state.dshReads.clear();state.dshReadErrors.clear();state.dshOpenDetails.clear();dshTasks.reset(state.thread?.id||null);state.dshConnection=null;renderDshConnection();dshLive.reset();syncDshLiveContext();if(state.connected)syncSessionDefaults();}
 const configPanel=mountConfigSettingsPanel($('config-panel'),{read:()=>api('/api/config-settings/read',state.cwd?{cwd:state.cwd}:{}),plan:edits=>{if(scopedPending('config').length)throw new Error('配置状态仍在自动同步');return api('/api/config-settings/plan',{edits});},apply:params=>{if(pendingMutations.storageError||scopedPending('config').length)throw new Error('配置状态仍在自动同步');return performMutation('config/apply',params);}});
 function renderConfigPending(){const host=$('config-pending');if(!host)return;const records=scopedPending('config');host.replaceChildren();for(const marker of records){const row=el('div','pending-inline');row.setAttribute('role','status');const status=el('span','pending-inline-status','正在更新配置状态…');const failure=pendingReconcileErrors.get(marker.requestId);if(failure)status.title=failure;row.append(status);host.append(row);}}
 function setConnected(connected, label) { if(state.connected !== connected){accountIdentity.reset();deactivatePendingReconciler();pluginPanel.reset();configPanel.reset();resetUsage();if(!connected)accountLoginPanel.update({state:'unknown'});state.dshReadGeneration++;state.dshReads.clear();state.dshReadErrors.clear();} state.connected = connected; if(connected)accountQuota.start();else accountQuota.stop(); if(!connected){followUps.pauseAll('连接已断开');renderQueue();try{workbench.connectionLost();}catch(error){notice('终端未能处理连接断开：'+(error?.message||'未知错误')+'。其余断连清理继续。',true);}state.searchGeneration++;resetRuntimePanel();remoteReset({statusMessage:'连接已断开，无法读取远控状态。',pairMessage:'连接已断开，本机配对码显示已清除；不会撤销任何设备。',devicesMessage:'连接已断开，设备列表显示已清除；未撤销旧环境设备。'});}terminalControls();$('connection-dot').className = connected ? 'ok' : 'bad'; $('connection-text').textContent = label || (connected ? '本地 Codex 已连接' : '连接已断开'); $('status-info').textContent = $('connection-text').textContent; updateControls(); renderDshConnection(); remoteControls(); syncSessionDefaults(); syncDshLiveContext(); syncDelegationMonitor(); syncPendingReconciler(); syncRuntimePanelActivity(); connectionBootstrap.update(connected,state.serverInstance); }
@@ -419,9 +418,9 @@ function updateControls() { const availability=currentSendAvailability();const r
  $('prompt').placeholder=running?'补充说明，或排队下一条消息':state.thread?'继续对话':'描述要完成的任务';
  const reason=running?'':availability.reason;$('send-state-text').textContent=reason;$('send-state').classList.toggle('hidden',!reason||(!availability.action&&reason==='输入消息，或添加图片 / 文件。'));const action=$('send-state-action');action.classList.toggle('hidden',running||!availability.action||availability.action==='stop');action.dataset.action=availability.action||'';action.textContent=({reconnect:'重新检查连接',cwd:'选择工作目录',pending:'查看消息状态'})[availability.action]||'';
  $('stop').classList.toggle('hidden', !state.busy); $('stop').disabled = state.loadingThread || !state.turnId || !state.connected || !state.serverInstance || state.interruptingTurns.has(state.turnId) || pendingMutations.has('turn/interrupt', state.thread?.id, state.turnId); $('new-thread').disabled = state.sending; $('add-project').disabled=state.sending||projectsState.busy; $('model').disabled = state.busy || state.sending || state.loadingThread; $('effort').disabled = state.busy || state.sending || state.loadingThread; $('model-trigger').disabled = $('effort').disabled; if ($('effort').disabled) closeReasoning(false); $('add-attachment').disabled = state.sending || state.uploadingImages || !state.connected; $('add-file').disabled = $('add-attachment').disabled; $('thread-menu-button').disabled = !state.thread || state.sending || state.loadingThread || state.busy || !!pendingMutations.storageError || threadPendingRecords().length>0; }
-function setCwd(cwd) { if(state.cwd !== (cwd || '')){workbench.cwdChanged();pluginPanel.reset();configPanel.reset();prReviewPanel?.reset();} state.cwd = cwd || ''; try { localSession.setItem('codex-light-cwd', state.cwd); } catch {} $('cwd-label').textContent = state.cwd.split(/[\\/]/).filter(Boolean).at(-1) || '选择项目'; $('cwd-button').title = state.cwd || '选择项目'; $('project-name').textContent = state.cwd.split(/[\\/]/).filter(Boolean).at(-1) || '工作区';syncSessionDefaults();updateControls();renderThreads(); }
+function setCwd(cwd) { if(state.cwd !== (cwd || '')){workbench.cwdChanged();pluginPanel.reset();configPanel.reset();} state.cwd = cwd || ''; try { localSession.setItem('codex-light-cwd', state.cwd); } catch {} $('cwd-label').textContent = state.cwd.split(/[\\/]/).filter(Boolean).at(-1) || '选择项目'; $('cwd-button').title = state.cwd || '选择项目'; $('project-name').textContent = state.cwd.split(/[\\/]/).filter(Boolean).at(-1) || '工作区';syncSessionDefaults();updateControls();renderThreads(); }
 // ---------- Router: exactly one stage is visible; every page transition goes through here ----------
-const STAGES = { chat: 'chat-page', usage: 'usage-page', account: 'account-page', terminal: 'terminal-page', review: 'review-view', settings: 'settings-dialog' };
+const STAGES = { chat: 'chat-page', usage: 'usage-page', account: 'account-page', terminal: 'terminal-page', settings: 'settings-dialog' };
 let currentRoute = 'chat';
 const routeTrail = [];
 function route(name, { section, back = false } = {}) {
@@ -443,7 +442,6 @@ function route(name, { section, back = false } = {}) {
   if (previous === 'usage' && name !== 'usage') statsView.deactivate();
   if (previous === 'account' && name !== 'account') { accountView.deactivate(); accountLoginPanel.deactivate(); }
   if (previous === 'settings' && name !== 'settings') { pluginPanel.deactivate(); aboutView.deactivate(); lanView.deactivate(); runtimePanel?.setActive?.(false); }
-  if (previous === 'review' && name !== 'review') prReviewPanel?.reset();
   if (name === 'usage') statsView.activate();
   if (name === 'account') { accountView.activate(); accountLoginPanel.activate(); }
   if (name === 'settings') { renderDshConnection(); $('cwd-input').value = state.cwd; $('settings-notice').classList.add('hidden'); selectSettingsSection(section || 'general'); }
@@ -457,7 +455,6 @@ function route(name, { section, back = false } = {}) {
 function openSettings(section = 'general') { route('settings', { section: typeof section === 'string' ? section : 'general' }); }
 function closeSettings() { route('chat'); }
 function showTerminal() { route('terminal'); }
-function showReview() { route('review'); $('pr-review-panel')?.querySelector('button')?.focus(); }
 function newThread() {
   if (state.sending) return;
   closeSettings(); sidebarController.closeForNavigation();
@@ -557,14 +554,17 @@ async function addProject() {
 }
 async function loadThreads(more = false, current = ()=>true) {
   const generation = ++state.searchGeneration;
+  if (!more) { threadAutoLoad?.reset(); state.nextThreads = null; }
   const params = { limit: 30, sortKey: 'updated_at', sortDirection: 'desc' };
   if (more && state.nextThreads) params.cursor = state.nextThreads;
   if ($('search').value.trim()) params.searchTerm = $('search').value.trim();
   const result = await rpc('thread/list', params); if (generation !== state.searchGeneration || !current()) return;
+  const anchor = more ? captureHistoryAnchor($('thread-scroll'), ['.project-group-thread', '[data-project-key]']) : null;
   state.threads = more ? [...state.threads, ...(result.data || [])] : result.data || [];
   // Keep the navigation bounded too; use server-side search instead of loading all history.
   if (state.threads.length > 300) { state.threads = state.threads.slice(-300); notice('侧栏仅保留最近加载的 300 个对话，可用搜索查找其他对话。'); }
   state.nextThreads = result.nextCursor; renderThreads();
+  if (more) restoreHistoryAnchor($('thread-scroll'), anchor);
 }
 const CONVERSATION_ITEMS = 300;
 const historyCaps = historyCapabilities();
@@ -631,7 +631,7 @@ async function loadItems(earlier = false, generation = state.openGeneration, cur
   // explicit thread/read. A fresh (non-earlier) load restarts from the newest page.
   if (earlier && (!state.pager || state.pager.threadId !== id || !state.pager.hasMore)) return;
   const pager = earlier ? state.pager : new HistoryPager(rpc, id, historyCaps);
-  const page = await pager.next();
+  const page = await pager.next(earlier ? { max: 60 } : undefined);
   if (!current() || generation !== state.openGeneration || id !== state.thread?.id) return;
   if (!earlier) state.pager = pager; else if (state.pager !== pager) return;
   const items = page.items;
@@ -645,7 +645,7 @@ async function loadItems(earlier = false, generation = state.openGeneration, cur
     ? `此 Codex CLI 不支持分页读取，已再次完整读取对话并显示更早的 ${page.read.shownTurns} / ${page.read.totalTurns} 个回合。`
     : `此 Codex CLI 不支持分页读取，已一次完整读取对话（共 ${page.read.totalTurns} 个回合），先显示最近 ${page.read.shownTurns} 个回合${page.hasMore ? '；“加载更早的内容”需要再次完整读取' : ''}。`);
   for (const item of items.slice(-CONVERSATION_ITEMS)) dshTasks.ingest(id, item, { older: earlier, source: '已加载的 Codex 对话记录' });
-  const oldHeight = $('conversation').scrollHeight;
+  const anchor = earlier ? captureHistoryAnchor($('conversation')) : null;
   if (earlier) {
     // Prepend older history while keeping pooled image bytes of items that stay in the window.
     const existing = state.store.values(); const seen = new Set(); const merged = [];
@@ -657,7 +657,7 @@ async function loadItems(earlier = false, generation = state.openGeneration, cur
   $('earlier').classList.toggle('hidden', !pager.hasMore);
   $('earlier').title = pager.nextNeedsFullRead ? '此 Codex CLI 不支持分页读取：加载更早内容需要再次完整读取对话' : '';
   renderMessages(false);
-  if (earlier) $('conversation').scrollTop += $('conversation').scrollHeight - oldHeight; else scrollBottom();
+  if (earlier) restoreHistoryAnchor($('conversation'), anchor); else scrollBottom();
 }
 function scrollBottom() { $('conversation').scrollTop = $('conversation').scrollHeight; }
 function titleFor(item) { return { commandExecution: '运行命令', fileChange: '文件改动', mcpToolCall: 'MCP 工具', dynamicToolCall: '工具调用', webSearch: '网页搜索', reasoning: '思考摘要', plan: '任务计划', collabAgentToolCall: '子代理' }[item.type] || item.type || '活动'; }
@@ -854,7 +854,7 @@ function renderContext() {
 // ---------- Slash menu ----------
 const slashMenu = createSlashMenu({ document, prompt: $('prompt'), menu: $('slash-menu'), el, rpc,
   context: () => ({ thread: !!state.thread, busy: state.busy, sending: state.sending, connected: state.connected, cwd: state.thread?.cwd || state.cwd }),
-  commands: { new: newThread, compact: () => compactThread(), review: () => reviewLocalChanges(), fork: () => forkCurrentThread(), rename: () => openRename(), model: () => openReasoning(), usage: () => route('usage'), account: () => route('account'), terminal: () => showTerminal() },
+  commands: { new: newThread, compact: () => compactThread(), fork: () => forkCurrentThread(), rename: () => openRename(), model: () => openReasoning(), usage: () => route('usage'), account: () => route('account'), terminal: () => showTerminal() },
   onDraftChange: () => { autosizePrompt(); updateControls(); } });
 async function compactThread() {
   if (!state.thread || state.busy || state.sending) return;
@@ -1018,7 +1018,7 @@ function applyThreadSessions(params) {
   updateControls(); renderThreads(); drainAll();
 }
 async function syncStatus() {
-  const status = await api('/api/status'); applyAccessMode(state.lan || status.access === 'lan'); state.cliVersion = typeof status.version==='string'&&status.version ? boundedText(status.version,300) : null; state.desktop = status.desktop === true; if($('version-info'))$('version-info').textContent=state.cliVersion||'未知'; document.body.classList.toggle('native-desktop',state.desktop); $('runtime-close-info').textContent = state.desktop ? '关闭窗口时可选择退出并停止本应用后台、转入托盘继续运行或取消。托盘菜单可以重新打开或退出；退出可能中断本应用任务，独立 DSH 任务可能继续。' : '关闭窗口不等于停止服务。需要结束本次 GUI 服务时使用下面的按钮；正在运行的任务可能中断，独立 DSH 任务可能继续。'; $('reopen-info').textContent = state.desktop ? '再次启动会建立新连接并读取官方对话历史；不保存浏览器配置文件，不承诺无缝恢复。' : status.reopenAvailable === true ? '可安全重新打开本地 GUI' : status.reopenAvailable === false ? '当前不可用。关闭窗口后可能需要恢复原窗口或重新运行启动器；不会承诺能无缝重开。' : '未知（服务未提供重开状态）'; if (!state.desktop && status.reopenError) $('reopen-info').textContent += ' ' + boundedText(status.reopenError, 800); if(state.serverInstance !== (status.serverInstance || null)){deactivatePendingReconciler();historyCaps.unsupported.clear();pluginPanel.reset();configPanel.reset();resetUsage();prReviewPanel?.reset();resetRuntimePanel();dshLive.reset();remoteReset({statusMessage:'本地服务实例已变化，请重新读取远控状态。',pairMessage:'本地服务实例已变化，本机配对码显示已清除；不会撤销旧环境设备。',devicesMessage:'本地服务实例已变化，旧设备显示已清除；不会撤销旧环境设备。'});}state.serverInstance = status.serverInstance || null; state.demo = !!status.demo; setConnected(status.connected, status.demo ? '演示模式 · 不调用模型' : undefined); if(state.desktop){await loadDesktopState();preferencesView.syncHostTheme();} $('mode-info').textContent = status.demo ? '演示模式，不消耗额度' : '本地 Codex app-server';
+  const status = await api('/api/status'); applyAccessMode(state.lan || status.access === 'lan'); state.cliVersion = typeof status.version==='string'&&status.version ? boundedText(status.version,300) : null; state.desktop = status.desktop === true; if($('version-info'))$('version-info').textContent=state.cliVersion||'未知'; document.body.classList.toggle('native-desktop',state.desktop); $('runtime-close-info').textContent = state.desktop ? '关闭窗口时可选择退出并停止本应用后台、转入托盘继续运行或取消。托盘菜单可以重新打开或退出；退出可能中断本应用任务，独立 DSH 任务可能继续。' : '关闭窗口不等于停止服务。需要结束本次 GUI 服务时使用下面的按钮；正在运行的任务可能中断，独立 DSH 任务可能继续。'; $('reopen-info').textContent = state.desktop ? '再次启动会建立新连接并读取官方对话历史；不保存浏览器配置文件，不承诺无缝恢复。' : status.reopenAvailable === true ? '可安全重新打开本地 GUI' : status.reopenAvailable === false ? '当前不可用。关闭窗口后可能需要恢复原窗口或重新运行启动器；不会承诺能无缝重开。' : '未知（服务未提供重开状态）'; if (!state.desktop && status.reopenError) $('reopen-info').textContent += ' ' + boundedText(status.reopenError, 800); if(state.serverInstance !== (status.serverInstance || null)){deactivatePendingReconciler();historyCaps.unsupported.clear();pluginPanel.reset();configPanel.reset();resetUsage();resetRuntimePanel();dshLive.reset();remoteReset({statusMessage:'本地服务实例已变化，请重新读取远控状态。',pairMessage:'本地服务实例已变化，本机配对码显示已清除；不会撤销旧环境设备。',devicesMessage:'本地服务实例已变化，旧设备显示已清除；不会撤销旧环境设备。'});}state.serverInstance = status.serverInstance || null; state.demo = !!status.demo; setConnected(status.connected, status.demo ? '演示模式 · 不调用模型' : undefined); if(state.desktop){await loadDesktopState();preferencesView.syncHostTheme();} $('mode-info').textContent = status.demo ? '演示模式，不消耗额度' : '本地 Codex app-server';
   // Replace with the server's current set; unchanged instances keep their card and draft.
   applyThreadSessions(status.threadSessions); const pending = new Map(); for (const request of status.pendingRequests || []) if (validRequestId(request?.id)) { const key = requestKey(request.id), known = state.requests.get(key); pending.set(key, known && known.bridgeRequestToken === request.bridgeRequestToken ? known : request); } state.requests = pending; renderRequests();
   if (status.demo) notice('当前是演示模式：仅测试界面和协议，不会调用真实模型。'); return status;
@@ -1088,8 +1088,19 @@ $('project-dialog').addEventListener('cancel',()=>{projectsState.dialogGeneratio
 $('project-dialog').addEventListener('close',()=>{projectsState.dialogGeneration++;});
 $('new-thread').addEventListener('click', newThread); $('settings').addEventListener('click', () => openSettings('general')); $('cwd-button').addEventListener('click', openProjectDialog);
 function saveSettings(e) { e.preventDefault(); selectProject({path:$('cwd-input').value.trim()}); }
-$('refresh').addEventListener('click', () => {loadProjects();loadThreads().catch(e => notice(e.message, true));}); $('more-threads').addEventListener('click', () => loadThreads(true).catch(e => notice(e.message, true)));
-$('earlier').addEventListener('click', async () => { $('earlier').disabled = true; try { await loadItems(true); } catch (e) { notice(e.message, true); } finally { $('earlier').disabled = false; } });
+$('refresh').addEventListener('click', () => {loadProjects();loadThreads().catch(e => notice(e.message, true));});
+const threadAutoLoad = mountThreadAutoLoad({
+  container: $('thread-scroll'), button: $('more-threads'), status: $('thread-load-status'),
+  getKey: () => $('search').value,
+  canLoad: () => !!state.nextThreads && state.connected,
+  load: () => loadThreads(true),
+});
+const historyAutoLoad = mountHistoryAutoLoad({
+  container: $('conversation'), button: $('earlier'), status: $('history-load-status'),
+  getKey: () => state.thread?.id + ':' + state.openGeneration,
+  canLoad: () => currentRoute === 'chat' && !state.loadingThread && !!state.pager?.hasMore,
+  load: () => loadItems(true),
+});
 $('shutdown').addEventListener('click', async () => { if (!confirm(state.desktop ? '停止本窗口的 Codex app-server？Codex 任务可能中断，独立 DSH 任务可能继续。再次启动会重新连接官方历史，不会无缝恢复当前连接。' : '停止 GUI 本地服务？通过此 GUI 运行的任务可能会中断，独立 DSH 任务可能继续。')) return; state.shuttingDown = true; try { const result = await api('/api/shutdown', {}); if (result?.engineStopped !== true || result?.shutdownAccepted !== true) throw new Error('服务未确认引擎已停止，状态未知；请稍后检查连接状态。'); state.eventController?.abort(); setConnected(false, 'GUI 服务已停止'); activity(state.desktop ? '已停止服务。请关闭本窗口后重新启动应用；新连接会读取官方历史。' : '已停止服务。重新运行启动器即可打开。'); closeSettings(); } catch (e) { state.shuttingDown = false; notice(e.message, true); } });
 $('model').addEventListener('change', () => populateEfforts(true)); $('dismiss-notice').addEventListener('click', () => notifications.dismiss());
 $('rail-sidebar').addEventListener('click', () => sidebarController.toggle()); $('sidebar-overlay').addEventListener('click', () => sidebarController.close()); for(const id of ['close-sidebar','settings-sidebar-close']) $(id).addEventListener('click', () => sidebarController.close());
@@ -1143,7 +1154,7 @@ function closeWindowMenu() { $('window-menu').classList.add('hidden'); for (cons
 function openWindowMenu(name) {
   if (activeMenu === name) { closeWindowMenu(); return; }
   closeWindowMenu(); activeMenu = name; const menu = $('window-menu'); menu.dataset.menu = name;
-  const entries = name === 'app' ? [['新对话',newThread],['打开项目…',openProjectDialog],['用量与性能',()=>route('usage')],['账户',()=>route('account')],['终端与 Git',showTerminal],['代码审查',showReview],['工具活动',()=>showDetails('tools',true)],['DSH 子代理',()=>showDetails('dsh',true)],['设置',()=>openSettings('general')],['帮助',()=>$('menu-help').click()]] : name === 'file' ? [['新对话', newThread], ['打开项目…', openProjectDialog], ['设置…', () => openSettings('general')]] : [['对话', () => route('chat')], ['用量与性能', () => route('usage')], ['账户', () => route('account')], ['终端与 Git', showTerminal], ['工具活动', () => showDetails('tools', true)], ['DSH 子代理', () => showDetails('dsh', true)], ['设置', () => openSettings('general')]];
+  const entries = name === 'app' ? [['新对话',newThread],['打开项目…',openProjectDialog],['用量与性能',()=>route('usage')],['账户',()=>route('account')],['终端与 Git',showTerminal],['工具活动',()=>showDetails('tools',true)],['DSH 子代理',()=>showDetails('dsh',true)],['设置',()=>openSettings('general')],['帮助',()=>$('menu-help').click()]] : name === 'file' ? [['新对话', newThread], ['打开项目…', openProjectDialog], ['设置…', () => openSettings('general')]] : [['对话', () => route('chat')], ['用量与性能', () => route('usage')], ['账户', () => route('account')], ['终端与 Git', showTerminal], ['工具活动', () => showDetails('tools', true)], ['DSH 子代理', () => showDetails('dsh', true)], ['设置', () => openSettings('general')]];
   const fragment = document.createDocumentFragment();
   for (const [label, action] of entries) { const item = el('button', '', label); item.setAttribute('role', 'menuitem'); item.addEventListener('click', () => { closeWindowMenu(); action(); }); fragment.append(item); }
   fragment.append(el('small', '', '本地客户端菜单')); menu.replaceChildren(fragment); menu.classList.remove('hidden'); if(name==='app'){const rect=$('menu-app').getBoundingClientRect();menu.style.left=Math.max(8,Math.min(rect.left,innerWidth-240))+'px';menu.style.top=(rect.bottom+6)+'px';}else{menu.style.left='52px';menu.style.top='8px';} $('menu-' + name).setAttribute('aria-expanded', 'true'); menu.querySelector('button')?.focus();
@@ -1246,18 +1257,8 @@ async function forkCurrentThread() {
   catch (e) { showMutationFailure(e, '创建分支'); }
   finally { state.sending = false; updateControls(); }
 }
-async function reviewLocalChanges() {
-  closeThreadMenu(); if (!canManageThread()) return; const target = state.thread; const generation = state.openGeneration;
-  const message = state.demo ? '运行演示审查？演示模式不会调用真实模型，也不会修改文件。' : `审查当前项目的本地未提交改动？\n目录：${target.cwd || state.cwd}\n这会调用 Codex 模型并消耗你的推理额度。本界面不会自动提交、合并或发布改动。`;
-  if (!confirm(message)) return; state.sending = true; updateControls(); activity('正在提交审查请求…');
-  try {
-    const result = await performMutation('review/start', {threadId:target.id,target:{type:'uncommittedChanges'},delivery:'inline'});
-    if (generation === state.openGeneration) { state.turnId = result.turn?.id; state.busy = !!state.turnId && !state.terminalTurns.has(state.turnId) && !['completed','interrupted','failed'].includes(result.turn?.status); if (!state.busy) state.turnId = null; else state.ledger.activate(state.turnId, Date.now()); activity(''); renderMessages(); }
-  } catch (e) { showMutationFailure(e, '审查请求'); }
-  finally { state.sending = false; updateControls(); }
-}
 $('thread-menu-button').addEventListener('click', () => { if ($('thread-menu').classList.contains('hidden')) { closeWindowMenu(); $('thread-menu').classList.remove('hidden'); $('thread-menu-button').setAttribute('aria-expanded','true'); $('rename-thread').focus(); } else closeThreadMenu(true); });
-$('rename-thread').addEventListener('click',openRename); $('fork-thread').addEventListener('click',forkCurrentThread); $('archive-thread').addEventListener('click',archiveCurrentThread); $('review-thread').addEventListener('click',showReview);
+$('rename-thread').addEventListener('click',openRename); $('fork-thread').addEventListener('click',forkCurrentThread); $('archive-thread').addEventListener('click',archiveCurrentThread);
 $('rename-form').addEventListener('submit',renameThread); $('rename-input').addEventListener('input',()=>$('rename-input').setCustomValidity(''));
 for (const id of ['rename-close','rename-cancel']) $(id).addEventListener('click',()=>{if(!state.sending)$('rename-dialog').close();});
 $('rename-dialog').addEventListener('cancel',event=>{if(state.sending)event.preventDefault();});
@@ -1265,7 +1266,6 @@ $('rename-dialog').addEventListener('close',()=>{if(!state.sending)state.renameT
 document.addEventListener('click',event=>{if(!$('thread-menu').contains(event.target)&&event.target.id!=='thread-menu-button')closeThreadMenu();});
 $('thread-menu').addEventListener('keydown',event=>{if(event.key==='ArrowDown'||event.key==='ArrowUp'){event.preventDefault();const buttons=[...$('thread-menu').querySelectorAll('button')],n=buttons.indexOf(document.activeElement);buttons[(n+(event.key==='ArrowDown'?1:-1)+buttons.length)%buttons.length]?.focus();}});
 
-$('review-back').addEventListener('click',closeSettings);$('review-local-action').addEventListener('click',()=>{if(!state.thread){notice('先选择已有对话，再请求使用该会话的 Codex 模型审查本地改动。');closeSettings();return;}closeSettings();reviewLocalChanges();});
 $('refresh-archived').addEventListener('click',()=>loadArchived()); $('more-archived').addEventListener('click',()=>loadArchived(true));
 const preferencesView = createPreferences({ document, window, state, $, el, api, notice, confirm: text => confirm(text) });
 const { loadDesktopState } = preferencesView;

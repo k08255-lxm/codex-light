@@ -150,3 +150,13 @@ div.step-detail { white-space: normal; padding: 6px 0; }
   .files-card, .queue, .slash-menu, .step-detail { border-color: CanvasText; }
   .slash-option[aria-selected="true"] { outline: 2px solid Highlight; }
 }
+/* Completed work is a disclosure above the answer, never an extra footer below it. */
+.turn-work { min-width:0; color:var(--tertiary); font-size:.8125rem; }
+.turn-work > summary { display:flex; align-items:center; gap:6px; min-height:32px; cursor:pointer; list-style:none; border-bottom:1px solid var(--border); padding:4px 0 10px; margin-bottom:6px; font-variant-numeric:tabular-nums; }
+.turn-work > summary::-webkit-details-marker { display:none; }
+.turn-work > summary:focus-visible { outline:2px solid var(--accent); outline-offset:3px; border-radius:4px; }
+.turn-work[open] > summary > .ui-icon { transform:rotate(90deg); }
+.turn-work:not([open]) > .turn-work-body { display:none; }
+.turn-work-body { display:flex; flex-direction:column; gap:8px; padding:4px 0 12px; }
+.turn-work[data-kind="failed"] > summary { color:var(--error); }
+.turn-footer { padding-bottom:10px; border-bottom:1px solid var(--border); }
