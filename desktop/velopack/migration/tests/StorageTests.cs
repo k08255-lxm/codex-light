@@ -3,9 +3,9 @@ static class StorageTests {
  public static int Run(string root){
   int count=0;void Check(bool ok,string name){if(!ok)throw new Exception(name);count++;}
   void Reject(Action action,string name){bool rejected=false;try{action();}catch(IOException){rejected=true;}Check(rejected,name);}
-  var data=Path.Combine(root,"app-data");Directory.CreateDirectory(Path.Combine(data,"state"));Directory.CreateDirectory(Path.Combine(data,"WebView","Default"));Directory.CreateDirectory(Path.Combine(data,"logs"));
+  var data=Path.Combine(root,"app-data");Directory.CreateDirectory(Path.Combine(data,"state"));Directory.CreateDirectory(Path.Combine(data,"WebView","Default"));Directory.CreateDirectory(Path.Combine(data,"logs"));Directory.CreateDirectory(Path.Combine(data,"recovery"));File.WriteAllBytes(Path.Combine(data,"recovery","saved.bin"),new byte[]{4,5,6});
   File.WriteAllBytes(Path.Combine(data,"state","a.bin"),new byte[]{0,1,2,255});File.WriteAllText(Path.Combine(data,"WebView","Default","Cookies"),"fixture-profile");File.WriteAllText(Path.Combine(data,"logs","old.log"),"excluded");
-  var manifest=MigrationStorage.Capture(data);Check(manifest.Files.Length==2&&manifest.Excluded.SequenceEqual(new[]{"logs"}),"profile retained/logs explicitly excluded");
+  var manifest=MigrationStorage.Capture(data);Check(manifest.Files.Length==3&&manifest.Excluded.SequenceEqual(new[]{"logs"}),"profile retained/logs explicitly excluded");
   var snapshot=Path.Combine(root,"snapshot");MigrationStorage.CopySnapshot(manifest,snapshot);MigrationStorage.VerifySnapshot(manifest,snapshot);count++;
   var restored=Path.Combine(root,"restored");MigrationStorage.RestoreToFreshDirectory(manifest,snapshot,restored);Check(File.ReadAllBytes(Path.Combine(restored,"state","a.bin")).SequenceEqual(new byte[]{0,1,2,255}),"restored exact bytes");
   Reject(()=>MigrationStorage.RestoreToFreshDirectory(manifest,snapshot,data),"in-place rejected");Reject(()=>MigrationStorage.CopySnapshot(manifest,Path.Combine(data,"nested")),"nested backup rejected");

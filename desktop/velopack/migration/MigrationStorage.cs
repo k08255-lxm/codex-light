@@ -6,7 +6,7 @@ namespace CodexLight.Migration;
 public sealed record DataFile(string Path,long Bytes,string Sha256);
 public sealed record DataSnapshot(int Schema,string SourceRoot,string[] Directories,DataFile[] Files,string[] Excluded);
 public static class MigrationStorage {
- static readonly string[] DataNames={"state","statistics","dsh","attachments","window-state.json","WebView"};
+ static readonly string[] DataNames={"state","statistics","dsh","attachments","window-state.json","WebView","recovery"};
  static readonly string[] CacheNames={"logs","Updates","SetupLogs"};
  public static string Canonical(string value){if(!Path.IsPathFullyQualified(value))throw new IOException("Absolute path required.");var full=Path.GetFullPath(value).TrimEnd(Path.DirectorySeparatorChar);if(full.Length<4||full.StartsWith(@"\\"))throw new IOException("Local non-root path required.");for(string? p=full;p!=null;p=Path.GetDirectoryName(p)){if(Path.GetFileName(p).Equals(".codex",StringComparison.OrdinalIgnoreCase))throw new IOException("Codex configuration is outside migration scope.");if((File.Exists(p)||Directory.Exists(p))&&(File.GetAttributes(p)&FileAttributes.ReparsePoint)!=0)throw new IOException("Reparse path refused.");}return full;}
  static bool Inside(string root,string candidate)=>candidate.Equals(root,StringComparison.OrdinalIgnoreCase)||candidate.StartsWith(root+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase);
@@ -61,5 +61,3 @@ public static class MigrationStorage {
  }
  sealed class Lease(List<Mutex> held):IDisposable {bool disposed;public void Dispose(){if(disposed)return;disposed=true;foreach(var m in held.AsEnumerable().Reverse()){m.ReleaseMutex();m.Dispose();}}}
 }
-
-

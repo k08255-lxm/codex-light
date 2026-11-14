@@ -2,6 +2,8 @@ using System.Runtime.InteropServices;
 using System.Text;
 namespace CodexLight.Migration;
 public static class MsiProbe {
+ public static bool ExactProductAbsent(string product){if(!Guid.TryParse(product,out _))throw new InvalidOperationException("Invalid product GUID");return MsiQueryProductState(product)==-1;}
+ [DllImport("msi.dll",CharSet=CharSet.Unicode)]static extern int MsiQueryProductState(string product);
  static string Info(string product,string property){uint n=32767;var s=new StringBuilder((int)n);Check(MsiGetProductInfoEx(product,null,2,property,s,ref n));return s.ToString();}
  static void Check(uint code){if(code!=0)throw new InvalidOperationException("MSI read failed: "+code);}
  static string Field(uint database,string name){uint view=0,record=0;try{Check(MsiDatabaseOpenView(database,"SELECT `Value` FROM `Property` WHERE `Property`='"+name+"'",out view));Check(MsiViewExecute(view,0));Check(MsiViewFetch(view,out record));uint n=32767;var text=new StringBuilder((int)n);Check(MsiRecordGetString(record,1,text,ref n));return text.ToString();}finally{if(record!=0)MsiCloseHandle(record);if(view!=0)MsiCloseHandle(view);}}

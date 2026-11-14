@@ -1,59 +1,49 @@
-# MSI → Velopack migration coordinator
+# Controlled MSI to Velopack stage
 
-This module is a **gated coordinator and read-only inventory command**, not a completed production migration installer. `Invoke-Migration.ps1` provides an inspect-by-default wrapper with explicit execution/idle/health/retirement switches. Its execution path is intentionally hard-disabled: the prior trailing-argument parser defect is fixed in the newly pinned prerelease, but production migration safety and end-to-end validation are not complete. The current MSI remains the production installation route until a wrapper implements `IMigrationHost` and passes isolated end-to-end migration/rollback tests.
+This module supports read-only inspection and an explicitly requested **stage-only** production path. Stage never retires the old MSI. Separate explicitly confirmed retirement is described below. Neither phase closes user tasks, installs missing prerequisites, modifies Codex configuration or cleans old user files. It is not a completed migration product.
 
 ## Commands
 
-- `dotnet run --project desktop/velopack/migration/Migration.csproj -- inspect`: read current-user unmanaged MSI registration, identify the sole related Codex Light product, and verify its registered original source database's ProductCode, UpgradeCode and ProductVersion. It reads/hashes the source; it does not install, launch, uninstall or modify registration.
-- `dotnet run --project desktop/velopack/migration/tests/Tests.csproj -c Release`: pure fake-host workflow tests with new temporary fixture files. No real MSI or application is executed.
+Build `Migration.csproj` in Release. `Migration inspect` verifies sole current-user unmanaged MSI, registered original source and exact Product/Upgrade/version identity.
 
-## Wrapper contract
+`Invoke-Migration.ps1 -ManifestPath <migration-release.json> -TrustedManifestSha256 <externally verified SHA> -TrustedSetupSha256 <externally verified SHA> [-AllowSameVersion]` defaults to read-only package/MSI inspection. The hashes must come from trusted build verification, not merely be calculated from an untrusted download.
 
-1. Pin and validate the exact target artifact hash/provenance; inspect the installed MSI. Reject another family, ambiguous registrations, missing/tampered source and non-newer target versions.
-2. Keep data outside both program roots. Use a dedicated `CodexLightDesktop` new program directory, never `%LOCALAPPDATA%/CodexLight`, which is the existing application data root. Never move, overwrite or delete Codex/DSH/user data as migration setup.
-3. Acquire a single migration lock, plus the legacy install and destination locks. Verify task and process idleness; do not force-stop work. Repeat this before staging, health checks and retirement. The production single-instance mutex is shared across directories; health tests must use a purpose-built isolated/read-only mode rather than accidentally waking the real application.
-4. Budget disk space for full new payload, extracted temporary copy, rollback source, package/delta reconstruction and safety margin. `RequiredFreeBytes` must be calculated by the wrapper from verified manifests, not guessed. Check the volume(s) actually used.
-5. Preserve the exact full MSI source in a verified recovery location outside both program roots and the user data root. Persist the migration receipt and backup path atomically outside those roots before each side effect.
-6. Check runtime prerequisites first. The separate prerequisites helper may perform a read-only Node check. Only explicit user approval permits its `--install-node` path; restart-required, canceled or uncertain results must stop migration, not proceed to vendor Setup.
-7. Stage the new Velopack installation without uninstalling old MSI, changing its files or producing model traffic. Verify the installed identity/version/file hashes and a genuinely isolated native/backend startup health check. Verify user data is unchanged. The coordinator returns `ReadyToRetire`, not `Completed`.
-8. Only after explicit retirement approval and fresh validation, uninstall the **exact** old MSI ProductCode with the MSI API. Do not delete its directory manually. Verify product absence, new installation and data. Uncertain failure becomes `RecoveryRequired`; it is not automatically retried.
+Only `-ExecuteStage -TasksCompleted` permits stage. The user must explicitly confirm all work finished and normally close the app. Absence of a process alone is not task completion. `-AllowSameVersion` permits explicitly recorded same-version installer-format migration, never downgrade or 0.4.900 benchmark packages.
 
-## Failure / rollback
+## Stage contract
 
-- Before retirement: keep the old MSI and its source. A failed new health check must leave it usable. The host must avoid modifying old registration/shortcuts while staging, or journal and restore those changes. The coordinator does not claim Velopack's default Setup automatically satisfies that contract.
-- During/after retirement: preserve receipt, full MSI source and new installation. Do not claim cross-installer atomic rollback. A recovery flow must check current registration, reconcile shortcut ownership and offer an explicit verified MSI reinstall if needed. No blanket directory or registry cleanup is allowed.
-- No automatic crash resume: `Staging`, `HealthChecking`, or `Retiring` receipts require inspection before continuing. Windows Installer system caches remain untouched.
-- Normal data-mutating launches are not health checks; reverting executable files does not undo a data-schema migration.
+1. Exact CodexLightDesktop identity, pinned Velopack 1.3.39-g8d2844f, shortcutLocations None, trusted manifest plus Setup hash, all release/payload file hashes, exact embedded full package bytes and nupkg metadata/updater verification.
+2. Fixed independent LocalAppData/CodexLightDesktop destination, absent registration/root, no reparse/overlap. Acquire desktop single-instance exclusion and legacy/new/current maintenance locks. Check old/new process roots and matching Node/WebView command lines without exposing command text; inventory uncertainty blocks. Never kill.
+3. Existing .NET10 Desktop/WebView/Node checks plus verified independent payload's native/backend health preflight. No prerequisite installation. Health checks are demo/account-free, not a renderer or real-account test.
+4. Actual manifest byte budget on relevant volumes; complete protected app data including WebView profile and exact MSI source recovery copies. Atomic receipts before Setup. Reject unknown entries or any backup/hash error. Repeat identity and idle checks.
+5. Official Setup `--silent --installto <fixedroot>` stages only, with no normal app launch or shortcut takeover. Nonzero/timeout/uncertain outcome becomes RecoveryRequired, not an automatic retry or deletion.
+6. Verify entire current payload, root updater, sq.version and registration. Run explicit native/backend component health, compare protected data and old MSI again. Record StagedOldPreserved, **not Completed**. Old MSI remains installed.
 
-## Validation boundaries
+Retirement is a separate CLI stage. Native/backend component health alone cannot authorize retirement; live new-GUI observation and explicit user acceptance/retirement confirmation are additionally required.
 
-The tests exercise branching/order/identity/path/hash/task/disk protections through an injected fake host. They do **not** establish actual MSI uninstall/reinstall correctness, Velopack Setup rollback, desktop shortcut takeover, MSI-cache sufficiency, or real elapsed migration time. A separate randomly identified benign MSI/Velopack fixture has now exercised install, stage, failed health, restored health, old-product retirement and normal cleanup; see fixture/README.md and its saved results. This does not validate the real application. The user has authorized formal-app testing without changing Codex configuration, but it remains blocked until actual task idleness, backups and the other production safeguards are established. A disposable VM remains preferred for destructive failure scenarios.
+## Recovery primitives
 
-## Historical parser blocker and remaining production gate
+MigrationStorage provides same-directory atomic receipt replacement, exact manifest copies and verification, fresh-directory-only restore, root locks and checked byte budgeting. Acquire/dispose mutex leases on the same thread. State, statistics, DSH, attachments, window state, application recovery directory and entire WebView profile are protected. Logs/Updates/SetupLogs are explicitly excluded; original MSI separately backed up. `.codex`, unknown entries, reparse paths and in-place restore are rejected. Partial failed copies remain unapproved for inspection.
 
-Official Velopack 1.2.161 documentation advertises `Setup.exe -- [EXE_ARGS]`, but pinned repository commit `92d6a1c91716729d449034df5c50307dcce39493`, `src/bins/src/setup.rs`, defines the positional without an OsString value parser and retrieves it with `get_many::<OsString>`. This matches upstream issue #1039. That evidence applied to the former 1.2.161 pin. Prerelease 1.3.39-g8d2844f fixes the parser through PR #1088; see the separate isolated fixture/parser results. `commands/install.rs` normally starts the installed application when not silent; `--silent` suppresses normal launch. It was explicitly authorized for the benign fixture. A formal silent flow is permissible only with known prerequisites, no undisclosed terms or permissions and explicit authorization; it must never bypass those gates.
+Stop all app/profile writers first. Per-file metadata/hash checks and pre/post manifests are **not a filesystem snapshot** and cannot guarantee consistency against concurrent adversarial writes. Atomic receipt replacement is not a cross-installer transaction or hardware-loss guarantee.
 
-The parser fix alone does not complete migration. The wrapper hard-stop occurs before any prerequisite installer, staging write, recovery copy or uninstall. It must not be removed until a supported no-normal-start mechanism is verified and real-app migration/rollback safeguards and authorized tests pass. The unreachable candidate execution code is retained for review, not advertised as working. Manual health attestation is not equivalent to an automated native/backend smoke test.
+## Validation scope
 
-Sources:
+55 pure fixture checks pass (coordinator order/failure/retirement gates, storage byte restore/lock/atomic-write safety, stage manifest policy). They do not run the production stage. The benign uniquely identified MSI/Velopack fixture completed reviewed Run+Resume health/failure/restore/retirement and normal cleanup; see fixture/README.md. Its timing and results are not real-app migration performance.
+
+The user has authorized formal-app tests without changing Codex configuration, subject to idle proof and backups. Production stage has not yet been executed or accepted; first-run/GUI/account and actual retirement/recovery execution remain unverified. Disposable VM snapshots remain preferred for destructive failure cases.
+
+Official parser issue in 1.2.161 was fixed by prerelease1.3.39; silent usage still requires authorized scope, known prerequisites and no undisclosed terms/permissions:
 - https://docs.velopack.io/reference/cli/content/setup-windows
 - https://github.com/velopack/velopack/issues/1039
-- https://github.com/velopack/velopack/blob/92d6a1c91716729d449034df5c50307dcce39493/src/bins/src/setup.rs
+- https://github.com/velopack/velopack/pull/1088
 
-Updated parser fix: https://github.com/velopack/velopack/pull/1088 . Production Execute remains disabled regardless of the fixture result.
+## Explicit GUI acceptance / retirement (implemented, not production-executed)
 
-## Independent recovery primitives (not wired to Execute)
+After successful stage, launch the new `CodexLightDesktop/current/CodexLight.exe` normally and test it. The helper never launches it silently as a substitute for acceptance. Optionally request `create-migration-shortcut RECEIPT MANIFEST MANIFEST_SHA SETUP_SHA --create-shortcut`; it creates only a distinct `Codex Light (Velopack).lnk` in the user's Start Menu. Existing links are refused, not overwritten. Original MSI shortcuts are never edited by this helper. A unique temporary link is atomically moved without overwrite; the owned link hash/target are journaled.
 
-`MigrationStorage` provides same-directory atomic receipts; manifest-based app-data recovery copies; exact member/length/SHA-256 verification; fresh-directory-only restoration; and cooperative legacy/new/current install mutex acquisition. Acquire and dispose a lock lease on the same thread. A lock alone does not establish task idleness.
+`observe-gui RECEIPT MANIFEST MANIFEST_SHA SETUP_SHA --confirm-real-use` requires exactly one responsive window belonging to the verified new executable, records process/start-time/exe-hash and binds evidence to the stage receipt. The flag represents the user's explicit acceptance of actual use. Process/window observation proves that GUI is running, **not** that arbitrary account/DSH operations succeeded; the user must genuinely perform/accept those before giving the flag. No fabricated evidence or component-only substitution.
 
-The production capture entry is fixed to this application's LocalAppData root. State, statistics, DSH, attachments, window state and the **entire WebView profile** are protected; logs, Updates and SetupLogs are explicitly excluded (rollback MSI source is separately preserved). Unknown entries, `.codex`, reparse paths, overwritten/in-place restore destinations and overlapping roots are refused. Stop the app cleanly before capture, including WebView writers. Pre/post capture plus per-file metadata/hash checks detect changes, but this is **not a filesystem snapshot** and cannot guarantee coherence against a concurrent adversarial writer. Existing recovery copies are never overwritten. Partial failed copies are unapproved and retained for inspection.
+Complete tasks and close both instances normally. `retire-plan RECEIPT MANIFEST MANIFEST_SHA SETUP_SHA` defaults to inspect. Only all three flags `--execute-retire --tasks-completed --confirm-retirement` enable exact ProductCode MSI uninstall. It revalidates GUI evidence, original recovery copy/MSI, new package and registration, locks/process-idleness, fresh component health, and creates a fresh verified **pre-retirement** data backup (including changes from GUI testing and the application's recovery directory). It atomically journals before uninstall, uses normal msiexec, never manually deletes program/registry/cache directories. Nonzero, uncertain or reboot-required results retain evidence and are not completed automatically. Successful absence is checked through MSI API plus both ARP hives/views; new payload/root executables/registration, protected data and component health are checked again. Original source and both data snapshots remain available for explicitly planned recovery.
 
-Space budgeting uses actual captured file lengths plus verified caller-provided payload/package/MSI sizes and explicit headroom. The wrapper must still check every affected volume and temporary extraction requirements; this helper is not free-space or idle proof. Receipt atomic replacement is not a transaction over installation side effects or a guarantee against filesystem/hardware loss.
-
-The production Execute gate remains disabled. Neither pure storage tests nor benign stub health prove real native/backend readiness, schema compatibility, authenticated task idleness, shortcut ownership or production recovery.
-
-## Packaged component health probe
-
-The packaged host accepts `--backend-health-check` before UI, instance wake, or normal app startup. It starts its actual packaged Node/backend in a fresh temporary demo state, checks anonymous rejection and authenticated loopback status, and shuts that process down normally. Native and backend versions must agree. This was executed from an isolated staged payload: exit 0, 624 ms, Node 24.13.0; no account/model or DSH connection was made.
-
-The JSON deliberately reports `realAccountVerified: false`. This proves the native-to-Node/backend component path, not WebView rendering, real user-account connectivity, old-task idleness, or complete migration. It does not remove the production execution gate.
+`OldMsiRetired` is not an assertion that a restore has been tested. Reboot-required and uncertain journals need manual reconciliation; no automatic retry/resume. The distinct shortcut intentionally does not claim ownership of unknown old shortcuts. Real production stage/GUI/retire and a restoration drill remain pending; pure guard tests and the separate benign fixture do not replace them.

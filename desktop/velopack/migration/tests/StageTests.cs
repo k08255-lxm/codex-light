@@ -1,0 +1,6 @@
+using CodexLight.Migration;
+static class StageTests {
+ public static int Run(){int count=0;var hash=new string('a',64);var files=new[]{new DataFile("setup.exe",1,hash),new DataFile("node.exe",1,hash),new DataFile("node.exe.config",1,hash),new DataFile("full.nupkg",1,hash)};var payload=new[]{new DataFile("sq.version",1,hash),new DataFile("CodexLight.exe",1,hash),new DataFile("app/src/backend-health.mjs",1,hash)};var m=new StageRelease(1,"CodexLightDesktop","0.4.3","1.3.39-g8d2844f","None","setup.exe","node.exe","payload","full.nupkg",hash,files,payload);SafeStage.ValidateRelease(m);count++;
+ foreach(var bad in new[]{m with{PackageId="Other"},m with{Version="0.4.900"},m with{Shortcuts="StartMenuRoot"},m with{VelopackVersion="1.2.161"},m with{Files=files.Take(3).ToArray()},m with{PayloadFiles=payload.Take(2).ToArray()},m with{Files=files.Concat(files.Take(1)).ToArray()}}){bool rejected=false;try{SafeStage.ValidateRelease(bad);}catch(IOException){rejected=true;}if(!rejected)throw new Exception("stage guard accepted invalid manifest");count++;}
+ Console.WriteLine($"PASS {count} stage manifest policy checks; no installed app inspected or run.");return count;}
+}
