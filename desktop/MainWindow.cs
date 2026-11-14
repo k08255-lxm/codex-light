@@ -67,7 +67,9 @@ internal sealed class MainWindow : CaptionWindow {
     }
     if(e.MenuItems.Count==0)e.Handled=true;
    };
-   settings.IsWebMessageEnabled=false;settings.IsStatusBarEnabled=false;settings.IsPasswordAutosaveEnabled=false;settings.IsGeneralAutofillEnabled=false;
+   settings.IsWebMessageEnabled=true;settings.IsStatusBarEnabled=false;settings.IsPasswordAutosaveEnabled=false;settings.IsGeneralAutofillEnabled=false;
+   core.WebMessageReceived+=(_,e)=>{if(LocalPathLinks.TrustedSource(e.Source,origin)&&LocalPathLinks.TrustedSource(core.Source,origin))RevealLocalPath(e.WebMessageAsJson);};
+   await core.AddScriptToExecuteOnDocumentCreatedAsync(LocalPathLinks.ClickScript);
    core.PermissionRequested+=(_,e)=>{e.State=CoreWebView2PermissionState.Deny;e.Handled=true;};
    core.DownloadStarting+=(_,e)=>{e.Cancel=true;e.Handled=true;};
    core.NewWindowRequested+=(_,e)=>{e.Handled=true;if(e.IsUserInitiated)QueueExternal(e.Uri);};
@@ -163,6 +165,16 @@ internal sealed class MainWindow : CaptionWindow {
   if(!Uri.TryCreate(value,UriKind.Absolute,out var uri)||uri.Scheme!="https"||uri.UserInfo!=""||uri.IsLoopback)return;
   if(MessageBox.Show(this,"在系统浏览器打开以下完整外部链接？地址中的查询参数将发送给该站点。\n"+uri.AbsoluteUri,"打开外部链接",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
   try{Process.Start(new ProcessStartInfo(uri.AbsoluteUri){UseShellExecute=true});}catch{MessageBox.Show(this,"无法打开系统浏览器。","Codex Light");}
+ }
+ bool revealingLocalPath;
+ void RevealLocalPath(string json){
+  if(closing||revealingLocalPath)return;revealingLocalPath=true;
+  try{
+   var path=LocalPathLinks.Normalize(LocalPathLinks.ReadMessage(json));var directory=LocalPathLinks.ValidateExisting(path);
+   if(MessageBox.Show(this,(directory?"在资源管理器中打开此文件夹？":"在资源管理器中定位此文件？不会运行文件。")+"\n"+path,"本地文件",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
+   directory=LocalPathLinks.ValidateExisting(path);Process.Start(LocalPathLinks.Explorer(path,directory))?.Dispose();
+  }catch(Exception error) when(error is IOException or UnauthorizedAccessException or ArgumentException or JsonException or InvalidOperationException or System.ComponentModel.Win32Exception){MessageBox.Show(this,"无法定位此路径。请确认它是本机现有文件或文件夹；不支持网络路径、快捷方式跳转和特殊协议。","Codex Light");}
+  finally{revealingLocalPath=false;}
  }
  async Task PickFolderAsync(string requestId){
   if(closing)return;
