@@ -50,4 +50,9 @@ test('released 0.4.3 desktop checker accepts the combined metadata',async t=>{
  const f=await fixture(t),release=await assembleRelease(f),selected=old.parseAppRelease(release,'0.4.3');
  assert.equal(selected.available,true);assert.equal(selected.setup.name,'CodexLight-Setup-0.4.4-x64.exe');
  assert.equal(old.publishedSetupHash(await readFile(path.join(f.output,'SHA256SUMS.txt'),'utf8'),selected.setup.name),hash(await readFile(path.join(f.output,selected.setup.name))));
+ // A historical bridge alone cannot service an old client that skips to a later latest release.
+ const skipped={...release,tag_name:'v0.9.0',html_url:'https://github.com/k08255-lxm/codex-light/releases/tag/v0.9.0',assets:release.assets.map(a=>({...a,browser_download_url:a.browser_download_url.replace('/v0.4.4/','/v0.9.0/')}))};
+ assert.throws(()=>old.parseAppRelease(skipped,'0.4.3'));
+ const routed={...skipped,assets:skipped.assets.map(a=>a.name==='CodexLight-Setup-0.4.4-x64.exe'?{...a,name:'CodexLight-Setup-0.9.0-x64.exe',browser_download_url:a.browser_download_url.replace('Setup-0.4.4','Setup-0.9.0')}:a)};
+ assert.equal(old.parseAppRelease(routed,'0.4.3').setup.name,'CodexLight-Setup-0.9.0-x64.exe');
 });
