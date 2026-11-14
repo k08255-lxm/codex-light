@@ -18,7 +18,7 @@ function Assert-Plain([string]$p){while($p){if((Test-Path -LiteralPath $p) -and 
 Assert-Plain $payload;Assert-Plain $hostDir;Assert-Plain $workerDir;Assert-Plain $out
 if((Get-Content -LiteralPath (Join-Path $payload 'app/package.json') -Raw|ConvertFrom-Json).version -ne $version){throw 'Application payload version mismatch'}
 $deps=Get-Content -LiteralPath (Join-Path $hostDir 'CodexLight.deps.json') -Raw|ConvertFrom-Json
-if(!$deps.libraries.'Velopack/1.2.161' -or !$deps.libraries."CodexLight/$version"){throw 'Publish the matching opt-in host with pinned Velopack 1.2.161 first'}
+if(!$deps.libraries.'Velopack/1.3.39-g8d2844f' -or !$deps.libraries."CodexLight/$version"){throw 'Publish the matching opt-in host with pinned Velopack 1.3.39-g8d2844f first'}
 if((Get-Item -LiteralPath (Join-Path $hostDir 'CodexLight.exe')).VersionInfo.FileVersion -ne "$version.0"){throw 'Host file version mismatch'}
 foreach($workerBinary in @('CodexLight.UpdateWorker.exe','CodexLight.UpdateWorker.dll')){
  if((Get-Item -LiteralPath (Join-Path $workerDir $workerBinary)).VersionInfo.FileVersion -ne "$version.0"){throw 'Worker file version mismatch'}
@@ -30,13 +30,13 @@ if(!$ToolPath){
  $tools=Join-Path $out 'tools'
  $nugetConfig=Join-Path $out 'NuGet.Config'
  '<configuration><packageSources><clear/><add key="nuget.org" value="https://api.nuget.org/v3/index.json" /></packageSources></configuration>'|Set-Content -LiteralPath $nugetConfig -Encoding utf8
- dotnet tool install vpk --version 1.2.161 --tool-path $tools --configfile $nugetConfig
+ dotnet tool install vpk --version 1.3.39-g8d2844f --tool-path $tools --configfile $nugetConfig
  if($LASTEXITCODE -ne 0){throw 'Official NuGet vpk installation failed'}
  $ToolPath=Join-Path $tools 'vpk.exe'
 }
 $tool=(Resolve-Path -LiteralPath $ToolPath).Path
 $toolVersion=(& $tool --help|Out-String).Trim()
-if($LASTEXITCODE -ne 0 -or $toolVersion -notmatch 'Velopack CLI 1\.2\.161,'){throw "Wrong vpk version: $toolVersion"}
+if($LASTEXITCODE -ne 0 -or $toolVersion -notmatch 'Velopack CLI 1\.3\.39-g8d2844f \(prerelease\),'){throw "Wrong vpk version: $toolVersion"}
 $manifestDir=Join-Path $work 'manifest'
 python (Join-Path $repo 'desktop/msi/generate.py') $payload $manifestDir --version $version
 if($LASTEXITCODE -ne 0){throw 'Existing complete-payload/licensing verification failed'}
@@ -55,7 +55,7 @@ foreach($destination in @((Join-Path $stage 'prerequisites'),(Join-Path $release
  foreach($name in @('CodexLight.NodePrerequisite.exe','CodexLight.NodePrerequisite.exe.config')){Copy-Item -LiteralPath (Join-Path $prerequisiteBuild $name) -Destination (Join-Path $destination $name)}
 }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'LICENSE-Velopack.txt') -Destination (Join-Path $stage 'licenses/Velopack-LICENSE.txt')
-$vendor=Join-Path (Split-Path $tool -Parent) '.store/vpk/1.2.161/vpk/1.2.161/vendor/THIRD_PARTY_NOTICES.md'
+$vendor=Join-Path (Split-Path $tool -Parent) '.store/vpk/1.3.39-g8d2844f/vpk/1.3.39-g8d2844f/vendor/THIRD_PARTY_NOTICES.md'
 if(!(Test-Path -LiteralPath $vendor)){throw 'Pinned vpk vendor notices missing; pass a dotnet --tool-path installation'}
 Copy-Item -LiteralPath $vendor -Destination (Join-Path $stage 'licenses/Velopack-VENDOR-NOTICES.md')
 # CLI validation normally invokes the app; skip it to guarantee no app/window/model startup.

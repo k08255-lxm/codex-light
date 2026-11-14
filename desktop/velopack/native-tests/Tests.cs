@@ -33,3 +33,18 @@ File.WriteAllText(Path.Combine(current,"sq.version"),Metadata("0.4.3").Replace("
 File.WriteAllText(Path.Combine(current,"sq.version"),"<!DOCTYPE x [<!ENTITY y SYSTEM 'file:///not-read'>]><x>&y;</x>");Reject(()=>VelopackPackage.ReadInstalled(current,local),"DTD forbidden");
 Reject(()=>VelopackPackage.ReadInstalled(@"\\server\share\current",local),"UNC forbidden");
 Console.WriteLine($"PASS {checks} native identity/package validation checks. Fixtures only: {root}");
+// Optional integration fixture: copies a real generated full package into a new
+// isolated cache, but never extracts executable payloads or runs any application.
+if(args.Length>0){
+ if(args.Length!=2||args[0]!="--real-package")throw new ArgumentException("Expected --real-package <full.nupkg>");
+ var source=Path.GetFullPath(args[1]);var match=System.Text.RegularExpressions.Regex.Match(Path.GetFileName(source),@"^CodexLightDesktop-((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))-full\.nupkg$");
+ if(!match.Success)throw new InvalidDataException("Unexpected real package filename.");
+ var version=match.Groups[1].Value;
+ using var sourceStream=File.OpenRead(source);var hash=Convert.ToHexString(SHA256.HashData(sourceStream)).ToLowerInvariant();sourceStream.Position=0;
+ var destinationDirectory=Path.Combine(local,"CodexLight","Updates",version+"-"+hash[..16]);Directory.CreateDirectory(destinationDirectory);
+ var destination=Path.Combine(destinationDirectory,Path.GetFileName(source));using(var copy=File.Create(destination))sourceStream.CopyTo(copy);
+ File.WriteAllText(Path.Combine(current,"sq.version"),Metadata("0.0.0"));var simulatedOld=VelopackPackage.ReadInstalled(current,local);
+ using var verified=VelopackPackage.Validate(destination,hash,simulatedOld);
+ Check(verified.Version==version,"real generated full package version");
+ Console.WriteLine($"PASS real full package validation: version={verified.Version}, sha256={verified.Sha256}, bytes={sourceStream.Length}. No executable extracted or run. Fixture root: {root}");
+}

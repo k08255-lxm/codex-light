@@ -16,7 +16,7 @@
     <DefineConstants>$(DefineConstants);VELOPACK_PROTOTYPE</DefineConstants>
   </PropertyGroup>
   <ItemGroup Condition="'$(EnableVelopackPrototype)' == 'true'">
-    <PackageReference Include="Velopack" Version="1.2.161" />
+    <PackageReference Include="Velopack" Version="1.3.39-g8d2844f" />
   </ItemGroup>
   <!-- WebView2 adds both UI frameworks; this host uses WinForms only. -->
   <Target Name="RemoveUnusedWebView2Wpf" BeforeTargets="ResolveAssemblyReferences">
