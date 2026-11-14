@@ -105,3 +105,66 @@ No source-path string does not prove a crate absent. Exact target/feature
 resolution, generated detailed Rust std third-party notices and static CRT
 terms remain to be reconciled. Neither the Windows nor available cloud
 environment had Cargo; no toolchain was installed for this audit.
+
+## Collected distribution notices (Windows snapshot, 2026-11-14)
+
+The new packaging layout is **two primary documents**, `LICENSE` and
+`THIRD-PARTY-NOTICES.txt`, plus **one self-contained bridge notice document** at
+`app/components/dsh-bridge/THIRD-PARTY-NOTICES.txt`. The bridge remains independently
+verifiable and usable; it does not resolve arbitrary parent paths to borrow the
+application's notice file. Its `licenses/manifest.json` is technical metadata,
+not another set of loose license texts. Source-tree license originals are kept.
+
+The text container is readable UTF-8, not an opaque ZIP. Its index maps every
+retained original path to exact bytes, byte length and SHA256. Only byte-identical
+texts share storage. Different copyright owners or modified notice text are never
+merged by license label. Original CRLF/BOM/text content is retained. Both Python
+and JavaScript readers verify the canonical representation and reject changed,
+missing, ambiguous or unsafe records. Original source notice documents can mention
+a broader source dependency tree; the current distribution inventory below, not
+those historical source lists, determines what code this package contains.
+
+### Actual bundled JavaScript, rather than the complete lockfile
+
+The builder derives package ownership from esbuild output inputs with positive
+`bytesInOutput`, plus the physically copied `yaml` runtime package. Every owner
+must resolve to the exact locked package/version. The output manifest records
+`distributedPackages`; its license manifest selects only those entries from the
+retained source license inventory. Source fingerprints still cover all original
+license inputs and the lockfile. Root-level duplicate bridge notices are selected
+against this independently verified bridge, not deleted by filename guesswork.
+
+This captured WSL integration snapshot emitted 13 packages: @hono/node-server,
+@modelcontextprotocol/sdk, ajv, ajv-formats, content-type, fast-deep-equal, fast-uri,
+hono, json-schema-traverse, ws, yaml, zod and zod-to-json-schema. The 96 source-lock
+entries remain provenance, not a claim that all 96 are shipped. No external DSH
+application, independently downloaded Codex platform archive, Node installer,
+.NET runtime or WebView2 runtime dependency tree is newly copied into this list.
+The exact apphost/WebView2 SDK notices and bundled code's own notices remain.
+
+### Verified results and limits
+
+- Fresh desktop, opt-in host and worker builds passed for this independent
+  v0.4.5 + WSL-source snapshot. The pinned native Update/Setup/stub hash gate ran.
+- Main staged legal inputs: 306 files / 1,331,319 bytes -> two files / 715,207
+  bytes, containing 222 selected source records. Eighty-three non-emitted bridge
+  dependency notices remain in source but are not repeated in this distribution.
+- The self-contained bridge has 210 files total; all selected notices are in one
+  readable text. Both source-aware Python and runtime JavaScript validators pass.
+- Full nupkg, portable ZIP, vendor Setup embedding and new-install wrapper build
+  passed. All 389 staged files match the extracted portable simulation. No Setup
+  or installed-mode upgrade was executed; the earlier registry-access isolation
+  blocker was not bypassed. No normal app UI, real Codex or model calls were used.
+- Notice cross-language and corruption tests, actual bridge readiness/notice
+  omission tests, and synthetic MCP/HTTP/WebSocket/stdio/provider tests passed.
+  The latest coordinator tree must be rebuilt after merging; this snapshot does
+  not include later concurrent callback changes.
+
+This is a verified **layout/selection change**, not new complete native clearance.
+All 195 native supplemental source records remain exactly recoverable. The fixed
+Velopack workflow uses `+crt-static` for Windows, so static CRT terms require
+reconciliation; Rust's dedicated `COPYRIGHT-library.html` scope is still not
+replaced by the basic Rust LICENSE/COPYRIGHT files or the entire compiler notice
+tree. Exact native dependency closure, detailed Rust std third-party notices and
+static CRT redistribution evidence remain open. Do not describe consolidation as
+having solved those pre-existing audit gaps.

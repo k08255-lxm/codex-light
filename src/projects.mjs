@@ -1,3 +1,4 @@
+import {WslFileScope} from './wsl-file-scope.mjs';
 import {access, lstat, mkdir, open, realpath, rename, stat, unlink} from 'node:fs/promises';
 import {constants} from 'node:fs';
 import {homedir} from 'node:os';
@@ -19,13 +20,14 @@ async function noLinks(file) {
 }
 
 export class ProjectStore {
-  constructor({root, platform = process.platform} = {}) {
+  constructor({root, platform = process.platform, wslDistribution} = {}) {
     root ??= platform === 'win32' ? (process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'CodexLight', 'state') : null) : path.join(homedir(), '.local', 'share', 'codex-light', 'state');
     if (!root || !path.isAbsolute(root)) throw stateError();
     this.root = root;
     this.file = path.join(root, 'projects.json');
     this.paths = platform === 'win32' ? path.win32 : path.posix;
     this.platform = platform;
+    this.wsl = wslDistribution ? new WslFileScope(wslDistribution) : null;
     this.queue = Promise.resolve();
   }
 
@@ -35,6 +37,10 @@ export class ProjectStore {
 
   key(value) {
     const normalized = this.paths.normalize(value);
+    if (this.wsl && /^\\\\(?:wsl\.localhost|wsl\$)\\/i.test(normalized)) {
+      const distribution = normalized.split('\\')[3];
+      if (distribution === this.wsl.distribution) return this.wsl.host(normalized);
+    }
     return this.platform === 'win32' ? normalized.toLowerCase() : normalized;
   }
 

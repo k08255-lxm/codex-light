@@ -20,6 +20,7 @@ New-Item -ItemType Directory -Path $public|Out-Null
 Get-ChildItem -LiteralPath $bin -File|Where-Object {$_.Extension -in @('.exe','.dll','.config')}|ForEach-Object {Copy-Item -LiteralPath $_.FullName -Destination $public}
 @'
 Codex Light 新电脑安装入口
+如果只在 WSL 中安装了 Codex：CLI 选择框选择“否”，仅安装应用，再到应用设置选择 WSL。此步骤不会验证 WSL CLI；验证成功前不能聊天。Windows Node.js 仍不可跳过。
 解压后打开 CodexLight-Install.exe。先复用已有兼容 Node.js 22.15+（满足 DSH 桥）和 Codex CLI；缺失项分别经明确同意才从锁定官方来源安装。不会自动登录或修改已有 Codex 配置/PATH。
 这仅用于首次安装。存在 Codex Light 程序、登记或数据时会停止，不能覆盖旧 MSI；旧用户请使用更新/迁移流程。
 确认任务结束才安装。系统安全拦截、权限错误、取消或需要重启时停止，不要管理员绕过、禁用防护或删除旧程序/备份。

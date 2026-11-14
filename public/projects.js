@@ -2,6 +2,8 @@ const windowsPath = value => /^[a-z]:[\\/]/i.test(value) || /^(?:\\\\|\/\/)[^\\/
 
 export function projectPathKey(value) {
   if (typeof value !== 'string' || !value || value.includes('\0')) return '';
+  const wsl = value.replace(/\\/g, '/').match(/^\/\/(wsl\.localhost|wsl\$)\/([^/]+)(\/.*)?$/i);
+  if (wsl) return '//wsl.localhost/' + wsl[2].toLowerCase() + (wsl[3] || '').replace(/\/{2,}/g, '/').replace(/\/+$/, '');
   if (windowsPath(value)) {
     let key = value.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
     if (/^(?:\\\\|\/\/)/.test(value)) key = '/' + key;

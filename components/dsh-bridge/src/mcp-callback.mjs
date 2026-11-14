@@ -16,7 +16,9 @@ function parent(extra) {
   return {thread, file, connection, directory: join(locations().state, 'callbacks')};
 }
 
-export async function watchFromMcp(agent, extra) {
+export async function watchFromMcp(agent, extra, {record,queueRequired=false}={}) {
+  if(extra?._meta?.dshQueue){const {registerQueueWatch}=await import('./queue-watch.mjs');return registerQueueWatch(record,extra,{state:locations().state});}
+  if(queueRequired)throw new Error('Current GUI callback binding unavailable; no daemon fallback is permitted');
   const {thread, file, directory} = parent(extra);
   const env = {...process.env};
   delete env.DSH_CODEX_TOKEN; delete env.DSH_CODEX_REMOTE; delete env.DSH_CODEX_CONNECTION;
@@ -31,11 +33,12 @@ export async function watchFromMcp(agent, extra) {
   return receipt;
 }
 
-export function unwatchFromMcp(agent, directory, extra) {
+export async function unwatchFromMcp(agent, directory, extra) {
   const {thread, directory: expected} = parent(extra);
   if (dirname(resolve(directory)) !== resolve(expected)) throw new Error('Invalid callback directory.');
   const receipt = readJson(join(directory, 'callback.json'));
   if (receipt?.thread_id !== thread || receipt.agent_id !== agent) throw new Error('The callback belongs to a different parent or agent.');
   writeFileSync(join(directory, 'cancel'), '', {mode: 0o600});
-  return {agent_id: agent, thread_id: thread, status: 'cancellation_requested'};
+  if(extra?._meta?.dshQueue&&receipt.generationId){const {queueCallbackEvent}=await import('./callback-queue.mjs');queueCallbackEvent(extra._meta.dshQueue,{eventType:'cancel',threadId:thread,taskId:agent,generationId:receipt.generationId});}
+  return {agent_id:agent,thread_id:thread,parent_thread_id:thread,generationId:receipt.generationId,callback_generation:receipt.generationId,status:'cancellation_requested'};
 }

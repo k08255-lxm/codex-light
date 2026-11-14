@@ -87,3 +87,15 @@ test('released 0.4.4 detects target full package and startup check notifies with
 test('post-bridge releases reject embedded schema1 migration even when hashes are valid',async t=>{
  const f=await fixture(t,'0.4.5');await assert.rejects(assembleRelease(f),/migration-aware/);await assert.rejects(readdir(f.output),{code:'ENOENT'});
 });
+
+test('embedded fresh payload publishes one EXE and preserves old transports with same-version APK',async t=>{
+ const {f,p,receipt}=await routerFixture(t);Object.assign(receipt,{schema:3,freshEmbedded:true,embeddedResource:'CodeCang.Fresh.zip'});await writeFile(p,JSON.stringify(receipt));
+ const release=await assembleRelease(f);
+ const names=release.assets.map(a=>a.name);assert.equal(names.length,5);assert.equal(names.filter(n=>n.endsWith('.exe')).length,1);assert.ok(!names.some(n=>n.endsWith('.zip')));assert.ok(names.includes('codex-light-0.4.5.apk'));
+ for(const [tag,transport] of [['v0.4.3','msi'],['v0.4.4','velopack'],['3556bd4b755f5177e131798990a5235ce1d450c4','velopack']]){
+  const source=execFileSync('git',['show',`${tag}:src/app-update.mjs`],{encoding:'utf8'}).replace("'./update-manifest.mjs'",JSON.stringify(new URL('../src/update-manifest.mjs',import.meta.url).href));
+  const old=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
+  const selected=old.parseAppRelease(release,'0.4.3',transport);assert.ok(names.includes(selected.setup.name));assert.ok(old.publishedSetupHash(await readFile(path.join(f.output,'SHA256SUMS.txt'),'utf8'),selected.setup.name));
+ }
+});
+test('embedded receipt must identify validated resource',async t=>{const {f,p,receipt}=await routerFixture(t);receipt.schema=3;await writeFile(p,JSON.stringify(receipt));await assert.rejects(assembleRelease(f),/embedded fresh/);});

@@ -11,9 +11,20 @@ const SETTLED = new Set(['connected', 'authenticationRequired', 'failed', 'cance
 const NOT_EXECUTED = new Set(['INVALID_INPUT', 'CONFIRMATION_REQUIRED', 'PLAN_EXPIRED', 'CONNECTION_ALREADY_ATTEMPTED', 'CONNECTION_BUSY', 'MCP_ALREADY_CONFIGURED', 'REVISION_CONFLICT', 'CODEX_CONFIG_READONLY', 'DSH_COMPONENT_UNAVAILABLE', 'DSH_DEMO_DISABLED', 'TOO_MANY_PLANS', 'LOCAL_ONLY']);
 const runtimeTone = state => state === 'connected' ? 'ok' : ['failed', 'authenticationRequired', 'cancelled', 'disabled'].includes(state) ? 'fail' : 'warn';
 
+export function describeCallbackStatus(callback) {
+  if (!callback || typeof callback !== 'object') return null;
+  const error = typeof callback.error === 'string' ? callback.error : callback.error?.message;
+  if (error) return `自动唤醒暂停：${String(error).slice(0,1000)}`;
+  if (callback.accountVerified !== true) return '自动唤醒暂停：尚未核对当前账户，不能确认可以投递。';
+  if (callback.automaticWakeup !== true) return '自动唤醒未启用；可通过 dsh_wait 主动读取任务结果。';
+  const count = Number.isSafeInteger(callback.pendingBindings) && callback.pendingBindings >= 0 ? callback.pendingBindings : null;
+  return `自动唤醒已启用，当前账户已核对${count === null ? '' : `；待处理绑定 ${count} 个`}。任务是否已投递仍以实际结果为准。`;
+}
+
 /** Status (+ optional connect result) → banner and allowed action. Pure for tests. */
 export function describeConnection(status, result = null) {
   if (!status) return { tone: 'idle', label: '尚未读取', detail: '', action: null };
+  if (status.selectionRequired) return { tone: 'idle', label: '选择 DSH 所在环境', detail: '先选择 WSL 原生 DSH 或 Windows DSH。仅检查状态，不会自动注册。', action: null };
   const reg = status.registration?.state, runtime = status.runtime?.state ?? null, runtimeLabel = dshRuntimeStatusLabel(runtime);
   if (status.error) return { tone: 'fail', label: '不可用', detail: `${status.error.message || status.error.code}。仅影响此连接功能，普通聊天不受影响。`, action: null };
   if (reg === 'external') return { tone: runtime === 'connected' ? 'ok' : 'warn', label: '使用已有配置', detail: `Codex 中已有名为 ${status.registration.serverName} 的 MCP 配置，已保留并继续使用，不会改成随包桥。运行时：${runtimeLabel}。`, action: null };
@@ -26,19 +37,20 @@ export function describeConnection(status, result = null) {
   const bundled = status.bundled || {};
   if (!bundled.available || !bundled.dependenciesReady) return { tone: 'fail', label: '随包桥不可用', detail: '随包 DSH 桥或其依赖未就绪。不会联网下载；普通聊天不受影响。', action: null };
   if (!status.canConnect) return { tone: 'fail', label: '暂不可连接', detail: 'Codex 用户配置当前不可写或不兼容。', action: null };
-  return { tone: 'idle', label: '未连接', detail: status.dsh?.installed ? '已检测到 DSH，可一键连接。' : '未检测到 DSH 本体。DSH 是可选组件，未安装不影响普通聊天；已安装在其他位置可填写其路径。', action: status.dsh?.installed ? 'connect' : 'connectWithPath' };
+  return { tone: 'idle', label: '未连接', detail: status.dsh?.diagnostic?.message ? String(status.dsh.diagnostic.message).slice(0,1000) : status.dsh?.installed ? '已检测到 DSH，可一键连接。' : '未检测到 DSH 本体。DSH 是可选组件，未安装不影响普通聊天；已安装在其他位置可填写其路径。', action: status.dsh?.installed ? 'connect' : 'connectWithPath' };
 }
 
-export function mountDshConnection(host, { api, wait = ms => new Promise(resolve => setTimeout(resolve, ms)), followUps = 5, followUpMs = 2000, onChange = () => {} }) {
+export function mountDshConnection(host, { api, wait = ms => new Promise(resolve => setTimeout(resolve, ms)), followUps = 5, followUpMs = 2000, onChange = () => {}, runtimeTarget = () => 'native' }) {
   const document = host.ownerDocument;
   let status = null, result = null, busy = false, connecting = false, generation = 0, pathDraft = '', message = { text: '', error: false };
+  let mode = null, context = runtimeTarget();
   const root = el(document, 'section', 'dshcfg dshconn');
   host.replaceChildren(root);
 
   async function load(mine = ++generation) {
     busy = true; render();
-    try { const next = await api('/api/dsh/connection/status', {}); if (mine !== generation) return; status = next; }
-    catch (error) { if (mine !== generation) return; message = { text: `无法读取连接状态：${error.message}`, error: true }; }
+    try { const next = await api('/api/dsh/connection/status', mode ? { mode } : {}); if (mine !== generation) return; status = next; }
+    catch (error) { if (mine !== generation) return; status = null; message = { text: `无法读取连接状态：${error.message}`, error: true }; }
     finally { if (mine === generation) { busy = false; render(); } }
   }
   // After a registration, follow the real runtime status for a bounded time; never infer it.
@@ -50,12 +62,12 @@ export function mountDshConnection(host, { api, wait = ms => new Promise(resolve
     }
   }
   async function connect() {
-    if (connecting) return;
+    if (connecting || busy || !describeConnection(status).action) return;
     const executablePath = pathDraft.trim();
     const mine = ++generation; connecting = true; busy = true; result = null; message = { text: '正在注册…', error: false }; render();
     let planned = false;
     try {
-      const plan = await api('/api/dsh/connection/plan', executablePath && !status?.dsh?.installed ? { executablePath } : {});
+      const plan = await api('/api/dsh/connection/plan', { ...(mode ? { mode } : {}), ...(executablePath && !status?.dsh?.installed ? { executablePath } : {}) });
       planned = true;
       result = await api('/api/dsh/connection/connect', { planId: plan.planId, confirmed: true });
       if (mine !== generation) return;
@@ -81,13 +93,29 @@ export function mountDshConnection(host, { api, wait = ms => new Promise(resolve
     head.append(titles, reload);
     return head;
   }
+  function modePicker() {
+    const field = el(document, 'label', 'field', 'DSH 所在环境');
+    const picker = el(document, 'select');picker.setAttribute('aria-label', 'DSH 所在环境');picker.disabled = busy || connecting;
+    for(const [value,label] of [['','请选择'],['native-wsl','WSL 原生 DSH'],['windows','Windows DSH']]){const option=el(document,'option','',label);option.value=value;picker.append(option);}
+    picker.value=mode||'';
+    picker.addEventListener('change',()=>{if(busy||connecting)return;mode=picker.value||null;status=null;result=null;pathDraft='';message={text:'',error:false};load();});
+    field.append(picker,el(document,'small','','选择只用于检查和本次注册计划，不会覆盖已有 MCP 配置。'));
+    return field;
+  }
   function facts(view) {
     const list = el(document, 'dl', 'kv dshcfg-effective');
     const fact = (k, v) => list.append(el(document, 'dt', '', k), el(document, 'dd', '', v));
     const bundled = status.bundled || {};
-    fact('DSH 本体', status.dsh?.installed ? status.dsh.executablePath : '未检测到（可选）');
+    fact('DSH 本体', status.dsh?.installed ? status.dsh.executablePath : status.dsh?.diagnostic?.message ? '自动检测未就绪，可填写路径重试' : '未检测到（可选）');
+    if(status.dsh?.diagnostic?.message)fact('检测说明',String(status.dsh.diagnostic.message).slice(0,1000));
+    if(status.dsh?.workspaceSupport==='windows-drives-only')fact('工作目录','仅 Windows 盘项目（/mnt/c/... 等）；不支持 Linux /home 等目录。');
+    if(status.dsh?.completionMode==='dsh_wait'||status.capabilities?.completionMode==='dsh_wait')fact('任务结果','通过 dsh_wait 等待并读取结果。');
+    const callbackLabel=describeCallbackStatus(status.callbackStatus);
+    if(callbackLabel)fact('自动唤醒',callbackLabel);
+    else if(status.dsh?.automaticWakeup===false||status.capabilities?.automaticWakeup===false)fact('自动唤醒','此连接模式不支持完成后自动唤醒；请等待或主动读取任务结果。');
+    else if(status.capabilities?.automaticWakeup===true)fact('自动唤醒','支持此能力，但尚未读取实际回调状态，不能确认可以投递。');
     fact('随包桥', bundled.available ? `${bundled.version || '版本未知'} · ${bundled.dependenciesReady ? '依赖就绪' : '依赖缺失'}` : '不可用');
-    fact('注册', ({ none: '未注册', bundled: `已注册（随包桥 · ${status.registration.serverName}）`, external: `已有外部配置（${status.registration.serverName}，已保留）`, unknown: '未知' })[status.registration?.state] || '未知');
+    fact('注册', ({ none: '未注册', bundled: `已注册（随包桥 · ${status.registration?.serverName}）`, external: `已有外部配置（${status.registration?.serverName}，已保留）`, unknown: '未知' })[status.registration?.state] || '未知');
     if (result) fact('MCP 刷新', result.reload?.queued ? '已排队（不等于已连接）' : `未完成：${result.reload?.error?.message || '客户端不支持'}`);
     if (status.registration?.state === 'bundled' || status.registration?.state === 'external') fact('运行时', dshRuntimeStatusLabel(status.runtime?.state ?? null));
     return list;
@@ -98,7 +126,7 @@ export function mountDshConnection(host, { api, wait = ms => new Promise(resolve
     const row = el(document, 'div', 'dshcfg-register');
     let input = null;
     if (view.action === 'connectWithPath') {
-      input = el(document, 'input'); input.placeholder = 'DeepSeek Harness.exe 的绝对路径'; input.setAttribute('aria-label', 'DSH 程序路径'); input.autocomplete = 'off'; input.spellcheck = false; input.value = pathDraft; input.disabled = busy;
+      input = el(document, 'input'); input.placeholder = mode === 'native-wsl' ? '/home/user/应用/DeepSeek Harness 的绝对路径' : 'DeepSeek Harness.exe 的绝对路径'; input.setAttribute('aria-label', 'DSH 程序路径'); input.autocomplete = 'off'; input.spellcheck = false; input.value = pathDraft; input.disabled = busy;
       input.addEventListener('input', () => { pathDraft = input.value; button.disabled = busy || connecting || !pathDraft.trim(); });
       row.append(icon(document, 'file', { size: 16 }), input);
     }
@@ -110,19 +138,23 @@ export function mountDshConnection(host, { api, wait = ms => new Promise(resolve
   }
   function render() {
     root.replaceChildren(header());
+    if(context==='wsl'||status?.selectionRequired||mode)root.append(modePicker());
+    if(mode==='windows'&&(context==='wsl'||status?.mode==='windows'))root.append(el(document,'p','runtime-blocked','WSL 调用 Windows DSH 仅支持 Windows 盘项目（例如 /mnt/c/...）。Linux /home 等原生目录不可用；请改用 WSL 原生 DSH，或选择 Windows 盘项目。'));
     if (!status) { root.append(el(document, 'p', 'empty-line', busy ? '正在检查…' : '尚未检查')); appendMessage(); return; }
+    if(status.selectionRequired){root.append(el(document,'p','fine',describeConnection(status).detail));appendMessage();return;}
     const view = describeConnection(status, result);
     const box = el(document, 'div', 'dshcfg-activation'); box.dataset.tone = view.tone; box.setAttribute('role', 'status');
     const line = el(document, 'div', 'dshcfg-activation-line'); line.append(el(document, 'span', 'agent-state', view.label));
     box.append(line, el(document, 'p', '', view.detail), facts(view));
     root.append(box);
+    for(const limitation of status.limitations||[])root.append(el(document,'p','runtime-blocked',String(limitation)));
     if (view.action) root.append(actions(view));
     appendMessage();
   }
   function appendMessage() { if (!message.text) return; const p = el(document, 'p', message.error ? 'inline-error' : 'fine', message.text); p.setAttribute('role', 'status'); root.append(p); }
   render();
   return {
-    activate() { message = { text: '', error: false }; load(); },
+    activate() { if(context!==runtimeTarget()){context=runtimeTarget();mode=null;status=null;result=null;pathDraft='';} message = { text: '', error: false }; load(); },
     // Leaving the page stops follow-ups; an in-flight connect still finishes server-side and is re-read on return.
     deactivate() { generation++; busy = connecting; },
     snapshot: () => ({ status, result, busy, connecting }),

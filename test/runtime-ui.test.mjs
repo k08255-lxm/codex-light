@@ -10,18 +10,31 @@ function between(start,end){const begin=app.indexOf(start),finish=app.indexOf(en
 
 test('runtime mounting wires only fixed local, registry and mutation adapters',async()=>{
  const runtimeAt=html.indexOf('id="runtime-panel"');assert.ok(runtimeAt>html.indexOf('id="command-info"'));assert.ok(runtimeAt<html.indexOf('id="settings-dsh-heading"'));assert.equal((html.match(/id="runtime-panel"/g)||[]).length,1);
- const source=between('function createRuntimePanel()','runtimePanel=createRuntimePanel()');let options;const root={},calls=[],query=()=>{},recovered=()=>{};
+ const source=between('function createRuntimePanel()','const wslRuntimePanel=');let options;const root={},calls=[],query=()=>{},recovered=()=>{};
  const create=new Function('mountRuntimePanel','$','api','performMutation','queryRuntimePending','clearRuntimePendingAfterRecovery',`${source};return createRuntimePanel;`)((container,callbacks)=>{assert.equal(container,root);options=callbacks;return{};},id=>{assert.equal(id,'runtime-panel');return root;},(...args)=>calls.push(['api',...args]),(...args)=>calls.push(['mutation',...args]),query,recovered);
  create();assert.deepEqual(calls,[]);options.read();options.check();options.upgrade({version:'0.167.1',confirmed:true});
  assert.deepEqual(calls,[['api','/api/runtime/status',{}],['api','/api/runtime/check',{}],['mutation','runtime/upgrade',{version:'0.167.1',confirmed:true}]]);assert.equal(options.queryPending,query);assert.equal(options.onRecovered,recovered);
- assert.match(app,/runtimePanel\.reset\(\{pending:!!runtimePendingMarker\(\)\}\)/);assert.match(app,/function resetRuntimePanel\(\)\{runtimePanel\?\.setActive\?\.\(false\);runtimePanel\?\.reset\(\{pending:!!runtimePendingMarker\(\)\}\);\}/);
+ assert.match(app,/runtimePanel\.reset\(\{pending:!!runtimePendingMarker\(\)\}\)/);assert.match(app,/function resetRuntimePanel\(\)\{wslRuntimePanel\.reset\(\);runtimePanel\?\.setActive\?\.\(false\);runtimePanel\?\.reset\(\{pending:!!runtimePendingMarker\(\)\}\);\}/);
 });
 
 test('runtime activity follows connection, settings page, dialog visibility and document visibility',()=>{
- const source=between('function runtimePanelShouldBeActive()','function pendingLedgerSignature()');const state={connected:true,settingsPage:'general'},document={visibilityState:'visible'};let hidden=false;const active=[];
- const sync=new Function('state','document','$','runtimePanel',`${source};return syncRuntimePanelActivity;`)(state,document,()=>({classList:{contains:()=>hidden}}),{setActive:value=>active.push(value)});
+ const source=between('function runtimePanelShouldBeActive()','function pendingLedgerSignature()');const state={connected:true,settingsPage:'general',desktop:true},document={visibilityState:'visible'};let hidden=false;const active=[];
+ const sync=new Function('state','document','$','runtimePanel','wslRuntimePanel',`${source};return syncRuntimePanelActivity;`)(state,document,()=>({classList:{contains:()=>hidden}}),{setActive:value=>active.push(value)},{setActive:()=>{}});
  sync();state.connected=false;sync();state.connected=true;state.settingsPage='account';sync();state.settingsPage='general';hidden=true;sync();hidden=false;document.visibilityState='hidden';sync();document.visibilityState='visible';sync();assert.deepEqual(active,[true,false,false,false,false,true]);
  assert.match(app,/visibilitychange[\s\S]*syncRuntimePanelActivity\(\)/);
+});
+
+test('WSL adapters are fixed local endpoints and remain available without a connected native CLI',()=>{
+ const calls=[],state={lan:false,desktop:true,connected:false,settingsPage:'general'};let options;
+ const mount=between('const wslRuntimePanel=','const engineOnboarding=');
+ new Function('mountWslRuntimePanel','$','api','state',mount)((_,value)=>{options=value;return {};},()=>({}),(...args)=>calls.push(args),state);
+ options.read();options.discover();options.select({target:'native'});
+ assert.deepEqual(calls,[['/api/runtime/wsl/status',{}],['/api/runtime/wsl/discover',{}],['/api/runtime/wsl/select',{target:'native'}]]);
+ assert.equal(options.isLocal(),true);state.lan=true;assert.equal(options.isLocal(),false);state.lan=false;
+ let active;
+ const source=between('function runtimePanelShouldBeActive()','function pendingLedgerSignature()');
+ new Function('state','document','$','runtimePanel','wslRuntimePanel',`${source};syncRuntimePanelActivity();`)(state,{visibilityState:'visible'},()=>({classList:{contains:()=>false}}),{setActive:()=>{}},{setActive:value=>active=value});
+ assert.equal(active,true);
 });
 
 test('runtime upgrade has a 31 minute transport timeout and validates operation outcomes',()=>{

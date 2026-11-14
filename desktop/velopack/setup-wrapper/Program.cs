@@ -68,7 +68,10 @@ namespace CodexLight.SetupWrapper {
   public bool ConsentNode()=>MessageBox.Show(this,(nodeUpgradeRequired?"检测到 "+existingNode+"。核心功能支持 Node 20+，但完整 DSH 桥要求 Node 22.15+。\n继续将打开锁定版本的官方 Node.js MSI，升级现有系统 Node，可能影响其他使用 Node 的软件；请先结束相关任务。\n若不希望更改系统，请选择否，先自行准备满足要求的独立 Node 环境。":"未找到兼容的 Node.js 22.15+ x64。是否从 nodejs.org 下载并打开固定版本的官方安装器？")+"\n将验证固定哈希、Windows 数字签名与发行者。可以在官方窗口取消；拒绝或取消不会继续应用安装。","安装 Node.js 前确认",MessageBoxButtons.YesNo,MessageBoxIcon.Question,MessageBoxDefaultButton.Button2)==DialogResult.Yes;
   public Task<int> InstallNode()=>CodexLight.Bootstrap.DependencyInstaller.Install("node",Progress,cancellation.Token,AllowCancel,false);
   public async Task<NodeState> DetectCli(){Progress("正在检查 Codex CLI 版本，不会登录或调用模型。");return await Task.Run(()=>{var found=CodexLight.Prerequisites.CliPrerequisite.Detect();return found.State==CodexLight.Prerequisites.CliState.Ready?NodeState.Ready:found.State==CodexLight.Prerequisites.CliState.Missing?NodeState.Missing:NodeState.Uncertain;});}
-  public bool ConsentCli()=>MessageBox.Show(this,"未找到兼容的 Codex CLI。是否从官方 registry.npmjs.org 安装锁定版本 0.169.0？\n平台包下载约 178 MiB（187 MB），展开约 492 MiB（515 MB）；临时解包还需额外空间。\n仅安装到本应用的用户工具目录，不覆盖系统 Codex、不修改 PATH 或已有配置、不自动登录。你可以取消。","安装 Codex CLI 前确认",MessageBoxButtons.YesNo,MessageBoxIcon.Question,MessageBoxDefaultButton.Button2)==DialogResult.Yes;
+  public CliChoice ChooseCli(){
+   var choice=MessageBox.Show(this,"未找到 Windows Codex CLI。请选择后续方式：\n\n是：从官方 registry.npmjs.org 安装固定版本 0.169.0 到本应用私有目录。下载约 178 MiB，展开约 492 MiB，不修改系统 PATH 或 Codex 配置。\n\n否：仅安装应用，稍后在设置中选择 WSL 或已有 Codex。当前尚未验证 WSL 中的 CLI；配置完成前不能发送消息。Windows Node.js 仍是应用后端的必需环境。\n\n取消：退出安装流程。不会自动登录或调用模型。","选择 Codex 运行环境",MessageBoxButtons.YesNoCancel,MessageBoxIcon.Question,MessageBoxDefaultButton.Button3);
+   return choice==DialogResult.Yes?CliChoice.InstallWindows:choice==DialogResult.No?CliChoice.ConfigureInApp:CliChoice.Cancel;
+  }
   public async Task<int> InstallCli(){AllowCancel(true);try{return await CodexLight.Prerequisites.CliPrerequisite.InstallAsync(new Progress<string>(Progress),cancellation.Token);}finally{AllowCancel(false);}}
   public async Task<int> RunVendor(){Progress("正在打开应用安装器。成功后可能自动打开新应用；请等待安装器结束。");cancellation.Token.ThrowIfCancellationRequested();
    var info=new ProcessStartInfo(extracted!,"--installto \""+target+"\""){UseShellExecute=true};

@@ -1,3 +1,4 @@
+import {WslFileScope} from './wsl-file-scope.mjs';
 import {readInlineHistoryImage} from './inline-history.mjs';
 import fs from 'node:fs/promises';
 import {constants} from 'node:fs';
@@ -118,7 +119,7 @@ async function checkPath(target,file=false){
 }
 
 export class ArtifactPreviewService {
- constructor({projects,rolloutRoots}={}){this.projects=projects;this.rolloutRoots=rolloutRoots;this.rollouts=new Map();this.threads=new Map();this.references=new Map();this.referenceCount=0;this.pending=new Set();this.closed=false;}
+ constructor({projects,rolloutRoots,wslDistribution}={}){this.wsl=wslDistribution?new WslFileScope(wslDistribution):null;this.projects=projects;this.rolloutRoots=rolloutRoots;this.rollouts=new Map();this.threads=new Map();this.references=new Map();this.referenceCount=0;this.pending=new Set();this.closed=false;}
  bindThread(thread){if(typeof thread?.path==='string'&&safeId(thread?.id)){this.rollouts.set(thread.id,thread.path);while(this.rollouts.size>1000)this.rollouts.delete(this.rollouts.keys().next().value);}if(safeId(thread?.id)&&typeof thread.cwd==='string'&&thread.cwd.length<=4096&&isAbsoluteWorkingDirectory(thread.cwd)){this.threads.delete(thread.id);this.threads.set(thread.id,thread.cwd);while(this.threads.size>1000){const oldest=this.threads.keys().next().value;this.threads.delete(oldest);this.dropReferences(oldest);}}}
  dropReferences(threadId){this.referenceCount-=this.references.get(threadId)?.size||0;this.references.delete(threadId);}
  /** Only trusted RPC items or accepted uploads may add exact external image references. */
@@ -130,7 +131,7 @@ export class ArtifactPreviewService {
   if(item.type==='userMessage')for(const part of (Array.isArray(item.content)?item.content:[]).slice(0,20))if(part?.type==='localImage')paths.push(part.path);
   for(const source of paths.slice(0,20)){
    if(!validImagePath(source)||!path.isAbsolute(source))continue;
-   const key=pathKey(path.resolve(source));let refs=this.references.get(threadId);
+   let key;try{key=this.wsl?this.wsl.host(source):pathKey(path.resolve(source));}catch{continue;}let refs=this.references.get(threadId);
    if(!refs){refs=new Set();this.references.set(threadId,refs);}
    if(refs.has(key))continue;
    refs.add(key);this.referenceCount++;
@@ -144,7 +145,7 @@ export class ArtifactPreviewService {
   if(input.threadId!==undefined){if(!safeId(input.threadId))throw fail('对话标识无效','ARTIFACT_SCOPE_INVALID');root=this.threads.get(input.threadId);}
   else{if(!safeId(input.projectId))throw fail('项目标识无效','ARTIFACT_SCOPE_INVALID');root=(await this.projects?.list())?.projects?.find(project=>project.id===input.projectId)?.path;}
   if(!root)throw fail('尚未授权该项目或绑定对话目录，请先打开对应项目或对话','ARTIFACT_SCOPE_UNKNOWN',403);
-  return path.resolve(root);
+  return this.wsl?this.wsl.host(root):path.resolve(root);
  }
  async preview(input){
   if(this.closed)throw fail('产物预览服务正在关闭','ARTIFACT_CLOSED',409);
@@ -165,18 +166,21 @@ export class ArtifactPreviewService {
    if(/[\x00-\x1f\x7f]/.test(source)||/^\\\\[?.]\\/.test(source)||source.replace(/^[A-Za-z]:[\\/]/,'').includes(':'))throw fail('需要有效的本地图片路径','ARTIFACT_PATH_INVALID',400);
    if(process.platform!=='win32'&&/^[A-Za-z]:[\\/]/.test(source))throw fail('当前系统无法读取 Windows 路径','ARTIFACT_PATH_INVALID',400);
    const extension=path.extname(source).toLowerCase();if(!allowed.has(extension))throw unsupported();
-   const filename=path.resolve(projectRoot,source);
+   const filename=this.wsl?this.wsl.resolve(projectRoot,source):path.resolve(projectRoot,source);
+   const referenceKey=this.wsl?filename:pathKey(filename);
+   if(this.wsl&&!this.wsl.inside(projectRoot,filename)&&!this.references.get(input.threadId)?.has(referenceKey))throw fail('WSL image is outside the conversation workspace','ARTIFACT_SCOPE_DENIED',403);
    // Local preview accepts absolute image paths outside the workspace as well.
    const rollout=input.threadId&&this.rollouts.get(input.threadId);
-   if(rollout&&this.references.get(input.threadId)?.has(pathKey(filename))){
+   if(rollout&&this.references.get(input.threadId)?.has(referenceKey)){
     try{
-     const inline=await readInlineHistoryImage({rollout,threadId:input.threadId,imagePath:filename,roots:this.rolloutRoots});
+     const inline=await readInlineHistoryImage({rollout,threadId:input.threadId,imagePath:this.wsl?this.wsl.linux(filename):filename,roots:this.rolloutRoots,caseSensitive:!!this.wsl});
      if(inline)return {bytes:inline.bytes,...inspectArtifact(inline.bytes,extension)};
     }catch{/* A missing/unreadable rollout must not prevent safe file fallback. */}
    }
    const root=path.dirname(filename);
    await checkPath(root);await checkPath(filename,true);
-   const canonicalRoot=await fs.realpath(root),canonicalFile=await fs.realpath(filename);if(!equal(canonicalRoot,root)||!inside(canonicalRoot,canonicalFile))throw fail('图片目录身份已变化，请重新预览','ARTIFACT_PATH_CHANGED',409);
+   const samePath=this.wsl?((a,b)=>a===b):equal;
+   const canonicalRoot=await fs.realpath(root),canonicalFile=await fs.realpath(filename);if(!samePath(canonicalRoot,root)||(this.wsl&&!samePath(canonicalFile,filename))||!inside(canonicalRoot,canonicalFile))throw fail('图片目录身份已变化，请重新预览','ARTIFACT_PATH_CHANGED',409);
    const rootStat=await fs.lstat(root),before=await fs.lstat(filename);
    if(!before.isFile()||before.nlink>1)throw fail('仅预览普通且无硬链接的图片文件','ARTIFACT_FILE_REFUSED',403);
    const max=extension==='.svg'?ARTIFACT_LIMITS.svgBytes:ARTIFACT_LIMITS.bytes;if(before.size<=0||before.size>max)throw fail('图片文件超过预览大小限制','ARTIFACT_SIZE_LIMIT',413);
@@ -185,7 +189,7 @@ export class ArtifactPreviewService {
    const bytes=Buffer.alloc(opened.size);let count=0;while(count<bytes.length){const result=await handle.read(bytes,count,bytes.length-count,count);if(!result.bytesRead)break;count+=result.bytesRead;}
    const after=await handle.stat(),afterPath=await fs.lstat(filename),afterRoot=await fs.lstat(root);
    await checkPath(root);await checkPath(filename,true);
-   if(count!==opened.size||after.size!==opened.size||after.mtimeMs!==opened.mtimeMs||after.ctimeMs!==opened.ctimeMs||afterPath.ino!==opened.ino||afterPath.dev!==opened.dev||afterPath.nlink>1||afterRoot.ino!==rootStat.ino||afterRoot.dev!==rootStat.dev||!equal(await fs.realpath(root),canonicalRoot)||!equal(await fs.realpath(filename),canonicalFile))throw fail('产物文件在读取时发生变化，请重新预览','ARTIFACT_CHANGED',409);
+   if(count!==opened.size||after.size!==opened.size||after.mtimeMs!==opened.mtimeMs||after.ctimeMs!==opened.ctimeMs||afterPath.ino!==opened.ino||afterPath.dev!==opened.dev||afterPath.nlink>1||afterRoot.ino!==rootStat.ino||afterRoot.dev!==rootStat.dev||!samePath(await fs.realpath(root),canonicalRoot)||!samePath(await fs.realpath(filename),canonicalFile))throw fail('产物文件在读取时发生变化，请重新预览','ARTIFACT_CHANGED',409);
    return {bytes,...inspectArtifact(bytes,extension)};
   }catch(error){if(error.code==='ENOENT'||error.code==='ENOTDIR')throw fail('产物图片不存在或已移动','ARTIFACT_NOT_FOUND',404);if(['EACCES','EPERM','ELOOP'].includes(error.code))throw fail('无法安全读取产物图片','ARTIFACT_ACCESS_DENIED',403);throw error;}
   finally{await handle?.close();}

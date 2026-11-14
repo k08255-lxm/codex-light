@@ -152,10 +152,10 @@ export function resolveCodexRuntime({platform=process.platform,arch=process.arch
  const {npm,desktop}=candidates; // Reuse runnable system candidates first. App-private CLI is an explicit-install fallback.
  if(!npm.version&&!desktop.version){
   try{const privateCli=discoverPrivateCodex({platform,arch,env,home});
-   if(privateCli&&probeCodexVersion(privateCli.path,{spawnSyncFn})===privateCli.version)return {...candidates,path:privateCli.path,source:'private'};
+   if(privateCli&&probeCodexVersion(privateCli.path,{spawnSyncFn})===privateCli.version)return {...candidates,path:privateCli.path,source:'private',version:privateCli.version};
   }catch{candidates.diagnostics.push('App-private Codex CLI could not be verified; no files changed');}
  }
- if(!npm.path&&!desktop.path)throw new Error('未找到官方 npm 安装的 Codex 原生程序。请指定 CODEX_LIGHT_CODEX 绝对路径；不会从工作目录寻找 codex.exe。');
+ if(!npm.path&&!desktop.path)throw Object.assign(new Error('未找到官方 npm 安装的 Codex 原生程序。请指定 CODEX_LIGHT_CODEX 绝对路径；不会从工作目录寻找 codex.exe。'),{code:candidates.diagnostics.length?'CODEX_DETECTION_UNCERTAIN':'CODEX_NOT_FOUND'});
  let selected;
  if(npm.path&&desktop.path){
   if(npm.version&&desktop.version){

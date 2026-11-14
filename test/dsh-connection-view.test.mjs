@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDocument } from './mini-dom.mjs';
-import { mountDshConnection, describeConnection } from '../public/ui/dsh-connection-view.js';
+import { mountDshConnection, describeConnection, describeCallbackStatus } from '../public/ui/dsh-connection-view.js';
 
 const settle = async () => { for (let i = 0; i < 6; i++) await new Promise(resolve => setTimeout(resolve, 0)); };
 const status = (over = {}) => ({ bundled: { available: true, version: '0.8.0-light.1', dependenciesReady: true }, dsh: { installed: true, executablePath: 'C:/Apps/DeepSeek Harness/DeepSeek Harness.exe' }, registration: { state: 'none', serverName: 'dsh_subagent' }, runtime: { state: null }, canConnect: true, error: null, ...over });
@@ -85,4 +85,53 @@ test('the entry is local-only markup next to config sources', async () => {
   const { readFile } = await import('node:fs/promises');
   const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
   assert.match(html, /<div id="dsh-connection-root" class="local-only"><\/div>\s*<div id="dsh-config-root"/);
+});
+
+test('WSL requires an explicit mode, status and plan bind it, connect carries only the confirmed plan',async()=>{
+ const h=harness([{selectionRequired:true,canConnect:false},status(),{planId:'wsl-plan'}, {registered:true,reload:{queued:true}},bundled('connected')],{runtimeTarget:()=> 'wsl'});
+ h.view.activate();await settle();assert.equal(h.byText('连接 DSH'),undefined);
+ const picker=h.host.querySelectorAll('select')[0];picker.value='windows';picker.dispatch('change');await settle();
+ assert.deepEqual(h.calls[1],['/api/dsh/connection/status',{mode:'windows'}]);
+ assert.match(h.host.textContent,/Linux \/home.*不可用/);assert.match(h.host.textContent,/Windows 盘项目/);
+ h.byText('连接 DSH').click();await settle();
+ assert.deepEqual(h.calls[2],['/api/dsh/connection/plan',{mode:'windows'}]);
+ assert.deepEqual(h.calls[3],['/api/dsh/connection/connect',{planId:'wsl-plan',confirmed:true}]);
+});
+
+test('native WSL mode uses Linux path and resets stale path and status on mode change',async()=>{
+ const missing=status({dsh:{installed:false}});
+ const h=harness([{selectionRequired:true},missing,missing],{runtimeTarget:()=> 'wsl'});
+ h.view.activate();await settle();let picker=h.host.querySelectorAll('select')[0];picker.value='native-wsl';picker.dispatch('change');await settle();
+ const input=h.host.querySelectorAll('input')[0];assert.match(input.placeholder,/^\/home/);input.value='/home/lee/dsh';input.dispatch('input');
+ picker=h.host.querySelectorAll('select')[0];picker.value='windows';picker.dispatch('change');await settle();
+ assert.equal(h.host.querySelectorAll('input')[0].value,'');assert.equal(h.byText('连接 DSH').disabled,true);
+});
+
+test('mode status read failure cannot retain a prior connect action',async()=>{
+ const h=harness([{selectionRequired:true},status(),new Error('读取失败')],{runtimeTarget:()=> 'wsl'});
+ h.view.activate();await settle();let picker=h.host.querySelectorAll('select')[0];picker.value='native-wsl';picker.dispatch('change');await settle();
+ picker=h.host.querySelectorAll('select')[0];picker.value='windows';picker.dispatch('change');await settle();
+ assert.equal(h.byText('连接 DSH'),undefined);assert.match(h.host.textContent,/读取失败/);
+});
+
+test('native diagnostic is text, not an installation claim; top-level completion capabilities are visible',async()=>{
+ const h=harness([status({dsh:{installed:false,diagnostic:{code:'PROVIDER_REQUIRED',message:'未配置默认供应商 <script>bad</script>'}},capabilities:{completionMode:'dsh_wait',automaticWakeup:false}})],{runtimeTarget:()=> 'wsl'});
+ h.view.activate();await settle();
+ assert.match(h.host.textContent,/未配置默认供应商/);assert.match(h.host.textContent,/自动检测未就绪/);
+ assert.doesNotMatch(h.host.textContent,/未检测到 DSH 本体/);assert.match(h.host.textContent,/dsh_wait/);assert.match(h.host.textContent,/不支持完成后自动唤醒/);
+ assert.equal(h.host.querySelectorAll('script').length,0);assert.equal(h.host.querySelectorAll('input').length,1);
+});
+
+test('callback state reports account pause and error rather than treating capability as delivery',async()=>{
+ const h=harness([status({capabilities:{automaticWakeup:true},callbackStatus:{automaticWakeup:true,accountVerified:false,pendingBindings:2,error:null}})]);
+ h.view.activate();await settle();assert.match(h.host.textContent,/尚未核对当前账户/);assert.doesNotMatch(h.host.textContent,/当前账户已核对/);
+ assert.match(describeCallbackStatus({automaticWakeup:true,accountVerified:true,error:{message:'<script>bad</script>'}}),/自动唤醒暂停/);
+ assert.match(describeCallbackStatus({automaticWakeup:true,accountVerified:true,pendingBindings:2}),/待处理绑定 2 个/);
+ assert.match(describeCallbackStatus({automaticWakeup:true,accountVerified:true,pendingBindings:0}),/以实际结果为准/);
+ assert.match(describeCallbackStatus({automaticWakeup:false,accountVerified:true}),/未启用/);
+});
+
+test('callback error is rendered as bounded text',async()=>{
+ const h=harness([status({callbackStatus:{automaticWakeup:true,accountVerified:true,error:'<script>bad</script>'}})]);
+ h.view.activate();await settle();assert.match(h.host.textContent,/自动唤醒暂停：<script>bad<\/script>/);assert.equal(h.host.querySelectorAll('script').length,0);
 });

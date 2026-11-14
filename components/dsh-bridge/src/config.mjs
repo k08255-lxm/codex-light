@@ -83,5 +83,6 @@ export function runtimeConfig(state=stateDirectory(),cli=resolveDshCli()) {
   writeFileSync(patch,agentRows.map(id=>`- id: ${id}\n  disabled: true\n`).join('')+shared,{mode:0o600});
   // Existing conversations keep the tool composition under which they ran.
   writeFileSync(legacyPatch,shared,{mode:0o600});
-  return {database:join(state,'state.sqlite'),cli,patch,legacyPatch};
+  const native=process.env.CODEX_LIGHT_DSH_TARGET==='wsl';
+  return {database:join(state,'state.sqlite'),cli,patch,legacyPatch,...(native?{profile:process.env.DSH_BRIDGE_PROFILE||'codecang-wsl',workspaceIsolation:'shared',defaultProvider:process.env.DSH_DEFAULT_PROVIDER,defaultModel:process.env.DSH_DEFAULT_MODEL,defaultEffort:process.env.DSH_DEFAULT_EFFORT,...(process.env.DSH_NATIVE_PROVIDER_CONFIG?{providerSources:new ProviderSources({configDir:locations().config,stateDir:state,home:process.env.DSH_HOME,sourcePath:process.env.DSH_NATIVE_PROVIDER_CONFIG,cli})}:{})}:{})};
 }

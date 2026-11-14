@@ -3,7 +3,6 @@ import {createInterface} from 'node:readline';
 import {randomUUID} from 'node:crypto';
 import {isAbsolute} from 'node:path';
 import {createServer} from './server.mjs';
-import {nativeCodex} from './runtime-path.mjs';
 import {createDesktopInstallerBridge} from './desktop-app-update-bridge.mjs';
 const args=process.argv.slice(2);
 if(args.some(a=>a!=='--demo')) {process.stderr.write('Unsupported desktop backend argument.\n');process.exit(2);}
@@ -49,10 +48,10 @@ lines.on('line',async line=>{
   app=await createServer({demo:args.includes('--demo'),reopen:false,desktop:true,desktopUpdateTransport:message.updateTransport??'msi',onDesktopPickFolder:pickFolder,onDesktopLaunchInstaller:(file,metadata)=>installers.launch(file,metadata),onDesktopTheme:(theme,visualStyle)=>{
    if(!['light','dark'].includes(theme)||(visualStyle!==undefined&&!['codex','claude'].includes(visualStyle)))throw new Error('无效原生主题');
    if(!stopping)process.stdout.write(JSON.stringify({type:'theme',theme,...(visualStyle===undefined?{}:{visualStyle})})+'\n');
-  },cwd:'',command:args.includes('--demo')?'demo-unused':nativeCodex()});
+  },cwd:'',command:args.includes('--demo')?'demo-unused':'codex'});
   if(stopping){await app.close();return;}
   app.server.once('close',()=>shutdown());
-  process.stdout.write(JSON.stringify({url:app.url,serverInstance:app.operations.serverInstance})+'\n');
+  process.stdout.write(JSON.stringify({url:app.url,serverInstance:app.operations.serverInstance,runtime:app.runtimeDescriptor})+'\n');
  }catch(error){process.stderr.write(JSON.stringify({type:'startupError',name:/^[A-Za-z]+$/.test(error?.name)?error.name:'Error',code:/^[A-Z0-9_]+$/.test(error?.code)?error.code:null,syscall:/^[A-Za-z]+$/.test(error?.syscall)?error.syscall:null})+'\n');await shutdown();}
 });
 lines.on('close',()=>shutdown());

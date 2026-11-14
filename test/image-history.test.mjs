@@ -1,4 +1,4 @@
-import test from 'node:test';import assert from 'node:assert/strict';import {Readable} from 'node:stream';import {mkdtemp,readFile,rm,stat,writeFile} from 'node:fs/promises';import os from 'node:os';import path from 'node:path';import {UploadStore} from '../src/uploads.mjs';import {readInlineHistoryImage} from '../src/inline-history.mjs';import {ArtifactPreviewService} from '../src/artifacts.mjs';
+import test from 'node:test';import assert from 'node:assert/strict';import {Readable} from 'node:stream';import {mkdtemp,readFile,realpath,rm,stat,writeFile} from 'node:fs/promises';import os from 'node:os';import path from 'node:path';import {UploadStore} from '../src/uploads.mjs';import {readInlineHistoryImage} from '../src/inline-history.mjs';import {ArtifactPreviewService} from '../src/artifacts.mjs';
 const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jN1sAAAAASUVORK5CYII=','base64');
 const url='data:image/png;base64,'+png.toString('base64');
 async function fixture(t){const root=await mkdtemp(path.join(os.tmpdir(),'inline-image-test-'));t.after(()=>rm(root,{recursive:true,force:true}));return root;}
@@ -33,4 +33,10 @@ test('image upload and selection share the 6 MiB preview-safe limit',async t=>{
  assert.throws(()=>validateImageSelection([{name:'large.png',type:'image/png',size:store.maxFile+1}]),/6 MiB/);
  await assert.rejects(store.add(Readable.from([Buffer.alloc(store.maxFile+1)])),/6 MiB/);
  const draft=new AttachmentDraft();assert.throws(()=>draft.add({id:'11111111-1111-4111-8111-111111111111',name:'large.png',mime:'image/png',size:store.maxFile+1}));
+});
+
+test('WSL inline history compares original Linux image paths case-sensitively',async t=>{
+ const f=await history(t,{labelPath:'/home/lee/A.png'});f.root=await realpath(f.root);f.rollout=await realpath(f.rollout);
+ assert.deepEqual((await readInlineHistoryImage({...f,imagePath:'/home/lee/A.png',threadId:'t1',roots:[f.root],caseSensitive:true})).bytes,png);
+ assert.equal(await readInlineHistoryImage({...f,imagePath:'/home/lee/a.png',threadId:'t1',roots:[f.root],caseSensitive:true}),null);
 });

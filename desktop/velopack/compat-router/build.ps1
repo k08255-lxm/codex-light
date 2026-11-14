@@ -12,11 +12,17 @@ if(@($sums|Where-Object {$_ -match ('^'+$hash+'\s+\*?'+[regex]::Escape($name)+'$
 New-Item -ItemType Directory -Path $out|Out-Null
 $url="https://github.com/k08255-lxm/codex-light/releases/download/v$Version/$name"
 $pins=Join-Path $out 'Pins.cs';"namespace CodexLight.PublicSetup { internal static class Pins { internal const string Version=`"$Version`",FreshUrl=`"$url`",FreshHash=`"$hash`"; } }"|Set-Content $pins -Encoding utf8
-& dotnet build (Join-Path $PSScriptRoot 'Router.csproj') -c Release "-p:Version=$Version" "-p:RouterPins=$pins" -p:DebugSymbols=false -p:DebugType=none -o (Join-Path $out 'bin') --nologo
+& dotnet build (Join-Path $PSScriptRoot 'Router.csproj') -c Release "-p:Version=$Version" "-p:RouterPins=$pins" "-p:RouterFresh=$fresh" -p:DebugSymbols=false -p:DebugType=none -o (Join-Path $out 'bin') --nologo
 if($LASTEXITCODE -ne 0){throw 'Router build failed'}
+# Verify the resource in the final EXE before issuing the receipt.
+$assembly=[Reflection.Assembly]::LoadFile((Join-Path $out 'bin/CodexLight-Setup.exe'))
+$resource=$assembly.GetManifestResourceStream('CodeCang.Fresh.zip')
+if(!$resource){throw 'Embedded archive missing'}
+try {$shaTool=[Security.Cryptography.SHA256]::Create();try {$embeddedHash=([BitConverter]::ToString($shaTool.ComputeHash($resource))).Replace('-','').ToLowerInvariant()}finally{$shaTool.Dispose()}}finally{$resource.Dispose()}
+if($embeddedHash -ne $hash){throw 'Embedded archive differs from verified fresh archive'}
 $public=Join-Path $out 'public';New-Item -ItemType Directory $public|Out-Null
 $setup="CodexLight-Setup-$Version-x64.exe";Copy-Item (Join-Path $out 'bin/CodexLight-Setup.exe') (Join-Path $public $setup)
 $sha=(Get-FileHash (Join-Path $public $setup)).Hash.ToLowerInvariant()
-@{schema=2;version=$Version;bootstrapName=$setup;bootstrapSha256=$sha;migrationSupported=$true;mode='fixedBridgeThenPrompt';bridgeVersion='0.4.4';bridgeUrl='https://github.com/k08255-lxm/codex-light/releases/download/v0.4.4/CodexLight-Setup-0.4.4-x64.exe';bridgeSha256='b2410266d12946301ffecebaa9c1fa77c8cebd065fe889cdb8eb83b974245aba';freshName=$name;freshSha256=$hash}|ConvertTo-Json|Set-Content (Join-Path $public 'release-bootstrap-receipt.json') -Encoding utf8
+@{schema=3;freshEmbedded=$true;embeddedResource='CodeCang.Fresh.zip';version=$Version;bootstrapName=$setup;bootstrapSha256=$sha;migrationSupported=$true;mode='fixedBridgeThenPrompt';bridgeVersion='0.4.4';bridgeUrl='https://github.com/k08255-lxm/codex-light/releases/download/v0.4.4/CodexLight-Setup-0.4.4-x64.exe';bridgeSha256='b2410266d12946301ffecebaa9c1fa77c8cebd065fe889cdb8eb83b974245aba';freshName=$name;freshSha256=$hash}|ConvertTo-Json|Set-Content (Join-Path $public 'release-bootstrap-receipt.json') -Encoding utf8
 "$sha  $setup"|Set-Content (Join-Path $public 'SHA256SUMS.txt') -Encoding ascii
 Write-Output $public

@@ -1,6 +1,7 @@
 """Validate compact DSH distribution before copying or authoring installers."""
 import hashlib,json,re
 from pathlib import Path,PurePosixPath
+from notice_text import read as read_notice_text
 
 SOURCE_SCOPES=('src','assets','licenses','LICENSE','README.md','THIRD-PARTY-NOTICES.md','package.json','package-lock.json','manifest.json','build.mjs','bundle.mjs','tools/package.json','tools/package-lock.json')
 def source_inventory(root):
@@ -39,7 +40,23 @@ def validate(root,source=None):
  if set(files)|{'manifest.json'}!=set(actual) or 'manifest.json' in files:raise ValueError('Bundle file inventory mismatch')
  for n,h in files.items():
   if sha(actual[n])!=h:raise ValueError('Modified bundle file: '+n)
- for n in ('LICENSE','package.json','package-lock.json',m.get('entry'),m.get('licenses')):
+ texts=None
+ if 'noticeText' in m:
+  if m['noticeText']!='THIRD-PARTY-NOTICES.txt' or m['noticeText'] not in files:raise ValueError('Unsupported notice collection')
+  texts=read_notice_text((root/m['noticeText']).read_bytes())
+  rows=json.loads((root/m['licenses']).read_text(encoding='utf-8'))
+  required={n for row in rows for n in row['notices']}|{'LICENSE','THIRD-PARTY-NOTICES.md','assets/DeepSeek-MIT-LICENSE','node_modules/yaml/LICENSE'}
+  if set(texts)!=required or any(n in actual or (n in sources and hashlib.sha256(texts[n]).hexdigest()!=sources[n]) for n in required):raise ValueError('Notice source inventory mismatch')
+  rows=json.loads((root/m['licenses']).read_text(encoding='utf-8'));lock=json.loads((root/'package-lock.json').read_text(encoding='utf-8'));packages=[(n,p) for n,p in lock.get('packages',{}).items() if n]
+  if 'distributedPackages' in m:
+   selected=m['distributedPackages']
+   if not isinstance(selected,dict) or not selected or 'node_modules/yaml' not in selected or any(not safe(n).startswith('node_modules/') or lock.get('packages',{}).get(n,{}).get('version')!=v for n,v in selected.items()):raise ValueError('Invalid distributed package inventory')
+   packages=[(n,p) for n,p in packages if n in selected]
+  if len(rows)!=len(packages) or m.get('dependencyCount')!=len(packages):raise ValueError('License package inventory mismatch')
+  for n,p in packages:
+   found=[row for row in rows if row['name']==n.rsplit('node_modules/',1)[-1] and row['version']==p['version']]
+   if not found or any(not row.get('notices') or any(v not in texts for v in row['notices']) for row in found):raise ValueError('Missing package notice')
+ for n in (*(() if texts is not None else ('LICENSE',)),'package.json','package-lock.json',m.get('entry'),m.get('licenses')):
   if safe(n) not in files:raise ValueError('Required bridge payload absent')
  if sha(root/'package-lock.json')!=m.get('lockSha256'):raise ValueError('Bridge lock mismatch')
  canonical=json.dumps(dict(sorted(sources.items())),ensure_ascii=False,separators=(',',':')).encode()

@@ -35,7 +35,7 @@ No network feed is modified by these tools. Use a new release version after chan
 
 ### Prerelease policy
 
-Tool and runtime are deliberately synchronized to **1.3.39-g8d2844f (official prerelease)**. The build rejects a mismatching stable or preview CLI/runtime. The prior 1.2.161 Setup forwarding defect is historical; the selected revision contains its source fix, but this does **not** authorize migration execution or establish end-to-end migration acceptance. Keep the wrapper gate closed until isolated installation/recovery evidence is reviewed. `README.md` and `TEST_REPORT.md` distinguish real portable apply tests from untested MSI migration.
+Tool and runtime are deliberately synchronized to **1.3.39-g8d2844f (official prerelease)**. The build rejects a mismatching stable or preview CLI/runtime. The prior 1.2.161 Setup forwarding defect is historical; the selected revision contains its source fix, but this does **not** authorize migration execution or establish end-to-end migration acceptance. Keep the wrapper gate closed until isolated installation/recovery evidence is reviewed. [Historical verification](INTEGRATION_STATUS.md) distinguishes earlier portable tests from the later 0.4.4 migration evidence; neither substitutes for acceptance of a newly built installer.
 
 ### Migration-stage build (not a release)
 
@@ -50,3 +50,15 @@ The caller must trust the manifest SHA256 and Setup SHA256 from a separate autho
 A matching application version is insufficient. Before staging, `source_integrity.py` compares the complete app/src, app/public, app/package.json and app/components/dsh-bridge trees against the current checkout by exact relative paths and SHA256, including current bridge build outputs and locked dependencies. Missing, extra or changed files are rejected. After MSI-policy filtering, the expected runtime tree is verified again; only the existing dependency TypeScript-declaration omission policy applies. The source is checked once more at completion so changes during packaging fail the build.
 
 `source-tree.json` is embedded and shipped alongside the package with a deterministic source-tree fingerprint; migration manifest binds that fingerprint too. It describes these application-source scopes, not a claim that equal product version means equal native/source history. Use `desktop/build.ps1` to create a fresh complete payload, then publish the current opt-in host and worker before packaging. Never patch an old payload with only the latest health file. Actual same-version stale-payload regression found omitted update-indicator, app-update-safety and backend-health files and was rejected.
+
+### Collected license layout
+
+After staging and pinned vendor validation, `collected_notices.py` converts the
+owned build stage's notices into root `LICENSE` and `THIRD-PARTY-NOTICES.txt`.
+Its destructive stage operation requires `--owned-build-stage`; never run it on
+an installed copy. Source originals and the input desktop payload are unchanged.
+Every selected path/text is byte-verified before its staged duplicate is removed.
+The independently usable bridge keeps its own one-file notice collection and
+technical package manifest. Both legacy and collected release layouts can be
+verified, but mixed layouts are rejected. See `docs/LICENSE-AUDIT.md` for actual
+distribution selection, test evidence and unresolved native-audit scope.

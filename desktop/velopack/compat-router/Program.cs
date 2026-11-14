@@ -12,7 +12,7 @@ namespace CodexLight.PublicSetup {
    if(route==Route.Velopack){detail.Text="已使用新的安装方式。请在应用内检查更新并确认安装；此入口不会重复迁移或降级。";return;}
    bool bridge=route==Route.Migrate;detail.Text=bridge?"正在下载并验证固定 0.4.4 迁移安装器。接下来请按安装器说明保存工作并退出旧版。":"正在下载并验证当前版本安装向导。";
    string cache=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"CodexLightMigration","router-"+Guid.NewGuid().ToString("N"));Plain(cache);Directory.CreateDirectory(cache);
-   string download=Path.Combine(cache,bridge?"bridge.exe":"fresh.zip");await Task.Run(()=>Download(bridge?RouterPolicy.BridgeUrl:Pins.FreshUrl,bridge?RouterPolicy.BridgeHash:Pins.FreshHash,download));
+   string download=Path.Combine(cache,bridge?"bridge.exe":"fresh.zip");await Task.Run(()=>{if(bridge)Download(RouterPolicy.BridgeUrl,RouterPolicy.BridgeHash,download);else ExtractEmbedded(download);});
    using(var verified=VerifiedLease.Open(download,bridge?RouterPolicy.BridgeHash:Pins.FreshHash))
    using(var fresh=bridge?null:FreshLease.Extract(verified,Path.Combine(cache,"fresh"))){
    if(Detect()!=route)throw new IOException("下载期间安装状态改变；未启动安装器，请重新检查。");
@@ -23,6 +23,13 @@ namespace CodexLight.PublicSetup {
    ExitCode=0;title.Text="安装向导已退出";detail.Text=bridge?"此阶段仅迁移到 0.4.4，不代表已安装 "+Pins.Version+"。请在已打开的应用中等待更新提示，然后点击更新。若检查失败，可在设置中重试。":"请以安装向导和应用中的版本为准。此入口未独立验证安装结果。";
   }catch(Exception e){ExitCode=1;title.Text="未完成";detail.Text=e.Message;}finally{busy=false;close.Enabled=true;progress.Visible=false;}}
   static void Plain(string path){for(string? p=Path.GetFullPath(path);p!=null;p=Path.GetDirectoryName(p))if((File.Exists(p)||Directory.Exists(p))&&(File.GetAttributes(p)&FileAttributes.ReparsePoint)!=0)throw new IOException("不支持链接目录");}
+  static void ExtractEmbedded(string file){
+   using(var input=typeof(RouterWindow).Assembly.GetManifestResourceStream("CodeCang.Fresh.zip")??throw new IOException("Missing embedded installer"))
+   using(var output=new FileStream(file,FileMode.CreateNew,FileAccess.Write,FileShare.None)){
+    if(input.Length>128L*1024*1024)throw new IOException("Embedded installer too large");input.CopyTo(output);output.Flush(true);
+   }
+   // VerifiedLease.Open checks the build-pinned SHA256 before extraction or execution.
+  }
   static void Download(string address,string hash,string file){ServicePointManager.SecurityProtocol=SecurityProtocolType.Tls12;var timer=Stopwatch.StartNew();var uri=new Uri(address);for(int redirects=0;redirects<6;redirects++){RouterPolicy.Redirect(uri);var request=(HttpWebRequest)WebRequest.Create(uri);request.AllowAutoRedirect=false;request.Timeout=30000;request.ReadWriteTimeout=30000;using(var response=(HttpWebResponse)request.GetResponse()){int status=(int)response.StatusCode;if(status>=300&&status<400){uri=new Uri(uri,response.Headers["Location"]??throw new IOException("缺少下载地址"));continue;}if(status!=200||response.ContentLength>128L*1024*1024)throw new IOException("下载响应异常");using(var input=response.GetResponseStream())using(var output=new FileStream(file,FileMode.CreateNew,FileAccess.Write,FileShare.None)){var buffer=new byte[65536];long total=0;int count;while((count=input.Read(buffer,0,buffer.Length))>0){total+=count;if(timer.Elapsed>TimeSpan.FromMinutes(5))throw new IOException("下载超时；未执行安装器");if(total>128L*1024*1024)throw new IOException("下载超出大小限制");output.Write(buffer,0,count);}output.Flush(true);}using(var input=File.OpenRead(file))using(var sha=SHA256.Create())if(BitConverter.ToString(sha.ComputeHash(input)).Replace("-","").ToLowerInvariant()!=hash)throw new IOException("安装器校验失败，未执行");return;}}throw new IOException("下载重定向过多");}
   Route Detect(){string local=Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);int count=0;string product="";for(int i=0;i<2;i++){var id=new StringBuilder(39);uint code=MsiEnumRelatedProducts("{C63D113F-36E4-46F6-B635-F1CE57BD166E}",0,i,id);if(code==259)break;if(code!=0){count=-1;break;}count++;product=id.ToString();}
    if(count==1){if(!Guid.TryParseExact(product,"B",out _))throw new IOException("Invalid MSI identity");uint length=32767;var location=new StringBuilder((int)length);uint result=MsiGetProductInfoEx(product,null,2,"InstallLocation",location,ref length);if(result!=0)throw new IOException("MSI InstallLocation read failed: "+result);legacyRoot=Routing.ValidateLegacyRoot(location.ToString(),Directory.Exists,File.Exists);Plain(legacyRoot);Plain(Path.Combine(legacyRoot,"CodexLight.exe"));}

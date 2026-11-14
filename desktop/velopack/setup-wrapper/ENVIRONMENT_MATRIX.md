@@ -7,7 +7,8 @@ No model calls, dependency installation, application launch or security-setting 
 | --- | --- | --- |
 | Compatible Node and CLI already present | Reuse both; execute vendor Setup once | Injected flow |
 | Node missing, CLI present | Explicit Node consent, install, re-detect, then Setup | Injected flow |
-| Node present, CLI missing | Explicit CLI consent, install, re-detect, then Setup | Injected flow |
+| Node present, Windows CLI missing | Choose Windows CLI installation (then re-detect), configure WSL/CLI later in app, or cancel (default) | Injected flow |
+| WSL-only user chooses configure-in-app | No Windows CLI installation or fake Ready result; Node and final Setup safety checks still required | Injected flow; real WSL-only install not tested |
 | Both missing | Node first, then CLI, independent consent and post-checks | Injected flow |
 | Node 20.x / 22.0–22.14 | Separate upgrade consent; rejection stops without probing CLI | Version boundary + injected flow |
 | Node 22.15 / 24.13 | Accepted by bridge version gate | Version boundary only; architecture is checked separately |

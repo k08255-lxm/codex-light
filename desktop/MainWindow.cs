@@ -50,6 +50,13 @@ internal sealed class MainWindow : CaptionWindow {
    string line=await ReadBoundedLineAsync(backend.StandardOutput,timeout.Token);
    using var result=JsonDocument.Parse(line);string? url=result.RootElement.GetProperty("url").GetString();
    if(!Uri.TryCreate(url,UriKind.Absolute,out var uri)||uri.Scheme!="http"||uri.Host!="127.0.0.1"||uri.Port<=0||uri.AbsolutePath!="/"||uri.Query!=""||uri.UserInfo!=""||!Regex.IsMatch(uri.Fragment,"^#token=[a-f0-9]{64}$"))throw new InvalidOperationException("后台返回了无效本地地址。");
+   if(result.RootElement.TryGetProperty("runtime",out var runtime)){
+    if(runtime.ValueKind!=JsonValueKind.Object||!runtime.TryGetProperty("kind",out var runtimeKind)||runtimeKind.ValueKind!=JsonValueKind.String)throw new InvalidDataException("Invalid runtime identity.");
+    if(runtimeKind.GetString()=="wsl"){
+     if(!runtime.TryGetProperty("distribution",out var distro)||distro.ValueKind!=JsonValueKind.String||!LocalPathLinks.ValidWslDistribution(distro.GetString()))throw new InvalidDataException("Invalid WSL identity.");
+     activeWslDistribution=distro.GetString();
+    }else if(runtimeKind.GetString()!="native")throw new InvalidDataException("Unknown runtime identity.");
+   }
    if(closing)return;origin=new Uri(uri.GetLeftPart(UriPartial.Authority));
    SetStartupStage("初始化 WebView2",StartupPhase.Renderer);
    Controls.Remove(view);view.Dispose();
@@ -181,13 +188,14 @@ internal sealed class MainWindow : CaptionWindow {
   }catch(Exception e) when(e is JsonException or InvalidDataException or InvalidOperationException or KeyNotFoundException){System.Diagnostics.Trace.WriteLine("Rejected invalid close behavior message.");}
  }
  void NotifyCloseBehaviorChanged(CloseBehavior behavior){try{if(view.CoreWebView2!=null)view.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(new{type="desktopCloseBehaviorChanged",behavior=CloseBehaviorStore.Name(behavior)}));}catch(InvalidOperationException){System.Diagnostics.Trace.WriteLine("Close preference saved; renderer notification unavailable.");}}
+ string? activeWslDistribution;
  bool revealingLocalPath;
  void RevealLocalPath(string json){
   if(closing||revealingLocalPath)return;revealingLocalPath=true;
   try{
-   var path=LocalPathLinks.Normalize(LocalPathLinks.ReadMessage(json));var directory=LocalPathLinks.ValidateExisting(path);
+   var path=LocalPathLinks.Normalize(LocalPathLinks.ReadMessage(json),activeWslDistribution);var directory=LocalPathLinks.ValidateExisting(path,activeWslDistribution);
    if(MessageBox.Show(this,(directory?"在资源管理器中打开此文件夹？":"在资源管理器中定位此文件？不会运行文件。")+"\n"+path,"本地文件",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
-   directory=LocalPathLinks.ValidateExisting(path);Process.Start(LocalPathLinks.Explorer(path,directory))?.Dispose();
+   directory=LocalPathLinks.ValidateExisting(path,activeWslDistribution);Process.Start(LocalPathLinks.Explorer(path,directory))?.Dispose();
   }catch(Exception error) when(error is IOException or UnauthorizedAccessException or ArgumentException or JsonException or InvalidOperationException or System.ComponentModel.Win32Exception){MessageBox.Show(this,"无法定位此路径。请确认它是本机现有文件或文件夹；不支持网络路径、快捷方式跳转和特殊协议。","码舱 CodeCang");}
   finally{revealingLocalPath=false;}
  }

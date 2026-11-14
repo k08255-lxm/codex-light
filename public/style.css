@@ -885,3 +885,10 @@ dialog::backdrop { background: var(--overlay); }
 /* A newly available update is a quiet state change, not a repeating pulse. */
 .update-indicator { opacity: 1; transform: none; transition: opacity var(--motion-panel) var(--ease-out), transform var(--motion-panel) var(--ease-out); }
 @starting-style { .update-indicator:not([hidden]) { opacity: 0; transform: translateY(-3px); } }
+
+.wsl-runtime-controls .field { margin-top: 12px; }
+.wsl-runtime-controls select { width: 100%; min-height: 36px; }
+.wsl-runtime-panel > .runtime-intro { margin-top: 10px; }
+.wsl-runtime-panel .runtime-status { min-height: 1.5em; }
+
+.wsl-unavailable { display: none !important; }

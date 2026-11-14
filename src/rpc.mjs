@@ -7,8 +7,8 @@ import {validServerRequestId,serverRequestKey,findServerRequest,removeServerRequ
 const appVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const failure = (message, code) => Object.assign(new Error(message), { code });
 export class RpcClient extends EventEmitter {
-  constructor({ command = process.env.CODEX_LIGHT_CODEX || 'codex', args = ['app-server', '--listen', 'stdio://', '-c', 'thread_unload_delay_secs=0'], cwd = process.cwd(), timeout = 60000, closeTimeout = 1500, spawnProcess = spawn } = {}) {
-    super(); Object.assign(this, {command,args,cwd,timeout,closeTimeout,spawnProcess});
+  constructor({ command = process.env.CODEX_LIGHT_CODEX || 'codex', args = ['app-server', '--listen', 'stdio://', '-c', 'thread_unload_delay_secs=0'], cwd = process.cwd(), timeout = 60000, closeTimeout = 1500, spawnProcess = spawn, env, mapRequest, mapResponse } = {}) {
+    super(); Object.assign(this, {command,args,cwd,timeout,closeTimeout,spawnProcess,env,mapRequest,mapResponse});
     this.pending = new Map(); this.requests = new Map(); this.sequence = 0; this.connected = false; this.closed = false; this.buffer = ''; this.lastError = null;
   }
   async start() {
@@ -16,7 +16,7 @@ export class RpcClient extends EventEmitter {
     this.started = true;
     try {
       if (/\.(cmd|bat)$/i.test(this.command)) throw failure('请选择 Codex 原生 .exe 路径，不要选择 .cmd/.bat 包装器。', 'INVALID_COMMAND');
-      const child = this.child = this.spawnProcess(this.command, this.args, { cwd:this.cwd, windowsHide:true, shell:false, stdio:['pipe','pipe','pipe'] });
+      const child = this.child = this.spawnProcess(this.command, this.args, { cwd:this.cwd, ...(this.env?{env:this.env}:{}), windowsHide:true, shell:false, stdio:['pipe','pipe','pipe'] });
       child.stdout.setEncoding('utf8'); child.stdout.on('data', data => this.consume(data));
       child.stderr.setEncoding('utf8'); child.stderr.on('data', () => {}); // Never send raw stderr/config/credentials to UI or disk.
       child.on('error', error => this.fail(failure(`无法启动 Codex：${error.code || error.message}`, 'SPAWN_FAILED')));
@@ -32,15 +32,18 @@ export class RpcClient extends EventEmitter {
     if (this.child.stdin.writableLength > 1024 * 1024) throw failure('Codex 输入队列已满，此请求未发送', 'INPUT_BACKPRESSURE');
     this.child.stdin.write(JSON.stringify(message)+'\n');
   }
-  call(method,params={},options={}) {
-    if(Object.keys(options).some(key=>key!=='timeoutMs')||(options.timeoutMs!==undefined&&options.timeoutMs!==null)||(options.timeoutMs===null&&method!=='command/exec'))return Promise.reject(failure('不支持的内部请求时限','INVALID_TIMEOUT'));
+  async call(method,params={},options={}) {
+    if(Object.keys(options).some(key=>!['timeoutMs','beforeSend'].includes(key))||(options.beforeSend!==undefined&&(method!=='turn/start'||typeof options.beforeSend!=='function'))||(options.timeoutMs!==undefined&&options.timeoutMs!==null)||(options.timeoutMs===null&&method!=='command/exec'))return Promise.reject(failure('不支持的内部请求时限','INVALID_TIMEOUT'));
     if(this.closed) return Promise.reject(failure('Codex 未连接', 'NOT_CONNECTED'));
     if(this.pending.size >= 256) return Promise.reject(failure('待处理请求过多，此请求未发送', 'TOO_MANY_REQUESTS'));
+    if(this.mapRequest)params=await this.mapRequest(params,method);
+    if(this.closed)return Promise.reject(failure('Codex disconnected while preparing the request','NOT_CONNECTED'));
+    if(this.pending.size>=256)return Promise.reject(failure('Too many pending requests','TOO_MANY_REQUESTS'));
     const id=++this.sequence;
     return new Promise((resolve,reject)=>{
       const timer=options.timeoutMs===null?null:setTimeout(()=>{this.pending.delete(id);reject(failure('请求超时，结果未知；请刷新状态，不要重复提交。','RPC_TIMEOUT'));},this.timeout);
       this.pending.set(id,{resolve,reject,timer});
-      try{this.write({id,method,params});}catch(e){clearTimeout(timer);this.pending.delete(id);reject(e);}
+      try{options.beforeSend?.();this.write({id,method,params});}catch(e){clearTimeout(timer);this.pending.delete(id);reject(e);}
     });
   }
   consume(data) {
@@ -52,6 +55,9 @@ export class RpcClient extends EventEmitter {
       const line=this.buffer.slice(0,end);this.buffer=this.buffer.slice(end+1);if(!line.trim())continue;
       let msg;try{msg=JSON.parse(line);}catch{this.emit('event',{method:'bridge/warning',params:{message:'忽略了一条无效协议消息'}});continue;}
       if(!msg || typeof msg!=='object' || Array.isArray(msg))continue;
+      // Approval payloads are native engine data. Preserve their exact paths so
+      // validated approval responses cannot accidentally grant a translated root.
+      if(this.mapResponse&&!(msg.method&&msg.id!==undefined))msg=this.mapResponse(msg);
       if(msg.id!==undefined && !msg.method) {
         const p=this.pending.get(msg.id);if(!p)continue;clearTimeout(p.timer);this.pending.delete(msg.id);
         if(msg.error){const error=failure(msg.error.message || 'Codex RPC 错误',msg.error.code);p.reject(error);}else p.resolve(msg.result);

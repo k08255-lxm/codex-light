@@ -1,6 +1,7 @@
 // Integrity checking is not code execution or a signature. It detects stale,
 // incomplete and corrupted bundle layouts; release signing remains separate.
 import fs from 'node:fs';
+import {readNoticeText} from './notice-text.mjs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 export const DSH_BUNDLE_FORMAT='codex-light-dsh-bundle-v1';
@@ -28,13 +29,17 @@ export function verifyDshBundle(root){
  const actual=bundleFiles(root);delete actual['manifest.json'];
  if(JSON.stringify(ordered(actual))!==JSON.stringify(ordered(m.files)))throw Error('Bundle file set or content mismatch');
  const required=['src/light-entry.mjs','src/service-runner.mjs','src/server.mjs','src/probe-desktop.cjs','src/dsh-plugin.mjs','src/config.mjs','src/manager.mjs','src/provider-sources.mjs','src/provider-sources-adapter.json','package.json','package-lock.json','LICENSE','THIRD-PARTY-NOTICES.md','assets/DeepSeek-MIT-LICENSE','licenses/manifest.json','node_modules/yaml/package.json','node_modules/yaml/dist/index.js','build-provenance/tool-package-lock.json'];
- if(required.some(name=>!Object.hasOwn(actual,name)))throw Error('Missing required bundle runtime file');
+ const legal=['LICENSE','THIRD-PARTY-NOTICES.md','assets/DeepSeek-MIT-LICENSE'];
+ const texts=m.noticeText===undefined?null:(m.noticeText==='THIRD-PARTY-NOTICES.txt'?readNoticeText(fs.readFileSync(path.join(root,m.noticeText))):(()=>{throw Error('Unsupported notice collection')})());
+ if(texts){const selected=JSON.parse(fs.readFileSync(path.join(root,'licenses/manifest.json'),'utf8'));if(!Array.isArray(selected))throw Error('Invalid notice rows');const expected=[...new Set(selected.flatMap(row=>row.notices)),...legal,'node_modules/yaml/LICENSE'].sort();if(JSON.stringify(Object.keys(texts).sort())!==JSON.stringify(expected)||expected.some(n=>Object.hasOwn(actual,n)||(m.sourceFiles[n]&&hashBytes(texts[n])!==m.sourceFiles[n])))throw Error('Notice source inventory mismatch');}
+ if(required.filter(n=>!texts||!legal.includes(n)).some(name=>!Object.hasOwn(actual,name)))throw Error('Missing required bundle runtime file');
  if(actual['package-lock.json']!==m.lockSha256||actual['build-provenance/tool-package-lock.json']!==m.builder.lockSha256)throw Error('Bundle lock mismatch');
  const json=name=>JSON.parse(fs.readFileSync(path.join(root,name),'utf8'));
  const adapter=json('src/provider-sources-adapter.json');if(adapter.version!==1||['config.mjs','manager.mjs','server.mjs','provider-sources.mjs'].some(name=>adapter.files?.[name]!==actual['src/'+name]))throw Error('Bundle adapter hash mismatch');
  const lock=json('package-lock.json'),licenses=json('licenses/manifest.json');
- const packages=Object.entries(lock.packages||{}).filter(([name])=>name);
+ let packages=Object.entries(lock.packages||{}).filter(([name])=>name);
+ if(m.distributedPackages!==undefined){if(!texts||!plain(m.distributedPackages)||!Object.keys(m.distributedPackages).length||Object.entries(m.distributedPackages).some(([n,v])=>!safeBundlePath(n)||!n.startsWith('node_modules/')||lock.packages?.[n]?.version!==v)||!Object.hasOwn(m.distributedPackages,'node_modules/yaml'))throw Error('Invalid distributed package inventory');packages=packages.filter(([n])=>Object.hasOwn(m.distributedPackages,n));}
  if(m.dependencyCount!==packages.length||!Array.isArray(licenses)||licenses.length!==packages.length)throw Error('Bundle license inventory incomplete');
- for(const [relative,record] of packages){const name=relative.slice(relative.lastIndexOf('node_modules/')+13);const rows=licenses.filter(row=>row.name===name&&row.version===record.version);if(!rows.length||rows.some(row=>!Array.isArray(row.notices)||!row.notices.length||row.notices.some(notice=>!notice.startsWith('licenses/')||!Object.hasOwn(actual,notice)||fs.statSync(path.join(root,notice)).size===0)))throw Error('Bundle license missing: '+name);}
+ for(const [relative,record] of packages){const name=relative.slice(relative.lastIndexOf('node_modules/')+13);const rows=licenses.filter(row=>row.name===name&&row.version===record.version);if(!rows.length||rows.some(row=>!Array.isArray(row.notices)||!row.notices.length||row.notices.some(notice=>!notice.startsWith('licenses/')||(texts?!Object.hasOwn(texts,notice):(!Object.hasOwn(actual,notice)||fs.statSync(path.join(root,notice)).size===0)))))throw Error('Bundle license missing: '+name);}
  return m;
 }

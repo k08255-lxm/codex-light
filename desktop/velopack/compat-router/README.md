@@ -1,15 +1,15 @@
 # Versioned compatibility router
 
 Purpose: an old MSI client requesting latest can download the exact versioned
-Setup filename it understands. This small net48 GUI routes legacy installs to
+Setup filename it understands. This net48 GUI routes legacy installs to
 the unchanged, SHA256-pinned published 0.4.4 bridge. The bridge retains its own
 consent, task protection, backups and installation logic. It starts 0.4.4, whose
 startup check (3 seconds, then 6-hour intervals) notifies about latest; the user
 clicks to install that update. No silent second-stage installation is promised.
 
 Existing Velopack: tell the user to update in-app; do not migrate or downgrade.
-Fresh install: download the same-version NewInstall ZIP using a hash embedded at
-build time, extract bounded safe members, then open its existing installer UI.
+Fresh install: read the same-version NewInstall ZIP embedded in the EXE, verify
+its build-pinned SHA256, extract bounded safe members, then open the installer UI.
 Unknown/conflicting inventories fail closed. No automatic retry of uncertain
 installation, force termination, registry deletion, data cleanup, or modification
 of the published bridge. A child exit code is not claimed as latest installed.
@@ -18,10 +18,13 @@ Build with verified current artifacts:
 
     ./build.ps1 -Version 0.4.5 -VelopackDirectory <verified-dir> -Output <new-dir>
 
-Then use scripts/assemble-release.mjs with its `public` output. Schema 2 receipts
-bind the output EXE hash, bridge identity and current fresh ZIP hash. Final
-assembly verifies both old-MSI and Velopack update transports and preserves APK.
-The build needs network at runtime to obtain GitHub assets; an offline failure
+Then use scripts/assemble-release.mjs with its `public` output. Schema 3 receipts
+bind the output EXE hash, bridge identity and the verified embedded fresh ZIP hash.
+The ZIP remains a required verified build input, but is not a published asset.
+Final assembly preserves both old-MSI and Velopack update assets and checksums.
+Every release retains a same-version APK using the existing signing identity,
+including desktop-only updates, so users never need to search older releases.
+Legacy migration still needs network to fetch the pinned bridge; an offline failure
 leaves the installation untouched. TLS/redirect host restrictions and embedded
 SHA256 are enforced. Download/extract cache and migration recovery are retained.
 
@@ -77,3 +80,22 @@ No installer was started by these tests.
 
 Post-0.4.4 assembly now requires schema2 fixed-bridge receipts; even internally
 consistent schema1 embedded-migration receipts are rejected by a regression test.
+
+## Single manual download implementation (unreleased)
+
+The EXE embeds `CodeCang.Fresh.zip`; build.ps1 reopens the built assembly and
+compares the resource SHA256 to the verified build input before issuing schema 3.
+No released assets or installation identities change. Existing schema 2 receipts
+remain supported for reproducing historical packages. Machine update `.nupkg`,
+`releases.win.json` and `SHA256SUMS.txt` remain published; only the redundant
+manual ZIP disappears. Fresh dependency setup may still need network.
+
+Local verification: 16 assembly tests passed, including original 0.4.3/0.4.4
+and published 0.4.5 update parsers; net48 compilation passed with no warnings.
+Using the existing verified 0.4.5 fresh ZIP produced an 8,278,016-byte EXE.
+The embedded resource and runtime extracted ZIP matched the original SHA256;
+extraction refused overwriting an existing file. No installer was launched.
+PowerShell script execution was denied by AuthorizationManager; direct dotnet
+compilation and read-only assembly/resource inspection were used without changing
+policy. Full build-script execution, actual install/migration and next-version
+WSL package integration remain to validate. This is not a release or install test.

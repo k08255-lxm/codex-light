@@ -2,9 +2,9 @@
   "version": 1,
   "bridgeVersion": "0.8.0",
   "files": {
-    "config.mjs": "52a7b33ac634382a59d31631fe98a2a058f982de7a57a479ae3d3c4d54b6a73d",
-    "manager.mjs": "4120540d775d7708b8d498a14f1e318150041ea126a9cc99e477c6ed30ff175e",
-    "server.mjs": "3c4deb8abfcf659adf6c99b064076214b9b48c804b80a1f079240ef26ac07f3f",
+    "config.mjs": "83b5da0758a2f11dddd10638a819881c13deee0f22a5caf7d6bc1b609a31c80e",
+    "manager.mjs": "17215d43bf7f5ca64684801d5ce5002bb4df725c233a0459309ff6eff4703ada",
+    "server.mjs": "322839deaf6c397dcfeaab9769ff8a2826632254840e56b5541d7f8b6eaba452",
     "provider-sources.mjs": "c6408d36c0621404c7ceadc4c36af6c4c48ae6a95b9bd68cbb73c2c3083b7029"
   }
 }

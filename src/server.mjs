@@ -1,7 +1,11 @@
+import {DshWakeup} from './dsh-wakeup.mjs';
+import {WslNativeDshBridge} from './dsh-wsl-native.mjs';
+import {WslWindowsDshBridge} from './dsh-wsl-windows.mjs';
 import {StorageMaintenance} from './storage-maintenance.mjs';
 import http from 'node:http';
 import {spawn} from 'node:child_process';
 import {ConfigSettingsService} from './config-settings.mjs';
+import {EngineOnboarding,EngineSetupStore} from './engine-onboarding.mjs';
 import {DesktopState} from './desktop-state.mjs';
 import {ProjectStore} from './projects.mjs';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
@@ -10,7 +14,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
 import {GitCommandActions} from './git-command-actions.mjs';
-import {nativeCodex,resolveCodexRuntime} from './runtime-path.mjs';
+import {nativeCodex,resolveCodexRuntime,probeCodexVersion} from './runtime-path.mjs';
+import {WslRuntime,WslSelectionStore,validateWslSelection,wslProfileId,wslPathToHost,hostPathToWsl,mapWslRequest,mapWslResponse} from './wsl-runtime.mjs';
 import {RuntimeManager} from './runtime-manager.mjs';
 import {AppUpdateService} from './app-update.mjs';
 import {assertUpdateIdle,UpdateReservation} from './app-update-safety.mjs';
@@ -53,6 +58,7 @@ publicFiles['/delegated-changes.js']='delegated-changes.js';publicFiles['/agent-
 publicFiles['/change-stats.js']='change-stats.js';
 publicFiles['/delegation-monitor.js']='delegation-monitor.js';
 publicFiles['/agent-history.js']='agent-history.js';
+publicFiles['/wsl-runtime-panel.js']='wsl-runtime-panel.js';
 publicFiles['/reasoning-timing.js']='reasoning-timing.js';
 publicFiles['/async-answer.js']='async-answer.js';
 publicFiles['/ui/async-input.js']='ui/async-input.js';
@@ -65,21 +71,51 @@ for(const file of ['about-view.js','about-view.css','notifications.js'])publicFi
 publicFiles['/ui/storage-view.js']='ui/storage-view.js';
 publicFiles['/ui/panel-resize.js']='ui/panel-resize.js';publicFiles['/ui/panel-resize.css']='ui/panel-resize.css';publicFiles['/project-name-dialog.js']='project-name-dialog.js';
 for(const file of ['history-auto-load.js','format.js','chart.js','stats-view.js','account-view.js','live-changes.js','views.css','paste.js','artifacts.js','agents.js','access.js','lan-view.js','viewport.js','approvals-view.js','composer.js','dsh-view.js','preferences-view.js','remote-view.js','slash-menu.js','workbench-view.js','dsh-config-view.js','dsh-connection-view.js'])publicFiles['/ui/'+file]='ui/'+file;
-for(const file of ['activity-feed.js','activity-feed.css','projects.js','project-navigation.js','project-navigation.css'])publicFiles['/'+file]=file;
+for(const file of ['engine-onboarding.js','engine-onboarding.css','activity-feed.js','activity-feed.css','projects.js','project-navigation.js','project-navigation.css'])publicFiles['/'+file]=file;
 async function body(req){let data='';for await(const chunk of req){data+=chunk;if(data.length>512*1024)throw new Error('请求太大');}try{return JSON.parse(data||'{}');}catch{throw new Error('无效 JSON');}}
-export async function createServer({client,cwd='',command='codex',demo=false,port=0,reopen=false,desktop=false,desktopUpdateTransport='msi',onDesktopTheme,onDesktopPickFolder,onDesktopLaunchInstaller,desktopStateRoot,storageMaintenance,storageRoot,projectStore,projectsRoot,fileAttachmentRoot,token=randomBytes(32).toString('hex'),prReviewService,runtimeManager,appUpdateService,statisticsRoot,lanOptions,dshConfigSourcesService,dshConnectionService}={}){
- let runtimeSource='configured';
- if(!client&&!demo){
-  if(!command||command==='codex'||command==='codex.exe'){const resolved=resolveCodexRuntime();command=resolved.path;runtimeSource=resolved.source==='npm'||resolved.source==='desktop'?resolved.source:'configured';}
-  else{command=nativeCodex({env:{...process.env,CODEX_LIGHT_CODEX:command}});runtimeSource='configured';}
+export async function createServer({client,cwd='',command='codex',demo=false,port=0,reopen=false,desktop=false,desktopUpdateTransport='msi',onDesktopTheme,onDesktopPickFolder,onDesktopLaunchInstaller,desktopStateRoot,storageMaintenance,storageRoot,projectStore,projectsRoot,fileAttachmentRoot,token=randomBytes(32).toString('hex'),prReviewService,runtimeManager,appUpdateService,statisticsRoot,lanOptions,dshConfigSourcesService,dshConnectionService,wslRuntimeService,wslSelectionStore:providedWslSelectionStore,engineNativeCandidate}={}){
+ let runtimeSource='configured',wslCandidate=null,wslLaunch=null,runtimeStartupError=null;
+ const wslRuntime=wslRuntimeService||new WslRuntime();
+ const wslSelectionStore=providedWslSelectionStore||new WslSelectionStore(desktopStateRoot?{root:desktopStateRoot}:{});
+ const detectSetupNative=engineNativeCandidate||(async()=>{let candidate;try{candidate=resolveCodexRuntime();}catch(error){if(error.code==='CODEX_NOT_FOUND')return null;throw error;}const version=candidate[candidate.source]?.version||candidate.version||(candidate.source==='env'?probeCodexVersion(candidate.path):null);if(!version)throw new Error('Windows Codex exists but its version could not be verified');return {available:true,version,path:candidate.path,source:candidate.source};});
+ const engineSetup=new EngineOnboarding({store:new EngineSetupStore(wslSelectionStore.root),supported:desktop&&!demo&&wslRuntime.platform==='win32',nativeCandidate:detectSetupNative,listDistributions:()=>wslRuntime.distributions(),probeDistribution:distribution=>wslRuntime.probe({distribution}),saveSelection:async selection=>{if(selection.target==='native'&&!(await detectSetupNative())?.available)throw new Error('Windows runtime is no longer available');return saveRuntimeSelection(selection);},current:()=>wslCurrent,busy:()=>runtime.upgrading||sessions.queues.size>0||sessions.snapshot().threads.some(t=>t.state!=='idle')});
+ await engineSetup.initialize();
+ let wslSelection=null;
+ if((!client||wslRuntimeService)&&!demo){
+  try{
+   if(wslRuntime.platform==='win32')wslSelection=await wslSelectionStore.read();
+   if(wslSelection){wslCandidate=await wslRuntime.probe(wslSelection);wslPathToHost(wslCandidate.home,wslCandidate.distribution);wslPathToHost(wslCandidate.codexHome,wslCandidate.distribution);wslLaunch=wslRuntime.launch(wslCandidate);command=wslLaunch.command;runtimeSource='wsl';}
+   else if(!client&&(!command||command==='codex'||command==='codex.exe')){const resolved=resolveCodexRuntime();command=resolved.path;runtimeSource=resolved.source==='npm'||resolved.source==='desktop'?resolved.source:'configured';}
+   else if(!client){command=nativeCodex({env:{...process.env,CODEX_LIGHT_CODEX:command}});runtimeSource='configured';}
+  }catch(error){runtimeStartupError=error;wslCandidate=null;wslLaunch=null;}
  }else runtimeSource=demo?'demo':(client?'client':'configured');
+ const wslActive=!!wslSelection;
+ const runtimeProfile=wslActive?wslProfileId(wslCandidate||wslSelection):null;
+ const runtimeDescriptor={kind:wslActive?'wsl':'native',distribution:wslSelection?.distribution||null};
+ const wslCurrent=wslActive?{target:'wsl',distribution:wslSelection.distribution,user:wslCandidate?.user||wslSelection.user,...(wslSelection.codexPath?{codexPath:wslSelection.codexPath}:{})}:{target:'native'};
+ const wslLimitations=['WSL 模式不使用 Windows Git 面板，请在 WSL 终端操作。','DSH 必须显式选择所在环境；Windows DSH 仅支持 Windows 盘目录，自动唤醒仅投递到原父对话，失败时可通过 dsh_wait 获取结果。'];
+ async function wslStatus(canSelect=true){const selected=wslRuntime.platform==='win32'&&!demo?await wslSelectionStore.read():null;const next=selected?{target:'wsl',...selected}:{target:'native'};return {supported:wslRuntime.platform==='win32'&&!demo,canSelect:canSelect&&wslRuntime.platform==='win32'&&!demo,current:wslCurrent,selected:next,restartRequired:JSON.stringify(next)!==JSON.stringify(wslCurrent),limitations:wslLimitations};}
+ function assertEngineSelectionIdle(){if(runtime.upgrading||sessions.queues.size||sessions.snapshot().threads.some(t=>t.state!=='idle'))throw Object.assign(new Error('Finish active work before changing runtime'),{code:'RUNTIME_BUSY',outcome:'notExecuted'});}
+ async function saveRuntimeSelection(selection){
+  assertEngineSelectionIdle();
+       if(!selection||Array.isArray(selection)||Object.keys(selection).some(key=>!['target','distribution','user','codexPath'].includes(key)))throw new Error('Invalid WSL selection');
+       if(selection.target==='native'){if(Object.keys(selection).length!==1)throw new Error('Native selection accepts no WSL parameters');assertEngineSelectionIdle();await wslSelectionStore.save(null);}
+       else if(selection.target==='wsl'){const candidate=await wslRuntime.probe(validateWslSelection({distribution:selection.distribution,...(selection.user!==undefined?{user:selection.user}:{}),...(selection.codexPath!==undefined?{codexPath:selection.codexPath}:{})}));if(!candidate.available)throw new Error('无法确定所选非交互环境中的 Linux Codex，请检查诊断或指定 Linux 绝对路径');assertEngineSelectionIdle();await wslSelectionStore.save({distribution:candidate.distribution,user:candidate.user,...(selection.codexPath?{codexPath:selection.codexPath}:{})});}
+       else throw new Error('Unknown runtime target');
+  return wslStatus();
+ }
+ if(runtimeProfile){
+  const profileBase=path.join(wslSelectionStore.root,'wsl-profiles',runtimeProfile);
+  statisticsRoot??=path.join(profileBase,'statistics');projectsRoot??=path.join(profileBase,'projects');fileAttachmentRoot??=path.join(profileBase,'attachments');
+ }
  const temporaryState=desktop&&demo&&!desktopStateRoot?await mkdtemp(path.join(os.tmpdir(),'codex-light-demo-state-')):null;
  const desktopState=desktop?new DesktopState({root:desktopStateRoot||temporaryState||undefined}):null;
  const temporaryProjects=demo&&!projectStore&&!projectsRoot?await mkdtemp(path.join(os.tmpdir(),'codex-light-demo-projects-')):null;
- const projects=projectStore||new ProjectStore({root:projectsRoot||temporaryProjects||undefined});
- const rpc=client || (demo?new DemoClient():new RpcClient({command,cwd:cwd||os.homedir()}));
+ const projects=projectStore||new ProjectStore({root:projectsRoot||temporaryProjects||undefined,...(wslCandidate?{wslDistribution:wslCandidate.distribution}:{})});
+ const rpc=client || (demo?new DemoClient():new RpcClient(wslLaunch?{...wslLaunch,mapRequest:params=>mapWslRequest(params,value=>wslRuntime.toLinux(value,wslCandidate)),mapResponse:value=>mapWslResponse(value,wslCandidate.distribution)}:{command,cwd:cwd||os.homedir()}));
+ if(runtimeStartupError){rpc.connected=false;rpc.start=async()=>{throw runtimeStartupError;};}
  const sessions=new ThreadSessions(rpc,{onEvent:message=>broadcast(message),onThreadLoaded:result=>statistics.thread(result?.thread,result)});
- const artifacts=new ArtifactPreviewService({projects});
+ const artifacts=new ArtifactPreviewService({projects,...(wslCandidate?{wslDistribution:wslCandidate.distribution,rolloutRoots:['sessions','archived_sessions'].map(part=>wslPathToHost(wslCandidate.codexHome+'/'+part,wslCandidate.distribution))}:{})});
  const git=new GitService();
  const gitActions=new GitCommandActions();
  const metadataRoot=statisticsRoot??(!demo&&!client?defaultStatisticsRoot():null);
@@ -97,8 +133,14 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
  }
  let usageScan=null,usageScanPromise=null,usageScanDirectory=null,modelRecovery=null,modelRecoveryError=null,dshResetError=null;
  function importUsageDirectory(directory){
+  if(wslActive){
+   if(!wslCandidate)throw new Error('WSL environment is unavailable');
+   const linux=hostPathToWsl(directory,wslCandidate.distribution),relative=path.posix.relative(wslCandidate.codexHome,linux);
+   if(relative==='..'||relative.startsWith('../')||path.posix.isAbsolute(relative))throw new Error('Select history inside the active WSL Codex home');
+   directory=wslPathToHost(linux,wslCandidate.distribution);
+  }
   if(usageScanPromise){
-   if(path.resolve(directory).toLowerCase()===path.resolve(usageScanDirectory).toLowerCase())return usageScanPromise;
+   if(wslActive?path.resolve(directory)===path.resolve(usageScanDirectory):path.resolve(directory).toLowerCase()===path.resolve(usageScanDirectory).toLowerCase())return usageScanPromise;
    throw new Error('已有其他目录的扫描正在进行');
   }
   const controller=new AbortController();usageScan=controller;usageScanDirectory=directory;
@@ -110,13 +152,15 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
   })().finally(()=>{clearTimeout(timeout);usageScan=null;usageScanPromise=null;usageScanDirectory=null;});
   return usageScanPromise;
  }
- const terminal=new TerminalService(rpc);
+ const terminal=new TerminalService(rpc,wslActive?{shellCommand:['/bin/sh']}:{});
  const accountLogin=new AccountLoginService(rpc);
  const pluginActions=new PluginActionService({rpc});
  const configSettings=new ConfigSettingsService({rpc});
  const sessionDefaults=new SessionDefaultsService({rpc,demo});
  const dshConfigSources=dshConfigSourcesService||new DshConfigSourcesService({demo});
- const dshConnection=dshConnectionService||new DshConnectionService({rpc,demo});
+ let dshWakeup=null,dshWakeupError=null;
+ if(wslCandidate&&!demo){try{dshWakeup=new DshWakeup({root:path.join(wslSelectionStore.root,'wsl-profiles',runtimeProfile,'callbacks'),targetIdentity:runtimeProfile,rpc,sessions,onEvent:broadcast,beforeSend:()=>{if(stopping||engineStopped)throw Object.assign(new Error('Application is stopping'),{code:'CLIENT_CLOSING',outcome:'notExecuted'});updateReservation.assertOpen();if(storage.running)throw Object.assign(new Error('Storage maintenance is active'),{code:'STORAGE_BUSY',outcome:'notExecuted'});if(runtime.upgrading)throw Object.assign(new Error('Runtime upgrade is active'),{code:'RUNTIME_BUSY',outcome:'notExecuted'});}});}catch{dshWakeupError='Automatic DSH wakeup could not initialize; use dsh_wait until callback state is repaired.';}}
+ const dshConnection=dshConnectionService||new DshConnectionService({rpc,demo,callbackStatus:()=>dshWakeup?{...dshWakeup.status(),...(dshWakeupError?{error:dshWakeupError}:{})}:null,...(wslCandidate?{bundles:{'native-wsl':new WslNativeDshBridge({candidate:wslCandidate,runtime:wslRuntime,queueDescriptor:dshWakeup?.descriptorPath}),windows:new WslWindowsDshBridge({candidate:wslCandidate,wsl:wslRuntime,queueDescriptor:dshWakeup?.descriptorPath})}}:{})});
  const requestTokens=new WeakMap();
  function presentRequest(request){let bridgeRequestToken=requestTokens.get(request);if(!bridgeRequestToken){bridgeRequestToken=randomBytes(24).toString('hex');requestTokens.set(request,bridgeRequestToken);}return {...request,bridgeRequestToken};}
  const prReview=prReviewService||new PrReviewService();
@@ -145,6 +189,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
    const auth=req.headers.authorization||'';const expected=`Bearer ${requestToken}`;
    if(Buffer.byteLength(auth)!==Buffer.byteLength(expected)||!timingSafeEqual(Buffer.from(auth),Buffer.from(expected))){json(res,401,{error:'访问凭据已失效，请重新启动 GUI'});return;}
    try{
+    if(wslActive&&['/api/git/','/api/dsh/config-sources/'].some(prefix=>url.pathname.startsWith(prefix))){json(res,409,{error:'此 Windows 宿主功能暂不支持 WSL，请在所选发行版内配置 Git 或 MCP。',code:'WSL_UNSUPPORTED',outcome:'notExecuted'});return;}
     if(['/api/dsh/config-sources/','/api/dsh/connection/'].some(prefix=>url.pathname.startsWith(prefix))&&requestAccess!=='local'){json(res,403,{error:'DSH 配置和连接管理仅限本机',code:'LOCAL_ONLY',outcome:'notExecuted'});return;}
     if(url.pathname.startsWith('/api/storage/')&&requestAccess!=='local'){json(res,403,{error:'存储清理仅限本机，远程设备不能清理宿主数据',code:'LOCAL_ONLY',outcome:'notExecuted'});return;}
     if(storage.running&&req.method==='POST')throw Object.assign(new Error('本机存储维护中，请稍后再试'),{code:'STORAGE_BUSY',status:409,outcome:'notExecuted'});
@@ -156,7 +201,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      const heartbeat=setInterval(()=>{if(res.writableLength>4*1024*1024)res.destroy();else res.write(': keepalive\n\n');},15000);
      req.on('close',()=>{streams.delete(res);clearInterval(heartbeat);});return;
     }
-    if(url.pathname==='/api/status' && req.method==='GET'){json(res,200,{connected:rpc.connected,demo,desktop:requestDesktop,access:requestAccess,stopping,engineStopped,shutdownError,threadSessions:sessions.snapshot(),persistenceWarning:operations.persistenceWarning||desktopState?.persistenceWarning||null,version:rpc.version||null,error:rpc.lastError||null,dshError:dsh.releaseError||dshResetError,pendingRequests:[...rpc.requests.values()].map(presentRequest),serverInstance:operations.serverInstance,operationRetentionMs:operations.retentionMs,reopenAvailable:requestAccess==='local'&&!!reopener,reopenError:requestAccess==='local'?reopenError:null});return;}
+    if(url.pathname==='/api/status' && req.method==='GET'){json(res,200,{connected:rpc.connected,runtimeTarget:wslActive?'wsl':'native',runtimeUnsupported:wslActive?['git','dshConfigSources','runtimeUpgrade',...(!wslCandidate?['dshConnection']:[])]:[],demo,desktop:requestDesktop,access:requestAccess,stopping,engineStopped,shutdownError,threadSessions:sessions.snapshot(),persistenceWarning:operations.persistenceWarning||desktopState?.persistenceWarning||null,version:rpc.version||null,error:rpc.lastError||null,dshError:dsh.releaseError||dshResetError,dshWakeup:dshWakeup?.status()||{automaticWakeup:false,error:dshWakeupError},pendingRequests:[...rpc.requests.values()].map(presentRequest),serverInstance:operations.serverInstance,operationRetentionMs:operations.retentionMs,reopenAvailable:requestAccess==='local'&&!!reopener,reopenError:requestAccess==='local'?reopenError:null});return;}
     if(url.pathname==='/api/operations' && req.method==='GET'){json(res,200,operations.get(url.searchParams.get('requestId')));return;}
     if(url.pathname==='/api/config' && req.method==='GET'){json(res,200,{cwd,codexCommand:command});return;}
     if(url.pathname==='/api/projects'&&req.method==='GET'){json(res,200,{...await projects.list(),canPickFolder:requestDesktop&&typeof onDesktopPickFolder==='function'});return;}
@@ -164,6 +209,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
     if(url.pathname==='/api/desktop/receipts'&&req.method==='GET'){if(!desktopState)throw new Error('仅桌面模式支持本机状态');json(res,200,{receipts:await desktopState.list(),persistenceWarning:operations.persistenceWarning||desktopState.persistenceWarning});return;}
     if(req.method!=='POST'){json(res,405,{error:'不支持的操作'});return;}
     if(url.pathname.startsWith('/api/dsh/connection/')){
+     if(wslActive&&!wslCandidate)throw Object.assign(new Error('The selected WSL runtime is unavailable; reconnect it before configuring DSH.'),{code:'WSL_RUNTIME_UNAVAILABLE',status:409,outcome:'notExecuted'});
      const action=url.pathname.slice('/api/dsh/connection/'.length),input=await body(req);
      if(!['status','plan','connect'].includes(action))throw Object.assign(new Error('未知 DSH 连接操作'),{code:'INVALID_INPUT',status:400});
      json(res,200,await dshConnection[action](input));return;
@@ -309,7 +355,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      let result=statistics.query(input);
      if(!demo&&requestAccess==='local'&&input.scope!=='local'&&result.coverage?.unknownModelRows>0){
       if(!modelRecovery)modelRecovery=(async()=>{
-       const found=await discoverLocalCodexUsageDirectories();
+       const found=await discoverLocalCodexUsageDirectories(wslCandidate?{env:{CODEX_HOME:wslPathToHost(wslCandidate.codexHome,wslCandidate.distribution)},home:wslPathToHost(wslCandidate.home,wslCandidate.distribution)}:wslActive?{env:{},home:''}:{});
        if(found.directory)await importUsageDirectory(found.directory);
       })().catch(error=>{modelRecoveryError=error.message;modelRecovery=null;});
       await modelRecovery;result=statistics.query(input);
@@ -320,7 +366,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
     if(url.pathname==='/api/statistics/directories'){
      if(Object.keys(input).length)throw new Error('目录发现参数无效');
      if(requestAccess!=='local')throw Object.assign(new Error('本机日志目录仅限本机访问'),{status:403});
-     json(res,200,demo?{directory:null,directories:[]}:await discoverLocalCodexUsageDirectories());return;
+     json(res,200,demo?{directory:null,directories:[]}:await discoverLocalCodexUsageDirectories(wslCandidate?{env:{CODEX_HOME:wslPathToHost(wslCandidate.codexHome,wslCandidate.distribution)},home:wslPathToHost(wslCandidate.home,wslCandidate.distribution)}:wslActive?{env:{},home:''}:{}));return;
     }
     if(['/api/local-usage/scan','/api/statistics/import'].includes(url.pathname)){
      if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(k=>k!=='directory')||typeof input.directory!=='string'||input.directory.length>4096)throw new Error('扫描目录参数无效');
@@ -338,7 +384,32 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      if(action!=='configure'&&Object.keys(input).length)throw new Error('标题设置参数无效');
      json(res,200,action==='status'?titleSummary.status():action==='models'?await titleSummary.models():await titleSummary.configure(input));return;
     }
+    if(url.pathname.startsWith('/api/runtime/onboarding/')){
+     if(requestAccess!=='local'||!requestDesktop)throw Object.assign(new Error('Engine setup is local desktop only'),{status:403,code:'LOCAL_ONLY'});
+     if(!engineSetup.supported)throw new Error('Engine setup is unavailable');
+     const action=url.pathname.slice('/api/runtime/onboarding/'.length);
+     if(action!=='complete'&&Object.keys(input).length)throw new Error('Invalid engine setup parameters');
+     if(action==='status'){json(res,200,await engineSetup.inventory());return;}
+     if(action==='discover'){json(res,200,await engineSetup.discover());return;}
+     if(action==='complete'){json(res,200,await engineSetup.complete(input));return;}
+     throw new Error('Unknown engine setup action');
+    }
     if(url.pathname.startsWith('/api/runtime/')){
+     if(url.pathname.startsWith('/api/runtime/wsl/')){
+      const action=url.pathname.slice('/api/runtime/wsl/'.length);
+      if(action==='status'){if(Object.keys(input).length)throw new Error('Invalid WSL status parameters');json(res,200,await wslStatus(requestAccess==='local'));return;}
+      if(requestAccess!=='local')throw Object.assign(new Error('WSL runtime selection is local-only'),{status:403,code:'LOCAL_ONLY'});
+      if(demo||wslRuntime.platform!=='win32')throw new Error('WSL is unavailable in this runtime');
+      if(action==='discover'){if(Object.keys(input).length)throw new Error('Invalid discovery parameters');json(res,200,{...await wslStatus(),...await wslRuntime.discover()});return;}
+      if(action==='select'){
+       json(res,200,await saveRuntimeSelection(input));return;
+      }
+      throw new Error('Unknown WSL action');
+     }
+     if(wslActive){
+      if(!['/api/runtime/status','/api/runtime/check'].includes(url.pathname))throw Object.assign(new Error('Manage the WSL Codex CLI inside its Linux distribution'),{code:'WSL_UNSUPPORTED',outcome:'notExecuted'});
+      json(res,200,{current:{source:'wsl',path:wslCandidate?.codexPath||null,version:null},npm:{available:false,path:null,version:null},desktop:{available:false,path:null,version:null},latest:null,canUpgrade:false,blockedReason:'请在所选 WSL 发行版内更新 Codex',upgrading:false});return;
+     }
      if(demo)throw new Error('演示模式不读取真实运行引擎，也不联网或升级');
      const action=url.pathname.slice('/api/runtime/'.length);
      if(action==='status'||action==='check'){
@@ -382,7 +453,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
       if(files.length+attachmentInputs.length>5)throw new Error('每次最多五个图片和文件附件');
       const accepted=input.confirmedFileAttachmentIds??[];if(!Array.isArray(accepted)||new Set(accepted).size!==accepted.length||accepted.some(id=>!files.some(file=>file.id===id)))throw new Error('附件风险确认无效');
       if(files.some(file=>file.riskWarning&&!accepted.includes(file.id)))throw new Error('请确认未知或压缩附件仅作为本地引用，不自动执行或解包');
-      for(const file of files)attachmentInputs.push({type:'text',text:`用户选择的本地附件（仅路径引用，内容尚未读取；请按当前权限读取，不执行或自动解包）：${JSON.stringify({name:file.name,path:file.path,category:file.category,size:file.size})}`,text_elements:[]});
+      for(const file of files)attachmentInputs.push({type:'text',text:`用户选择的本地附件（仅路径引用，内容尚未读取；请按当前权限读取，不执行或自动解包）：${JSON.stringify({name:file.name,path:wslCandidate?await wslRuntime.toLinux(file.path,wslCandidate):file.path,category:file.category,size:file.size})}`,text_elements:[]});
       params=REMOTE_METHODS.has(input.method)?validateRemote(input.method,input.params||{},{confirmed:input.confirmed,activeEnvironmentId:remoteEnvironment,allowedClientIds:remoteClients}):validateRpc(input.method,input.params||{},{hasAttachments:attachmentInputs.length>0});
       if(input.method==='turn/start')titleInput=params.input.filter(item=>item.type==='text').map(item=>({type:'text',text:item.text}));
       if(input.method==='remoteControl/pairing/status'&&(!remotePairing||!Object.entries(params).some(([key,value])=>value&&remotePairing[key]===value)))throw new Error('配对码不属于本界面当前请求或已过期，请重新创建配对码');
@@ -472,6 +543,9 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
   const threadId=message.params?.threadId||message.params?.thread?.id;
   if(threadId&&dsh.isReaderThread(threadId))return;
   statistics.observe(message);sessions.observe(message);
+  if(message.method==='bridge/status'&&message.params?.connected===true)void dshWakeup?.refreshAccount();
+  if(message.method==='account/updated'||message.method==='account/login/completed'){void dshWakeup?.refreshAccount({changed:true});}
+  if(['item/started','item/completed'].includes(message.method)){try{dshWakeup?.observe(threadId,message.params?.item);}catch{dshWakeup?.close();dshWakeupError='Callback binding persistence failed; automatic wakeup disabled.';}}
   if(message.method==='account/updated'||(message.method==='bridge/status'&&message.params?.connected===false)){pluginActions.clear();configSettings.clear();clearDsh();}
   accountLogin.observe(message);
   if(message.method==='account/login/completed'){clearDsh();return;}
@@ -483,12 +557,14 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
  });
  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',resolve);});
  origin=`http://127.0.0.1:${server.address().port}`;
+ void dshWakeup?.refreshAccount();
+ dshWakeup?.start();
  void lan.restore().catch(()=>{});
  if(reopen){try{reopener=await createReopener({url:`${origin}/#token=${token}`,serverInstance:operations.serverInstance});}catch{reopenError='安全重开通道不可用；关闭窗口后请恢复原窗口，不会通过不安全方式返回访问令牌';}}
  function reportShutdownFailure(error){shutdownError={code:error.code||'SHUTDOWN_FAILED',message:'本地服务关闭失败，不能确认所有资源已释放'};broadcast({method:'bridge/shutdown',params:{state:'failed',...shutdownError,engineStopped}});}
  function shutdownServices(){
   if(serviceShutdown)return serviceShutdown;
-  stopping=true;configSettings.clear();gitActions.plans.clear();pluginActions.clear();
+  stopping=true;dshWakeup?.close();configSettings.clear();gitActions.plans.clear();pluginActions.clear();
   for(const timer of loginTimers)clearTimeout(timer);loginTimers.clear();usageScan?.abort();clearPairing();
   const stopEngine=(async()=>{try{await Promise.all([sessions.close(),dsh.close(),titleSummary.close()]);}finally{await rpc.close();engineStopped=true;}})();
   serviceShutdown=Promise.all([lan.close(),terminal.close(),accountLogin.close(),Promise.resolve(runtime.close?.()),Promise.resolve(appUpdates.close?.()),stopEngine]).then(async()=>{
@@ -506,7 +582,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
   closing=Promise.all([stopped,new Promise(resolve=>server.close(resolve)),Promise.resolve(reopener?.close())]);return closing;
  }
  const started=rpc.start().catch(error=>{rpc.lastError=error.message;return null;});
- return {server,lan,rpc,sessions,statistics,artifacts,operations,uploads,fileUploads,dsh,terminal,runtime,appUpdates,projectStore:projects,reopenEndpoint:reopener?.endpoint,origin,token,url:`${origin}/#token=${token}`,close,started};
+ return {runtimeDescriptor,server,lan,rpc,sessions,statistics,artifacts,operations,uploads,fileUploads,dsh,terminal,runtime,appUpdates,projectStore:projects,reopenEndpoint:reopener?.endpoint,origin,token,url:`${origin}/#token=${token}`,close,started};
 }
 if(process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href===import.meta.url){
  const args=process.argv.slice(2);const get=key=>args.includes(key)?args[args.indexOf(key)+1]:undefined;

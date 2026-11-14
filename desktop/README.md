@@ -1,6 +1,6 @@
-# Codex Light Windows 桌面宿主
+# 码舱 CodeCang Windows 桌面宿主
 
-Codex Light 使用 WinForms + WebView2 承载本地界面，通过 Node 后台连接官方 Codex CLI 的 app-server，运行目标为 Windows x64。用户安装入口是内嵌 MSI 的单文件 `CodexLight-Setup-<version>-x64.exe`，详见 [安装与升级](INSTALLATION.md)。
+Codex Light 使用 WinForms + WebView2 承载本地界面，通过 Node 后台连接官方 Codex CLI 的 app-server，运行目标为 Windows x64。当前安装与更新采用 Velopack；历史 MSI 迁移保留兼容入口。详见 [安装与升级](INSTALLATION.md) 和 [Velopack 构建说明](velopack/BUILD.md)。
 
 ## 运行与窗口行为
 
@@ -39,7 +39,11 @@ app/public/...
 licenses/...
 ```
 
-## 构建安装包
+## 当前安装包
+
+当前发布流程使用 [Velopack](velopack/README.md)，最终资产由 `scripts/assemble-release.mjs` 校验与组合。应用 payload 构建与安装器构建是不同步骤，不应将旧 MSI 脚本当作当前发布入口。
+
+## 历史 MSI 安装包（0.4.3 及以前）
 
 先完成应用构建，再生成并校验内部 MSI，最后将同版本 MSI 嵌入 Setup：
 

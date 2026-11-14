@@ -42,6 +42,8 @@ export function receipt(value, operation) {
   const id = value.id ?? value.agent_id;
   const out={agent_id: id, id, operation, status: value.status, accepted: true};
   if(value.name) out.name=value.name;
+  if(value.callback_generation){out.generationId=value.callback_generation;out.callback_generation=value.callback_generation;}
+  if(value.parent_thread_id)out.parent_thread_id=value.parent_thread_id;
   Object.assign(out, workspace(value));
   Object.assign(out, context(value));
   if(value.delivery) out.delivery=sanitize(value.delivery);

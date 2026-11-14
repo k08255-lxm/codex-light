@@ -6,7 +6,7 @@ import {connectBridge} from './ipc.mjs';
 
 export async function stdioProxy({desktop = false} = {}) {
   const state=locations().state;
-    let socket;
+    let socket,initializeId,queueVerified=false;
     try {socket=await connectBridge(state);}
     catch(error) {
       const {installation}=await import('./platform.mjs');
@@ -21,14 +21,17 @@ export async function stdioProxy({desktop = false} = {}) {
       input.on('line',line=>{
         try {
           const message=JSON.parse(line);
-          if(desktop && message.method==='initialize') message.params = {...message.params, _meta: {...message.params?._meta, dshClientProfile: 'desktop'}};
+          if(desktop&&process.env.DSH_CODEX_QUEUE&&message.method==='initialize')initializeId=message.id;
+          if(desktop&&process.env.DSH_CODEX_QUEUE&&message.method==='tools/call'&&!queueVerified)throw Error('GUI callback service not verified');
+          if(desktop && message.method==='initialize') message.params = {...message.params, _meta: {...message.params?._meta, dshClientProfile: process.env.DSH_CODEX_QUEUE?'desktop-queue':'desktop'}};
           if(!desktop && message.method==='tools/call')message.params._meta={...message.params._meta,dshConnection:process.env.DSH_CODEX_CONNECTION};
+          if(desktop&&message.method==='tools/call'&&process.env.DSH_CODEX_QUEUE)message.params={...message.params,_meta:{...message.params?._meta,dshQueue:process.env.DSH_CODEX_QUEUE,dshConnection:undefined}};
           socket.write(JSON.stringify(message)+'\n');
         } catch {socket.destroy(new Error('Invalid MCP input'));}
       });
       input.once('close',()=>socket.end());
       socket.once('close',()=>input.close());
     } else process.stdin.pipe(socket);
-    socket.pipe(process.stdout);
+    if(desktop&&process.env.DSH_CODEX_QUEUE){const replies=createInterface({input:socket});replies.on('line',line=>{try{const message=JSON.parse(line);if(message.id===initializeId){if(message.result?.capabilities?.experimental?.codecangCallbackQueue?.version!==1)throw Error('Installed DSH bridge must be restarted before GUI callbacks can be used');queueVerified=true;}process.stdout.write(JSON.stringify(message)+'\n');}catch{process.stderr.write('GUI callback bridge protocol mismatch. Restart the DSH bridge after its active tasks finish.\n');process.exitCode=1;socket.destroy();process.stdin.destroy();}});}else socket.pipe(process.stdout);
     socket.on('close',()=>process.stdin.destroy());
 }

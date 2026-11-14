@@ -39,6 +39,8 @@ import { DshLiveMonitor } from './dsh-live.js';
 import { PendingMutations, pendingForScope, PendingReconciler, outcomeFromError, lookupDecision, sendAvailability, ConnectionBootstrap, SessionDefaultsBridge } from './submissions.js';
 import { mountHistoryAutoLoad, mountThreadAutoLoad, captureHistoryAnchor, restoreHistoryAnchor } from './ui/history-auto-load.js';
 import { mountRuntimePanel } from './runtime-panel.js';
+import { mountWslRuntimePanel } from './wsl-runtime-panel.js';
+import { mountEngineOnboarding } from './engine-onboarding.js';
 import { AttachmentDraft, FileAttachmentDraft, validateFileSelection, validateImageSelection } from './attachments.js';
 import { mountConversation, renderDiff } from './activity-feed.js';
 import { TurnLedger, buildTurns, FollowUpQueue, contextSnapshot, contextView, HistoryPager, historyCapabilities } from './state.js';
@@ -277,12 +279,23 @@ function clearRuntimePendingAfterRecovery(){
  }
  noteLedgerChanged();
 }
+function applyRuntimeTarget(){
+ const wsl=state.runtimeTarget==='wsl';
+ document.documentElement.dataset.runtimeTarget=wsl?'wsl':'native';
+ for(const [id,text] of [['runtime-panel','WSL 环境的 Codex 请在对应发行版内更新；此处不会更新 Windows 引擎。'],['dsh-config-root','WSL 模式暂不支持编辑 Windows DSH 配置来源。'],['terminal-git-workspace','WSL 模式暂不支持此 Windows Git 面板。请在 WSL 中使用 Git，避免操作到错误的仓库。']]){
+  const host=$(id);if(!host)continue;
+  let note=$(id+'-wsl-notice');if(!note){note=el('p','runtime-status');note.id=id+'-wsl-notice';host.before(note);}note.textContent=text;note.classList.toggle('hidden',!wsl);host.classList.toggle('wsl-unavailable',wsl);host.inert=wsl;
+ }
+ if(wsl){dshConfigView.deactivate();}
+}
 function createRuntimePanel(){return mountRuntimePanel($('runtime-panel'),{read:()=>api('/api/runtime/status',{}),check:()=>api('/api/runtime/check',{}),upgrade:params=>performMutation('runtime/upgrade',params),queryPending:queryRuntimePending,onRecovered:clearRuntimePendingAfterRecovery});}
+const wslRuntimePanel=mountWslRuntimePanel($('wsl-runtime-panel'),{read:()=>api('/api/runtime/wsl/status',{}),discover:()=>api('/api/runtime/wsl/discover',{}),select:target=>api('/api/runtime/wsl/select',target),isLocal:()=>!state.lan&&state.desktop===true});
+const engineOnboarding=mountEngineOnboarding(document.body,{read:()=>api('/api/runtime/onboarding/status',{}),discover:()=>api('/api/runtime/onboarding/discover',{}),complete:input=>api('/api/runtime/onboarding/complete',input),isLocal:()=>!state.lan&&state.desktop===true&&!state.demo,openSettings:()=>openSettings('general'),notice});
 runtimePanel=createRuntimePanel();
 runtimePanel.reset({pending:!!runtimePendingMarker()});
-function resetRuntimePanel(){runtimePanel?.setActive?.(false);runtimePanel?.reset({pending:!!runtimePendingMarker()});}
-function runtimePanelShouldBeActive(){return !state.lan&&!!state.connected&&document.visibilityState==='visible'&&!$('settings-dialog').classList.contains('hidden')&&state.settingsPage==='general';}
-function syncRuntimePanelActivity(){runtimePanel?.setActive?.(runtimePanelShouldBeActive());}
+function resetRuntimePanel(){wslRuntimePanel.reset();runtimePanel?.setActive?.(false);runtimePanel?.reset({pending:!!runtimePendingMarker()});}
+function runtimePanelShouldBeActive(){return state.runtimeTarget!=='wsl'&&!state.lan&&!!state.connected&&document.visibilityState==='visible'&&!$('settings-dialog').classList.contains('hidden')&&state.settingsPage==='general';}
+function syncRuntimePanelActivity(){runtimePanel?.setActive?.(runtimePanelShouldBeActive());wslRuntimePanel.setActive(!state.lan&&state.desktop===true&&document.visibilityState==='visible'&&!$('settings-dialog').classList.contains('hidden')&&state.settingsPage==='general');}
 function pendingLedgerSignature(){return reconcilableRecords().map(row=>`${row.requestId}:${row.status}`).sort().join('|');}
 function deactivatePendingReconciler(){pendingReadGeneration++;pendingReconciler?.setActive(false);pendingReconcilerActive=false;pendingReconcilerSignature='';}
 function syncPendingReconciler(){
@@ -399,7 +412,7 @@ const aboutView = mountAbout($('about-root'), { api, onStatus:status=>updateIndi
 } });
 // Local-only: the LAN page never mounts requests for DSH config management (server also refuses with 403).
 const dshConfigView = mountDshConfig($('dsh-config-root'), { api });
-const dshConnectionView = mountDshConnection($('dsh-connection-root'), { api, onChange: () => refreshDsh() });
+const dshConnectionView = mountDshConnection($('dsh-connection-root'), { api, runtimeTarget:()=>state.runtimeTarget, onChange: () => refreshDsh() });
 function resetUsage(){statsView.reset();accountView.reset();if(currentRoute==='usage')statsView.activate();if(currentRoute==='account')accountView.activate();}
 function resetAccountScopedViews(reason='账户已改变'){accountQuota.reset();if(state.connected)accountQuota.refresh();resetUsage();configPanel.reset();pluginPanel.reset();resetRuntimePanel();remoteReset({statusMessage:reason+'，请重新读取远控状态。',pairMessage:reason+'，本机配对码显示已清除；不会撤销原账户或环境设备。',devicesMessage:reason+'，旧设备显示已清除；不会撤销原账户或环境设备。'});sessionDefaults.clear();state.dshReadGeneration++;state.dshReads.clear();state.dshReadErrors.clear();state.dshOpenDetails.clear();dshTasks.reset(state.thread?.id||null);state.dshConnection=null;renderDshConnection();dshLive.reset();syncDshLiveContext();if(state.connected)syncSessionDefaults();}
 const configPanel=mountConfigSettingsPanel($('config-panel'),{read:()=>api('/api/config-settings/read',state.cwd?{cwd:state.cwd}:{}),plan:edits=>{if(scopedPending('config').length)throw new Error('配置状态仍在自动同步');return api('/api/config-settings/plan',{edits});},apply:params=>{if(pendingMutations.storageError||scopedPending('config').length)throw new Error('配置状态仍在自动同步');return performMutation('config/apply',params);}});
@@ -446,7 +459,7 @@ function route(name, { section, back = false } = {}) {
   // Deactivate pages being left so their polling/reads stop.
   if (previous === 'usage' && name !== 'usage') statsView.deactivate();
   if (previous === 'account' && name !== 'account') { accountView.deactivate(); accountLoginPanel.deactivate(); }
-  if (previous === 'settings' && name !== 'settings') { pluginPanel.deactivate(); aboutView.deactivate(); lanView.deactivate(); runtimePanel?.setActive?.(false); }
+  if (previous === 'settings' && name !== 'settings') { pluginPanel.deactivate(); aboutView.deactivate(); lanView.deactivate(); runtimePanel?.setActive?.(false); wslRuntimePanel.setActive(false); }
   if (name === 'usage') statsView.activate();
   if (name === 'account') { accountView.activate(); accountLoginPanel.activate(); }
   if (name === 'settings') { renderDshConnection(); $('cwd-input').value = state.cwd; $('settings-notice').classList.add('hidden'); selectSettingsSection(section || 'general'); }
@@ -1025,10 +1038,10 @@ function applyThreadSessions(params) {
   updateControls(); renderThreads(); drainAll();
 }
 async function syncStatus() {
-  const status = await api('/api/status'); applyAccessMode(state.lan || status.access === 'lan'); state.cliVersion = typeof status.version==='string'&&status.version ? boundedText(status.version,300) : null; state.desktop = status.desktop === true; if($('version-info'))$('version-info').textContent=state.cliVersion||'未知'; document.body.classList.toggle('native-desktop',state.desktop); $('runtime-close-info').textContent = state.desktop ? '关闭窗口默认询问，也可记住选择并在上方更改。托盘菜单可以重新打开或退出；退出可能中断本应用任务，独立 DSH 任务可能继续。' : '关闭窗口不等于停止服务。需要结束本次 GUI 服务时使用下面的按钮；正在运行的任务可能中断，独立 DSH 任务可能继续。'; $('reopen-info').textContent = state.desktop ? '再次启动会建立新连接并读取官方对话历史；不保存浏览器配置文件，不承诺无缝恢复。' : status.reopenAvailable === true ? '可安全重新打开本地 GUI' : status.reopenAvailable === false ? '当前不可用。关闭窗口后可能需要恢复原窗口或重新运行启动器；不会承诺能无缝重开。' : '未知（服务未提供重开状态）'; if (!state.desktop && status.reopenError) $('reopen-info').textContent += ' ' + boundedText(status.reopenError, 800); if(state.serverInstance !== (status.serverInstance || null)){deactivatePendingReconciler();historyCaps.unsupported.clear();pluginPanel.reset();configPanel.reset();resetUsage();resetRuntimePanel();dshLive.reset();remoteReset({statusMessage:'本地服务实例已变化，请重新读取远控状态。',pairMessage:'本地服务实例已变化，本机配对码显示已清除；不会撤销旧环境设备。',devicesMessage:'本地服务实例已变化，旧设备显示已清除；不会撤销旧环境设备。'});}state.serverInstance = status.serverInstance || null; state.demo = !!status.demo; setConnected(status.connected, status.demo ? '演示模式 · 不调用模型' : undefined); if(state.desktop){await loadDesktopState();preferencesView.syncHostTheme();} $('mode-info').textContent = status.demo ? '演示模式，不消耗额度' : '本地 Codex app-server';
+  const status = await api('/api/status'); applyAccessMode(state.lan || status.access === 'lan'); state.cliVersion = typeof status.version==='string'&&status.version ? boundedText(status.version,300) : null; state.desktop = status.desktop === true; state.runtimeTarget=status.runtimeTarget==='wsl'?'wsl':'native';applyRuntimeTarget(); if($('version-info'))$('version-info').textContent=state.cliVersion||'未知'; document.body.classList.toggle('native-desktop',state.desktop); $('runtime-close-info').textContent = state.desktop ? '关闭窗口默认询问，也可记住选择并在上方更改。托盘菜单可以重新打开或退出；退出可能中断本应用任务，独立 DSH 任务可能继续。' : '关闭窗口不等于停止服务。需要结束本次 GUI 服务时使用下面的按钮；正在运行的任务可能中断，独立 DSH 任务可能继续。'; $('reopen-info').textContent = state.desktop ? '再次启动会建立新连接并读取官方对话历史；不保存浏览器配置文件，不承诺无缝恢复。' : status.reopenAvailable === true ? '可安全重新打开本地 GUI' : status.reopenAvailable === false ? '当前不可用。关闭窗口后可能需要恢复原窗口或重新运行启动器；不会承诺能无缝重开。' : '未知（服务未提供重开状态）'; if (!state.desktop && status.reopenError) $('reopen-info').textContent += ' ' + boundedText(status.reopenError, 800); if(state.serverInstance !== (status.serverInstance || null)){deactivatePendingReconciler();historyCaps.unsupported.clear();pluginPanel.reset();configPanel.reset();resetUsage();resetRuntimePanel();dshLive.reset();remoteReset({statusMessage:'本地服务实例已变化，请重新读取远控状态。',pairMessage:'本地服务实例已变化，本机配对码显示已清除；不会撤销旧环境设备。',devicesMessage:'本地服务实例已变化，旧设备显示已清除；不会撤销旧环境设备。'});}state.serverInstance = status.serverInstance || null; state.demo = !!status.demo; setConnected(status.connected, status.demo ? '演示模式 · 不调用模型' : undefined); if(state.desktop){await loadDesktopState();preferencesView.syncHostTheme();} $('mode-info').textContent = status.demo ? '演示模式，不消耗额度' : '本地 Codex app-server';
   // Replace with the server's current set; unchanged instances keep their card and draft.
   applyThreadSessions(status.threadSessions); const pending = new Map(); for (const request of status.pendingRequests || []) if (validRequestId(request?.id)) { const key = requestKey(request.id), known = state.requests.get(key); pending.set(key, known && known.bridgeRequestToken === request.bridgeRequestToken ? known : request); } state.requests = pending; renderRequests();
-  if (status.demo) notice('当前是演示模式：仅测试界面和协议，不会调用真实模型。'); return status;
+  if (status.demo) notice('当前是演示模式：仅测试界面和协议，不会调用真实模型。'); engineOnboarding.start(); return status;
 }
 async function events() {
   let delay = 1000; let reconnected = false;
@@ -1180,7 +1193,7 @@ function selectSettingsSection(section = 'general') {
   for (const name of ['general','dsh','archived','remote','plugins','appearance','notifications','shortcuts','configuration','about','storage']) $('settings-' + name).classList.toggle('hidden', name !== page);
   for (const item of document.querySelectorAll('[data-settings-section]')) item.classList.toggle('active', item.dataset.settingsSection === section);
   document.querySelector('.settings-content').scrollTop = 0;
-  if (page === 'dsh' && !state.lan) { dshConnectionView.activate(); dshConfigView.activate(); } else { dshConnectionView.deactivate(); dshConfigView.deactivate(); }
+  if (page === 'dsh' && !state.lan) { dshConnectionView.activate(); if(state.runtimeTarget!=='wsl')dshConfigView.activate();else dshConfigView.deactivate(); } else { dshConnectionView.deactivate(); dshConfigView.deactivate(); }
   if (page === 'appearance' && !state.lan) titleSettings.activate();
   if (page === 'archived') loadArchived().catch(e => notice(e.message, true));
   if(page==='plugins')pluginPanel.activate();else pluginPanel.deactivate();renderPluginPending();

@@ -9,7 +9,8 @@ internal class Fake:IInstallHost {
  public bool ConsentNode()=>Consent;
  public Task<int> InstallNode(){NodeCalls++;if(CancelNode)throw new OperationCanceledException();return Task.FromResult(NodeCode);}
  public Task<NodeState> DetectCli(){CliDetections++;return Task.FromResult(CliDetections==1?CliBefore:CliAfter);}
- public bool ConsentCli()=>CliConsent;
+ public CliChoice Choice=CliChoice.InstallWindows;
+ public CliChoice ChooseCli()=>CliConsent?Choice:CliChoice.Cancel;
  public Task<int> InstallCli(){CliCalls++;if(CancelCli)throw new OperationCanceledException();return Task.FromResult(CliCode);}
  public Task<int> RunVendor(){VendorCalls++;return Task.FromResult(VendorCode);}
 }
@@ -57,6 +58,17 @@ internal class Program {
    try{await InstallFlow.Run(f);throw new Exception("changed installation accepted");}
    catch(InvalidOperationException){A(f.NodeCalls==1&&f.CliCalls==1&&f.VendorCalls==0);}
   }
+  // WSL-only / configure-later is explicit, not a fake Ready detection.
+  var deferred=new Fake{CliBefore=NodeState.Missing,Choice=CliChoice.ConfigureInApp};
+  A(await InstallFlow.Run(deferred)==0);
+  A(deferred.CliDetections==1&&deferred.CliCalls==0&&deferred.VendorCalls==1&&deferred.Checks==2&&deferred.Verifies==2);
+  foreach(var f in new[]{new Fake{CliBefore=NodeState.Missing,Choice=CliChoice.ConfigureInApp,FreshAfter=false},new Fake{CliBefore=NodeState.Missing,Choice=CliChoice.ConfigureInApp,ValidAfter=false},new Fake{CliBefore=NodeState.Uncertain,Choice=CliChoice.ConfigureInApp},new Fake{Before=NodeState.Uncertain,CliBefore=NodeState.Missing,Choice=CliChoice.ConfigureInApp},new Fake{CliBefore=NodeState.Missing,Choice=(CliChoice)99}}){
+   try{await InstallFlow.Run(f);throw new Exception("unsafe deferred installation accepted");}
+   catch(InvalidOperationException){A(f.VendorCalls==0&&f.CliCalls==0);}
+  }
+  var deferredNode=new Fake{Before=NodeState.Missing,CliBefore=NodeState.Missing,Choice=CliChoice.ConfigureInApp};
+  A(await InstallFlow.Run(deferredNode)==0);
+  A(deferredNode.NodeCalls==1&&deferredNode.Detections==2&&deferredNode.CliCalls==0&&deferredNode.VendorCalls==1);
   Console.WriteLine(tests+" safe flow assertions passed; no actual process/download/installation.");return 0;
  }
 }

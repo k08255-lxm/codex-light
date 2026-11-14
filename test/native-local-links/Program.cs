@@ -10,3 +10,10 @@ Reject(()=>LocalPathLinks.ReadMessage("{\"type\":\"revealLocalPath\",\"path\":\"
 var plan=LocalPathLinks.Explorer(@"C:\space name\x.cmd",false);Check(!plan.UseShellExecute&&plan.ArgumentList.Count==1&&plan.ArgumentList[0]==@"/select,C:\space name\x.cmd");
 var fixture=Path.Combine(Path.GetTempPath(),"local-links-test-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(fixture);var file=Path.Combine(fixture,"space 文件.txt");File.WriteAllText(file,"fixture");Check(LocalPathLinks.ValidateExisting(file)==false);Check(LocalPathLinks.ValidateExisting(fixture));Reject(()=>LocalPathLinks.ValidateExisting(Path.Combine(fixture,"missing")));
 Console.WriteLine($"PASS {count} local path/link policy tests; fixture only, no Explorer/app launched.");
+
+Check(LocalPathLinks.Normalize("/home/lee/space name/A.png","Ubuntu")==@"\\wsl.localhost\Ubuntu\home\lee\space name\A.png");
+Check(LocalPathLinks.Normalize(@"\\wsl$\Ubuntu\home\lee\A.png","Ubuntu")==@"\\wsl.localhost\Ubuntu\home\lee\A.png");
+foreach(var p in new[]{@"\\wsl.localhost\Debian\home\a",@"\\server\share\a","/home/../etc/a","/home/./a","/home/a:ads",@"\\wsl.localhost\Ubuntu\..\Debian\x"})Reject(()=>LocalPathLinks.Normalize(p,"Ubuntu"));
+Reject(()=>LocalPathLinks.Normalize(@"\\wsl.localhost\Ubuntu\home\a"));
+Check(LocalPathLinks.Normalize("/home/lee/A.png","Ubuntu")!=LocalPathLinks.Normalize("/home/lee/a.png","Ubuntu"));
+Console.WriteLine($"PASS {count} including selected-distribution WSL policy tests.");

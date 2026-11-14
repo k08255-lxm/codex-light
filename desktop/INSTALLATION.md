@@ -1,5 +1,15 @@
 # Windows 安装与升级
 
+## 当前版本（0.4.4 起）
+
+码舱 CodeCang 使用 Velopack 安装与更新。请以当前 GitHub Release 的下载说明为准；已有 Velopack 安装优先使用应用内更新，不要反复运行旧 MSI 安装器。旧 MSI 用户通过版本化 EXE 路由至固定的 0.4.4 迁移桥，迁移后由应用自动检查后续版本，仍需用户确认安装。
+
+安装前复用已有兼容运行环境，缺少依赖时明确提示。程序数据与安装目录分开；迁移资料和恢复备份不能当作普通缓存删除。未签名程序仍可能出现 Windows 安全提示，不应关闭系统保护。
+
+维护与打包请参阅 [Velopack 文档](velopack/README.md) 和 [迁移契约](velopack/MIGRATION_RELEASE_POLICY.md)。以下内容仅解释历史 MSI 安装，不适用于当前 Velopack 安装。
+
+## 历史 MSI 安装（0.4.3 及以前）
+
 从 GitHub Release 下载并打开 `CodexLight-Setup-<version>-x64.exe`（如 `CodexLight-Setup-0.4.1-x64.exe`）。这是内嵌 MSI 的单文件安装器，不需要旁边放 config/payload 目录。它使用系统 .NET Framework 4.8，应用使用 .NET 10 Windows Desktop Runtime；不需要安装 SDK。
 
 只需使用上述版本化 EXE。它负责运行环境检查、安装与更新，并内置应用安装包。升级和卸载由 Windows Installer 管理；若使用 ZIP 发行包，请先完整解压。0.4.1 另保留同内容的 `CodexLight-Setup.exe`，供仅识别旧名称的 0.4.0 应用内更新使用；`SHA256SUMS.txt` 同时列出两个附件的精确文件名与哈希。

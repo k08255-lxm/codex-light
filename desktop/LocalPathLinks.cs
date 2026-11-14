@@ -18,9 +18,21 @@ internal static class LocalPathLinks {
   return path.GetString()!;
  }
  internal static bool TrustedSource(string source,Uri? origin){return origin!=null&&Uri.TryCreate(source,UriKind.Absolute,out var url)&&url.Scheme=="http"&&url.Host=="127.0.0.1"&&url.Port==origin.Port&&origin.Scheme==url.Scheme&&origin.Host==url.Host&&url.UserInfo==""&&url.AbsolutePath=="/"&&url.Query=="";}
- internal static string Normalize(string input){
+ internal static bool ValidWslDistribution(string? value)=>value!=null&&Regex.IsMatch(value,@"^[A-Za-z0-9][A-Za-z0-9._ -]{0,127}$")&&!value.EndsWith('.')&&!value.EndsWith(' ');
+ internal static string Normalize(string input,string? wslDistribution=null){
   if(string.IsNullOrWhiteSpace(input)||input.Length>4096||input.Any(c=>char.IsControl(c)))throw new InvalidDataException("Invalid local path.");
   var path=input;
+  if(wslDistribution!=null){
+   if(!ValidWslDistribution(wslDistribution))throw new InvalidDataException("Invalid WSL distribution.");
+   if(path.StartsWith("/",StringComparison.Ordinal)&&!path.StartsWith("//",StringComparison.Ordinal))path=@"\\wsl.localhost\"+wslDistribution+path.Replace('/','\\');
+   if(path.StartsWith(@"\\",StringComparison.Ordinal)){
+    var match=Regex.Match(path,@"^\\\\(?i:wsl\.localhost|wsl\$)\\([^\\]+)(\\.*)?$");
+    if(!match.Success||match.Groups[1].Value!=wslDistribution)throw new InvalidDataException("Only the selected WSL distribution is allowed.");
+    var suffix=match.Groups[2].Value;
+    foreach(var segment in suffix.Split('\\',StringSplitOptions.RemoveEmptyEntries))if(segment is "." or ".."||segment.EndsWith('.')||segment.EndsWith(' ')||segment.Any(c=>char.IsControl(c)||"\"<>|?*:/".Contains(c)))throw new InvalidDataException("Unsafe WSL path segment.");
+    return @"\\wsl.localhost\"+wslDistribution+(suffix.Length==0?@"\":suffix);
+   }
+  }
   if(path.StartsWith("file:",StringComparison.OrdinalIgnoreCase)){
    if(!Uri.TryCreate(path,UriKind.Absolute,out var uri)||!uri.IsFile||uri.IsUnc||uri.Host!=""&&uri.Host!="localhost"||uri.UserInfo!=""||uri.Query!=""||uri.Fragment!="")throw new InvalidDataException("Only local file URI allowed.");
    path=uri.LocalPath;
@@ -31,9 +43,9 @@ internal static class LocalPathLinks {
   }
   return Path.GetFullPath(path);
  }
- internal static bool ValidateExisting(string path){
-  path=Normalize(path);for(string? part=path;part!=null;part=Path.GetDirectoryName(part))if((File.GetAttributes(part)&FileAttributes.ReparsePoint)!=0)throw new InvalidDataException("Linked paths are not supported.");
-  var drive=new DriveInfo(Path.GetPathRoot(path)!);if(drive.DriveType!=DriveType.Fixed&&drive.DriveType!=DriveType.Removable)throw new InvalidDataException("Network or unknown drive refused.");
+ internal static bool ValidateExisting(string path,string? wslDistribution=null){
+  path=Normalize(path,wslDistribution);for(string? part=path;part!=null;part=Path.GetDirectoryName(part))if((File.GetAttributes(part)&FileAttributes.ReparsePoint)!=0)throw new InvalidDataException("Linked paths are not supported.");
+  if(!path.StartsWith(@"\\wsl.localhost\",StringComparison.Ordinal)){var drive=new DriveInfo(Path.GetPathRoot(path)!);if(drive.DriveType!=DriveType.Fixed&&drive.DriveType!=DriveType.Removable)throw new InvalidDataException("Network or unknown drive refused.");}
   if(Directory.Exists(path))return true;if(File.Exists(path))return false;throw new FileNotFoundException("Local path not found.");
  }
  internal static ProcessStartInfo Explorer(string path,bool directory){

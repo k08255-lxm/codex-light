@@ -4,7 +4,6 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {acquireInstance} from './instance.mjs';
 import {requestReopen} from './reopen.mjs';
-import {nativeCodex} from './runtime-path.mjs';
 import {launchNative} from './native-launch.mjs';
 const browserMode=process.argv.slice(2).includes('--browser');
 const args=process.argv.slice(2).filter(argument=>argument!=='--browser');
@@ -21,7 +20,9 @@ if(instance.active){
  catch{console.error('已有后台实例，未启动第二个服务。安全重开不可用，请恢复原浏览器窗口；不会重启或中断旧任务。');process.exitCode=1;}
 } else {
 
-const command=args.includes('--codex')?[]:['--codex',args.includes('--demo')?'demo-unused':nativeCodex()];
+// Resolve in the backend so a saved WSL selection also works in browser mode,
+// and a missing CLI can reach the settings UI rather than aborting the launcher.
+const command=args.includes('--codex')?[]:['--codex',args.includes('--demo')?'demo-unused':process.env.CODEX_LIGHT_CODEX||'codex'];
 const child=spawn(process.execPath,[fileURLToPath(new URL('./server.mjs',import.meta.url)),...args,...command],{detached:true,windowsHide:true,stdio:['ignore','ignore','ignore','ipc']});
 let launched=false;
 const timeout=setTimeout(()=>{console.error('GUI 启动超时；请运行 npm run serve 查看本地错误。');child.kill();process.exitCode=1;},15000);

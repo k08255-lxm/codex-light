@@ -1,6 +1,7 @@
 // Build-only bundling. No DSH installation, account access or model execution.
 import fs from 'node:fs';import path from 'node:path';import {fileURLToPath,pathToFileURL} from 'node:url';
 import {bundleFiles,hashBytes,ordered,sourceDigest,verifyDshBundle,DSH_BUNDLE_FORMAT} from '../../src/dsh-bundle-integrity.mjs';
+import {collectNoticeText,readNoticeText} from '../../src/notice-text.mjs';
 const root=fileURLToPath(new URL('.',import.meta.url));
 export const BUNDLE_SOURCE_SCOPES=['src','assets','licenses','LICENSE','README.md','THIRD-PARTY-NOTICES.md','package.json','package-lock.json','manifest.json','build.mjs','bundle.mjs','tools/package.json','tools/package-lock.json'];
 function collectSources(){const out={};for(const scope of BUNDLE_SOURCE_SCOPES){const p=path.join(root,scope);if(fs.lstatSync(p).isSymbolicLink())throw Error('Source link refused');if(fs.statSync(p).isDirectory())for(const [name,hash] of Object.entries(bundleFiles(p)))out[scope+'/'+name]=hash;else out[scope]=hashBytes(fs.readFileSync(p));}return ordered(out);}
@@ -26,14 +27,30 @@ export async function bundleBridge(){
   // Only input path/hash metadata is shipped, not host paths or a stale generated
   // esbuild metafile. The complete output file manifest covers all shared chunks.
   const sourceFiles=collectSources(),base=JSON.parse(fs.readFileSync(path.join(root,'manifest.json')));
-  const manifest={...base,format:DSH_BUNDLE_FORMAT,builder:{name:'esbuild',version:esbuild.version,lockSha256:hashBytes(fs.readFileSync(path.join(root,'tools/package-lock.json')))},sourceFiles,sourceSha256:sourceDigest(sourceFiles),files:bundleFiles(stage)};
+  const dependencyLock=JSON.parse(fs.readFileSync(path.join(root,'package-lock.json')));
+  const lockPaths=Object.keys(dependencyLock.packages).filter(n=>n).sort((a,b)=>b.length-a.length),included=new Set(['node_modules/yaml']);
+  const emittedInputs=new Set(Object.values(result.metafile.outputs).flatMap(output=>Object.entries(output.inputs).filter(([,info])=>info.bytesInOutput>0).map(([name])=>name)));
+  for(const input of emittedInputs){const normalized=input.replaceAll('\\','/');if(!normalized.startsWith('node_modules/'))continue;const owner=lockPaths.find(n=>normalized.startsWith(n+'/'));if(!owner)throw Error('Unattributed distributed module: '+input);included.add(owner);}
+  const distributedPackages=Object.fromEntries([...included].sort().map(n=>[n,dependencyLock.packages[n].version]));
+  const allLicenseNames=Object.keys(sourceFiles).filter(n=>n.startsWith('licenses/')&&n!=='licenses/manifest.json');
+  const sourceLicenses=JSON.parse(fs.readFileSync(path.join(root,'licenses/manifest.json')));
+  const selectedLicenses=sourceLicenses.filter(row=>[...included].some(n=>n.slice(n.lastIndexOf('node_modules/')+13)===row.name&&dependencyLock.packages[n].version===row.version));
+  if(selectedLicenses.length!==included.size)throw Error('Distributed notice inventory ambiguous');
+  fs.writeFileSync(path.join(stage,'licenses/manifest.json'),JSON.stringify(selectedLicenses,null,2)+'\n');
+  const noticeNames=[...new Set(selectedLicenses.flatMap(row=>row.notices)),'LICENSE','THIRD-PARTY-NOTICES.md','assets/DeepSeek-MIT-LICENSE','node_modules/yaml/LICENSE'];
+  const noticeInputs=Object.fromEntries(noticeNames.map(n=>[n,fs.readFileSync(path.join(stage,n))]));
+  const noticeText='THIRD-PARTY-NOTICES.txt',noticeBytes=collectNoticeText(noticeInputs);
+  const recovered=readNoticeText(noticeBytes);for(const n of noticeNames)if(!recovered[n].equals(noticeInputs[n]))throw Error('Notice consolidation mismatch');
+  fs.writeFileSync(path.join(stage,noticeText),noticeBytes);
+  for(const n of new Set([...allLicenseNames,...noticeNames]))fs.unlinkSync(path.join(stage,n)); // owned fresh stage only, after roundtrip validation
+  const manifest={...base,dependencyCount:included.size,distributedPackages,noticeText,format:DSH_BUNDLE_FORMAT,builder:{name:'esbuild',version:esbuild.version,lockSha256:hashBytes(fs.readFileSync(path.join(root,'tools/package-lock.json')))},sourceFiles,sourceSha256:sourceDigest(sourceFiles),files:bundleFiles(stage)};
   fs.writeFileSync(path.join(stage,'manifest.json'),JSON.stringify(manifest,null,2)+'\n');verifyDshBundle(stage);
   // Refuse to overwrite an unknown or modified directory. Only verified generated
   // bundles at this exact output path may be replaced; never installed copies.
   if(fs.existsSync(out)){verifyDshBundle(out);fs.rmSync(out,{recursive:true});}
   fs.renameSync(stage,out);verifyDshBundle(out);
   const bytes=Object.keys(manifest.files).reduce((n,name)=>n+fs.statSync(path.join(out,name)).size,fs.statSync(path.join(out,'manifest.json')).size);
-  return {output:out,files:Object.keys(manifest.files).length+1,bytes,modules:Object.keys(result.metafile.inputs).length,sourceSha256:manifest.sourceSha256};
+  return {output:out,files:Object.keys(manifest.files).length+1,bytes,modules:Object.keys(result.metafile.inputs).length,distributedPackages,sourceSha256:manifest.sourceSha256};
  }finally{if(fs.existsSync(stage))fs.rmSync(stage,{recursive:true});}
 }
 if(process.argv[1]&&pathToFileURL(path.resolve(process.argv[1])).href===import.meta.url)console.log(JSON.stringify(await bundleBridge()));

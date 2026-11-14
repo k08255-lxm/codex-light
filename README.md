@@ -6,18 +6,33 @@ Codex 桌面与远程客户端（原 Codex Light）。英文名称为 **CodeCang
 
 独立 Windows 桌面客户端，采用 WinForms + WebView2。通过官方 Codex CLI 的 app-server 协议工作，复用已有登录和配置；不改动官方客户端，不伪装成官方客户端。
 
+## WSL 运行环境（开发分支）
+
+可在设置中发现并选择 WSL 内的 Linux Codex，保存后重启使用，账户和数据按运行环境隔离。支持标准 nvm/fnm 候选检测及手动指定 Linux CLI 路径；Windows Git、Windows DSH 自动注册和 Windows CLI 升级在 WSL 模式下禁用。**当前未完成真实 WSL 端到端验收，尚未发布。** 安装条件、使用方式与限制见 [WSL 说明](docs/WSL.md)。
+
 ## 界面预览
 
-以下为当前源码运行的浏览器演示截图，全部使用合成数据，不调用真实模型。宽屏为 1440px，窄屏为 390px。
+以下为当前源码在 Windows 无头 Edge 中运行的桌面宽屏界面（1440px 视口）。全部为合成演示数据，不读取个人对话、不调用真实模型；账户、额度及用量仅用于展示，更新按钮与 `v0.4.6-demo` 为模拟可更新状态，不代表真实发布。
 
-![对话与统一活动面板：折叠操作过程、几何子代理头像、模型与时长（合成演示数据）](docs/assets/conversation-demo.png)
+![对话页面：顶部用时、折叠过程、文件变更及左下角额度](docs/assets/conversation-demo.png)
 
 <details>
-<summary>查看文件 diff 与窄屏布局</summary>
+<summary>查看更多桌面功能页面</summary>
 
-![本轮文件变更与展开的 diff（合成演示数据）](docs/assets/file-diff-demo.png)
+### 文件变更
+![展开文件 diff](docs/assets/file-diff-demo.png)
 
-![窄屏对话布局（390px 浏览器演示，合成数据）](docs/assets/narrow-layout-demo.png)
+### 账户与额度
+![账户额度与每日用量（合成数据）](docs/assets/account-demo.png)
+
+### 外观设置
+![界面风格、主题与文字大小](docs/assets/appearance-demo.png)
+
+### 应用更新
+![更新入口及发布说明（模拟状态）](docs/assets/update-demo.png)
+
+### 模型与思考强度
+![模型与思考强度弹层（演示模型）](docs/assets/model-demo.png)
 
 </details>
 

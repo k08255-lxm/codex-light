@@ -7,6 +7,7 @@
 <title>码舱 CodeCang</title>
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/engine-onboarding.css">
 <link rel="stylesheet" href="/session-controls.css">
 <link rel="stylesheet" href="/activity-feed.css">
 <link rel="stylesheet" href="/ui/views.css">
@@ -187,6 +188,7 @@
             <label class="field">工作目录<input id="cwd-input" placeholder="C:\Users\USER\project" autocomplete="off" spellcheck="false"><small>Codex 与 DSH 在此目录工作，修改会直接影响源文件。</small></label>
             <div class="work-row end"><button id="settings-cancel" type="button" class="btn">取消</button><button id="save-settings" type="submit" class="btn primary">保存工作目录</button></div>
           </div>
+          <div id="wsl-runtime-panel" class="local-only"></div>
           <div id="runtime-panel"></div>
           <h2 class="section-title">服务</h2>
           <div class="panel row-panel"><p id="runtime-close-info" class="fine">关闭窗口不等于停止服务。</p><button id="shutdown" type="button" class="btn danger">停止服务</button></div>

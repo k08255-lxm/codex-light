@@ -21,7 +21,7 @@ export class ThreadSessions {
   try{const result=await this.rpc.call('thread/unsubscribe',{threadId:id});this.entries.delete(id);this.changed();return result;}
   catch(error){e.releaseError='会话订阅未释放，请检查连接状态；关闭 Light 会结束本应用的引擎进程。';this.changed();throw error;}
  }
- async call(method,params){
+ async call(method,params,{beforeSend}={}){
   if(this.closed)throw fail('Light 正在关闭，此请求未发送','CLIENT_CLOSING');
   const id=params.threadId;
   // Keep resume internal: legacy clients opening history cannot acquire locks.
@@ -40,7 +40,8 @@ export class ThreadSessions {
    if(e.activeTurnId||e.unknown)throw fail('此对话已有运行任务或结果待核对，请使用立即发送或排队','TURN_ACTIVE');
    if(method==='thread/compact/start')e.unknown=true;
    try{
-    const result=await this.rpc.call(method,params);
+    beforeSend?.();
+    const result=await this.rpc.call(method,params,beforeSend?{beforeSend}:{});
     const turn=result?.turn;
     if(turn?.id)e.unpersisted=false;
     if(turn?.id&&!e.completed.has(turn.id)&&(!turn.status||turn.status==='inProgress'))e.activeTurnId=turn.id;

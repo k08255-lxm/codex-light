@@ -69,6 +69,8 @@ if(!(Test-Path -LiteralPath $vendor)){throw 'Pinned vpk vendor notices missing; 
 Copy-Item -LiteralPath $vendor -Destination (Join-Path $stage 'licenses/Velopack-VENDOR-NOTICES.md')
 & python (Join-Path $PSScriptRoot 'native_notices.py') --payload $stage --vendor (Split-Path $vendor -Parent)
 if($LASTEXITCODE -ne 0){throw 'Pinned native binary/notices verification failed'}
+& python (Join-Path $PSScriptRoot 'collected_notices.py') $stage --owned-build-stage
+if($LASTEXITCODE -ne 0){throw 'Lossless collected notice verification failed'}
 # CLI validation normally invokes the app; skip it to guarantee no app/window/model startup.
 # The build verifies the referenced runtime but live fast-hook behavior is a separate integration gate.
 $shortcuts=if($MigrationStage){'None'}else{'StartMenuRoot'}

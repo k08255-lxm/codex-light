@@ -1,0 +1,28 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {windowsWorkspace,mapWindowsRequest,parseWindowsLaunch} from '../components/dsh-bridge/src/wsl-windows-paths.mjs';
+import {WslWindowsDshBridge,INTEROP_SCRIPT} from '../src/dsh-wsl-windows.mjs';
+const mapped=(output,back)=>{let i=0;return ()=>({status:0,stdout:i++?back:output});};
+test('maps Windows drive cwd with exact round trip, preserves task/meta',()=>{
+ const m={id:1,method:'tools/call',params:{name:'dsh_start',arguments:{cwd:'/mnt/c/My Project',task:'Do not rewrite /home/user/file'},_meta:{threadId:'abc'}}};
+ const result=mapWindowsRequest(m,'Ubuntu',{run:mapped('C:\\My Project','/mnt/c/My Project')});
+ assert.equal(result.params.arguments.cwd,'C:\\My Project');assert.equal(result.params.arguments.task,m.params.arguments.task);assert.deepEqual(result.params._meta,m.params._meta);assert.equal(m.params.arguments.cwd,'/mnt/c/My Project');
+});
+test('rejects Linux home UNC, invalid path and ambiguous mapping',()=>{
+ assert.throws(()=>windowsWorkspace('/home/a','Ubuntu',{run:mapped('\\\\wsl.localhost\\Ubuntu\\home\\a','/home/a')}),/Windows-drive/);
+ assert.throws(()=>windowsWorkspace('/mnt/c/../a','Ubuntu'),/absolute/);
+ assert.throws(()=>windowsWorkspace('/mnt/c/a','Ubuntu',{run:mapped('C:\\a','/mnt/c/b')}),/ambiguous/);
+ assert.throws(()=>windowsWorkspace('/mnt/c/a','Ubuntu',{run:()=>({status:1})}),/Windows-drive/);
+});
+test('list cwd mapped; followup untouched',()=>{assert.equal(mapWindowsRequest({method:'tools/call',params:{name:'dsh_list',arguments:{cwd:'/mnt/c/a'}}},'Ubuntu',{run:mapped('C:\\a','/mnt/c/a')}).params.arguments.cwd,'C:\\a');const m={method:'tools/call',params:{name:'dsh_followup',arguments:{task:'/mnt/c/a'}}};assert.equal(mapWindowsRequest(m,'Ubuntu'),m);});
+test('launch payload limits fields and Windows absolute paths',()=>{const v={distribution:'Ubuntu',user:'a',config:'C:\\data\\config',state:'C:\\data\\state',data:'C:\\data'};const enc=v=>Buffer.from(JSON.stringify(v)).toString('base64url');assert.deepEqual(parseWindowsLaunch(enc(v)),v);assert.throws(()=>parseWindowsLaunch(enc({...v,data:'/home/a'})));assert.throws(()=>parseWindowsLaunch(enc({...v,token:'secret'})));});
+test('registration uses stdio interop, no token; owns selected distro only',async()=>{
+ const bundle={root:'C:\\bridge',bundled:()=>({available:true,dependenciesReady:true}),probe:()=>({executablePath:'C:\\DSH.exe',version:'0.2.2-rc.3'}),registration:()=>({env:{DSH_SUBAGENT_CONFIG:'C:\\cfg',DSH_SUBAGENT_STATE:'C:\\state',DSH_SUBAGENT_DATA:'C:\\data'}})};
+ const bridge=new WslWindowsDshBridge({candidate:{distribution:'Ubuntu',user:'a',home:'/home/a'},bundle,wsl:{toLinux:async()=>'/mnt/c/DSH.exe',invoke:async()=>JSON.stringify({name:'@deepseek-ai/dsh-desktop-host',version:'0.2.2-rc.3',sqlite:true})}});
+ const probe=await bridge.probe('C:\\DSH.exe'),reg=bridge.registration(probe.executablePath,probe);assert.equal(reg.command,'/bin/sh');assert.equal(reg.args[1],INTEROP_SCRIPT);assert.ok(bridge.owns(reg));assert.equal(bridge.owns({...reg,env:{...reg.env,CODEX_LIGHT_DSH_DISTRIBUTION:'Other'}}),false);assert.ok(!JSON.stringify(reg).includes('token'));assert.throws(()=>bridge.registration(probe.executablePath,{...probe,user:'other'}));
+});
+test('interop failure fails closed without registration',async()=>{const bridge=new WslWindowsDshBridge({candidate:{distribution:'Ubuntu',user:'a',home:'/home/a'},bundle:{root:'C:\\bridge',bundled:()=>({available:true,dependenciesReady:true}),probe:()=>({executablePath:'C:\\DSH.exe',version:'0.2.2'})},wsl:{toLinux:async()=>'/mnt/c/DSH.exe',invoke:async()=>{throw Error('disabled')}}});await assert.rejects(bridge.probe('x'),/interop/);});
+test('wslpath invocation uses args rather than shell interpolation',()=>{const calls=[];let n=0;const input='/mnt/c/a $b; x';assert.equal(windowsWorkspace(input,'Ubuntu',{run:(cmd,args,options)=>{calls.push({cmd,args,options});return {status:0,stdout:n++?input:'C:\\a $b; x'};}}),'C:\\a $b; x');assert.equal(calls[0].args.at(-1),input);assert.equal(calls[0].options.shell,false);});
+test('desktop entry chooses bound queue mode or wait-only and strips foreign configuration',async()=>{const {readFile}=await import('node:fs/promises');const s=await readFile(new URL('../components/dsh-bridge/src/wsl-windows-entry.mjs',import.meta.url),'utf8');assert.match(s,/dshClientProfile:launch.queueDescriptor\?'desktop-queue':'desktop'/);assert.match(s,/Automatic parent wakeup is unavailable/);assert.match(s,/delete process.env\[key\]/);assert.doesNotMatch(s,/openNativeCodexSocket|\.listen\(/);});
+test('queue descriptor is a Windows-local launch field, never key in MCP config',()=>{const bundle={root:'C:\\bridge',registration:()=>({env:{DSH_SUBAGENT_CONFIG:'C:\\cfg',DSH_SUBAGENT_STATE:'C:\\state',DSH_SUBAGENT_DATA:'C:\\data'}})};const b=new WslWindowsDshBridge({candidate:{distribution:'Ubuntu',user:'a'},bundle,queueDescriptor:'C:\\queue\\descriptor.json'});const r=b.registration('C:\\DSH.exe',{distribution:'Ubuntu',user:'a',executablePath:'C:\\DSH.exe',linuxExecutable:'/mnt/c/DSH.exe'});const payload=parseWindowsLaunch(r.args.at(-1));assert.equal(payload.queueDescriptor,'C:\\queue\\descriptor.json');assert.equal(payload.key,undefined);});
+test('old bridge cannot silently route queue callback to Windows Codex',async()=>{const {assertQueueCapability}=await import('../components/dsh-bridge/src/wsl-windows-paths.mjs');assert.throws(()=>assertQueueCapability({capabilities:{}}),/different Codex instance/);assert.throws(()=>assertQueueCapability({capabilities:{experimental:{codecangCallbackQueue:{version:2}}}}));assert.doesNotThrow(()=>assertQueueCapability({capabilities:{experimental:{codecangCallbackQueue:{version:1}}}}));});

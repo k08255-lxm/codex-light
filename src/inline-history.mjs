@@ -4,10 +4,11 @@ import os from 'node:os';
 const same=(a,b)=>process.platform==='win32'?a.toLowerCase()===b.toLowerCase():a===b;
 export const defaultRolloutRoots=()=>['sessions','archived_sessions'].map(p=>path.join(process.env.CODEX_HOME||path.join(os.homedir(),'.codex'),p));
 const within=(root,file)=>{const r=path.relative(root,file);return r&&!path.isAbsolute(r)&&r!=='..'&&!r.startsWith('..'+path.sep);};
-export async function readInlineHistoryImage({rollout,threadId,imagePath,roots=defaultRolloutRoots()}){
- if(typeof rollout!=='string'||!path.isAbsolute(rollout)||!roots.some(r=>within(path.resolve(r),rollout))||!path.basename(rollout).endsWith('-'+threadId+'.jsonl'))return null;
+export async function readInlineHistoryImage({rollout,threadId,imagePath,roots=defaultRolloutRoots(),caseSensitive=false}){
+ const samePath=caseSensitive?((a,b)=>a===b):same;
+ if(typeof rollout!=='string'||!path.isAbsolute(rollout)||!roots.some(r=>within(path.resolve(r),rollout)&&(!caseSensitive||rollout.startsWith(path.resolve(r)+path.sep)))||!path.basename(rollout).endsWith('-'+threadId+'.jsonl'))return null;
  for(let p=rollout;;p=path.dirname(p)){const s=await fs.lstat(p);if(s.isSymbolicLink())throw Error('History link refused');if(path.dirname(p)===p)break;}
- if(!same(await fs.realpath(rollout),path.resolve(rollout)))throw Error('History path changed');
+ if(!samePath(await fs.realpath(rollout),path.resolve(rollout)))throw Error('History path changed');
  const h=await fs.open(rollout,'r');
  try{
   const info=await h.stat();if(!info.isFile()||info.nlink!==1||info.size>256*1024*1024)return null;
@@ -24,7 +25,7 @@ export async function readInlineHistoryImage({rollout,threadId,imagePath,roots=d
     for(let i=0;i+1<items.length;i++){
      if(items[i]?.type!=='input_text'||typeof items[i].text!=='string')continue;
      const match=/^<image name=\[Image #\d+\] path="([^"\r\n]+)">\r?\n?$/.exec(items[i].text);
-     if(!match||!same(match[1],imagePath)||items[i+1]?.type!=='input_image')continue;
+     if(!match||!samePath(match[1],imagePath)||items[i+1]?.type!=='input_image')continue;
      const uri=items[i+1].image_url;if(typeof uri!=='string'||uri.length>14*1024*1024)return null;
      const data=/^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/]+={0,2})$/.exec(uri);if(!data)return null;
      const bytes=Buffer.from(data[2],'base64');if(bytes.length>10*1024*1024||bytes.toString('base64')!==data[2])return null;

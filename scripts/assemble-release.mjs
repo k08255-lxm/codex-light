@@ -40,10 +40,11 @@ export async function assembleRelease({version,setupDirectory,velopackDirectory,
  const postBridge=version.split('.').map(Number).reduce((r,n,i)=>r||Math.sign(n-[0,4,4][i]),0)>0;
  const legacy=!postBridge&&bootstrap.schema===1&&['migrationBundleSha256','vendorSetupSha256','migrationManifestSha256'].every(k=>/^[a-f\d]{64}$/.test(bootstrap[k]??''));
 
- const router=postBridge&&bootstrap.schema===2&&bootstrap.mode==='fixedBridgeThenPrompt'&&bootstrap.bridgeVersion==='0.4.4'&&
+ const router=postBridge&&[2,3].includes(bootstrap.schema)&&bootstrap.mode==='fixedBridgeThenPrompt'&&bootstrap.bridgeVersion==='0.4.4'&&
   bootstrap.bridgeUrl==='https://github.com/k08255-lxm/codex-light/releases/download/v0.4.4/CodexLight-Setup-0.4.4-x64.exe'&&
   bootstrap.bridgeSha256==='b2410266d12946301ffecebaa9c1fa77c8cebd065fe889cdb8eb83b974245aba'&&
   bootstrap.freshName===fresh&&bootstrap.freshSha256===files[2].sha256;
+ if(bootstrap.schema===3&&(bootstrap.freshEmbedded!==true||bootstrap.embeddedResource!=='CodeCang.Fresh.zip'))throw Error('Verified embedded fresh archive required');
  if(!identity||(!legacy&&!router))throw Error('Verified migration-aware bootstrap required; legacy MSI Setup is insufficient');
  const recorded=verification.artifacts?.filter(a=>a.name===full);
  if(recorded?.length!==1||recorded[0].sha256!==files[1].sha256||recorded[0].size!==files[1].size)throw Error('Stale package verification');
@@ -51,6 +52,8 @@ export async function assembleRelease({version,setupDirectory,velopackDirectory,
  const apkBytes=await readFile(apk);if(apkBytes[0]!==0x50||apkBytes[1]!==0x4b)throw Error('APK is not an archive');
  // APK signing/version inspection is a separate build gate, not inferred from its filename.
  files.push({file:apk,name:apkName,size:apkBytes.length,sha256:hash(apkBytes)});
+ // The verified ZIP remains a build input, not a second manual download.
+ if(bootstrap.schema===3)files.splice(2,1);
  const sums=files.map(f=>`${f.sha256}  ${f.name}`).join('\n')+'\n';
  const base=`https://github.com/k08255-lxm/codex-light/releases/download/v${version}/`;
  const release={tag_name:`v${version}`,draft:false,prerelease:false,html_url:`https://github.com/k08255-lxm/codex-light/releases/tag/v${version}`,assets:[...files,{name:'SHA256SUMS.txt',size:Buffer.byteLength(sums)}].map(f=>({name:f.name,size:f.size,browser_download_url:base+f.name}))};
