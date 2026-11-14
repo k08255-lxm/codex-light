@@ -22,7 +22,7 @@ host=new Fake(plan,root){FreeBytes=0};Reject(()=>MigrationCoordinator.Prepare(pl
 host=new Fake(plan,root){RootAbsent=false};Reject(()=>MigrationCoordinator.Prepare(plan,host),"existing destination");
 host=new Fake(plan,root);receipt=MigrationCoordinator.Prepare(plan,host);host.FailRetire=true;var failed=MigrationCoordinator.Retire(receipt,host,true);Check(failed.Phase==Phase.RecoveryRequired,"uncertain uninstall does not claim old retained");
 Check(host.Phases.IndexOf(Phase.Retiring)<host.Phases.IndexOf(Phase.RecoveryRequired),"journal precedes side effect");
-count+=StorageTests.Run(root);count+=StageTests.Run();count+=RetireTests.Run();count+=ManualTests.Run(root);count+=ManualPlanTests.Run(root);
+count+=ShortcutTests.Run(root);count+=StorageTests.Run(root);count+=StageTests.Run();count+=RetireTests.Run();count+=ManualTests.Run(root);count+=ManualPlanTests.Run(root);
 Console.WriteLine($"PASS {count} isolated migration checks; no real installation. Fixtures: {root}");
 sealed class Fake(MigrationPlan plan,string root):IMigrationHost {
  public bool Busy,Healthy=true,ThrowStage,MutatedData,RootAbsent=true,FailRetire;public long FreeBytes=100000;public int Stages,Retires;public List<Phase> Phases=new();
@@ -41,3 +41,4 @@ sealed class Fake(MigrationPlan plan,string root):IMigrationHost {
  public void Persist(Receipt r)=>Phases.Add(r.Phase);
  sealed class Gate:IDisposable{public void Dispose(){}}
 }
+

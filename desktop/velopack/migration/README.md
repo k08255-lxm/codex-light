@@ -82,3 +82,9 @@ After the user actually completes this handoff, use:
 The plan hash, failed-source hash, new package hashes, exact old MSI identity/root and verified baseline are all checked. The subsequent reconciled receipt preserves the old failure link **and** the prepared-plan hash; SafeRetire validates both links. A changed setup without a prepared plan, substituted/tampered plan, different source identity or downgrade is rejected. Same-package legacy `reconcile-manual` remains strict and is not a backdoor to replacing hashes.
 
 Only fixture policy/tamper/link tests ran during this change; no actual plan preparation, data backup or installation was performed.
+
+## Start Menu handoff during retirement
+
+Before invoking MSI uninstall, retirement checks the formal and migration shortcut slots for foreign targets, backs up recognized old/new links with hashes, and creates a verified fallback pointing to the new root stub. It does not remove the old entry before uninstall. Only after uninstall, protected-data and component-health checks succeed does it atomically publish the formal `Codex Light.lnk` and remove hash-matching old/temporary links. Unknown or concurrently changed links are never deleted. A publication/health/uninstall failure retains a verified new launch entry and recovery evidence instead of restoring a shortcut to a potentially removed legacy executable. Original shortcut bytes and the immutable handoff plan remain in the recovery directory. This does not automatically reinstall or roll back MSI.
+
+The shortcut fixtures use fake link files, not Windows Start Menu changes: successful retirement, uninstall failure, foreign-slot rejection, formal-publication failure and consolidation of already-existing owned links. Actual GUI and user acceptance remain separate gates.
