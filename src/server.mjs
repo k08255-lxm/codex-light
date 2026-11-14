@@ -56,6 +56,8 @@ publicFiles['/ui/async-input.js']='ui/async-input.js';
 publicFiles['/ui/agent-avatar.js']='ui/agent-avatar.js';
 publicFiles['/account-identity.js']='account-identity.js';
 publicFiles['/ui/title-settings.js']='ui/title-settings.js';
+publicFiles['/ui/update-indicator.js']='ui/update-indicator.js';
+publicFiles['/ui/optimistic-messages.js']='ui/optimistic-messages.js';
 for(const file of ['about-view.js','about-view.css','notifications.js'])publicFiles['/ui/'+file]='ui/'+file;
 publicFiles['/ui/panel-resize.js']='ui/panel-resize.js';publicFiles['/ui/panel-resize.css']='ui/panel-resize.css';publicFiles['/project-name-dialog.js']='project-name-dialog.js';
 for(const file of ['history-auto-load.js','format.js','chart.js','stats-view.js','account-view.js','live-changes.js','views.css','paste.js','artifacts.js','agents.js','access.js','lan-view.js','viewport.js','approvals-view.js','composer.js','dsh-view.js','preferences-view.js','remote-view.js','slash-menu.js','workbench-view.js','dsh-config-view.js','dsh-connection-view.js'])publicFiles['/ui/'+file]='ui/'+file;

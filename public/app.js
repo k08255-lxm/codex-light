@@ -197,6 +197,7 @@ function releaseThread(threadId) {
 }
 function resetThreadView() {
   historyAutoLoad?.reset(); state.store.clear(); state.ledger.clear(); conversation.clear(); state.nextItems = null; state.nextTurns = null; state.historyFallback = false; state.pager = null;
+  composer.renderOptimistic();
 }
 const projectNavigation=mountProjectNavigation($('thread-list'),{
   onSelect:group=>selectProject(group),
@@ -316,7 +317,7 @@ async function recoverPendingResult(marker,result,current){
  }
  if(marker.method==='turn/start'||marker.method==='review/start'){
   if(!recoveredId(marker.threadId)||!recoveredId(result?.turn?.id)||!['inProgress','completed','failed','interrupted'].includes(result.turn.status)||(result.threadId&&result.threadId!==marker.threadId)||(result.turn.threadId&&result.turn.threadId!==marker.threadId))throw new Error('原任务结果缺少有效任务状态或对话关联，继续保留待同步记录。');
-  if(envelope&&marker.method==='turn/start')clearSubmittedDraft(envelope);
+  if(envelope&&marker.method==='turn/start')clearSubmittedDraft({...envelope,preserveText:true});
   if(state.thread?.id!==marker.threadId)return;
   const generation=state.openGeneration,threadCurrent=()=>current()&&generation===state.openGeneration&&state.thread?.id===marker.threadId;
   state.ledger.merge(result.turn);if(!state.busy||!state.turnId||state.turnId===result.turn.id){state.busy=result.turn.status==='inProgress'&&!state.terminalTurns.has(result.turn.id);state.turnId=state.busy?result.turn.id:null;}
@@ -325,7 +326,7 @@ async function recoverPendingResult(marker,result,current){
   return;
  }
  if(marker.method==='turn/steer'){
-  if(envelope)clearSubmittedDraft(envelope);
+  if(envelope)clearSubmittedDraft({...envelope,preserveText:true});
   if(state.thread?.id===marker.threadId){const generation=state.openGeneration;await loadItems(false,generation,()=>current()&&state.thread?.id===marker.threadId);}
   return;
  }
@@ -347,6 +348,7 @@ async function handlePendingReconcileResult(marker,response,decision){
   await recoverPendingResult(marker,response.result,current);
   if(!current())return;
  }
+ composer.resolveOptimistic(marker,response,resolved);
  pendingMutations.settle(marker.requestId);
  mutationContexts.delete(marker.requestId);
  if(resolved==='failed')notice('原操作已确认失败：'+(response?.error||'服务返回失败，请检查实际结果。'),true);
@@ -669,8 +671,9 @@ function renderMessages(follow = true) {
   const delegatedChanges=[...dshTasks.delegatedChanges({turns:[...state.ledger.turns.values()],activeTurnId:state.busy?state.turnId:null}),...delegationMonitor.changes()];
   const turns = buildTurns(items, state.ledger, { activeTurnId: state.busy ? state.turnId : null, cwd: state.thread?.cwd || state.cwd,delegatedChanges });
   conversation.render(turns);
+  composer.renderOptimistic();
   liveChanges.update(pillChanges(turns));scrollToBottom.update();
-  state.store.dirty.clear(); $('welcome').classList.toggle('hidden', !!state.thread || items.length > 0);
+  state.store.dirty.clear(); $('welcome').classList.toggle('hidden', !!state.thread || items.length > 0 || Boolean($('optimistic-messages') && !$('optimistic-messages').hidden));
   if (!$('details').classList.contains('hidden')) { if (state.detailsTab === 'dsh') renderDshTasks(); else renderTools(); }
   if (follow && nearBottom) scrollBottom();
 }
@@ -737,7 +740,7 @@ async function uploadChosenFiles(files) {
 function clearSubmittedDraft(envelope) {
   if (!['turn/start', 'turn/steer'].includes(envelope?.method)) return;
   const submitted = envelope.params?.input?.[0]?.text;
-  if (typeof submitted === 'string' && $('prompt').value.trim() === submitted.trim()) { $('prompt').value = ''; autosizePrompt(); }
+  if (!envelope.preserveText && typeof submitted === 'string' && $('prompt').value.trim() === submitted.trim()) { $('prompt').value = ''; autosizePrompt(); }
   for (const id of envelope.attachmentIds || []) removeAttachment(id);
   for (const id of envelope.fileAttachmentIds || []) fileAttachmentDraft.remove(id);
   renderAttachments(); updateControls();
@@ -790,6 +793,7 @@ async function performMutation(method, params, extras = {}) {
   try { envelope = pendingMutations.begin(state.serverInstance, method, params, extras); }
   catch (error) { error.outcome = 'notExecuted'; renderPendingMutations(); throw error; }
   mutationContexts.set(envelope.requestId,{openGeneration:state.openGeneration});
+  extras.onRequest?.(envelope);
   renderPendingMutations(); updateControls();
   try {
     const result = method==='runtime/upgrade'

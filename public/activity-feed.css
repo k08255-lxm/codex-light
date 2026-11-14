@@ -160,3 +160,9 @@ div.step-detail { white-space: normal; padding: 6px 0; }
 .turn-work-body { display:flex; flex-direction:column; gap:8px; padding:4px 0 12px; }
 .turn-work[data-kind="failed"] > summary { color:var(--error); }
 .turn-footer { padding-bottom:10px; border-bottom:1px solid var(--border); }
+
+.optimistic-messages { display: grid; gap: 16px; padding: 16px 0; }
+.optimistic-messages[hidden] { display: none; }
+.optimistic-status { color: var(--tertiary); font-size: .75rem; }
+.optimistic-message[data-status="notExecuted"] .optimistic-status, .optimistic-message[data-status="failed"] .optimistic-status { color: var(--error); }
+.optimistic-attachments { max-width: 100%; overflow-wrap: anywhere; color: var(--secondary); font-size: .8rem; }

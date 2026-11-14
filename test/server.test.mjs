@@ -115,3 +115,7 @@ test('xterm styles use fresh HTML nonce without relaxing script or unnonced styl
  for(const path of ['/vendor/xterm.mjs','/vendor/addon-fit.mjs','/vendor/xterm.css','/terminal.js'])assert.equal((await fetch(a.origin+path)).status,200);
  const vendor=await(await fetch(a.origin+'/vendor/xterm.mjs')).text();assert.match(vendor,/if\(nonce\)el.nonce=nonce/);
 });
+
+test('optimistic composer and update indicator imports are served',async t=>{
+ const a=await fixture(t);for(const path of ['/ui/optimistic-messages.js','/ui/update-indicator.js']){const response=await fetch(a.origin+path);assert.equal(response.status,200,path);assert.match(response.headers.get('content-type'),/javascript/);}
+});

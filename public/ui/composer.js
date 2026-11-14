@@ -1,9 +1,10 @@
 // Composer submission controller: first send (draft → thread/start → turn/start), steer into a
-// running turn, and the per-thread follow-up queue. Drafts are cleared only after a confirmed
-// acknowledgement; an unknown outcome is never resubmitted automatically.
+// running turn, and the per-thread follow-up queue. Text moves immediately into a pending
+// bubble; attachment cleanup waits for acknowledgement. Unknown outcomes are never replayed.
 import { steerParams } from '../state.js';
 import { outcomeFromError } from '../submissions.js';
 import { reasoningParameter } from '../reasoning.js';
+import { OptimisticMessages } from './optimistic-messages.js';
 
 /**
  * Ports (explicit dependencies, grouped by responsibility):
@@ -19,6 +20,46 @@ export function createComposer({ document, session, drafts, ledger, thread, view
   const { performMutation, pendingMutations, scopedPending, currentSendAvailability, renderPendingMutations } = ledger;
   const { restoreThreadReasoning, loadThreads, syncStatus, resetThreadDsh } = thread;
   const { $, el, notice, activity, confirm, openImage, updateControls, renderMessages, scheduleRender, scrollBottom, renderContext, openProjectDialog, openInlineCwd } = view;
+  const optimistic=new OptimisticMessages();
+  const optimisticHost=document.createElement('div');optimisticHost.id='optimistic-messages';optimisticHost.className='optimistic-messages';optimisticHost.hidden=true;
+  const messages=$('messages');if(messages?.parentElement)messages.parentElement.append(optimisticHost);
+  function beginOptimistic(draft,method='turn/start',retryId=null){
+    const row=optimistic.begin({threadId:state.thread?.id||null,generation:state.openGeneration,...draft,method,beforeIds:state.store.values().filter(x=>x.type==='userMessage'&&!x._local).map(x=>x.id)});
+    if(retryId)optimistic.remove(retryId);
+    $('prompt').value='';autosizePrompt();renderOptimistic();scrollBottom();return row;
+  }
+  function restoreUnsentText(row){
+    if(row.status==='notExecuted'&&state.openGeneration===row.generation&&(state.thread?.id||null)===row.threadId&&!$('prompt').value) { $('prompt').value=row.text;autosizePrompt(); }
+  }
+  function resolveOptimistic(marker,response,decision){
+    optimistic.resolve(marker.requestId,decision,response?.result,response?.error||'');
+    for(const row of optimistic.rows.values())if(row.requestId===marker.requestId)restoreUnsentText(row);
+    renderOptimistic();
+  }
+  function retryOptimistic(row){
+    if(row.status!=='notExecuted'||state.sending||state.loadingThread||!state.connected)return;
+    const current=draftSnapshot();
+    const sameIds=(a,b)=>a.length===b.length&&a.every((x,i)=>x.id===b[i].id);
+    if(current.text&&current.text!==row.text||!sameIds(current.images,row.images)||!sameIds(current.files,row.files)) {notice('草稿或附件已改变，请检查输入框后手动发送。原消息未重发。');return;}
+    $('prompt').value=row.text;autosizePrompt();send('auto',row.id);
+  }
+  function renderOptimistic(){
+    optimistic.reconcile(state.thread?.id||null,state.store.values());
+    const rows=optimistic.visible(state.thread?.id||null,state.openGeneration);const fragment=document.createDocumentFragment();
+    for(const row of rows){
+      const article=el('article','message userMessage optimistic-message');article.dataset.submission=row.id;article.dataset.status=row.status;
+      const body=el('div','message-text');if(row.text)body.append(el('div','message-bubble',row.text));
+      const names=[...row.images,...row.files].map(x=>x.name||'附件');if(names.length)body.append(el('div','optimistic-attachments',names.join(' · ')));
+      const labels={sending:'正在发送…',accepted:'已发送，正在同步…',notExecuted:'未发送',failed:'发送失败，请核对结果',unknown:'结果待确认，请勿重复发送'};
+      const status=el('div','optimistic-status',labels[row.status]);status.setAttribute('role','status');if(row.error)status.title=row.error;
+      article.append(body,status);
+      if(row.status==='notExecuted'){const retry=el('button','btn ghost small','重新发送');retry.type='button';retry.disabled=state.sending||!state.connected;retry.addEventListener('click',()=>retryOptimistic(row));article.append(retry);}
+      if(['failed','notExecuted'].includes(row.status)){const dismiss=el('button','btn ghost small','移除此提示');dismiss.type='button';dismiss.addEventListener('click',()=>{optimistic.remove(row.id);renderOptimistic();});article.append(dismiss);}
+      fragment.append(article);
+    }
+    optimisticHost.replaceChildren(fragment);optimisticHost.hidden=!rows.length;
+    if(rows.length)$('welcome').classList.add('hidden');
+  }
   // ---------- Composer: send, steer, queue ----------
   function draftSnapshot() {
     return { text: $('prompt').value.trim(), images: attachmentDraft.values(), files: fileAttachmentDraft.values() };
@@ -45,9 +86,9 @@ export function createComposer({ document, session, drafts, ledger, thread, view
     const selectedModel = state.models.find(model => model.model === $('model').value);
     return images.length && Array.isArray(selectedModel?.inputModalities) && !selectedModel.inputModalities.includes('image') ? '所选模型未声明图片输入能力。请选择支持图片的模型，或移除附件。' : '';
   }
-  async function send(mode = 'auto') {
+  async function send(mode = 'auto', retryId = null) {
     if(state.sending)return;
-    if (state.busy && state.thread && mode !== 'start') return mode === 'queue' ? queueDraft() : steerDraft();
+    if (state.busy && state.thread && mode !== 'start') return mode === 'queue' ? queueDraft() : steerDraft(retryId);
     const availability=currentSendAvailability();if(availability.disabled){notice(availability.reason);if(availability.action==='cwd')openInlineCwd();else if(availability.action==='pending')$('pending-submissions').scrollIntoView({block:'nearest'});return;}
     const draft = draftSnapshot(); if (!draft.text && !draft.images.length && !draft.files.length) return;
     const capability = imageCapabilityError(draft.images); if (capability) { notice(capability, true); return; }
@@ -56,29 +97,31 @@ export function createComposer({ document, session, drafts, ledger, thread, view
     // One immutable logical submission: navigation/model/cwd edits cannot retarget its second stage.
     const submission = { cwd: state.cwd, model: $('model').value, effort: reasoningParameter(state.reasoning), text: draft.text, attachmentIds: attachmentDraft.ids(), fileAttachmentIds:fileAttachmentDraft.ids(), confirmedFileAttachmentIds:confirmed };
     try { submission.controls=sessionControls.snapshot(); } catch(error){notice(error.message,true);return;}
-    state.sending = true; updateControls(); activity('正在发送…'); const generation = state.openGeneration;
+    state.sending = true; const optimisticRow=beginOptimistic(draft,'turn/start',retryId);updateControls(); activity('正在发送…'); const generation = state.openGeneration;
     try {
       if (!state.thread) {
         // The draft becomes a real thread only now, immediately before its first turn.
         const params = { cwd: submission.cwd }; if (submission.model) params.model = submission.model;
         Object.assign(params,sessionControls.params(submission.controls,'thread'));
-        const result = await performMutation('thread/start', params); if (generation !== state.openGeneration) { notice('新对话已创建；你已切换页面，因此消息未继续发送。'); return; }
+        const result = await performMutation('thread/start', params,{onRequest:envelope=>optimistic.patch(optimisticRow.id,{requestId:envelope.requestId,method:'thread/start'})}); optimistic.patch(optimisticRow.id,{threadId:result.thread.id});if (generation !== state.openGeneration) { optimistic.patch(optimisticRow.id,{status:'notExecuted',error:'已切换对话，消息未发送。'});renderOptimistic();notice('新对话已创建；你已切换页面，因此消息未继续发送。'); return; }
         sessionControls.adopt(result.thread.id);
         state.thread = result.thread; restoreThreadReasoning(result, submission.effort); resetThreadDsh(state.thread.id); $('thread-title').textContent = submission.text.slice(0, 55) || '附件对话'; $('welcome').classList.add('hidden'); renderContext();
       }
       const params = { threadId: state.thread.id, cwd: submission.cwd, input: [{ type: 'text', text: submission.text }] }; if (submission.model) params.model = submission.model; if (submission.effort) params.effort = submission.effort;
       Object.assign(params,sessionControls.params(submission.controls,'turn'));
-      const result = await performMutation('turn/start', params, { attachmentIds: submission.attachmentIds, fileAttachmentIds:submission.fileAttachmentIds, confirmedFileAttachmentIds:submission.confirmedFileAttachmentIds });
-      clearSubmittedDraft({ method: 'turn/start', params, attachmentIds: submission.attachmentIds, fileAttachmentIds:submission.fileAttachmentIds });
+      const result = await performMutation('turn/start', params, { attachmentIds: submission.attachmentIds, fileAttachmentIds:submission.fileAttachmentIds, confirmedFileAttachmentIds:submission.confirmedFileAttachmentIds,onRequest:envelope=>optimistic.patch(optimisticRow.id,{requestId:envelope.requestId,method:'turn/start'}) });
+      optimistic.patch(optimisticRow.id,{status:'accepted',turnId:result.turn?.id});renderOptimistic();
+      clearSubmittedDraft({ preserveText:true, method: 'turn/start', params, attachmentIds: submission.attachmentIds, fileAttachmentIds:submission.fileAttachmentIds });
       if (generation !== state.openGeneration) { notice('消息已发送到原对话，未发送到当前页面。'); return; }
       if (submission.effort) state.reasoning.inherited = submission.effort;
       acceptStartedTurn(params.threadId, result.turn);
       loadThreads().catch(() => {}); scrollBottom();
     } catch (e) {
       const outcome = outcomeFromError(e);
+      optimistic.patch(optimisticRow.id,{status:outcome,error:e.message});restoreUnsentText(optimisticRow);renderOptimistic();
       notice(outcome === 'unknown' ? `请求结果未知：${e.message}。正在自动同步消息状态，不会自动重发。` : `请求未完成：${e.message}。${outcome === 'notExecuted' ? '服务确认该请求未执行，草稿已保留。' : '服务返回明确失败；请检查是否有部分改动。'}没有自动重发。`, true);
       activity(outcome === 'unknown' ? '请求结果未知，请确认后再继续' : '请求未完成');
-    } finally { state.sending = false; renderPendingMutations(); updateControls(); drainAll(); }
+    } finally { state.sending = false; renderOptimistic(); renderPendingMutations(); updateControls(); drainAll(); }
   }
   /** Records a confirmed turn/start for whichever thread it belongs to. */
   function acceptStartedTurn(threadId, turn) {
@@ -90,7 +133,7 @@ export function createComposer({ document, session, drafts, ledger, thread, view
     activity(''); renderMessages(); updateControls();
   }
   /** Adds guidance to the running turn. Clears the draft only after the bridge confirms. */
-  async function steerDraft() {
+  async function steerDraft(retryId=null) {
     if (!runningInputAvailable()) { notice('当前任务状态未确认，暂不能立即补充。可排队，或等待任务结束。'); return; }
     const draft = draftSnapshot(); if (!draft.text && !draft.images.length && !draft.files.length) return;
     const capability = imageCapabilityError(draft.images); if (capability) { notice(capability, true); return; }
@@ -98,25 +141,20 @@ export function createComposer({ document, session, drafts, ledger, thread, view
     const threadId = state.thread.id, turnId = state.turnId;
     let params; try { params = steerParams(threadId, turnId, draft.text); } catch (error) { notice(error.message, true); return; }
     const extras = { attachmentIds: attachmentDraft.ids(), fileAttachmentIds: fileAttachmentDraft.ids(), confirmedFileAttachmentIds: confirmed };
-    const beforeIds=state.store.values().filter(item=>item.type==='userMessage'&&!item._local).map(item=>item.id);
-    const echoId=`steer:${globalThis.crypto.randomUUID()}`;
-    state.sending = true; updateControls(); activity('正在补充到当前任务…');
+        state.sending = true; const optimisticRow=beginOptimistic(draft,'turn/steer',retryId);optimistic.patch(optimisticRow.id,{turnId});updateControls(); activity('正在补充到当前任务…');
     try {
-      const result = await performMutation('turn/steer', params, extras);
-      clearSubmittedDraft({ method: 'turn/steer', params, ...extras });
-      // The store reconciles canonical items arriving before OR after this acknowledgement.
-      // Attachment envelopes are expanded by the server, so only its real user item can represent them.
-      if (state.thread?.id === threadId && !extras.attachmentIds.length && !extras.fileAttachmentIds.length) {
-        state.store.confirmUserEcho({id:echoId,turnId:result.turnId||turnId,text:draft.text,beforeIds});
-        scheduleRender();
-      }
+      const result = await performMutation('turn/steer', params, {...extras,onRequest:envelope=>optimistic.patch(optimisticRow.id,{requestId:envelope.requestId})});
+      optimistic.patch(optimisticRow.id,{status:'accepted',turnId:result.turnId||turnId});renderOptimistic();
+      clearSubmittedDraft({ preserveText:true, method: 'turn/steer', params, ...extras });
+      scheduleRender();
       activity('');
     } catch (e) {
       const outcome = outcomeFromError(e);
+      optimistic.patch(optimisticRow.id,{status:outcome,error:e.message});restoreUnsentText(optimisticRow);renderOptimistic();
       if (e.code === 'ACTIVE_TURN_MISMATCH') { notice('运行中的任务已经变化，补充未发送，草稿已保留。可重新选择立即补充或排队。', true); syncStatus().catch(() => {}); }
       else notice(outcome === 'unknown' ? `补充结果未知：${e.message}。正在自动同步，不会重发；草稿已保留，请先确认再决定。` : `补充未发送：${e.message}。草稿已保留。`, true);
       activity('');
-    } finally { state.sending = false; renderPendingMutations(); updateControls(); }
+    } finally { state.sending = false; renderOptimistic(); renderPendingMutations(); updateControls(); }
   }
   /** Moves the draft into this thread's ordered queue. Nothing is sent yet. */
   function queueDraft() {
@@ -210,5 +248,5 @@ export function createComposer({ document, session, drafts, ledger, thread, view
   }
 
 
-  return { send, steerDraft, queueDraft, hasDraft, runningInputAvailable, drainAll, drainQueue, renderQueue, acceptStartedTurn };
+  return { renderOptimistic,resolveOptimistic, send, steerDraft, queueDraft, hasDraft, runningInputAvailable, drainAll, drainQueue, renderQueue, acceptStartedTurn };
 }
