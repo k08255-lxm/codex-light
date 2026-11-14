@@ -1,6 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import {mountHistoryAutoLoad,captureHistoryAnchor,restoreHistoryAnchor} from '../public/ui/history-auto-load.js';
-function fixture(){const listeners={};const container={scrollTop:0,addEventListener(k,v){listeners[k]=v}};const button={addEventListener(k,v){this[k]=v}};const status={textContent:''};let key='a',hasMore=true,calls=0,resolve,reject;const ctrl=mountHistoryAutoLoad({container,button,status,getKey:()=>key,canLoad:()=>hasMore,load:()=>{calls++;return new Promise((a,b)=>{resolve=a;reject=b})}});return {ctrl,container,button,status,listeners,get calls(){return calls},resolve:()=>resolve(),reject:()=>reject(Error('offline')),key:v=>key=v,more:v=>hasMore=v};}
+function fixture(){const listeners={};const container={scrollTop:0,getBoundingClientRect:()=>({top:0}),querySelectorAll:()=>[],addEventListener(k,v){listeners[k]=v}};const button={addEventListener(k,v){this[k]=v}};const status={textContent:''};let key='a',hasMore=true,calls=0,resolve,reject;const ctrl=mountHistoryAutoLoad({container,button,status,getKey:()=>key,canLoad:()=>hasMore,load:()=>{calls++;return new Promise((a,b)=>{resolve=a;reject=b})}});return {ctrl,container,button,status,listeners,get calls(){return calls},resolve:()=>resolve(),reject:()=>reject(Error('offline')),key:v=>key=v,more:v=>hasMore=v};}
 const settle=()=>new Promise(r=>setImmediate(r));
 test('upward intention loads one page; repeated input dedupes and programmatic downward shift cannot cascade',async()=>{const f=fixture();f.listeners.wheel({deltaY:-2});f.listeners.wheel({deltaY:-2});assert.equal(f.calls,1);assert.equal(f.button.disabled,true);f.container.scrollTop=800;f.resolve();await settle();f.listeners.scroll();assert.equal(f.calls,1);f.container.scrollTop=50;f.listeners.scroll();assert.equal(f.calls,2);f.resolve();await settle();});
 test('error suspends auto retry, manual retry works; exhausted history cannot request',async()=>{const f=fixture();f.listeners.wheel({deltaY:-1});f.reject();await settle();assert.match(f.status.textContent,/offline/);f.listeners.wheel({deltaY:-1});assert.equal(f.calls,1);f.button.click();assert.equal(f.calls,2);f.more(false);f.resolve();await settle();assert.equal(f.status.textContent,'已到对话开头');f.button.click();assert.equal(f.calls,2);});
@@ -11,4 +11,15 @@ test('sidebar loads at bottom once, failure waits for manual retry and refresh i
  const events={};let calls=0,resolve,reject,key='a';const container={scrollTop:90,scrollHeight:200,clientHeight:100,addEventListener(k,v){events[k]=v}};
  const button={addEventListener(k,v){this[k]=v}},status={textContent:''};const c=mountThreadAutoLoad({container,button,status,getKey:()=>key,canLoad:()=>true,load:()=>{calls++;return new Promise((a,b)=>{resolve=a;reject=b})}});
  events.wheel({deltaY:1});events.wheel({deltaY:1});assert.equal(calls,1);reject(Error('offline'));await settle();events.wheel({deltaY:1});assert.equal(calls,1);button.click();assert.equal(calls,2);key='b';c.reset();resolve();await settle();assert.equal(status.textContent,'');
+});
+
+test('loading feedback cannot shift the first message at the top, or undo scrolling while waiting', async()=>{
+ const events={}; let text='',resolve; const container={scrollTop:0,getBoundingClientRect:()=>({top:0}),addEventListener(k,v){events[k]=v},querySelectorAll:()=>[node],contains:n=>n===node};
+ const node={getBoundingClientRect:()=>({top:60+(text?34:0)-container.scrollTop,bottom:100+(text?34:0)-container.scrollTop,height:40})};
+ const status={get textContent(){return text},set textContent(v){text=v}};
+ const button={addEventListener(){}};
+ mountHistoryAutoLoad({container,button,status,getKey:()=>1,canLoad:()=>true,load:()=>new Promise(r=>resolve=r)});
+ events.wheel({deltaY:-1});assert.equal(node.getBoundingClientRect().top,60);
+ container.scrollTop+=20;const readingTop=node.getBoundingClientRect().top;
+ resolve();await settle();assert.equal(node.getBoundingClientRect().top,readingTop);
 });

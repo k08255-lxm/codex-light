@@ -31,7 +31,7 @@ public final class AppUpdateChecker {
   final String found=version;activity.runOnUiThread(()->{if(found==null||activity.isFinishing()||activity.isDestroyed()||!timers.containsKey(activity))return;
    prefs.edit().putLong("checked",System.currentTimeMillis()).apply();
    if(found.equals(prefs.getString("notified","")))return;
-   new AlertDialog.Builder(activity).setTitle("Codex Light v"+found+" 可用").setMessage("发现新版手机 APK。查看发布说明后自行下载；Android 会检查签名，只能用相同签名的新版本覆盖安装。不会自动安装，也不要为更新卸载现有应用。").setNegativeButton("稍后",(d,w)->prefs.edit().putString("notified",found).apply()).setPositiveButton("查看更新",(d,w)->{prefs.edit().putString("notified",found).apply();activity.startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(REPO+"/tag/v"+found)));}).show();
+   new AlertDialog.Builder(activity).setTitle("码舱 CodeCang v"+found+" 可用").setMessage("发现新版手机 APK。查看发布说明后自行下载；Android 会检查签名，只能用相同签名的新版本覆盖安装。不会自动安装，也不要为更新卸载现有应用。").setNegativeButton("稍后",(d,w)->prefs.edit().putString("notified",found).apply()).setPositiveButton("查看更新",(d,w)->{prefs.edit().putString("notified",found).apply();activity.startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(REPO+"/tag/v"+found)));}).show();
   });
   },"app-update-check").start();
  }

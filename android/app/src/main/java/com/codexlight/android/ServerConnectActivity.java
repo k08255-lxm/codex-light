@@ -26,6 +26,7 @@ public class ServerConnectActivity extends Activity {
     private LinearLayout recentSection;
     private LinearLayout recentListContainer;
     private ServerConfigManager configManager;
+    private android.widget.CheckBox autoConnect;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -33,6 +34,9 @@ public class ServerConnectActivity extends Activity {
         setContentView(R.layout.activity_connect);
 
         configManager = new ServerConfigManager(this);
+        autoConnect = findViewById(R.id.autoConnect);
+        autoConnect.setChecked(configManager.isAutoConnectEnabled());
+        autoConnect.setOnCheckedChangeListener((button, checked) -> configManager.setAutoConnectEnabled(checked));
 
         editHost = findViewById(R.id.editHost);
         editPort = findViewById(R.id.editPort);
@@ -72,14 +76,20 @@ public class ServerConnectActivity extends Activity {
 
         if (getIntent().getBooleanExtra("demo", false)) {
             launchDemoMode();
+        } else if (savedInstanceState == null && !getIntent().getBooleanExtra("manual", false)
+                && configManager.isAutoConnectEnabled() && last != null
+                && ReconnectPolicy.eligible(last.getHost(), last.getPort(), last.getToken())) {
+            launchConnection(last, true);
         }
+        if (configManager.hasStorageError()) Toast.makeText(this,
+            "已保存的连接无法解密，请重新配对；没有发送旧凭据。", Toast.LENGTH_LONG).show();
     }
 
     @Override protected void onResume(){super.onResume();AppUpdateChecker.start(this);}
     @Override protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(request==42&&result==RESULT_OK&&data!=null)redeem(data.getStringExtra("pairing"));}
     private void redeem(String link){
         if(pairingBusy)return;
-        new android.app.AlertDialog.Builder(this).setTitle("连接这台电脑？").setMessage("只扫描你自己电脑上的二维码。配对会允许本手机使用该电脑的 Codex Light；HTTP 仅适用于可信局域网。").setNegativeButton("取消",null).setPositiveButton("配对",(dialog,which)->{
+        new android.app.AlertDialog.Builder(this).setTitle("连接这台电脑？").setMessage("只扫描你自己电脑上的二维码。配对会允许本手机使用该电脑的 码舱 CodeCang；HTTP 仅适用于可信局域网。").setNegativeButton("取消",null).setPositiveButton("配对",(dialog,which)->{
          if(pairingBusy)return;pairingBusy=true;Toast.makeText(this,"正在配对…",Toast.LENGTH_SHORT).show();
          new Thread(()->{try{ServerConfig cfg=PairingClient.redeem(link);runOnUiThread(()->{pairingBusy=false;if(isFinishing()||isDestroyed())return;editHost.setText(cfg.getHost());editPort.setText(String.valueOf(cfg.getPort()));editToken.setText(cfg.getToken());performConnect();});}catch(Exception e){runOnUiThread(()->{pairingBusy=false;if(!isFinishing())new android.app.AlertDialog.Builder(this).setTitle("配对失败").setMessage("请确认同一网络，并在电脑重新生成二维码后重试。也可粘贴手动连接链接。").setPositiveButton("知道了",null).show();});}},"pairing").start();
         }).show();
@@ -102,7 +112,7 @@ public class ServerConnectActivity extends Activity {
                     }
                 }
             }
-            Toast.makeText(this, "剪贴板中未发现有效的 Codex Light 局域网链接", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "剪贴板中未发现有效的 码舱 CodeCang 局域网链接", Toast.LENGTH_SHORT).show();
         } catch (Exception e) {
             Toast.makeText(this, "读取剪贴板失败: " + e.getMessage(), Toast.LENGTH_SHORT).show();
         }
@@ -131,9 +141,21 @@ public class ServerConnectActivity extends Activity {
         }
 
         ServerConfig cfg = new ServerConfig(host, port, token);
-        configManager.saveCurrent(cfg);
+        if (!ReconnectPolicy.eligible(cfg.getHost(), cfg.getPort(), cfg.getToken())) {
+            Toast.makeText(this, "请输入电脑生成的私有 IPv4 地址、端口和完整访问令牌，或重新扫码配对。", Toast.LENGTH_LONG).show();
+            return;
+        }
+        new android.app.AlertDialog.Builder(this)
+            .setTitle("连接已配对的电脑？")
+            .setMessage("请确认当前是可信局域网，地址属于你的电脑。HTTP 未加密；确认后会记住当前网络，下次打开 App 自动连接。更换网络或手机重启后需再次确认。")
+            .setNegativeButton("取消", null)
+            .setPositiveButton("确认连接", (dialog, which) -> launchConnection(cfg, false)).show();
+    }
 
+    private void launchConnection(ServerConfig cfg, boolean automatic) {
         Intent intent = new Intent(this, MainActivity.class);
+        intent.putExtra("automatic", automatic);
+        intent.putExtra("authorizedNetwork", automatic ? configManager.getNetworkBinding() : NetworkBinding.current(this));
         intent.putExtra("host", cfg.getHost());
         intent.putExtra("port", cfg.getPort());
         intent.putExtra("token", cfg.getToken());

@@ -31,6 +31,12 @@ public class MainActivity extends Activity {
 
     private ServerConfig currentConfig;
     private boolean isDemoMode = false;
+    private LanConnectionClient connectionAttempt;
+    private int connectionGeneration;
+    private boolean connectionFailed;
+    private boolean authorizationFailed;
+    private String authorizedNetwork = "";
+    private int networkLease;
     private volatile boolean currentPageTrusted = false;
     private long lastBackPressTime = 0;
     private boolean backRequestPending = false;
@@ -52,7 +58,7 @@ public class MainActivity extends Activity {
             getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
                 android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, systemBackCallback);
         }
-        loadTargetUrl();
+        if (!isFinishing()) loadTargetUrl();
     }
 
     private void initViews() {
@@ -100,13 +106,15 @@ public class MainActivity extends Activity {
         isDemoMode = intent.getBooleanExtra("demo", false);
 
         if (!isDemoMode) {
+            ServerConfigManager saved = new ServerConfigManager(this);
+            authorizedNetwork = intent.getStringExtra("authorizedNetwork");
             String host = intent.getStringExtra("host");
             int port = intent.getIntExtra("port", 0);
             String token = intent.getStringExtra("token");
 
             if (host != null && !host.isEmpty()) {
                 currentConfig = new ServerConfig(host, port, token);
-                new ServerConfigManager(this).saveCurrent(currentConfig);
+                // Save only after authenticated contact with the paired server.
             } else {
                 ServerConfigManager mgr = new ServerConfigManager(this);
                 currentConfig = mgr.getCurrent();
@@ -193,6 +201,10 @@ public class MainActivity extends Activity {
     }
 
     private void loadTargetUrl() {
+        cancelConnectionAttempt();
+        if (webView != null) webView.stopLoading();
+        connectionFailed = false;
+        authorizationFailed = false;
         navigationGeneration++;
         backRequestPending = false;
         lastBackPressTime = 0;
@@ -203,13 +215,61 @@ public class MainActivity extends Activity {
             statusDot.setBackgroundTintList(getColorStateList(R.color.status_warning));
             webView.loadUrl("file:///android_asset/web/index.html");
         } else if (currentConfig != null) {
-            currentPageTrusted = true;
+            String network = NetworkBinding.current(this);
+            if (!NetworkBinding.matches(authorizedNetwork, network)) {
+                authorizationFailed = true;
+                showConnectionError("网络已变化或无法确认。为避免把令牌发给同地址的其他设备，自动连接已暂停。请返回连接页，确认可信网络和电脑地址后再连接。");
+                return;
+            }
+            networkLease = NetworkBinding.bind(this, authorizedNetwork);
+            if (networkLease == 0) {
+                authorizationFailed = true;
+                showConnectionError("无法安全绑定已确认的网络，请返回连接页重试。");
+                return;
+            }
+            currentPageTrusted = false;
             tvServerTitle.setText(currentConfig.toDisplayAddress());
             if (tvModeBadge != null) tvModeBadge.setText("LAN");
-            statusDot.setBackgroundTintList(getColorStateList(R.color.status_connected));
-            String url = currentConfig.toFullUrl();
-            webView.loadUrl(url);
+            statusDot.setBackgroundTintList(getColorStateList(R.color.status_warning));
+            tvModeBadge.setText("连接中");
+            progressBar.setVisibility(View.VISIBLE);
+            final int attemptId = connectionGeneration;
+            final ServerConfig target = currentConfig;
+            final String expectedNetwork = authorizedNetwork;
+            final LanConnectionClient attempt = new LanConnectionClient(url -> NetworkBinding.open(this, expectedNetwork, url));
+            connectionAttempt = attempt;
+            new Thread(() -> {
+                LanConnectionClient.Result result = attempt.check(target);
+                runOnUiThread(() -> {
+                    if (attemptId != connectionGeneration || isFinishing() || isDestroyed()) return;
+                    connectionAttempt = null;
+                    progressBar.setVisibility(View.GONE);
+                    if (result == LanConnectionClient.Result.READY) {
+                        ServerConfigManager manager = new ServerConfigManager(this);
+                        // The network may have changed while the request was in flight.
+                        if (!NetworkBinding.matches(authorizedNetwork, NetworkBinding.current(this))) {
+                            authorizationFailed = true;
+                            showConnectionError("连接期间网络变化，请重新确认当前网络。");
+                            return;
+                        }
+                        manager.saveCurrent(target, authorizedNetwork);
+                        if (manager.hasStorageError()) Toast.makeText(this,
+                            "本次已连接，但无法安全保存凭据；下次可能需要重新配对。", Toast.LENGTH_LONG).show();
+                        currentPageTrusted = true;
+                        tvModeBadge.setText("LAN");
+                        webView.loadUrl(target.toFullUrl());
+                    } else {
+                        authorizationFailed = result == LanConnectionClient.Result.UNAUTHORIZED || result == LanConnectionClient.Result.INVALID;
+                        showConnectionError(authorizationFailed ? "配对已失效，请在电脑生成新二维码并重新配对。" : "暂时无法连接电脑。请确认电脑远控已开启，手机和电脑位于同一可信网络。若电脑地址变化，请重新配对。");
+                    }
+                });
+            }, "lan-reconnect").start();
         }
+    }
+
+    private void cancelConnectionAttempt() {
+        connectionGeneration++;
+        if (connectionAttempt != null) { connectionAttempt.cancel(); connectionAttempt = null; }
     }
 
     public void hideConnectionError() {
@@ -222,16 +282,18 @@ public class MainActivity extends Activity {
     }
 
     public void showConnectionError(String detail) {
+        connectionFailed = true;
+        currentPageTrusted = false;
+        progressBar.setVisibility(View.GONE);
+        if (tvModeBadge != null) tvModeBadge.setText(authorizationFailed ? "需配对" : "离线");
         if (errorOverlay == null) return;
         errorOverlay.setVisibility(View.VISIBLE);
         if (statusDot != null) {
             statusDot.setBackgroundTintList(getColorStateList(R.color.status_error));
         }
-        if (currentConfig != null) {
-            tvErrorMessage.setText("目标地址：" + currentConfig.toDisplayAddress() + "\n\n排查项：\n• 桌面端「设置 → 远程控制 → 局域网访问」保持开启\n• 手机与电脑连接在同一可信局域网\n• 电脑防火墙允许入站 TCP 端口 " + currentConfig.getPort());
-        } else {
-            tvErrorMessage.setText(detail);
-        }
+        tvErrorMessage.setText(detail + (currentConfig == null ? "" : "\n\n目标地址：" + currentConfig.toDisplayAddress()));
+        btnErrorRetry.setVisibility(authorizationFailed ? View.GONE : View.VISIBLE);
+        btnErrorChangeServer.setText(authorizationFailed ? "重新配对" : "取消重连 / 更换电脑");
     }
 
     public void setFileUploadCallback(ValueCallback<Uri[]> callback) {
@@ -248,7 +310,11 @@ public class MainActivity extends Activity {
     }
 
     private void openServerManager() {
+        cancelConnectionAttempt();
+        if (webView != null) { webView.stopLoading(); webView.loadUrl("about:blank"); }
+        currentPageTrusted = false;
         Intent intent = new Intent(this, ServerConnectActivity.class);
+        intent.putExtra("manual", true);
         startActivity(intent);
         finish();
     }
@@ -329,16 +395,26 @@ public class MainActivity extends Activity {
         super.onResume();
         AppUpdateChecker.start(this);
         if (webView != null) webView.onResume();
+        if (connectionFailed && !authorizationFailed && new ServerConfigManager(this).isAutoConnectEnabled()) {
+            errorOverlay.setVisibility(View.GONE);
+            loadTargetUrl();
+        }
     }
 
     @Override
     protected void onPause() {
-        AppUpdateChecker.stop(this);super.onPause();
+        AppUpdateChecker.stop(this);
+        if (connectionAttempt != null) {
+            cancelConnectionAttempt();
+            showConnectionError("连接已暂停。返回后可重试，或更换电脑。");
+        }
+        super.onPause();
         if (webView != null) webView.onPause();
     }
 
     @Override
     protected void onDestroy() {
+        cancelConnectionAttempt();
         navigationGeneration++;
         if (Build.VERSION.SDK_INT >= 33 && systemBackCallback != null) {
             getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(systemBackCallback);
@@ -348,6 +424,7 @@ public class MainActivity extends Activity {
             webView.stopLoading();
             webView.destroy();
         }
+        NetworkBinding.release(this, networkLease);
         super.onDestroy();
     }
 }

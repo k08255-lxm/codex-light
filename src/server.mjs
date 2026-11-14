@@ -23,6 +23,7 @@ import {TitleSummaryService} from './title-summary.mjs';
 import {StatisticsService,defaultStatisticsRoot} from './statistics.mjs';
 import {ArtifactPreviewService} from './artifacts.mjs';
 import {LanAccess} from './lan-access.mjs';
+import {LanPreferenceStore,windowsNetworkIdentity} from './lan-preferences.mjs';
 import {GitService} from './git.mjs';
 import {TerminalService} from './terminal.mjs';
 import { RpcClient } from './rpc.mjs';
@@ -218,7 +219,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      const action=url.pathname.slice('/api/lan/'.length);
      if(!input||typeof input!=='object'||Array.isArray(input))throw new Error('局域网参数无效');
      if(action==='enable'){json(res,200,await lan.enable(input));return;}
-     if(!['status','disable','rotate','pairing','cancelPairing'].includes(action)||Object.keys(input).length)throw new Error('局域网操作参数无效');
+     if(!['status','restore','disable','rotate','pairing','cancelPairing'].includes(action)||Object.keys(input).length)throw new Error('局域网操作参数无效');
      json(res,200,await lan[action]());return;
     }
     if(url.pathname==='/api/desktop/pick-folder'){
@@ -445,7 +446,8 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
   try{let bytes=await readFile(path.join(publicDir,filename));if(filename==='index.html')bytes=Buffer.from(bytes.toString('utf8').replace(/<head>/i,`<head><meta name="codex-light-style-nonce" content="${styleNonce}">`));res.writeHead(200,{'Content-Type':types[path.extname(filename)]});res.end(bytes);}catch{json(res,404,{error:'资源未找到'});}
  };
  const server=http.createServer((req,res)=>handle(req,res));
- const lan=new LanAccess({...lanOptions,handler:handle,publicPaths:Object.keys(publicFiles)});
+ const lanPersistence=desktop&&!demo&&process.platform==='win32'?{preferenceStore:new LanPreferenceStore({root:path.join(desktopState.root,'lan')}),networkIdentity:windowsNetworkIdentity}:{};
+ const lan=new LanAccess({...lanPersistence,...lanOptions,handler:handle,publicPaths:Object.keys(publicFiles)});
  function observeRemote(method,params,result){
   if(['remoteControl/status/read','remoteControl/enable','remoteControl/disable'].includes(method)){const env=result?.environmentId||null;if(env!==remoteEnvironment){remoteEnvironment=env;remoteClients.clear();clearPairing();}}
   if(method==='remoteControl/client/list'){if(!params.cursor)remoteClients.clear();for(const client of result?.data||[])if(typeof client.clientId==='string')remoteClients.add(client.clientId);}
@@ -481,6 +483,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
  });
  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',resolve);});
  origin=`http://127.0.0.1:${server.address().port}`;
+ void lan.restore().catch(()=>{});
  if(reopen){try{reopener=await createReopener({url:`${origin}/#token=${token}`,serverInstance:operations.serverInstance});}catch{reopenError='安全重开通道不可用；关闭窗口后请恢复原窗口，不会通过不安全方式返回访问令牌';}}
  function reportShutdownFailure(error){shutdownError={code:error.code||'SHUTDOWN_FAILED',message:'本地服务关闭失败，不能确认所有资源已释放'};broadcast({method:'bridge/shutdown',params:{state:'failed',...shutdownError,engineStopped}});}
  function shutdownServices(){
@@ -508,6 +511,6 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
 if(process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href===import.meta.url){
  const args=process.argv.slice(2);const get=key=>args.includes(key)?args[args.indexOf(key)+1]:undefined;
  const app=await createServer({demo:args.includes('--demo'),reopen:true,cwd:get('--cwd')||'',command:get('--codex')||process.env.CODEX_LIGHT_CODEX||'codex'});
- if(process.send)process.send({url:app.url,serverInstance:app.operations.serverInstance,reopenEndpoint:app.reopenEndpoint});else console.log(`Codex Light 本地地址（仅自己使用）：\n${app.url}\n关闭此进程会停止 GUI 后端。`);
+ if(process.send)process.send({url:app.url,serverInstance:app.operations.serverInstance,reopenEndpoint:app.reopenEndpoint});else console.log(`码舱 CodeCang 本地地址（仅自己使用）：\n${app.url}\n关闭此进程会停止 GUI 后端。`);
  for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>app.close().then(()=>process.exit()));
 }

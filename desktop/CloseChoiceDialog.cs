@@ -7,7 +7,7 @@ internal sealed class CloseChoiceDialog : Form {
  public bool RememberChoice=>Choice!=CloseChoice.Cancel&&remember.Checked;
  readonly Font dialogFont=new("Microsoft YaHei UI",9f,FontStyle.Regular,GraphicsUnit.Point);
  public CloseChoiceDialog(Color surface,Color foreground){
-  Text="关闭 Codex Light";FormBorderStyle=FormBorderStyle.FixedDialog;StartPosition=FormStartPosition.CenterParent;
+  Text="关闭 码舱 CodeCang";FormBorderStyle=FormBorderStyle.FixedDialog;StartPosition=FormStartPosition.CenterParent;
   MinimizeBox=false;MaximizeBox=false;ShowInTaskbar=false;
   AutoScaleDimensions=new SizeF(96,96);AutoScaleMode=AutoScaleMode.Dpi;Font=dialogFont;
   BackColor=SystemInformation.HighContrast?SystemColors.Window:surface;

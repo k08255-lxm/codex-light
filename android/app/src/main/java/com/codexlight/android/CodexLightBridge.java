@@ -65,7 +65,7 @@ public class CodexLightBridge {
                 if (clipboard == null) {
                     return;
                 }
-                ClipData clip = ClipData.newPlainText("Codex Light", text);
+                ClipData clip = ClipData.newPlainText("码舱 CodeCang", text);
                 clipboard.setPrimaryClip(clip);
                 copied.set(true);
             } catch (Exception ignored) {

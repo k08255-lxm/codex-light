@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Codex Light</string>
+    <string name="app_name">码舱 CodeCang</string>
     <string name="app_subtitle">局域网移动工作台 · 复用桌面端 Codex CLI</string>
 
     <string name="btn_paste_url">从剪贴板粘贴局域网链接</string>
@@ -18,7 +18,7 @@
     <string name="btn_connect">连接工作台</string>
     <string name="btn_demo_mode">离线界面预览（不连接电脑）</string>
 
-    <string name="guide_summary">配对方式：电脑端打开 Codex Light → 设置 → 远程控制 → 局域网访问，开启后复制链接。局域网 HTTP 未加密，请仅在可信网络中使用。</string>
+    <string name="guide_summary">配对方式：电脑端打开 码舱 CodeCang → 设置 → 远程控制 → 局域网访问，开启后复制链接。局域网 HTTP 未加密，请仅在可信网络中使用。</string>
 
     <string name="recent_servers">最近连接</string>
     <string name="no_recent_servers">暂无记录</string>

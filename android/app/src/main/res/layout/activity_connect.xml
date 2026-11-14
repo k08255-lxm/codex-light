@@ -262,6 +262,16 @@
                 android:textSize="13sp" />
         </LinearLayout>
 
+        <CheckBox
+            android:id="@+id/autoConnect"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:layout_marginBottom="12dp"
+            android:text="打开 App 时连接上次配对的电脑"
+            android:textColor="@color/text_primary"
+            android:textSize="14sp" />
+
         <!-- Recent Connections -->
         <LinearLayout
             android:id="@+id/recentSection"

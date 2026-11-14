@@ -45,7 +45,7 @@ export function mountRuntimePanel(container,{read,check,upgrade,queryPending,onR
  const el=(tag,value,className)=>{const node=doc.createElement(tag);if(value!==undefined)node.textContent=value;if(className)node.className=className;return node;};
  const section=el('section',undefined,'settings-section runtime-panel');
  const title=el('h2','运行引擎与更新');
- const intro=el('p','这里只管理后台 Codex 引擎和 npm CLI，不需要打开或更新官方桌面界面，也不会自动启动官方界面。 “刷新版本”只读取本机状态；“检查更新”仅在你点击时读取官方 npm registry；安装完成后需下次重启 Codex Light 才生效。','runtime-intro');
+ const intro=el('p','这里只管理后台 Codex 引擎和 npm CLI，不需要打开或更新官方桌面界面，也不会自动启动官方界面。 “刷新版本”只读取本机状态；“检查更新”仅在你点击时读取官方 npm registry；安装完成后需下次重启 码舱 CodeCang 才生效。','runtime-intro');
  const status=el('p','尚未读取运行引擎状态。进入设置或点击“刷新版本”后读取；不会自动联网。','runtime-status');
  status.setAttribute('role','status');status.setAttribute('aria-live','polite');status.setAttribute('aria-atomic','true');
  const rows=el('div',undefined,'runtime-setting-rows');
@@ -55,7 +55,7 @@ export function mountRuntimePanel(container,{read,check,upgrade,queryPending,onR
  const confirmation=el('section',undefined,'runtime-confirm');confirmation.hidden=true;
  confirmation.setAttribute('role','group');confirmation.setAttribute('aria-live','polite');confirmation.setAttribute('aria-atomic','true');confirmation.setAttribute('aria-labelledby','runtime-confirm-title');confirmation.setAttribute('aria-describedby','runtime-confirm-note');
  const confirmTitle=el('strong',undefined,'确认升级运行引擎');confirmTitle.id='runtime-confirm-title';
- const confirmNote=el('p','先下载并验证新引擎，再替换 npm 安装。完成后重启 Codex Light 生效。','runtime-confirm-note');confirmNote.id='runtime-confirm-note';
+ const confirmNote=el('p','先下载并验证新引擎，再替换 npm 安装。完成后重启 码舱 CodeCang 生效。','runtime-confirm-note');confirmNote.id='runtime-confirm-note';
  const confirmTargetLine=el('p',undefined,'runtime-confirm-target');
  const confirmTargetCode=el('code','未提供');
  confirmTargetLine.append(el('span','目标版本 '),confirmTargetCode);
@@ -169,7 +169,7 @@ export function mountRuntimePanel(container,{read,check,upgrade,queryPending,onR
    const result=await upgrade({version:target,confirmed:true});
    if(disposed||version!==generation)return;
    if(result?.outcome==='succeeded'&&result.installedVersion===target&&result.restartRequired===true){
-    pending=false;snapshot=null;renderRows();say(`已确认 npm CLI 升级到 ${target}；重启 Codex Light 后生效。`);
+    pending=false;snapshot=null;renderRows();say(`已确认 npm CLI 升级到 ${target}；重启 码舱 CodeCang 后生效。`);
    }else if(result?.outcome==='not-executed'){
     pending=false;const detail=outcomeDetail(result);say(`${detail?detail+'。':''}升级未执行；当前以实际 npm 版本为准，不会自动重试。`);
    }else{

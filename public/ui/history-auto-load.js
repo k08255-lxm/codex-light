@@ -2,21 +2,26 @@
 export function mountHistoryAutoLoad({container, button, status, canLoad, load, getKey}) {
   let pending = null, failed = false, lastTop = container.scrollTop, touchY = null, epoch = 0;
   const label = '加载更早的内容';
+  // Loading/error text is inside the scroller. Preserve the reading position when
+  // it enters/leaves flow, including at scrollTop=0 where native anchoring is off.
+  function feedback(change) {
+    const anchor = captureHistoryAnchor(container);
+    change();
+    restoreHistoryAnchor(container, anchor);
+  }
   function reset() { epoch++; pending = null; failed = false; button.disabled = false; button.textContent = label; status.textContent = ''; lastTop = container.scrollTop; }
   async function request(manual = false) {
     if (pending || (!manual && failed) || !canLoad()) return;
     const key = getKey(), version = epoch;
     const ticket = {}; pending = ticket; failed = false; button.disabled = true;
-    button.textContent = '正在加载…'; status.textContent = '正在加载更早的内容…';
+    feedback(() => { button.textContent = '正在加载…'; status.textContent = '正在加载更早的内容…'; });
     try {
       await load();
       if (key !== getKey() || version !== epoch) return;
-      status.textContent = canLoad() ? '' : '已到对话开头';
-      button.textContent = label;
+      feedback(() => { status.textContent = canLoad() ? '' : '已到对话开头'; button.textContent = label; });
     } catch (error) {
       if (key !== getKey() || version !== epoch) return;
-      failed = true; button.textContent = '重试加载更早的内容';
-      status.textContent = '加载失败：' + (error?.message || '请重试');
+      failed = true; feedback(() => { button.textContent = '重试加载更早的内容'; status.textContent = '加载失败：' + (error?.message || '请重试'); });
     } finally {
       if (pending === ticket) { pending = null; button.disabled = false; lastTop = container.scrollTop; }
     }

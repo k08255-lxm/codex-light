@@ -18,6 +18,19 @@ try{for(const width of [1440,390]){
  const before=calls.filter(x=>x.m==='thread/items/list').length;
  await page.locator('#conversation').evaluate(n=>{n.scrollTop=100;});await page.waitForFunction(()=>document.querySelector('#earlier').disabled===false&&document.querySelector('[data-item-id="u30"]'));
  assert.ok(calls.filter(x=>x.m==='thread/items/list').length>before);assert.ok(await page.locator('#conversation').evaluate(n=>n.scrollTop>100));
+ // The loading status itself enters/leaves the scroll flow. At the hard top the
+ // browser does not preserve its anchor automatically. Check the actual message,
+ // not merely scrollTop > 0 (which missed the old 34px jump).
+ for (let round=0;round<2;round++) {
+  const anchor=await page.locator('#conversation').evaluate(c=>{
+   c.scrollTop=0;const node=[...c.querySelectorAll('[data-item-id]')].find(n=>n.getBoundingClientRect().height>0);
+   return {id:node.dataset.itemId,offset:node.getBoundingClientRect().top-c.getBoundingClientRect().top};
+  });
+  await page.locator('#conversation').evaluate(c=>c.dispatchEvent(new WheelEvent('wheel',{deltaY:-40})));
+  await page.waitForFunction(()=>!document.querySelector('#earlier').disabled);await page.waitForTimeout(100);
+  const offset=await page.locator('#conversation').evaluate((c,id)=>c.querySelector('[data-item-id="'+id+'"]')?.getBoundingClientRect().top-c.getBoundingClientRect().top,anchor.id);
+  assert.ok(Math.abs(offset-anchor.offset)<2, 'history feedback moved the reading anchor by '+(offset-anchor.offset)+'px');
+ }
  await page.screenshot({path:path.join(out,'chat-'+width+'.png')});
  // sidebar auto paging while at the lower edge, without pressing its old button.
  if(width===390)await page.locator('#rail-sidebar').click();const count=calls.filter(x=>x.m==='thread/list').length;

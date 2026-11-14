@@ -5,7 +5,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Represents connection parameters to a Codex Light desktop server.
+ * Represents connection parameters to a 码舱 CodeCang desktop server.
  */
 public class ServerConfig {
     private String host;
@@ -40,7 +40,7 @@ public class ServerConfig {
     public void setLastConnectedAt(long time) { this.lastConnectedAt = time; }
 
     /**
-     * Constructs the full web URL with the #token fragment, exactly matching Codex Light LAN specs.
+     * Constructs the full web URL with the #token fragment, exactly matching 码舱 CodeCang LAN specs.
      */
     public String toFullUrl() {
         StringBuilder sb = new StringBuilder();

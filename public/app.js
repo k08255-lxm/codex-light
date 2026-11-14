@@ -50,7 +50,7 @@ import { mountPanelResize } from './ui/panel-resize.js';
 import { mountToolActivity } from './ui/tool-activity.js';
 import { mountLiveChanges, pillChanges, mountScrollToBottom } from './ui/live-changes.js';
 import { createDelegationMonitor } from './delegation-monitor.js';
-if(new URL(location.href).searchParams.get('preview')==='source')document.title='Codex Light · 源码预览';
+if(new URL(location.href).searchParams.get('preview')==='source')document.title='码舱 CodeCang · 源码预览';
 const attachmentDraft = new AttachmentDraft();
 const fileAttachmentDraft = new FileAttachmentDraft();
 const attachmentPreviews = new Map();
@@ -1170,7 +1170,7 @@ $('menu-app').addEventListener('click',()=>openWindowMenu('app'));
 $('menu-file').addEventListener('click', () => openWindowMenu('file')); $('menu-view').addEventListener('click', () => openWindowMenu('view'));
 document.addEventListener('click', e => { if (!$('window-menu').contains(e.target) && !e.target.closest('#menu-file,#menu-view,#menu-app')) closeWindowMenu(); });
 $('window-menu').addEventListener('keydown', e => { const buttons = [...$('window-menu').querySelectorAll('button')]; if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); const n = buttons.indexOf(document.activeElement); buttons[(n + (e.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length]?.focus(); } });
-$('menu-help').addEventListener('click', () => notice('Codex Light 支持本地聊天、历史、审批与 DSH 任务展示，通过本机 Codex CLI 工作。设置仅显示当前可用功能。'));
+$('menu-help').addEventListener('click', () => notice('码舱 CodeCang 支持本地聊天、历史、审批与 DSH 任务展示，通过本机 Codex CLI 工作。设置仅显示当前可用功能。'));
 $('settings-search').addEventListener('input', () => { const query = $('settings-search').value.trim().toLowerCase(); for (const item of document.querySelectorAll('.settings-nav-item')) item.classList.toggle('hidden', !item.textContent.toLowerCase().includes(query)); });
 for (const button of document.querySelectorAll('[data-settings-section]')) button.addEventListener('click', () => {const wasOverlay=sidebarController.isOverlayOpen();selectSettingsSection(button.dataset.settingsSection);if(wasOverlay){sidebarController.closeForNavigation();$('settings-back').focus();}});
 function selectSettingsSection(section = 'general') {
@@ -1291,6 +1291,6 @@ async function init() {
   } catch (e) { setConnected(false); notice(e.message, true); activity('未发送任何模型请求'); }
 }
 init();
-if(!access.lan)startUpdateChecks({check:()=>api('/api/app-update/check',{}),onStatus:status=>updateIndicator?.update(status),notify:version=>notice('Codex Light v'+version+' 可用。打开设置 → 关于查看更新说明并下载。')});
+if(!access.lan)startUpdateChecks({check:()=>api('/api/app-update/check',{}),onStatus:status=>updateIndicator?.update(status),notify:version=>notice('码舱 CodeCang v'+version+' 可用。打开设置 → 关于查看更新说明并下载。')});
 
 mountDesktopClosePreference();

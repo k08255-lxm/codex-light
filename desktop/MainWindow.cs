@@ -19,7 +19,7 @@ internal sealed class MainWindow : CaptionWindow {
  Task? stopTask;
  string startupStage="检测运行环境";
  readonly WindowPlacementController placement;
- public MainWindow(bool demo){this.demo=demo;Text="Codex Light";Icon=Icon.ExtractAssociatedIcon(Application.ExecutablePath);Size=new Size(1257,945);MinimumSize=new Size(800,600);BackColor=Color.FromArgb(24,24,24);Controls.Add(view);Controls.Add(loading);BuildCaptionMenu();placement=new WindowPlacementController(this,WindowPlacementStore.ForCurrentUser());Shown+=async(_,_)=>await StartAsync();FormClosing+=OnClosing;}
+ public MainWindow(bool demo){this.demo=demo;Text="码舱 CodeCang";Icon=Icon.ExtractAssociatedIcon(Application.ExecutablePath);Size=new Size(1257,945);MinimumSize=new Size(800,600);BackColor=Color.FromArgb(24,24,24);Controls.Add(view);Controls.Add(loading);BuildCaptionMenu();placement=new WindowPlacementController(this,WindowPlacementStore.ForCurrentUser());Shown+=async(_,_)=>await StartAsync();FormClosing+=OnClosing;}
  protected override void OnLoad(EventArgs e){base.OnLoad(e);placement.Restore();try{ShowTray();}catch{DisposeTray();ShowTrayFailure();}}
  protected override void OnMove(EventArgs e){base.OnMove(e);placement?.Capture();}
  protected override void OnResize(EventArgs e){base.OnResize(e);placement?.Capture();}
@@ -169,7 +169,7 @@ internal sealed class MainWindow : CaptionWindow {
  void OpenExternal(string value){
   if(!Uri.TryCreate(value,UriKind.Absolute,out var uri)||uri.Scheme!="https"||uri.UserInfo!=""||uri.IsLoopback)return;
   if(MessageBox.Show(this,"在系统浏览器打开以下完整外部链接？地址中的查询参数将发送给该站点。\n"+uri.AbsoluteUri,"打开外部链接",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
-  try{Process.Start(new ProcessStartInfo(uri.AbsoluteUri){UseShellExecute=true});}catch{MessageBox.Show(this,"无法打开系统浏览器。","Codex Light");}
+  try{Process.Start(new ProcessStartInfo(uri.AbsoluteUri){UseShellExecute=true});}catch{MessageBox.Show(this,"无法打开系统浏览器。","码舱 CodeCang");}
  }
  void HandleCloseBehavior(string json){
   if(closing)return;
@@ -188,7 +188,7 @@ internal sealed class MainWindow : CaptionWindow {
    var path=LocalPathLinks.Normalize(LocalPathLinks.ReadMessage(json));var directory=LocalPathLinks.ValidateExisting(path);
    if(MessageBox.Show(this,(directory?"在资源管理器中打开此文件夹？":"在资源管理器中定位此文件？不会运行文件。")+"\n"+path,"本地文件",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
    directory=LocalPathLinks.ValidateExisting(path);Process.Start(LocalPathLinks.Explorer(path,directory))?.Dispose();
-  }catch(Exception error) when(error is IOException or UnauthorizedAccessException or ArgumentException or JsonException or InvalidOperationException or System.ComponentModel.Win32Exception){MessageBox.Show(this,"无法定位此路径。请确认它是本机现有文件或文件夹；不支持网络路径、快捷方式跳转和特殊协议。","Codex Light");}
+  }catch(Exception error) when(error is IOException or UnauthorizedAccessException or ArgumentException or JsonException or InvalidOperationException or System.ComponentModel.Win32Exception){MessageBox.Show(this,"无法定位此路径。请确认它是本机现有文件或文件夹；不支持网络路径、快捷方式跳转和特殊协议。","码舱 CodeCang");}
   finally{revealingLocalPath=false;}
  }
  async Task PickFolderAsync(string requestId){
@@ -233,7 +233,7 @@ internal sealed class MainWindow : CaptionWindow {
     closing=false;Enabled=true;
     // Shutdown may have closed stdin; keep automatic EOF/Exited cleanup disarmed.
     // There is no Close/Dispose/force-stop fallback on update failure.
-    MessageBox.Show(this,"后台或其子任务未能安全退出，更新已取消，未强制结束任务。请检查任务后手动重新启动应用。","Codex Light",MessageBoxButtons.OK,MessageBoxIcon.Warning);
+    MessageBox.Show(this,"后台或其子任务未能安全退出，更新已取消，未强制结束任务。请检查任务后手动重新启动应用。","码舱 CodeCang",MessageBoxButtons.OK,MessageBoxIcon.Warning);
    }
   }
  }
@@ -269,9 +269,8 @@ internal sealed class MainWindow : CaptionWindow {
    trayIcon=TrayAppearance.CreateIcon(Math.Max(16,SystemInformation.SmallIconSize.Width),TrayAppearance.IsLightTaskbar());
    TrayAppearance.Apply(trayMenu,TrayAppearance.IsLightTaskbar());
    trayMenu.Opening+=(_,_)=>RefreshTrayAppearance();
-   tray=new NotifyIcon{Text="Codex Light",Icon=trayIcon,ContextMenuStrip=trayMenu};// MouseClick fires for the first release; WinForms suppresses the double-click release.
-   // Do not also subscribe to DoubleClick: a double click must not restore twice.
-   tray.MouseClick+=(_,e)=>{if(e.Button==MouseButtons.Left&&e.Clicks==1)RestoreFromTray();};
+   tray=new NotifyIcon{Text="码舱 CodeCang",Icon=trayIcon,ContextMenuStrip=trayMenu};
+   TrayInteraction.BindRestore(tray,RestoreFromTray);
   }
   tray.Visible=true;
   if(!tray.Visible)throw new InvalidOperationException("Tray icon unavailable");
@@ -283,7 +282,7 @@ internal sealed class MainWindow : CaptionWindow {
   var previous=trayIcon;tray.Icon=next;trayIcon=next;previous?.Dispose();
   TrayAppearance.Apply(trayMenu,light);
  }
- void ShowTrayFailure()=>MessageBox.Show(this,"无法显示系统托盘图标，窗口将保持打开。","Codex Light",MessageBoxButtons.OK,MessageBoxIcon.Error);
+ void ShowTrayFailure()=>MessageBox.Show(this,"无法显示系统托盘图标，窗口将保持打开。","码舱 CodeCang",MessageBoxButtons.OK,MessageBoxIcon.Error);
  void DisposeTray(){if(tray!=null){tray.Visible=false;tray.Dispose();tray=null;}trayMenu?.Dispose();trayMenu=null;trayIcon?.Dispose();trayIcon=null;trayFont?.Dispose();trayFont=null;}
  protected override void WndProc(ref Message message){
   sessionEnd.Observe(message.Msg,message.WParam);
@@ -305,7 +304,7 @@ internal sealed class MainWindow : CaptionWindow {
      using var dialog=new CloseChoiceDialog(BackColor,ForeColor);dialog.ShowDialog(this);choice=dialog.Choice;
      if(dialog.RememberChoice){var selected=choice==CloseChoice.Tray?CloseBehavior.Tray:CloseBehavior.Exit;
       if(closeBehavior.Save(selected))NotifyCloseBehaviorChanged(selected);
-      else MessageBox.Show(this,"这次仍按你的选择操作，但未能记住关闭偏好；下次会再次询问。","Codex Light",MessageBoxButtons.OK,MessageBoxIcon.Warning);
+      else MessageBox.Show(this,"这次仍按你的选择操作，但未能记住关闭偏好；下次会再次询问。","码舱 CodeCang",MessageBoxButtons.OK,MessageBoxIcon.Warning);
      }
     }finally{choosingClose=false;}
    }else choice=preference==CloseBehavior.Tray?CloseChoice.Tray:CloseChoice.Exit;

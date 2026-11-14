@@ -24,7 +24,7 @@ test('single mounts for review, menus and the separate terminal/Git/usage/accoun
 });
 
 test('product identity without nonofficial badges, and the meaningful safety warnings remain',()=>{
- assert.match(html,/<strong>Codex Light<\/strong>/);assert.doesNotMatch(html,/非官方|非 OpenAI 官方应用|class="version"|class="window-app-label"/);assert.doesNotMatch(app,/非官方实验客户端/);
+ assert.match(html,/<strong>码舱 CodeCang<\/strong>/);assert.doesNotMatch(html,/非官方|非 OpenAI 官方应用|class="version"|class="window-app-label"/);assert.doesNotMatch(app,/非官方实验客户端/);
  assert.match(app,/演示模式 · 不调用模型/);
  for(const warning of ['修改会直接影响源文件','配对码到期只结束本次配对流程','连接或配对成功不等于手机端已验证可用','不暂存、提交或推送','不会调用模型'])assert.ok(html.includes(warning),warning);
 });

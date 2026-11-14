@@ -13,9 +13,9 @@ export function mountAbout(host,{api,mutate,onStatus=()=>{}}){
  }
  function render(){
   onStatus(status);
-  const header=el(document,'header','page-head');const titles=el(document,'div','page-titles');titles.append(el(document,'h1','','关于'),el(document,'p','page-sub','Codex Light 应用与版本更新'));header.append(titles);
+  const header=el(document,'header','page-head');const titles=el(document,'div','page-titles');titles.append(el(document,'h1','','关于'),el(document,'p','page-sub','码舱 CodeCang 应用与版本更新'));header.append(titles);
   const intro=el(document,'section','about-intro');
-  const title=el(document,'div','about-brand');title.append(el(document,'h2','','Codex Light'));
+  const title=el(document,'div','about-brand');title.append(el(document,'h2','','码舱 CodeCang'));
   if(status?.currentVersion)title.append(el(document,'span','about-version',`v${status.currentVersion}`));
   intro.append(title,el(document,'p','','轻量的本地 Codex 工作台。'));
   const update=el(document,'section','about-update');const updateHead=el(document,'div','about-update-head');
@@ -38,11 +38,11 @@ export function mountAbout(host,{api,mutate,onStatus=()=>{}}){
   }
   if(error||status?.error){const failure=el(document,'p','inline-error',error||status.error);failure.setAttribute('role','alert');update.append(failure);}
   if(uncertainInstall||phase==='launchUnknown')update.append(el(document,'p','about-update-message','请先核对安装程序是否已打开。为避免重复启动，此次操作不会自动重试。'));
-  else if(phase==='launched')update.append(el(document,'p','about-update-message','请先完全退出 Codex Light（包括系统托盘），再在安装程序中完成更新；安装后重新打开应用。'));
+  else if(phase==='launched')update.append(el(document,'p','about-update-message','请先完全退出 码舱 CodeCang（包括系统托盘），再在安装程序中完成更新；安装后重新打开应用。'));
   else if(status?.demo)update.append(el(document,'p','about-update-message','演示模式可检查发布信息，不能下载或安装应用更新。'));
   else if(status&&!status.supported)update.append(el(document,'p','about-update-message','应用内安装目前支持 Windows x64。可前往发布页面查看安装包。'));
   if(confirmInstall&&status?.preparedVersion&&!locked){
-   const confirm=el(document,'div','about-confirm');confirm.append(el(document,'strong','',`打开 v${status.preparedVersion} 安装程序？`),el(document,'p','','安装界面打开后，请先完全退出 Codex Light（包括系统托盘），再继续安装。由你确认安装位置，对话和用户数据保留在原数据目录。'));
+   const confirm=el(document,'div','about-confirm');confirm.append(el(document,'strong','',`打开 v${status.preparedVersion} 安装程序？`),el(document,'p','','安装界面打开后，请先完全退出 码舱 CodeCang（包括系统托盘），再继续安装。由你确认安装位置，对话和用户数据保留在原数据目录。'));
    const actions=el(document,'div','about-confirm-actions');actions.append(button('取消',()=>{confirmInstall=false;render();}),button('确认打开',()=>run('install'),{primary:true}));confirm.append(actions);update.append(confirm);
   }
   const latest=status?.latest;

@@ -39,3 +39,11 @@ Before the first post-0.4.4 release, implement and test that router with old MSI
 machine, missing/corrupted bridge, interrupted stage, and repeated invocation.
 The current tests prove the old client's filename/metadata constraints only;
 they do not pretend to execute this future router.
+
+## Clarified user flow (2026-11-14)
+
+The user accepts 0.4.4 automatically checking latest and showing an update prompt;
+installation of that next update remains a user click. The post-bridge router
+therefore must not claim the selected latest version is already installed.
+`compat-router/` implements this smaller fixed-bridge handoff. The former
+silent two-stage coordinator experiment is not part of the release pipeline.

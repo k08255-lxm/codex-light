@@ -14,33 +14,62 @@ public class ServerConfigManager {
     private static final String KEY_CURRENT_TOKEN = "current_token";
     private static final String KEY_HISTORY_JSON = "history_json";
 
+    private static final String KEY_SECURE_TOKEN = "current_token_encrypted_v1";
+    private static final String KEY_SECURE_HISTORY = "history_encrypted_v1";
+    private static final String KEY_AUTO_CONNECT = "auto_connect";
     private final SharedPreferences prefs;
+    private boolean storageError;
+    public String getNetworkBinding() { return prefs.getString("connection_network_v1", ""); }
+    public void saveNetworkBinding(String fingerprint) {
+        if (!prefs.edit().putString("connection_network_v1", fingerprint).commit()) storageError = true;
+    }
+    public boolean hasStorageError() { return storageError; }
+    public boolean isAutoConnectEnabled() { return prefs.getBoolean(KEY_AUTO_CONNECT, true); }
+    public void setAutoConnectEnabled(boolean enabled) { prefs.edit().putBoolean(KEY_AUTO_CONNECT, enabled).apply(); }
+    private String readSecret(String encryptedKey, String legacyKey, String fallback) {
+        try {
+            if (prefs.contains(encryptedKey)) return CredentialCipher.open(prefs.getString(encryptedKey, ""));
+            String legacy = prefs.getString(legacyKey, fallback);
+            if (prefs.contains(legacyKey)) {
+                String encrypted = CredentialCipher.seal(legacy);
+                if (!prefs.edit().putString(encryptedKey, encrypted).remove(legacyKey).commit())
+                    throw new IllegalStateException("Cannot save connection");
+            }
+            return legacy;
+        } catch (Exception failure) { storageError = true; return fallback; }
+    }
 
     public ServerConfigManager(Context context) {
         this.prefs = context.getApplicationContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
     }
 
-    public void saveCurrent(ServerConfig config) {
+    public void saveCurrent(ServerConfig config) { saveCurrent(config, ""); }
+
+    public void saveCurrent(ServerConfig config, String networkBinding) {
         if (config == null) return;
-        prefs.edit()
+        try {
+        String encrypted = CredentialCipher.seal(config.getToken());
+        if (!prefs.edit()
             .putString(KEY_CURRENT_HOST, config.getHost())
             .putInt(KEY_CURRENT_PORT, config.getPort())
-            .putString(KEY_CURRENT_TOKEN, config.getToken())
-            .apply();
+            .putString(KEY_SECURE_TOKEN, encrypted).remove(KEY_CURRENT_TOKEN)
+            .putString("connection_network_v1", networkBinding)
+            .commit()) throw new IllegalStateException("Cannot save connection");
         addToHistory(config);
+        } catch (Exception failure) { storageError = true; }
     }
 
     public ServerConfig getCurrent() {
         String host = prefs.getString(KEY_CURRENT_HOST, "");
         int port = prefs.getInt(KEY_CURRENT_PORT, 0);
-        String token = prefs.getString(KEY_CURRENT_TOKEN, "");
+        String token = readSecret(KEY_SECURE_TOKEN, KEY_CURRENT_TOKEN, "");
         if (host.isEmpty()) return null;
         return new ServerConfig(host, port, token);
     }
 
     public List<ServerConfig> getHistory() {
         List<ServerConfig> list = new ArrayList<>();
-        String jsonStr = prefs.getString(KEY_HISTORY_JSON, "[]");
+        String jsonStr = readSecret(KEY_SECURE_HISTORY, KEY_HISTORY_JSON, "[]");
         try {
             JSONArray arr = new JSONArray(jsonStr);
             for (int i = 0; i < arr.length(); i++) {
@@ -53,13 +82,14 @@ public class ServerConfigManager {
                 cfg.setLastConnectedAt(obj.optLong("time", System.currentTimeMillis()));
                 list.add(cfg);
             }
-        } catch (Exception ignored) {}
+        } catch (Exception failure) { storageError = true; }
         return list;
     }
 
     public void addToHistory(ServerConfig newCfg) {
         if (newCfg == null || newCfg.getHost().isEmpty()) return;
         List<ServerConfig> current = getHistory();
+        if (storageError) return; // Do not overwrite unreadable history.
         List<ServerConfig> updated = new ArrayList<>();
         updated.add(newCfg);
         for (ServerConfig c : current) {
@@ -78,11 +108,13 @@ public class ServerConfigManager {
                 obj.put("time", c.getLastConnectedAt());
                 arr.put(obj);
             }
-            prefs.edit().putString(KEY_HISTORY_JSON, arr.toString()).apply();
-        } catch (Exception ignored) {}
+            String encrypted = CredentialCipher.seal(arr.toString());
+            if (!prefs.edit().putString(KEY_SECURE_HISTORY, encrypted).remove(KEY_HISTORY_JSON).commit())
+                throw new IllegalStateException("Cannot save connection history");
+        } catch (Exception failure) { storageError = true; }
     }
 
     public void clearHistory() {
-        prefs.edit().remove(KEY_HISTORY_JSON).apply();
+        prefs.edit().remove(KEY_HISTORY_JSON).remove(KEY_SECURE_HISTORY).apply();
     }
 }

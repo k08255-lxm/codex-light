@@ -36,8 +36,15 @@ export async function assembleRelease({version,setupDirectory,velopackDirectory,
  }
  const files=await Promise.all([checked(setupDirectory,setup),checked(velopackDirectory,full),checked(velopackDirectory,fresh),checked(velopackDirectory,'releases.win.json')]);
  const bootstrap=await json(path.join(setupDirectory,'release-bootstrap-receipt.json'));
- if(bootstrap.schema!==1||bootstrap.version!==version||bootstrap.migrationSupported!==true||bootstrap.bootstrapName!==setup||bootstrap.bootstrapSha256!==files[0].sha256||
-  !['migrationBundleSha256','vendorSetupSha256','migrationManifestSha256'].every(k=>/^[a-f\d]{64}$/.test(bootstrap[k]??'')))throw Error('Verified migration-aware bootstrap required; legacy MSI Setup is insufficient');
+ const identity=bootstrap.version===version&&bootstrap.migrationSupported===true&&bootstrap.bootstrapName===setup&&bootstrap.bootstrapSha256===files[0].sha256;
+ const postBridge=version.split('.').map(Number).reduce((r,n,i)=>r||Math.sign(n-[0,4,4][i]),0)>0;
+ const legacy=!postBridge&&bootstrap.schema===1&&['migrationBundleSha256','vendorSetupSha256','migrationManifestSha256'].every(k=>/^[a-f\d]{64}$/.test(bootstrap[k]??''));
+
+ const router=postBridge&&bootstrap.schema===2&&bootstrap.mode==='fixedBridgeThenPrompt'&&bootstrap.bridgeVersion==='0.4.4'&&
+  bootstrap.bridgeUrl==='https://github.com/k08255-lxm/codex-light/releases/download/v0.4.4/CodexLight-Setup-0.4.4-x64.exe'&&
+  bootstrap.bridgeSha256==='b2410266d12946301ffecebaa9c1fa77c8cebd065fe889cdb8eb83b974245aba'&&
+  bootstrap.freshName===fresh&&bootstrap.freshSha256===files[2].sha256;
+ if(!identity||(!legacy&&!router))throw Error('Verified migration-aware bootstrap required; legacy MSI Setup is insufficient');
  const recorded=verification.artifacts?.filter(a=>a.name===full);
  if(recorded?.length!==1||recorded[0].sha256!==files[1].sha256||recorded[0].size!==files[1].size)throw Error('Stale package verification');
  await plain(apk);if(path.basename(apk)!==apkName)throw Error('APK must have exact versioned name');

@@ -22,7 +22,7 @@ export class RpcClient extends EventEmitter {
       child.on('error', error => this.fail(failure(`无法启动 Codex：${error.code || error.message}`, 'SPAWN_FAILED')));
       child.on('exit', (code,signal) => this.fail(failure(`Codex 连接已结束（${code ?? signal}）。请重启 GUI；不会自动重发任务。`, 'PROCESS_EXITED')));
       child.stdin.on('error', error => this.fail(error));
-      const result = await this.call('initialize', { clientInfo:{name:'codex_light_local',title:'Codex Light (unofficial)',version:appVersion}, capabilities:{experimentalApi:true,requestAttestation:false,requiredHumanApproval:true} });
+      const result = await this.call('initialize', { clientInfo:{name:'codex_light_local',title:'码舱 CodeCang (unofficial)',version:appVersion}, capabilities:{experimentalApi:true,requestAttestation:false,requiredHumanApproval:true} });
       this.write({method:'initialized',params:{}}); this.connected = true; this.version = result?.userAgent || null;
       this.emit('event',{method:'bridge/status',params:{connected:true}}); return result;
     } catch (error) { this.fail(error); await this.terminate(); throw error; }

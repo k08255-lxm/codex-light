@@ -37,7 +37,7 @@ public final class QrScanActivity extends Activity implements SurfaceHolder.Call
  }
  private void decode(byte[] data,Camera cam){if(decoding||finished)return;decoding=true;Camera.Size size=cam.getParameters().getPreviewSize();byte[] frame=data.clone();
   new Thread(()->{String text=null;try{PlanarYUVLuminanceSource source=new PlanarYUVLuminanceSource(frame,size.width,size.height,0,0,size.width,size.height,false);text=new com.google.zxing.qrcode.QRCodeReader().decode(new BinaryBitmap(new HybridBinarizer(source))).getText();}catch(Exception ignored){}
-   final String result=text;runOnUiThread(()->{decoding=false;if(result==null||finished||isFinishing()||camera==null)return;if(!PairingClient.isPairing(result)){hint.setText("这不是 Codex Light 配对码，请扫描电脑设置中的二维码。");return;}finished=true;setResult(RESULT_OK,new Intent().putExtra("pairing",result));finish();});
+   final String result=text;runOnUiThread(()->{decoding=false;if(result==null||finished||isFinishing()||camera==null)return;if(!PairingClient.isPairing(result)){hint.setText("这不是 码舱 CodeCang 配对码，请扫描电脑设置中的二维码。");return;}finished=true;setResult(RESULT_OK,new Intent().putExtra("pairing",result));finish();});
   },"qr-decode").start();
  }
 }

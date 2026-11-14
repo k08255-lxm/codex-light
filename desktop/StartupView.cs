@@ -21,7 +21,7 @@ internal sealed class StartupView : Control {
  }
  internal void SetProgress(StartupPhase next,string message){if(failure)return;phase=next;detail=message;UpdateAccessibility();Invalidate(ContentBounds());}
  internal void ShowFailure(string message){failure=true;detail=message;animation.Stop();failureDetails.Text=message;failureDetails.Visible=true;UpdateAccessibility();LayoutDetails();Invalidate();}
- void UpdateAccessibility(){AccessibleName=failure?"Codex Light 启动未完成":"Codex Light 正在启动";AccessibleDescription=Steps[(int)phase]+"。"+detail;if(IsHandleCreated)AccessibilityNotifyClients(AccessibleEvents.DescriptionChange,-1);}
+ void UpdateAccessibility(){AccessibleName=failure?"码舱 CodeCang 启动未完成":"码舱 CodeCang 正在启动";AccessibleDescription=Steps[(int)phase]+"。"+detail;if(IsHandleCreated)AccessibilityNotifyClients(AccessibleEvents.DescriptionChange,-1);}
  static bool SystemAnimationAllowed()=>SystemParametersInfo(0x1042,0,out bool enabled,0)&&enabled;
  internal static bool ShouldAnimate(bool handle,bool visible,bool failure,bool allowed)=>handle&&visible&&!failure&&allowed;
  void RefreshAnimation(){if(disposed)return;animationsAllowed=animationPreference();bool run=ShouldAnimate(IsHandleCreated,Visible&&owner?.WindowState!=FormWindowState.Minimized,failure,animationsAllowed);if(run&&!animation.Enabled){clock.Restart();animation.Start();}else if(!run){animation.Stop();}Invalidate();}
@@ -45,7 +45,7 @@ internal sealed class StartupView : Control {
   Color Fade(Color value)=>Blend(bg,value,ease);Color muted=Fade(Blend(bg,ink,.65f)),dim=Fade(Blend(bg,ink,.38f)),main=Fade(ink),line=Fade(Blend(bg,ink,.12f)),accent=Fade(hc?ink:Color.FromArgb(242,178,92));
   using(var pen=new Pen(main,2.1f){StartCap=LineCap.Round,EndCap=LineCap.Round})graphics.DrawArc(pen,r.X,r.Y+3,20,20,42,276);
   using(var dot=new SolidBrush(accent))graphics.FillEllipse(dot,r.X+18,r.Y+11,4,4);
-  Draw(graphics,"Codex Light",brandFont,main,new RectangleF(r.X+34,r.Y,r.Width-34,30));
+  Draw(graphics,"码舱 CodeCang",brandFont,main,new RectangleF(r.X+34,r.Y,r.Width-34,30));
   Draw(graphics,failure?"暂时无法打开工作台":"正在打开你的工作台",titleFont,main,new RectangleF(r.X,r.Y+52,r.Width,44));
   Draw(graphics,failure?"启动已停止。请根据下面的详情检查后重新打开。":"准备本地环境，然后载入界面。",bodyFont,muted,new RectangleF(r.X,r.Y+102,r.Width,44));
   if(failure){

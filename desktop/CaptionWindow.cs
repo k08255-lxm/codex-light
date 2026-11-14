@@ -94,6 +94,11 @@ internal class CaptionWindow : Form {
   if(selected!=0)PostMessage(Handle,0x0112,(IntPtr)selected,IntPtr.Zero);
  }
  protected override void WndProc(ref Message m){
+  if(m.Msg==0x00AE||m.Msg==0x00AF){
+   // Theme/menu activation can request legacy non-client caption/frame painting
+   // without WM_NCPAINT. The client caption owns those pixels as well.
+   m.Result=IntPtr.Zero;return;
+  }
   if(m.Msg==0x0085){
    // WM_NCCALCSIZE gives us the whole window. DefWindowProc must not paint
    // WS_THICKFRAME over those client pixels when an overlay deactivates us.
@@ -102,7 +107,7 @@ internal class CaptionWindow : Form {
   if(m.Msg==0x0086){
    // Keep the native activation/minimized-icon bookkeeping, but suppress its
    // default frame repaint (documented WM_NCACTIVATE lParam=-1 contract).
-   m.LParam=(IntPtr)(-1);base.WndProc(ref m);Invalidate();return;
+   m.LParam=(IntPtr)(-1);DefWndProc(ref m);Invalidate();return;
   }
   if(m.Msg==0x0083){
    // Both NCCALCSIZE_PARAMS.rgrc[0] (TRUE) and RECT (FALSE) start with the

@@ -8,7 +8,7 @@ import {assembleRelease} from '../scripts/assemble-release.mjs';
 import {parseAppRelease} from '../src/app-update.mjs';
 import {execFileSync} from 'node:child_process';
 const version='0.4.4',hash=b=>createHash('sha256').update(b).digest('hex');
-async function fixture(t){
+async function fixture(t,version='0.4.4'){
  const root=await mkdtemp(path.join(os.tmpdir(),'dual-release-'));t.after(()=>rm(root,{recursive:true,force:true}));
  const msiDirectory=path.join(root,'msi'),velopackDirectory=path.join(root,'velo');
  for(const p of [msiDirectory,velopackDirectory])await mkdir(p);
@@ -55,4 +55,35 @@ test('released 0.4.3 desktop checker accepts the combined metadata',async t=>{
  assert.throws(()=>old.parseAppRelease(skipped,'0.4.3'));
  const routed={...skipped,assets:skipped.assets.map(a=>a.name==='CodexLight-Setup-0.4.4-x64.exe'?{...a,name:'CodexLight-Setup-0.9.0-x64.exe',browser_download_url:a.browser_download_url.replace('Setup-0.4.4','Setup-0.9.0')}:a)};
  assert.equal(old.parseAppRelease(routed,'0.4.3').setup.name,'CodexLight-Setup-0.9.0-x64.exe');
+});
+
+async function routerFixture(t){
+ const f=await fixture(t,'0.4.5'),p=path.join(f.setupDirectory,'release-bootstrap-receipt.json');
+ const receipt=JSON.parse(await readFile(p,'utf8'));
+ Object.assign(receipt,{schema:2,mode:'fixedBridgeThenPrompt',bridgeVersion:'0.4.4',bridgeUrl:'https://github.com/k08255-lxm/codex-light/releases/download/v0.4.4/CodexLight-Setup-0.4.4-x64.exe',bridgeSha256:'b2410266d12946301ffecebaa9c1fa77c8cebd065fe889cdb8eb83b974245aba',freshName:'CodexLight-NewInstall-0.4.5-x64.zip',freshSha256:hash(await readFile(path.join(f.velopackDirectory,'CodexLight-NewInstall-0.4.5-x64.zip')))});
+ await writeFile(p,JSON.stringify(receipt));return {f,p,receipt};
+}
+test('fixed bridge router receipt binds current fresh archive and preserves both transports',async t=>{
+ const {f}=await routerFixture(t),release=await assembleRelease(f);
+ assert.equal(parseAppRelease(release,'0.4.3','msi').setup.name,'CodexLight-Setup-0.4.5-x64.exe');
+ assert.equal(parseAppRelease(release,'0.4.4','velopack').setup.name,'CodexLightDesktop-0.4.5-full.nupkg');
+});
+for(const field of ['bridgeVersion','bridgeUrl','bridgeSha256','mode','freshName','freshSha256'])test('router receipt rejects changed '+field,async t=>{
+ const {f,p,receipt}=await routerFixture(t);receipt[field]='changed';await writeFile(p,JSON.stringify(receipt));await assert.rejects(assembleRelease(f),/migration-aware/);await assert.rejects(readdir(f.output),{code:'ENOENT'});
+});
+
+test('released 0.4.4 detects target full package and startup check notifies without installing',async t=>{
+ const source=execFileSync('git',['show','v0.4.4:src/app-update.mjs'],{encoding:'utf8'}).replace("'./update-manifest.mjs'",JSON.stringify(new URL('../src/update-manifest.mjs',import.meta.url).href));
+ const old=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
+ const {f}=await routerFixture(t),release=await assembleRelease(f),selected=old.parseAppRelease(release,'0.4.4','velopack');
+ assert.equal(selected.available,true);assert.equal(selected.version,'0.4.5');assert.equal(selected.setup.name,'CodexLightDesktop-0.4.5-full.nupkg');
+ const auto=execFileSync('git',['show','v0.4.4:public/ui/auto-update.js'],{encoding:'utf8'});
+ const {startUpdateChecks}=await import('data:text/javascript;base64,'+Buffer.from(auto).toString('base64'));
+ let callback,delay,calls=0;const notices=[];
+ const stop=startUpdateChecks({check:async()=>{calls++;return {latest:{available:true,version:'0.4.5'}}},notify:v=>notices.push(v),setTimer:(fn,ms)=>{callback=fn;delay=ms;return 1},clearTimer:()=>{}});
+ assert.equal(delay,3000);assert.equal(calls,0);await callback();assert.equal(calls,1);assert.deepEqual(notices,['0.4.5']);assert.equal(delay,6*60*60*1000);await callback();assert.deepEqual(notices,['0.4.5']);stop();
+});
+
+test('post-bridge releases reject embedded schema1 migration even when hashes are valid',async t=>{
+ const f=await fixture(t,'0.4.5');await assert.rejects(assembleRelease(f),/migration-aware/);await assert.rejects(readdir(f.output),{code:'ENOENT'});
 });

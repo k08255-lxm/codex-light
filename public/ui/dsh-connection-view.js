@@ -74,7 +74,7 @@ export function mountDshConnection(host, { api, wait = ms => new Promise(resolve
   function header() {
     const head = el(document, 'div', 'dshcfg-head');
     const titles = el(document, 'div');
-    titles.append(el(document, 'h2', 'section-title', 'DSH MCP 连接'), el(document, 'p', 'fine', 'Codex Light 自带 DSH MCP 桥。连接后 Codex 可调用 DSH 子代理；不连接也可以正常聊天。'));
+    titles.append(el(document, 'h2', 'section-title', 'DSH MCP 连接'), el(document, 'p', 'fine', '码舱 CodeCang 自带 DSH MCP 桥。连接后 Codex 可调用 DSH 子代理；不连接也可以正常聊天。'));
     const reload = el(document, 'button', 'btn icon-only ghost'); reload.type = 'button'; reload.setAttribute('aria-label', '重新检查连接'); reload.title = '重新检查连接';
     reload.append(icon(document, 'refresh', { size: 16 })); reload.disabled = busy;
     reload.addEventListener('click', () => { message = { text: '', error: false }; load(); });

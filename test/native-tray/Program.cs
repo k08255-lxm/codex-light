@@ -22,13 +22,14 @@ internal static class NativeTrayTests {
    Check(Field("backend").GetValue(window)==null,"test never starts backend");
    var tray=Tray(window);Call(window,"ShowTray");Check(ReferenceEquals(tray,Tray(window)),"repeated show reuses icon");
    window.Hide();
-   var mouseClick=typeof(NotifyIcon).GetMethod("OnMouseClick",Instance)!;
-   mouseClick.Invoke(tray,[new MouseEventArgs(MouseButtons.Right,1,0,0,0)]);
+   var mouseClick=typeof(NotifyIcon).GetMethod("WmMouseUp",Instance)!;
+   var mouseDown=typeof(NotifyIcon).GetMethod("WmMouseDown",Instance)!;
+   mouseClick.Invoke(tray,[MouseButtons.Right]);
    Check(!window.Visible,"right click does not restore window");
-   mouseClick.Invoke(tray,[new MouseEventArgs(MouseButtons.Left,1,0,0,0)]);
+   mouseClick.Invoke(tray,[MouseButtons.Left]);
    Check(window.Visible,"left single click restores hidden window");
    window.Hide();
-   mouseClick.Invoke(tray,[new MouseEventArgs(MouseButtons.Left,2,0,0,0)]);
+   mouseDown.Invoke(tray,[MouseButtons.Left,2]);mouseClick.Invoke(tray,[MouseButtons.Left]);
    Check(!window.Visible,"double click event cannot repeat restoration");
    window.RestoreFromTray();
    Check(window.Visible&&Tray(window).Visible,"restore retains tray icon");
@@ -45,8 +46,8 @@ internal static class NativeTrayTests {
    Check(window.IsDisposed,"tray exit closes test window without choice dialog");
    Check(Field("tray").GetValue(window)==null&&Field("trayMenu").GetValue(window)==null&&Field("trayIcon").GetValue(window)==null,"exit disposes icon menu and cloned icon");
    window.Dispose();Check(Field("tray").GetValue(window)==null,"repeated disposal is safe");
-   RestartManager(directory).GetAwaiter().GetResult();
-   Console.WriteLine($"PASS {assertions} assertions; native tray lifecycle and owned-child real Restart Manager shutdown; no app backend or WebView startup.");
+   if(!args.Contains("--tray-only"))RestartManager(directory).GetAwaiter().GetResult();
+   Console.WriteLine($"PASS {assertions} assertions; native tray lifecycle; Restart Manager {(args.Contains("--tray-only")?"not requested":"passed")}; no app backend or WebView startup.");
   }finally{Directory.Delete(directory,true);}
  }
  static MainWindow CreateWindow(string directory){
