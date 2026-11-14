@@ -93,3 +93,12 @@ android/
 APK 升级须保留同一 applicationId 与签名证书，增加 versionCode；Android 安装器会拒绝不匹配签名。不要为更新而卸载应用。当前代码仍为开发中的 0.4.3，发布前必须统一升版；本地构建不是新 Release。0.4.3 / versionCode 403; local builds do not publish a Release.
 
 依赖：ZXing core 3.5.3（Apache-2.0）位于 android/libs，构建时离线编译到 DEX；相机仅扫描页使用，离开页面释放。不自动接受系统相机权限。
+
+
+### 系统返回
+
+Android 普通返回按钮/边缘返回手势先交给桌面服务提供的网页界面：关闭最上层对话框（遵守取消保护）、菜单/模型选择、移动侧栏、活动面板，再返回前一个页面；根页面才使用 WebView 历史和原有两次返回退出提示。API 33+ 使用 `OnBackInvokedCallback` 的完成回调，旧版本走 `onBackPressed`；不实现预测性返回动画。键盘和原生文件选择器仍由系统先处理。
+
+这需要新版 APK 和包含 `CodexLightNavigation` 的新版桌面网页一起使用。旧服务或离线预览没有该入口时保留原来的 WebView/退出回退。纯浏览器访问不改写浏览器的 Back 历史；网页内侧栏按钮仍可关闭抽屉。
+
+验证脚本：`node --test test/back-navigation.test.mjs` 与 `node test/mobile-back-browser.mjs`（需要本地 Playwright / `CHROMIUM_PATH`，只使用 DemoClient）。浏览器测试可验证页面状态，但不能代替 Android 真机的系统返回、键盘和文件选择器验收。

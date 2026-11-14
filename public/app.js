@@ -1,3 +1,4 @@
+import { createBackHandler } from './ui/back-navigation.js';
 import { mountWelcomeGreeting } from './ui/welcome-greeting.js';
 import { redeemPairing } from './ui/pairing.js';
 import { startUpdateChecks } from './ui/auto-update.js';
@@ -422,9 +423,13 @@ function setCwd(cwd) { if(state.cwd !== (cwd || '')){workbench.cwdChanged();plug
 // ---------- Router: exactly one stage is visible; every page transition goes through here ----------
 const STAGES = { chat: 'chat-page', usage: 'usage-page', account: 'account-page', terminal: 'terminal-page', review: 'review-view', settings: 'settings-dialog' };
 let currentRoute = 'chat';
-function route(name, { section } = {}) {
+const routeTrail = [];
+function route(name, { section, back = false } = {}) {
   if (!Object.hasOwn(STAGES, name)) name = 'chat';
-  const previous = currentRoute; currentRoute = name;
+  const previous = currentRoute;
+  if (!back && name === 'chat') routeTrail.length = 0;
+  else if (!back && name !== previous) { routeTrail.push({ name: previous, section: state.settingsPage }); if (routeTrail.length > 32) routeTrail.shift(); }
+  currentRoute = name;
   closeWindowMenu(); closeThreadMenu();
   for (const [key, id] of Object.entries(STAGES)) $(id).classList.toggle('hidden', key !== name);
   $('app').dataset.view = name;
@@ -1106,6 +1111,24 @@ $('refresh-dsh').addEventListener('click', refreshDsh); $('refresh-dsh-settings'
 for (const button of document.querySelectorAll('[data-prompt]')) button.addEventListener('click', () => { $('prompt').value = button.dataset.prompt; $('prompt').focus(); updateControls(); });
 let searchTimer; $('search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => loadThreads().catch(e => notice(e.message, true)), 250); });
 document.addEventListener('keydown', e => { if ($('rename-dialog').open || $('project-dialog').open) { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') e.preventDefault(); return; } if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') { e.preventDefault(); newThread(); } if (e.key === 'Escape') { if (!$('thread-menu').classList.contains('hidden')) { closeThreadMenu(true); return; } if (activeMenu) { const previousMenu = activeMenu; closeWindowMenu(); const trigger=$('menu-' + previousMenu);if(trigger.getClientRects().length)trigger.focus();else if(!$('settings-dialog').classList.contains('hidden'))$('settings-back').focus();else $('prompt').focus();return; } if(sidebarController.isOverlayOpen()){sidebarController.close();return;} if(currentRoute!=='chat'&&!e.defaultPrevented&&!document.activeElement?.closest?.('dialog,.reasoning-popover,#queue'))route('chat'); } });
+// Android asks the SPA before falling back to WebView history or leaving the app.
+// No synthetic browser history entries: browser Back retains its normal contract.
+window.CodexLightNavigation = Object.freeze({ back: createBackHandler({ document,
+  layers: [
+    { isOpen: () => !$('thread-menu').classList.contains('hidden'), close: () => closeThreadMenu(true) },
+    { isOpen: () => !!activeMenu, close: () => { closeWindowMenu(); $('menu-app').focus(); } },
+    { isOpen: () => !$('reasoning-popover').classList.contains('hidden'), close: () => closeReasoning() },
+    { isOpen: () => slashMenu.isOpen(), close: () => slashMenu.close() },
+    { isOpen: () => sidebarController.isOverlayOpen(), close: () => sidebarController.close() },
+    { isOpen: () => !$('details').classList.contains('hidden'), close: () => { $('close-details').click(); $('toggle-details').focus(); } },
+  ],
+  navigateBack: () => {
+    const previous = routeTrail.pop();
+    if (previous) { route(previous.name, { section: previous.section, back: true }); return true; }
+    if (currentRoute !== 'chat') { route('chat', { back: true }); return true; }
+    return false;
+  },
+}) });
 function openInlineCwd(){openProjectDialog();}
 function saveInlineCwd(){selectProject({path:$('cwd-inline-input').value.trim()});}
 $('cwd-inline-save').addEventListener('click',saveInlineCwd);$('cwd-inline-input').addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();saveInlineCwd();}});$('cwd-inline-cancel').addEventListener('click',()=>{$('cwd-setup').classList.add('hidden');$('prompt').focus();});

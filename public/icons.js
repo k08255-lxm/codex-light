@@ -18,6 +18,7 @@ const ICONS = {
   plug: [['path', { d: 'M9.5 3.5v4M14.5 3.5v4' }], ['path', { d: 'M6.5 7.5h11v3a5.5 5.5 0 0 1-11 0z' }], ['path', { d: 'M12 16v4.5' }]],
   settings: [['path', { d: 'M4.5 7.5h8.5M17 7.5h2.5M4.5 16.5h2.5M11 16.5h8.5' }], ['circle', { cx: '15', cy: '7.5', r: '2' }], ['circle', { cx: '9', cy: '16.5', r: '2' }]],
   panel: [['rect', { x: '3.5', y: '4.5', width: '17', height: '15', rx: '2.5' }], ['path', { d: 'M9.5 4.5v15' }]],
+  activity: [['path', { d: 'M3.5 12h4l2.5-7 4 14 2.5-7h4' }]],
   menu: [['path', { d: 'M4.5 7h15M4.5 12h15M4.5 17h15' }]],
   more: [['circle', { cx: '6', cy: '12', r: '1.3', fill: DOT }], ['circle', { cx: '12', cy: '12', r: '1.3', fill: DOT }], ['circle', { cx: '18', cy: '12', r: '1.3', fill: DOT }]],
   search: [['circle', { cx: '10.5', cy: '10.5', r: '6' }], ['path', { d: 'M15 15l4.5 4.5' }]],

@@ -33,6 +33,10 @@ public class MainActivity extends Activity {
     private boolean isDemoMode = false;
     private volatile boolean currentPageTrusted = false;
     private long lastBackPressTime = 0;
+    private boolean backRequestPending = false;
+    private int backRequestSerial = 0;
+    private int navigationGeneration = 0;
+    private android.window.OnBackInvokedCallback systemBackCallback;
     private ValueCallback<Uri[]> fileUploadCallback;
 
     @Override
@@ -43,6 +47,11 @@ public class MainActivity extends Activity {
         initViews();
         resolveIntent();
         setupWebView();
+        if (Build.VERSION.SDK_INT >= 33) {
+            systemBackCallback = this::handleSystemBack;
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, systemBackCallback);
+        }
         loadTargetUrl();
     }
 
@@ -133,6 +142,9 @@ public class MainActivity extends Activity {
     }
 
     public void updatePageOrigin(String url) {
+        navigationGeneration++;
+        backRequestPending = false;
+        lastBackPressTime = 0;
         if (url == null || url.isEmpty()) {
             currentPageTrusted = false;
             return;
@@ -181,6 +193,9 @@ public class MainActivity extends Activity {
     }
 
     private void loadTargetUrl() {
+        navigationGeneration++;
+        backRequestPending = false;
+        lastBackPressTime = 0;
         if (isDemoMode) {
             currentPageTrusted = false;
             tvServerTitle.setText("离线界面预览");
@@ -263,17 +278,46 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        handleSystemBack();
+    }
+
+    private void handleSystemBack() {
         if (errorOverlay.getVisibility() == View.VISIBLE) {
             openServerManager();
             return;
         }
-        if (webView.canGoBack()) {
+        if (backRequestPending) return;
+        if (webView == null || !currentPageTrusted) { finishBackNavigation(); return; }
+        backRequestPending = true;
+        final int generation = navigationGeneration;
+        final int request = ++backRequestSerial;
+        webView.postDelayed(() -> {
+            if (generation == navigationGeneration && request == backRequestSerial && backRequestPending) {
+                backRequestPending = false;
+                backRequestSerial++; // Ignore a late result rather than unexpectedly leaving the page.
+            }
+        }, 2000);
+        // Let the web UI dismiss its modal/drawer/page before navigating away.
+        webView.evaluateJavascript(
+            "(() => { const nav = window.CodexLightNavigation; return nav && typeof nav.back === 'function' ? nav.back() === true : false; })()",
+            result -> {
+                if (generation != navigationGeneration || request != backRequestSerial || isFinishing() || isDestroyed()) return;
+                backRequestPending = false;
+                if ("true".equals(result)) { lastBackPressTime = 0; return; }
+                // JS errors must not turn an attempted dismiss into an accidental exit.
+                if ("false".equals(result)) finishBackNavigation();
+            });
+    }
+
+    private void finishBackNavigation() {
+        if (webView != null && webView.canGoBack()) {
+            lastBackPressTime = 0;
             webView.goBack();
             return;
         }
-        long now = System.currentTimeMillis();
-        if (now - lastBackPressTime < 2000) {
-            super.onBackPressed();
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (lastBackPressTime != 0 && now - lastBackPressTime < 2000) {
+            finish();
         } else {
             lastBackPressTime = now;
             Toast.makeText(this, R.string.press_again_exit, Toast.LENGTH_SHORT).show();
@@ -295,6 +339,10 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        navigationGeneration++;
+        if (Build.VERSION.SDK_INT >= 33 && systemBackCallback != null) {
+            getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(systemBackCallback);
+        }
         cancelPendingFileUpload();
         if (webView != null) {
             webView.stopLoading();
