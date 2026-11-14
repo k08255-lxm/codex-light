@@ -14,12 +14,12 @@ namespace CodexLight.Prerequisites {
   static bool IsX64(string file){
    using(var r=new BinaryReader(File.OpenRead(file))){if(r.BaseStream.Length<64||r.ReadUInt16()!=0x5a4d)return false;r.BaseStream.Position=60;int offset=r.ReadInt32();if(offset<64||offset>r.BaseStream.Length-6)return false;r.BaseStream.Position=offset;return r.ReadUInt32()==0x4550&&r.ReadUInt16()==0x8664;}
   }
-  static NodeRuntimeInfo? Detect(string directory,out bool uncertain){
+  internal static NodeRuntimeInfo? Detect(string directory,out bool uncertain){
    uncertain=false;var bundled=Path.GetFullPath(Path.Combine(directory,"runtime","node.exe"));var diagnostics=new List<string>();
    var candidates=NodeRuntimeDetection.CandidatePaths(directory,diagnostics).OrderBy(x=>string.Equals(x,bundled,StringComparison.OrdinalIgnoreCase)?1:0);
    foreach(var candidate in candidates){
     if(!File.Exists(candidate))continue;
-    try{if(!IsX64(candidate)){Console.Error.WriteLine("Skipping non-x64 Node: "+candidate);continue;}
+    try{if(!IsX64(candidate)){Console.Error.WriteLine("Skipping non-x64 Node: "+candidate);uncertain=true;continue;}
      var runtime=NodeRuntimeDetection.Probe(candidate,out string failure);if(runtime!=null){Console.WriteLine("COMPATIBLE\t"+runtime.Version+"\tx64\t"+runtime.Path);return runtime;}
      Console.Error.WriteLine(candidate+": "+failure);uncertain=true;
     }catch(Exception e)when(e is IOException||e is UnauthorizedAccessException){Console.Error.WriteLine(e.Message);uncertain=true;}

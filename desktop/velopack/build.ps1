@@ -75,6 +75,12 @@ if($LASTEXITCODE -ne 0){throw 'Velopack packaging failed'}
 $verification=& python (Join-Path $PSScriptRoot 'verify.py') $release $stage $version --manifest (Join-Path $work 'final-payload-manifest.json')
 if($LASTEXITCODE -ne 0){throw 'Release verification failed'}
 $verification|Set-Content -LiteralPath (Join-Path $release 'verification.json') -Encoding utf8
+if(!$MigrationStage){
+ $wrapperOutput=Join-Path $work 'new-install-wrapper'
+ & (Join-Path $PSScriptRoot 'setup-wrapper/build.ps1') -VendorSetup (Join-Path $release 'CodexLightDesktop-win-Setup.exe') -Output $wrapperOutput -Version $version
+ if($LASTEXITCODE -ne 0){throw 'Safe new-install entrypoint build failed'}
+ Copy-Item -LiteralPath (Join-Path $wrapperOutput "CodexLight-NewInstall-$version-x64.zip") -Destination $release
+}
 $finalSource=Join-Path $work 'source-tree-final.json'
 & python (Join-Path $PSScriptRoot 'source_integrity.py') $repo $payload --output $finalSource
 if($LASTEXITCODE -ne 0 -or (Get-FileHash -LiteralPath $sourceFingerprint).Hash -ne (Get-FileHash -LiteralPath $finalSource).Hash){throw 'Source changed during packaging; discard this output and rebuild.'}
