@@ -32,6 +32,31 @@ internal class Program {
   foreach(var version in new[]{"v20.19.0","v22.14.0","garbage"})A(!InstallFlow.BridgeCompatible(version));
   foreach(var version in new[]{"v22.15.0","v24.13.0","v23.0.0"})A(InstallFlow.BridgeCompatible(version));
   var upgradeDeclined=new Fake{Before=NodeState.UpgradeRequired,Consent=false};A(await InstallFlow.Run(upgradeDeclined)==1602);A(upgradeDeclined.NodeCalls==0&&upgradeDeclined.VendorCalls==0);
+  // Failures must stop before probing/installing unrelated downstream components.
+  foreach(var state in new[]{NodeState.Missing,NodeState.UpgradeRequired}){
+   var no=new Fake{Before=state,Consent=false,CliBefore=NodeState.Missing};
+   A(await InstallFlow.Run(no)==1602);A(no.CliDetections==0&&no.CliCalls==0&&no.VendorCalls==0);
+   foreach(var after in new[]{NodeState.Missing,NodeState.Uncertain,NodeState.UpgradeRequired}){
+    var f=new Fake{Before=state,After=after,CliBefore=NodeState.Missing};
+    try{await InstallFlow.Run(f);throw new Exception("post-install node was not rejected");}
+    catch(InvalidOperationException){A(f.NodeCalls==1&&f.CliDetections==0&&f.VendorCalls==0);}
+   }
+   var cancelled=new Fake{Before=state,CancelNode=true};
+   try{await InstallFlow.Run(cancelled);throw new Exception("node cancellation ignored");}
+   catch(OperationCanceledException){A(cancelled.CliDetections==0&&cancelled.VendorCalls==0);}
+  }
+  foreach(var f in new[]{new Fake{Fresh=false},new Fake{Valid=false}}){
+   try{await InstallFlow.Run(f);throw new Exception("preflight accepted");}
+   catch(InvalidOperationException){A(f.Detections==0&&f.CliDetections==0&&f.NodeCalls==0&&f.CliCalls==0&&f.VendorCalls==0);}
+  }
+  // A successful Node installation is not rolled back or repeated when CLI consent is denied.
+  var partial=new Fake{Before=NodeState.Missing,CliBefore=NodeState.Missing,CliConsent=false};
+  A(await InstallFlow.Run(partial)==1602);A(partial.NodeCalls==1&&partial.Detections==2&&partial.CliCalls==0&&partial.VendorCalls==0);
+  // Recheck after dependency installation: a concurrently created installation or changed Setup blocks execution.
+  foreach(var f in new[]{new Fake{Before=NodeState.Missing,CliBefore=NodeState.Missing,FreshAfter=false},new Fake{Before=NodeState.Missing,CliBefore=NodeState.Missing,ValidAfter=false}}){
+   try{await InstallFlow.Run(f);throw new Exception("changed installation accepted");}
+   catch(InvalidOperationException){A(f.NodeCalls==1&&f.CliCalls==1&&f.VendorCalls==0);}
+  }
   Console.WriteLine(tests+" safe flow assertions passed; no actual process/download/installation.");return 0;
  }
 }
