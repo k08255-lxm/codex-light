@@ -5,6 +5,8 @@ namespace CodexLight.Desktop;
 internal static class BackendHealth {
  internal static async Task<int> RunAsync(){
   try{
+   var webViewVersion=Microsoft.Web.WebView2.Core.CoreWebView2Environment.GetAvailableBrowserVersionString();
+   if(string.IsNullOrWhiteSpace(webViewVersion)||!Version.TryParse(webViewVersion.Split(' ',StringSplitOptions.RemoveEmptyEntries)[0],out _))throw new InvalidOperationException();
    string root=Path.Combine(AppContext.BaseDirectory,"app"),script=Path.Combine(root,"src","backend-health.mjs");
    if(!File.Exists(script))throw new FileNotFoundException();
    var runtime=CodexLight.Runtime.NodeRuntimeDetection.FindCompatible(AppContext.BaseDirectory);
@@ -20,7 +22,7 @@ internal static class BackendHealth {
    using var result=JsonDocument.Parse(text);var r=result.RootElement;
    var expectedVersion=typeof(BackendHealth).Assembly.GetName().Version?.ToString(3)??throw new InvalidOperationException();
    if(!r.GetProperty("ok").GetBoolean()||r.GetProperty("scope").GetString()!="isolated-demo-backend"||r.GetProperty("realAccountVerified").GetBoolean()||!r.GetProperty("gracefulShutdown").GetBoolean()||!r.GetProperty("authenticatedStatus").GetBoolean()||!r.GetProperty("unauthenticatedRejected").GetBoolean()||!r.GetProperty("loopbackOnly").GetBoolean()||r.GetProperty("version").GetString()!=expectedVersion)throw new InvalidOperationException();
-   Console.WriteLine(JsonSerializer.Serialize(new{ok=true,scope="native-and-isolated-demo-backend",nativeVersion=typeof(BackendHealth).Assembly.GetName().Version?.ToString(),backendVersion=r.GetProperty("version").GetString(),nodeVersion=r.GetProperty("nodeVersion").GetString(),authenticatedStatus=r.GetProperty("authenticatedStatus").GetBoolean(),unauthenticatedRejected=r.GetProperty("unauthenticatedRejected").GetBoolean(),loopbackOnly=r.GetProperty("loopbackOnly").GetBoolean(),gracefulShutdown=true,realAccountVerified=false}));
+   Console.WriteLine(JsonSerializer.Serialize(new{ok=true,scope="native-and-isolated-demo-backend",webViewVersion,dotnetVersion=Environment.Version.ToString(),nativeVersion=typeof(BackendHealth).Assembly.GetName().Version?.ToString(),backendVersion=r.GetProperty("version").GetString(),nodeVersion=r.GetProperty("nodeVersion").GetString(),authenticatedStatus=r.GetProperty("authenticatedStatus").GetBoolean(),unauthenticatedRejected=r.GetProperty("unauthenticatedRejected").GetBoolean(),loopbackOnly=r.GetProperty("loopbackOnly").GetBoolean(),gracefulShutdown=true,realAccountVerified=false}));
    return 0;
   }catch{Console.WriteLine("{\"ok\":false,\"scope\":\"native-and-isolated-demo-backend\",\"code\":\"NATIVE_BACKEND_HEALTH_FAILED\"}");return 1;}
  }

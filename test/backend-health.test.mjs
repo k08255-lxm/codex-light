@@ -30,3 +30,10 @@ test('native health fails closed on each required proof and version mismatch',as
  assert.ok(native.includes('WindowStyle=ProcessWindowStyle.Hidden'));
  assert.ok(native.includes('catch{Console.WriteLine'));
 });
+test('native dependency preflight queries WebView without creating UI',async()=>{
+ const native=await readFile('desktop/BackendHealth.cs','utf8');
+ assert.ok(native.includes('CoreWebView2Environment.GetAvailableBrowserVersionString()'));
+ assert.ok(native.includes('string.IsNullOrWhiteSpace(webViewVersion)||!Version.TryParse'));
+ assert.ok(native.includes('webViewVersion,dotnetVersion=Environment.Version.ToString()'));
+ assert.ok(!native.includes('CreateAsync('));assert.ok(!native.includes('EnsureCoreWebView2Async('));
+});
