@@ -18,3 +18,43 @@ The exact public-registry dependency lock, source, MIT notices, and a generated 
 Configuration sources are one-way imports of provider declarations. Existing live tasks keep their loaded revision; new runtimes follow valid selected files. Inline secrets and full plugin trees are not copied. Runtime permissions retain the upstream bridge's explicit per-task sandbox choices and owner checks.
 
 DSH's normal built-in DeepSeek provider remains usable with no third-party provider declaration. A valid empty profile imports nothing; explicit zero selected sources means built-in only. An explicitly selected malformed, missing or conflicting source is rejected rather than silently ignored.
+
+## Compact desktop distribution
+
+Desktop packaging runs `node build.mjs --bundle` after restoring the component
+lock and the separate `tools/package-lock.json` with `npm ci --ignore-scripts`.
+The build tool is pinned to esbuild 0.25.12. It is never installed or executed
+when the application starts, and is not distributed in the application.
+
+`dist/` is the complete redistributable bridge. All local source-module paths
+remain intact (including service-runner, the desktop probe and DSH plugin).
+Third-party JavaScript is bundled into shared ESM chunks without minification.
+YAML remains a real package because provider discovery uses `createRequire`.
+Optional ws native accelerators are not shipped; the tested JavaScript fallback
+is used. No DSH runtime or model is included or launched by the build.
+
+The distribution manifest records every output SHA-256 (except its own file),
+the complete input-source map, component lock, bundler lock/version and all
+96 dependency license entries. The adapter hashes are regenerated *after*
+bundling. Consumers must validate the exact file set, not merely look for
+package.json files. These checks detect stale/corrupt artifacts; they do not
+replace release signatures or establish provenance against a malicious author.
+
+Build and synthetic verification from the repository root:
+
+```powershell
+npm ci --prefix components/dsh-bridge --ignore-scripts --omit=dev
+npm ci --prefix components/dsh-bridge/tools --ignore-scripts
+node components/dsh-bridge/build.mjs --bundle
+node --test test/dsh-bundle-integrity.test.mjs
+node test/dsh-bundle-runtime.mjs
+node test/dsh-bundle-stdio.mjs
+node test/dsh-bundle-providers.mjs
+```
+
+Runtime fixtures use only temporary configuration and loopback mock servers.
+They cover tool discovery/dispatch/schema failures, HTTP security, stdio proxy
+metadata and framing, ws multiplexing and YAML loading. They do not validate
+real provider inference, daemon autostart or real-user DSH task lifecycles.
+The integrity test creates a temporary directory junction/symlink; restricted
+sandboxes must run that test in an environment that permits creating links.

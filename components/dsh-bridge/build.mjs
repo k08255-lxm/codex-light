@@ -25,3 +25,5 @@ fs.writeFileSync(path.join(root,'manifest.json'),JSON.stringify(manifest,null,2)
 const notice='# Third-party notices\n\nThis component derives from dsh-subagent-mcp 0.8.0 (MIT, DSH Subagent MCP contributors); see LICENSE. The desktop preset overlay derives from DeepSeek DSH (MIT); see assets/DeepSeek-MIT-LICENSE. DSH itself is not distributed.\n\nAll dependency copyright and license notices are preserved under licenses/. Exact versions and notice paths are in licenses/manifest.json.\n\n'+inventory.map(row=>`- ${row.name} ${row.version}: ${row.license}`).join('\n')+'\n';
 fs.writeFileSync(path.join(root,'THIRD-PARTY-NOTICES.md'),notice);
 console.log(JSON.stringify({component:manifest.component,version:manifest.version,dependencies:inventory.length,licensesPreserved:true}));
+
+if(process.argv.includes('--bundle'))console.log(JSON.stringify(await (await import('./bundle.mjs')).bundleBridge()));
