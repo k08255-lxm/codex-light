@@ -6,6 +6,8 @@ internal static class Tests {
  static IEnumerable<Control> Descendants(Control control){foreach(Control child in control.Controls){yield return child;foreach(var item in Descendants(child))yield return item;}}
  [STAThread]static void Main(string[] args){
   Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);Application.EnableVisualStyles();
+  CheckCaptionCommands();
+  if(args.Contains("--caption-only")){Console.WriteLine($"Passed {checks} hidden caption assertions; no visible window or model calls.");return;}
   string output=args.Length>0?args[0]:Path.Combine(Path.GetTempPath(),"codex-light-native-ui-previews");Directory.CreateDirectory(output);
   foreach(bool light in new[]{false,true}){
    foreach(int size in new[]{16,20,24,32}){
@@ -27,4 +29,36 @@ internal static class Tests {
   }
   Console.WriteLine($"Passed {checks} native appearance assertions; transparent offscreen rendering only. Previews: {output}");
  }
+ static void CheckCaptionCommands(){
+  // Never show or activate this HWND. Consume commands before Windows changes state.
+  IntPtr foreground=GetForegroundWindow();
+  using var window=new CaptionProbe();var handle=window.Handle;
+  Check(GetWindowRect(handle,out var outer)&&GetClientRect(handle,out var client)&&outer.Width==client.Width&&outer.Height==client.Height,"caption stays integrated with no native title strip");
+  Check((window.NativeStyle&0x00C00000)==0x00C00000,"native caption semantics retained");
+  Check((window.NativeStyle&0x000F0000)==0x000F0000,"resize/system/min/max styles retained");
+  Check(!window.Visible,"probe must remain hidden");
+  foreach(var pair in new[]{("minimize",0xF020),("maximize",0xF030)}){
+   var field=typeof(CaptionWindow).GetField(pair.Item1,System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance)!;
+   var button=(Button)field.GetValue(window)!;
+   Check(button.TabStop&&!string.IsNullOrEmpty(button.AccessibleName),"caption keyboard/accessibility preserved");
+   typeof(Control).GetMethod("OnClick",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance)!.Invoke(button,new object[]{EventArgs.Empty});
+   Check(window.Commands.Count==0,"command is asynchronously queued");Application.DoEvents();
+   Check(window.Commands.SequenceEqual(new[]{pair.Item2}),"caption uses native system command");window.Commands.Clear();
+   Check(!window.Visible,"command probe never shown");
+   Check(GetForegroundWindow()==foreground,"probe must not steal foreground");
+  }
+ }
+ sealed class CaptionProbe:CaptionWindow {
+  public readonly List<int> Commands=new();public int NativeStyle=>CreateParams.Style;
+  protected override void WndProc(ref Message message){
+   if(message.Msg==0x0112){Commands.Add((int)message.WParam&0xFFF0);message.Result=IntPtr.Zero;return;}
+   base.WndProc(ref message);
+  }
+ }
+
+ [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]struct NativeRect {public int Left,Top,Right,Bottom;public int Width=>Right-Left;public int Height=>Bottom-Top;}
+ [System.Runtime.InteropServices.DllImport("user32.dll")]static extern bool GetWindowRect(IntPtr window,out NativeRect rect);
+ [System.Runtime.InteropServices.DllImport("user32.dll")]static extern bool GetClientRect(IntPtr window,out NativeRect rect);
+ [System.Runtime.InteropServices.DllImport("user32.dll")]static extern IntPtr GetForegroundWindow();
+
 }

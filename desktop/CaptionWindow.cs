@@ -32,11 +32,13 @@ internal class CaptionWindow : Form {
   minimize.AccessibleName="最小化";maximize.AccessibleName="最大化";close.AccessibleName="关闭";
   minimize.TabIndex=100;maximize.TabIndex=101;close.TabIndex=102;
   Controls.AddRange(new Control[]{minimize,maximize,close});
-  minimize.Click+=(_,_)=>WindowState=FormWindowState.Minimized;
+  minimize.Click+=(_,_)=>RequestWindowCommand(0xF020);
   maximize.Click+=(_,_)=>ToggleMaximize();close.Click+=(_,_)=>Close();
  }
- protected override CreateParams CreateParams {get{var cp=base.CreateParams;cp.Style&=~0x00C00000;cp.Style|=0x00040000|0x00080000|0x00020000|0x00010000;cp.ClassStyle|=0x0001|0x0002;return cp;}}
- // WS_THICKFRAME is intentionally retained for native resize/system-menu behavior.
+ protected override CreateParams CreateParams {get{var cp=base.CreateParams;cp.Style|=0x00C00000;cp.Style|=0x00040000|0x00080000|0x00020000|0x00010000;cp.ClassStyle|=0x0001|0x0002;return cp;}}
+ // Keep WS_CAPTION and WS_THICKFRAME for native DWM transitions/system commands.
+ // WM_NCCALCSIZE below removes the visible caption, not its OS window semantics.
+ // Windows remains responsible for animation and reduced-motion preferences.
  // Its one-pixel DWM border otherwise inherits the active Windows accent colour.
  // These attributes apply to this HWND only; no registry/system theme changes.
  void ApplyDwmFrameAppearance(){
@@ -73,7 +75,12 @@ internal class CaptionWindow : Form {
   maximize.Restored=WindowState==FormWindowState.Maximized;maximize.AccessibleName=maximize.Restored?"还原":"最大化";maximize.Invalidate();
   CaptionMenu.BringToFront();minimize.BringToFront();maximize.BringToFront();close.BringToFront();
  }
- void ToggleMaximize(){WindowState=WindowState==FormWindowState.Maximized?FormWindowState.Normal:FormWindowState.Maximized;}
+ void ToggleMaximize()=>RequestWindowCommand(IsZoomed(Handle)?0xF120:0xF030);
+ void RequestWindowCommand(int command){
+  // Use the same path as the system menu; do not tween Bounds or force OS animation.
+  if(!PostMessage(Handle,0x0112,(IntPtr)command,IntPtr.Zero))
+   System.Diagnostics.Trace.WriteLine($"Window command could not be queued: {command:X}");
+ }
  protected override void OnPaintBackground(PaintEventArgs e){using var brush=new SolidBrush(CaptionSurface);e.Graphics.FillRectangle(brush,e.ClipRectangle);}
  protected override void OnPaint(PaintEventArgs e){base.OnPaint(e);using var brush=new SolidBrush(CaptionSurface);e.Graphics.FillRectangle(brush,new Rectangle(0,0,ClientSize.Width,CaptionHeight));}
  protected override bool ProcessCmdKey(ref Message msg,Keys keyData){
