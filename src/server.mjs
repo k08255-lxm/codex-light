@@ -1,3 +1,4 @@
+import {StorageMaintenance} from './storage-maintenance.mjs';
 import http from 'node:http';
 import {spawn} from 'node:child_process';
 import {ConfigSettingsService} from './config-settings.mjs';
@@ -60,11 +61,12 @@ publicFiles['/ui/title-settings.js']='ui/title-settings.js';
 publicFiles['/ui/update-indicator.js']='ui/update-indicator.js';
 publicFiles['/ui/optimistic-messages.js']='ui/optimistic-messages.js';
 for(const file of ['about-view.js','about-view.css','notifications.js'])publicFiles['/ui/'+file]='ui/'+file;
+publicFiles['/ui/storage-view.js']='ui/storage-view.js';
 publicFiles['/ui/panel-resize.js']='ui/panel-resize.js';publicFiles['/ui/panel-resize.css']='ui/panel-resize.css';publicFiles['/project-name-dialog.js']='project-name-dialog.js';
 for(const file of ['history-auto-load.js','format.js','chart.js','stats-view.js','account-view.js','live-changes.js','views.css','paste.js','artifacts.js','agents.js','access.js','lan-view.js','viewport.js','approvals-view.js','composer.js','dsh-view.js','preferences-view.js','remote-view.js','slash-menu.js','workbench-view.js','dsh-config-view.js','dsh-connection-view.js'])publicFiles['/ui/'+file]='ui/'+file;
 for(const file of ['activity-feed.js','activity-feed.css','projects.js','project-navigation.js','project-navigation.css'])publicFiles['/'+file]=file;
 async function body(req){let data='';for await(const chunk of req){data+=chunk;if(data.length>512*1024)throw new Error('请求太大');}try{return JSON.parse(data||'{}');}catch{throw new Error('无效 JSON');}}
-export async function createServer({client,cwd='',command='codex',demo=false,port=0,reopen=false,desktop=false,desktopUpdateTransport='msi',onDesktopTheme,onDesktopPickFolder,onDesktopLaunchInstaller,desktopStateRoot,projectStore,projectsRoot,fileAttachmentRoot,token=randomBytes(32).toString('hex'),prReviewService,runtimeManager,appUpdateService,statisticsRoot,lanOptions,dshConfigSourcesService,dshConnectionService}={}){
+export async function createServer({client,cwd='',command='codex',demo=false,port=0,reopen=false,desktop=false,desktopUpdateTransport='msi',onDesktopTheme,onDesktopPickFolder,onDesktopLaunchInstaller,desktopStateRoot,storageMaintenance,storageRoot,projectStore,projectsRoot,fileAttachmentRoot,token=randomBytes(32).toString('hex'),prReviewService,runtimeManager,appUpdateService,statisticsRoot,lanOptions,dshConfigSourcesService,dshConnectionService}={}){
  let runtimeSource='configured';
  if(!client&&!demo){
   if(!command||command==='codex'||command==='codex.exe'){const resolved=resolveCodexRuntime();command=resolved.path;runtimeSource=resolved.source==='npm'||resolved.source==='desktop'?resolved.source:'configured';}
@@ -127,6 +129,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
  }}:{})});
  const dsh=new DshReadService(rpc);const uploads=new UploadStore();const streams=new Set();const operations=new OperationStore({hooks:desktopState?{before:r=>desktopState.before(r),after:r=>desktopState.after(r)}:undefined});const runtime=runtimeManager||new RuntimeManager({currentPath:command,currentSource:runtimeSource,operations,rpc});let origin;let stopping=false;let closing;let serviceShutdown;let shutdownError=null;let engineStopped=false;let reopener;let reopenError=null;let remoteEnvironment=null;const remoteClients=new Set();let remotePairing=null;let pairingTimer;
  function clearPairing(){clearTimeout(pairingTimer);remotePairing=null;for(const entry of operations.entries.values())if(entry.method==='remoteControl/pairing/start'&&entry.result){delete entry.result.pairingCode;delete entry.result.manualPairingCode;entry.result.expired=true;}}
+ const storage=storageMaintenance||new StorageMaintenance({root:storageRoot||(process.platform==='win32'&&process.env.LOCALAPPDATA?path.join(process.env.LOCALAPPDATA,'CodexLight'):null),activeProfile:process.env.CODEX_LIGHT_ACTIVE_WEBVIEW_PROFILE||null,imageFiles:()=>uploads.storageFiles?.()||[...uploads.records.values()].map(r=>({path:r.path,size:r.size,ownedTemp:true,cleanupEligible:false})),imageLease:fn=>uploads.withMaintenance?uploads.withMaintenance(fn):fn(),busy:()=>!!(uploads.reserved||uploads.writes?.size||appUpdates.downloading||appUpdates.installing||sessions.queues.size||rpc.requests.size||sessions.snapshot().threads.some(t=>t.state!=='idle')||[...terminal.sessions.values()].some(t=>!['exited','error','disconnected'].includes(t.state))||[...dsh.threads.values()].some(t=>[...t.tasks.values()].some(x=>!['completed','failed','cancelled','canceled','interrupted','context_exhausted'].includes(String(x.status).toLowerCase()))))});
  const json=(res,status,data)=>{if(res.destroyed || res.writableEnded)return;res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(data));};
  const handle=async(req,res,context)=>{
   const requestOrigin=context?.origin??origin,requestToken=context?.token??token,requestAccess=context?.access==='lan'?'lan':'local',requestDesktop=desktop&&requestAccess==='local';
@@ -142,6 +145,8 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
    if(Buffer.byteLength(auth)!==Buffer.byteLength(expected)||!timingSafeEqual(Buffer.from(auth),Buffer.from(expected))){json(res,401,{error:'访问凭据已失效，请重新启动 GUI'});return;}
    try{
     if(['/api/dsh/config-sources/','/api/dsh/connection/'].some(prefix=>url.pathname.startsWith(prefix))&&requestAccess!=='local'){json(res,403,{error:'DSH 配置和连接管理仅限本机',code:'LOCAL_ONLY',outcome:'notExecuted'});return;}
+    if(url.pathname.startsWith('/api/storage/')&&requestAccess!=='local'){json(res,403,{error:'存储清理仅限本机，远程设备不能清理宿主数据',code:'LOCAL_ONLY',outcome:'notExecuted'});return;}
+    if(storage.running&&req.method==='POST')throw Object.assign(new Error('本机存储维护中，请稍后再试'),{code:'STORAGE_BUSY',status:409,outcome:'notExecuted'});
     if(url.pathname.startsWith('/api/app-update/')&&requestAccess!=='local'){json(res,403,{error:'应用更新仅限本机操作',code:'LOCAL_ONLY',outcome:'notExecuted'});return;}
     if(desktopUpdateTransport==='velopack'&&req.method==='POST'&&!['/api/app-update/status','/api/shutdown'].includes(url.pathname))updateReservation.assertOpen();
     if(stopping&&req.method==='POST'&&url.pathname!=='/api/shutdown')throw Object.assign(new Error('Light 正在关闭，此请求未发送'),{code:'CLIENT_CLOSING',outcome:'notExecuted',status:409});
@@ -185,6 +190,14 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
     }
     const input=await body(req);
     if(desktopUpdateTransport==='velopack'&&!['/api/app-update/status','/api/shutdown'].includes(url.pathname))updateReservation.assertOpen();
+    if(storage.running)throw Object.assign(new Error('本机存储维护中，请稍后再试'),{code:'STORAGE_BUSY',status:409,outcome:'notExecuted'});
+    if(url.pathname.startsWith('/api/storage/')){
+     const action=url.pathname.slice('/api/storage/'.length);
+     const keys={scan:'',plan:'category',apply:'confirmed,id,manifestDigest',restore:'confirmed,recoveryId'};
+     if(!Object.hasOwn(keys,action)||!input||typeof input!=='object'||Array.isArray(input)||(!(action==='plan'&&['category','category,mode'].includes(Object.keys(input).sort().join(',')))&&Object.keys(input).sort().join(',')!==keys[action]))throw Object.assign(new Error('存储操作参数无效'),{code:'STORAGE_INVALID',status:400,outcome:'notExecuted'});
+     if(demo&&action!=='scan')throw Object.assign(new Error('演示模式不能清理真实文件'),{code:'STORAGE_DEMO',status:409,outcome:'notExecuted'});
+     json(res,200,await storage[action](input));return;
+    }
     if(url.pathname.startsWith('/api/app-update/')){
      const action=url.pathname.slice('/api/app-update/'.length);
      if(!input||typeof input!=='object'||Array.isArray(input))throw new Error('应用更新参数无效');

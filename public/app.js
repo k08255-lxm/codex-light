@@ -1,5 +1,6 @@
 import { createBackHandler } from './ui/back-navigation.js';
 import { mountDesktopClosePreference } from './ui/desktop-close-preference.js';
+import {mountStorageView} from './ui/storage-view.js';
 import { mountWelcomeGreeting } from './ui/welcome-greeting.js';
 import { redeemPairing } from './ui/pairing.js';
 import { startUpdateChecks } from './ui/auto-update.js';
@@ -389,6 +390,7 @@ const accountView = mountAccount($('account-root'), {
   getThreadId: () => state.thread?.id, onQuota: result => accountQuota.update(result),
 });
 const lanView = mountLanAccess($('lan-root'), { api, notice });
+const storageView=mountStorageView($('storage-root'),{api});
 const titleSettings=mountTitleSettings($('title-settings-root'),{api,notice});
 const updateIndicator = !access.lan ? mountUpdateIndicator(document.querySelector('.rail'), {onOpen:()=>route('settings',{section:'about'})}) : null;
 const aboutView = mountAbout($('about-root'), { api, onStatus:status=>updateIndicator?.update(status), mutate: (method, params) => {
@@ -1174,8 +1176,8 @@ for (const button of document.querySelectorAll('[data-settings-section]')) butto
 function selectSettingsSection(section = 'general') {
   if(section==='account'||section==='usage'){route(section);return;}
   if(section==='lan')section='remote';
-  const page = (section==='about' && state.lan) ? 'general' : ['general','dsh','archived','remote','plugins','appearance','notifications','shortcuts','configuration','about'].includes(section) ? section : 'general'; state.settingsPage = page;
-  for (const name of ['general','dsh','archived','remote','plugins','appearance','notifications','shortcuts','configuration','about']) $('settings-' + name).classList.toggle('hidden', name !== page);
+  const page = (['about','storage'].includes(section) && state.lan) ? 'general' : ['general','dsh','archived','remote','plugins','appearance','notifications','shortcuts','configuration','about','storage'].includes(section) ? section : 'general'; state.settingsPage = page;
+  for (const name of ['general','dsh','archived','remote','plugins','appearance','notifications','shortcuts','configuration','about','storage']) $('settings-' + name).classList.toggle('hidden', name !== page);
   for (const item of document.querySelectorAll('[data-settings-section]')) item.classList.toggle('active', item.dataset.settingsSection === section);
   document.querySelector('.settings-content').scrollTop = 0;
   if (page === 'dsh' && !state.lan) { dshConnectionView.activate(); dshConfigView.activate(); } else { dshConnectionView.deactivate(); dshConfigView.deactivate(); }
@@ -1184,6 +1186,7 @@ function selectSettingsSection(section = 'general') {
   if(page==='plugins')pluginPanel.activate();else pluginPanel.deactivate();renderPluginPending();
   if(page==='remote'&&!state.lan)lanView.activate();else lanView.deactivate();
   if(page==='about')aboutView.activate();else aboutView.deactivate();
+  if(page==='storage'&&!state.lan)storageView.activate();else storageView.deactivate();
   if (page === 'remote'){if(state.connected)refreshRemote();else remoteReset({statusMessage:'尚未连接 Codex，无法读取远控状态。',pairMessage:'尚未连接，本机配对码显示已清除；不会撤销已配对设备。',devicesMessage:'未连接时设备列表不可用；不会撤销旧环境设备。'});}
   syncRuntimePanelActivity();
 }
