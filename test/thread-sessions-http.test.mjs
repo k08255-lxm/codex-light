@@ -49,7 +49,7 @@ test('HTTP steer uses owned attachments, preserves turn, deduplicates, rejects s
  const extra={requestId,attachmentIds:[image.id],fileAttachmentIds:[file.id]};
  const [one,two]=await Promise.all([post(app,'turn/steer',params,extra),post(app,'turn/steer',params,extra)]);assert.equal(one.status,200);assert.deepEqual(one,two);assert.deepEqual(one.body,{turnId});
  let calls=(await app.rpc.call('test/stats')).calls.filter(c=>c.method==='turn/steer');assert.equal(calls.length,1);
- const input=calls[0].params.input;assert.equal(input.length,3);assert.deepEqual(input[0].text_elements,[{byteRange:{start:0,end:6}}]);assert.equal(input[1].type,'localImage');assert.match(input[2].text,/fixture.txt/);assert.deepEqual(input[2].text_elements,[]);
+ const input=calls[0].params.input;assert.equal(input.length,3);assert.deepEqual(input[0].text_elements,[{byteRange:{start:0,end:6}}]);assert.equal(input[1].type,'image');assert.equal(input[1].url,'data:image/png;base64,'+Buffer.from([137,80,78,71,13,10,26,10,1]).toString('base64'));assert.equal(input[1].path,undefined);assert.match(input[2].text,/fixture.txt/);assert.deepEqual(input[2].text_elements,[]);
  const stale=await post(app,'turn/steer',{...params,expectedTurnId:'wrong'});assert.equal(stale.status,409);assert.equal(stale.body.code,'ACTIVE_TURN_MISMATCH');assert.equal(stale.body.notExecuted,true);
  assert.equal((await post(app,'turn/steer',{...params,model:'override'})).status,400);
  const missing=await post(app,'turn/steer',params,{requestId:null});assert.equal(missing.status,400);
