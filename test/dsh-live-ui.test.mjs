@@ -103,7 +103,7 @@ test('context sync forwards thread, connection, visibility and instance to the m
 });
 
 test('static shell mounts one inspector scroll surface rather than nested event scrollers', () => {
-  for (const id of ['toggle-details', 'rail-dsh', 'dsh-panel', 'dsh-live-state', 'dsh-live-meta', 'dsh-live-warning', 'dsh-live-refresh', 'dsh-tasks']) {
+  for (const id of ['toggle-details', 'dsh-panel', 'dsh-live-state', 'dsh-live-meta', 'dsh-live-warning', 'dsh-live-refresh', 'dsh-tasks']) {
     assert.equal((html.match(new RegExp(`id="${id}"`, 'g')) || []).length, 1, `${id} mounted once`);
   }
   assert.doesNotMatch(html, /id="open-dsh"/, 'Activity is the single conversation panel entry');

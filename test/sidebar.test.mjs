@@ -2,8 +2,8 @@ import test from 'node:test';import assert from 'node:assert/strict';import {rea
 const app=await readFile(new URL('../public/app.js',import.meta.url),'utf8');const html=await readFile(new URL('../public/index.html',import.meta.url),'utf8');const css=await readFile(new URL('../public/style.css',import.meta.url),'utf8');
 function classList(node){const values=new Set();return{add(...names){for(const name of names)values.add(name);},remove(...names){for(const name of names)values.delete(name);},toggle(name,force){const next=force===undefined?!values.has(name):!!force;if(next)values.add(name);else values.delete(name);return next;},contains(name){return values.has(name);},values(){return [...values];},node};}
 function element(id,{hidden=false}={}){let attributes={};const node={id,attributes,classList:classList(),visible:!hidden,focus(){document.activeElement=node;},setAttribute(name,value){attributes[name]=String(value);},removeAttribute(name){delete attributes[name];},getAttribute(name){return attributes[name];},getClientRects(){return node.visible?[{}]:[];},addEventListener(){},contains(other){return other===node||(id==='sidebar'&&(other===elements['close-sidebar']||other===elements['settings-sidebar-close']));},querySelectorAll(){return[];}};node.classList.node=node;elements[id]=node;return node;}
-const elements={};const document={activeElement:null,createComment(){return {after(node){node.parentNode='rail';node.previousSibling=this;}};},querySelector(selector){return selector.includes('settings-dialog')?settingsActions:chatActions;}};
-const chatActions={prepend(node){node.parentNode=this;node.previousSibling=null;}},settingsActions={prepend(node){node.parentNode=this;node.previousSibling=null;}};document.documentElement=element('root');document.body=element('body');
+const elements={};const document={activeElement:null,createComment(){return {after(node){node.parentNode='rail';node.previousSibling=this;}};},querySelector(){return activeActions;}};
+const chatActions={prepend(node){node.parentNode=this;node.previousSibling=null;}},settingsActions={prepend(node){node.parentNode=this;node.previousSibling=null;}};let activeActions=chatActions;document.documentElement=element('root');document.body=element('body');
 for(const id of ['app','sidebar','sidebar-overlay','rail-sidebar','settings-dialog','close-sidebar','settings-sidebar-close'])element(id);
 elements['rail-sidebar'].before=anchor=>{elements['rail-sidebar'].parentNode='rail';elements['rail-sidebar'].previousSibling=anchor;};
 elements['settings-dialog'].classList.add('hidden');
@@ -42,6 +42,23 @@ test('static shell exposes one overlay, two in-sidebar closers, and a single per
 
 test('one sidebar control relocates on narrow chat/settings and restores on wide view',()=>{
  media.matches=true;media.handler();sidebar.setRoute('chat');assert.equal(elements['rail-sidebar'].parentNode,chatActions);
- sidebar.setRoute('settings');assert.equal(elements['rail-sidebar'].parentNode,settingsActions);
+ activeActions=settingsActions;sidebar.setRoute('settings');assert.equal(elements['rail-sidebar'].parentNode,settingsActions);
  media.matches=false;media.handler();assert.equal(elements['rail-sidebar'].parentNode,'rail');
+});
+
+
+test('all non-settings destinations keep the conversation sidebar and a visible toggle',()=>{
+ for(const narrow of [false,true]){
+  media.matches=narrow;media.handler();
+  for(const name of ['chat','usage','account','terminal','review']){
+   activeActions={prepend(node){node.parentNode=this;node.previousSibling=null;}};
+   sidebar.setRoute(name);sidebar.close();
+   assert.equal(elements['rail-sidebar'].hidden,false,name);
+   assert.equal(elements.sidebar.classList.contains('route-hidden'),false,name);
+   assert.equal(elements.sidebar.getAttribute('aria-label'),'项目与对话');
+   if(narrow)assert.equal(elements['rail-sidebar'].parentNode,activeActions,name);
+   sidebar.toggle();assert.equal(expanded('rail-sidebar'),'true',name);
+   sidebar.toggle();assert.equal(expanded('rail-sidebar'),'false',name);
+  }
+ }
 });

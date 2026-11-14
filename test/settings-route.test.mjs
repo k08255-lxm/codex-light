@@ -41,7 +41,7 @@ test('settings about is a real exclusive section and opens its dedicated sidebar
   assert.ok(h.calls.some(([view,action])=>view==='about'&&action==='activate'));
   assert.ok(h.calls.some(([view,action])=>view==='sidebar'&&action==='open'));
   h.route('usage');
-  assert.equal(h.$('chat-sidebar').classList.contains('hidden'),true);
+  assert.equal(h.$('chat-sidebar').classList.contains('hidden'),false);
   assert.equal(h.$('settings-sidebar').classList.contains('hidden'),true);
   assert.ok(h.calls.some(([view,action])=>view==='about'&&action==='deactivate'));
   h.route('chat');assert.equal(h.$('chat-sidebar').classList.contains('hidden'),false);

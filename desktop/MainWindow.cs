@@ -11,7 +11,7 @@ internal sealed class MainWindow : CaptionWindow {
  readonly bool demo; readonly string profile=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"CodexLight","WebView","Sessions",Guid.NewGuid().ToString("N"));
  readonly CancellationTokenSource hostMessages=new();
  readonly SemaphoreSlim hostWrites=new(1,1);
- NotifyIcon? tray;ContextMenuStrip? trayMenu;Icon? trayIcon;
+ NotifyIcon? tray;ContextMenuStrip? trayMenu;Icon? trayIcon;Font? trayFont;
  Process? backend;ChildJob? job;Uri? origin;bool closing,allowClose,exitRequested,choosingClose,resourcesDisposed,failed,updateShutdownAttempted;
  readonly WindowSessionEnd sessionEnd=new();
  Task? stopTask;
@@ -236,18 +236,29 @@ internal sealed class MainWindow : CaptionWindow {
  }
  void ShowTray(){
   if(tray==null){
-   trayMenu=new ContextMenuStrip();trayMenu.Items.Add("打开窗口",null,(_,_)=>RestoreFromTray());trayMenu.Items.Add(new ToolStripSeparator());
+   trayFont=new Font("Microsoft YaHei UI",9f,FontStyle.Regular,GraphicsUnit.Point);
+   trayMenu=new ContextMenuStrip{Font=trayFont};trayMenu.Items.Add("打开窗口",null,(_,_)=>RestoreFromTray());trayMenu.Items.Add(new ToolStripSeparator());
    trayMenu.Items.Add("退出",null,(_,_)=>{exitRequested=true;Close();});
-   trayIcon=(Icon)(Icon??SystemIcons.Application).Clone();
+   trayIcon=TrayAppearance.CreateIcon(Math.Max(16,SystemInformation.SmallIconSize.Width),TrayAppearance.IsLightTaskbar());
+   TrayAppearance.Apply(trayMenu,TrayAppearance.IsLightTaskbar());
+   trayMenu.Opening+=(_,_)=>RefreshTrayAppearance();
    tray=new NotifyIcon{Text="Codex Light",Icon=trayIcon,ContextMenuStrip=trayMenu};tray.DoubleClick+=(_,_)=>RestoreFromTray();
   }
   tray.Visible=true;
   if(!tray.Visible)throw new InvalidOperationException("Tray icon unavailable");
  }
+ void RefreshTrayAppearance(){
+  if(tray==null||trayMenu==null)return;
+  bool light=TrayAppearance.IsLightTaskbar();
+  var next=TrayAppearance.CreateIcon(Math.Max(16,SystemInformation.SmallIconSize.Width),light);
+  var previous=trayIcon;tray.Icon=next;trayIcon=next;previous?.Dispose();
+  TrayAppearance.Apply(trayMenu,light);
+ }
  void ShowTrayFailure()=>MessageBox.Show(this,"无法显示系统托盘图标，窗口将保持打开。","Codex Light",MessageBoxButtons.OK,MessageBoxIcon.Error);
- void DisposeTray(){if(tray!=null){tray.Visible=false;tray.Dispose();tray=null;}trayMenu?.Dispose();trayMenu=null;trayIcon?.Dispose();trayIcon=null;}
+ void DisposeTray(){if(tray!=null){tray.Visible=false;tray.Dispose();tray=null;}trayMenu?.Dispose();trayMenu=null;trayIcon?.Dispose();trayIcon=null;trayFont?.Dispose();trayFont=null;}
  protected override void WndProc(ref Message message){
   sessionEnd.Observe(message.Msg,message.WParam);
+  if(message.Msg==0x001A||message.Msg==0x031A||message.Msg==0x02E0)RefreshTrayAppearance();
   // Form raises FormClosing during QUERY, then disposes only on END(TRUE).
   // Leave disposal to that confirmed path, so END(FALSE) remains usable.
   base.WndProc(ref message);

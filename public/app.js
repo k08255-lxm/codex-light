@@ -94,19 +94,18 @@ const sidebarController = (() => {
   const closeButton=()=>$('settings-dialog').classList.contains('hidden')?$('close-sidebar'):$('settings-sidebar-close');
   const focusable=()=>[...sidebar.querySelectorAll('button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),a[href],[tabindex]:not([tabindex="-1"])')].filter(node=>node.getClientRects().length);
   function sync(){
-    const available=mode==='chat'||mode==='settings';
-    const topActions=narrow()&&available?document.querySelector(mode==='settings'?'#settings-dialog .stage-actions':'#chat-page .stage-actions'):null;
+    const topActions=narrow()?document.querySelector('.stage:not(.hidden) .stage-actions, .stage:not(.hidden) .page-controls'):null;
     if(topActions){if(sidebarButton.parentNode!==topActions)topActions.prepend(sidebarButton);}
     else if(sidebarButton.previousSibling!==sidebarHome)sidebarHome.after(sidebarButton);
-    const effectiveOpen=available&&open;
+    const effectiveOpen=open;
     const overlayOpen=narrow()&&effectiveOpen;
     app.classList.toggle('sidebar-open',overlayOpen);
     app.classList.toggle('sidebar-collapsed',!narrow()&&!effectiveOpen);
-    sidebar.classList.toggle('route-hidden',!available);
+    sidebar.classList.remove('route-hidden');
     overlay.classList.toggle('hidden',!overlayOpen);
     sidebar.inert=!effectiveOpen;
     if(effectiveOpen)sidebar.removeAttribute('aria-hidden');else sidebar.setAttribute('aria-hidden','true');
-    const button=$('rail-sidebar');button.hidden=!available;button.setAttribute('aria-expanded',String(effectiveOpen));const label=effectiveOpen?'收起侧栏':'展开侧栏';button.setAttribute('aria-label',label);button.title=label;
+    const button=$('rail-sidebar');button.hidden=false;button.setAttribute('aria-expanded',String(effectiveOpen));const label=effectiveOpen?'收起侧栏':'展开侧栏';button.setAttribute('aria-label',label);button.title=label;
   }
   function set(next,{focus=true}={}){
     if(!['chat','settings'].includes(mode))return;
@@ -133,6 +132,7 @@ const sidebarController = (() => {
     close:()=>set(false),
     closeForNavigation:()=>{if(narrow()&&open)set(false,{focus:false});},
     setRoute(next){
+      next=next==='settings'?'settings':'chat';
       if(mode===next){sync();return;}
       if(!narrow()&&Object.hasOwn(desktopOpen,mode))desktopOpen[mode]=open;
       mode=next;returnFocus=null;
@@ -426,8 +426,8 @@ function route(name, { section } = {}) {
   closeWindowMenu(); closeThreadMenu();
   for (const [key, id] of Object.entries(STAGES)) $(id).classList.toggle('hidden', key !== name);
   $('app').dataset.view = name;
-  // Each page owns its navigation; project history is exclusive to the conversation view.
-  $('chat-sidebar').classList.toggle('hidden', name !== 'chat');
+  // Settings owns a dedicated navigator; every other page keeps access to project history.
+  $('chat-sidebar').classList.toggle('hidden', name === 'settings');
   $('settings-sidebar').classList.toggle('hidden', name !== 'settings');
   sidebarController.setRoute(name);
   if (name !== 'chat') { $('details').classList.add('hidden'); $('toggle-details').setAttribute('aria-pressed', 'false'); }
@@ -1111,7 +1111,7 @@ $('send-state-action').addEventListener('click',async()=>{const action=$('send-s
 $('settings-form').addEventListener('submit', saveSettings);
 $('settings-back').addEventListener('click', closeSettings); $('settings-cancel').addEventListener('click', closeSettings);
 $('rail-plugins').addEventListener('click',()=>openSettings('plugins'));
-$('rail-home').addEventListener('click', () => route('chat')); $('rail-settings').addEventListener('click', () => openSettings('general')); $('rail-dsh').addEventListener('click', () => showDetails('dsh', true));
+$('rail-home').addEventListener('click', () => route('chat')); $('rail-settings').addEventListener('click', () => openSettings('general'));
 $('rail-usage').addEventListener('click', () => route('usage')); $('rail-account').addEventListener('click', () => route('account'));
 let activeMenu = null;
 function closeWindowMenu() { $('window-menu').classList.add('hidden'); for (const id of ['menu-file','menu-view','menu-app']) $(id).setAttribute('aria-expanded', 'false'); activeMenu = null; }
