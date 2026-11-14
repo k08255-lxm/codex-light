@@ -1,3 +1,4 @@
+import {discoverPrivateCodex} from './private-codex.mjs';
 import {existsSync} from 'node:fs';
 import {spawnSync} from 'node:child_process';
 import path from 'node:path';
@@ -148,7 +149,12 @@ export function resolveCodexRuntime({platform=process.platform,arch=process.arch
   throw new Error('未找到已安装的 Codex CLI，请安装官方 CLI 或指定原生程序绝对路径。');
  }
  const candidates=discoverRuntimeCandidates({platform,arch,env,home,exists,discoverDesktop,versionOf,spawnSyncFn});
- const {npm,desktop}=candidates;
+ const {npm,desktop}=candidates; // Reuse runnable system candidates first. App-private CLI is an explicit-install fallback.
+ if(!npm.version&&!desktop.version){
+  try{const privateCli=discoverPrivateCodex({platform,arch,env,home});
+   if(privateCli&&probeCodexVersion(privateCli.path,{spawnSyncFn})===privateCli.version)return {...candidates,path:privateCli.path,source:'private'};
+  }catch{candidates.diagnostics.push('App-private Codex CLI could not be verified; no files changed');}
+ }
  if(!npm.path&&!desktop.path)throw new Error('未找到官方 npm 安装的 Codex 原生程序。请指定 CODEX_LIGHT_CODEX 绝对路径；不会从工作目录寻找 codex.exe。');
  let selected;
  if(npm.path&&desktop.path){
