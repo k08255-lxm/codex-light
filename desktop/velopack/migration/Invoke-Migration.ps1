@@ -32,9 +32,9 @@ foreach($p in @($old.InstallRoot,$data)){if((Same $p $newRoot) -or $newRoot.Star
 $plan=[ordered]@{Mode=$(if($RetireLegacy){'retire'}else{'stage'});Legacy=$old;NewRoot=$newRoot;DataRoot=$data;TargetVersion=$TargetVersion;Installer=$vendor;InstallerSha256=$TrustedSetupSha256;Execute=[bool]$Execute}
 $plan|ConvertTo-Json -Depth 6|Write-Output
 if(!$Execute){Write-Output 'INSPECT ONLY: no installer, app or cleanup was executed.';return}
-# Release gate: pinned vendor source has broken EXE_ARGS parsing (Velopack issue #1039).
+# Release gate: 1.3.39 fixes prior EXE_ARGS parsing, but production migration remains unvalidated.
 # Until a no-normal-start staging path is verified end-to-end, both staging and retirement stay disabled.
-throw 'EXECUTION DISABLED: Velopack 1.2.161 argument-forwarding safety and disposable-VM migration/rollback have not passed. No installer or prerequisite was started.'
+throw 'EXECUTION DISABLED: production MSI migration requires verified idle/data snapshots/health/rollback and end-to-end validation. No installer or prerequisite was started.'
 Idle
 $mutex=New-Object Threading.Mutex($false,'Local\CodexLight.MsiVelopackMigration')
 $locked=$false

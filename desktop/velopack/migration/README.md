@@ -1,6 +1,6 @@
 # MSI → Velopack migration coordinator
 
-This module is a **gated coordinator and read-only inventory command**, not a completed production migration installer. `Invoke-Migration.ps1` provides an inspect-by-default wrapper with explicit execution/idle/health/retirement switches. Its execution path is intentionally hard-disabled: the pinned vendor source still has the documented trailing-argument parser defect, and no isolated VM migration has passed. The current MSI remains the production installation route until a wrapper implements `IMigrationHost` and passes isolated end-to-end migration/rollback tests.
+This module is a **gated coordinator and read-only inventory command**, not a completed production migration installer. `Invoke-Migration.ps1` provides an inspect-by-default wrapper with explicit execution/idle/health/retirement switches. Its execution path is intentionally hard-disabled: the prior trailing-argument parser defect is fixed in the newly pinned prerelease, but production migration safety and end-to-end validation are not complete. The current MSI remains the production installation route until a wrapper implements `IMigrationHost` and passes isolated end-to-end migration/rollback tests.
 
 ## Commands
 
@@ -27,15 +27,27 @@ This module is a **gated coordinator and read-only inventory command**, not a co
 
 ## Validation boundaries
 
-The tests exercise branching/order/identity/path/hash/task/disk protections through an injected fake host. They do **not** establish actual MSI uninstall/reinstall correctness, Velopack Setup rollback, desktop shortcut takeover, MSI-cache sufficiency, or real elapsed migration time. Those require a disposable Windows VM with snapshots and the exact old/new packages. The user's active installation is not a suitable test fixture.
+The tests exercise branching/order/identity/path/hash/task/disk protections through an injected fake host. They do **not** establish actual MSI uninstall/reinstall correctness, Velopack Setup rollback, desktop shortcut takeover, MSI-cache sufficiency, or real elapsed migration time. A separate randomly identified benign MSI/Velopack fixture has now exercised install, stage, failed health, restored health, old-product retirement and normal cleanup; see fixture/README.md and its saved results. This does not validate the real application. The user has authorized formal-app testing without changing Codex configuration, but it remains blocked until actual task idleness, backups and the other production safeguards are established. A disposable VM remains preferred for destructive failure scenarios.
 
-## Wrapper blocker (verified source, not speculation)
+## Historical parser blocker and remaining production gate
 
-Official Velopack 1.2.161 documentation advertises `Setup.exe -- [EXE_ARGS]`, but pinned repository commit `92d6a1c91716729d449034df5c50307dcce39493`, `src/bins/src/setup.rs`, defines the positional without an OsString value parser and retrieves it with `get_many::<OsString>`. This matches upstream issue #1039. The proposed `--migration-staged` argument cannot safely be relied on for this release. `commands/install.rs` normally starts the installed application when not silent; using `--silent` as a workaround would auto-accept prompts and is not acceptable here.
+Official Velopack 1.2.161 documentation advertises `Setup.exe -- [EXE_ARGS]`, but pinned repository commit `92d6a1c91716729d449034df5c50307dcce39493`, `src/bins/src/setup.rs`, defines the positional without an OsString value parser and retrieves it with `get_many::<OsString>`. This matches upstream issue #1039. That evidence applied to the former 1.2.161 pin. Prerelease 1.3.39-g8d2844f fixes the parser through PR #1088; see the separate isolated fixture/parser results. `commands/install.rs` normally starts the installed application when not silent; `--silent` suppresses normal launch. It was explicitly authorized for the benign fixture. A formal silent flow is permissible only with known prerequisites, no undisclosed terms or permissions and explicit authorization; it must never bypass those gates.
 
-The wrapper hard-stop occurs before any prerequisite installer, staging write, recovery copy or uninstall. It must not be removed until a supported no-normal-start mechanism is verified and real disposable-VM migration/rollback tests pass. The unreachable candidate execution code is retained for review, not advertised as working. Manual health attestation is not equivalent to an automated native/backend smoke test.
+The parser fix alone does not complete migration. The wrapper hard-stop occurs before any prerequisite installer, staging write, recovery copy or uninstall. It must not be removed until a supported no-normal-start mechanism is verified and real-app migration/rollback safeguards and authorized tests pass. The unreachable candidate execution code is retained for review, not advertised as working. Manual health attestation is not equivalent to an automated native/backend smoke test.
 
 Sources:
 - https://docs.velopack.io/reference/cli/content/setup-windows
 - https://github.com/velopack/velopack/issues/1039
 - https://github.com/velopack/velopack/blob/92d6a1c91716729d449034df5c50307dcce39493/src/bins/src/setup.rs
+
+Updated parser fix: https://github.com/velopack/velopack/pull/1088 . Production Execute remains disabled regardless of the fixture result.
+
+## Independent recovery primitives (not wired to Execute)
+
+`MigrationStorage` provides same-directory atomic receipts; manifest-based app-data recovery copies; exact member/length/SHA-256 verification; fresh-directory-only restoration; and cooperative legacy/new/current install mutex acquisition. Acquire and dispose a lock lease on the same thread. A lock alone does not establish task idleness.
+
+The production capture entry is fixed to this application's LocalAppData root. State, statistics, DSH, attachments, window state and the **entire WebView profile** are protected; logs, Updates and SetupLogs are explicitly excluded (rollback MSI source is separately preserved). Unknown entries, `.codex`, reparse paths, overwritten/in-place restore destinations and overlapping roots are refused. Stop the app cleanly before capture, including WebView writers. Pre/post capture plus per-file metadata/hash checks detect changes, but this is **not a filesystem snapshot** and cannot guarantee coherence against a concurrent adversarial writer. Existing recovery copies are never overwritten. Partial failed copies are unapproved and retained for inspection.
+
+Space budgeting uses actual captured file lengths plus verified caller-provided payload/package/MSI sizes and explicit headroom. The wrapper must still check every affected volume and temporary extraction requirements; this helper is not free-space or idle proof. Receipt atomic replacement is not a transaction over installation side effects or a guarantee against filesystem/hardware loss.
+
+The production Execute gate remains disabled. Neither pure storage tests nor benign stub health prove real native/backend readiness, schema compatibility, authenticated task idleness, shortcut ownership or production recovery.

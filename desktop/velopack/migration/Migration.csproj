@@ -1,4 +1,4 @@
 <Project Sdk="Microsoft.NET.Sdk">
  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0-windows</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><EnableDefaultCompileItems>false</EnableDefaultCompileItems></PropertyGroup>
- <ItemGroup><Compile Include="Migration.cs"/><Compile Include="MsiProbe.cs"/><Compile Include="Program.cs"/></ItemGroup>
+ <ItemGroup><Compile Include="Migration.cs"/><Compile Include="MigrationStorage.cs"/><Compile Include="MsiProbe.cs"/><Compile Include="Program.cs"/></ItemGroup>
 </Project>
