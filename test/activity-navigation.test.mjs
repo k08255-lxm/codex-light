@@ -22,7 +22,7 @@ function setup(currentRoute='chat') {
 
 test('chat toolbar has one Activity entry and retains the tool and agent tabs without the removed rail shortcut',()=>{
   const toolbar=html.match(/<div class="stage-actions">[\s\S]*?<\/div>/)[0];
-  assert.match(toolbar,/id="toggle-details"[\s\S]*?data-icon="panel"[\s\S]*?>活动<\/span>/);
+  assert.match(toolbar,/id="toggle-details"[\s\S]*?data-icon="activity"[\s\S]*?>活动<\/span>/);
   assert.doesNotMatch(html,/id="open-dsh"/);assert.doesNotMatch(app,/\$\('open-dsh'\)/);
   for(const id of ['tab-tools','tab-dsh'])assert.match(html,new RegExp(`id="${id}"`));
 });
