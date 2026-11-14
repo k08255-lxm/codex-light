@@ -40,13 +40,11 @@ if ($receipt.version -ne $Version -or $receipt.msiSha256 -ne $msiHash -or $recei
 }
 New-Item -ItemType Directory -Path $directory | Out-Null
 Copy-Item -LiteralPath $setup -Destination (Join-Path $directory $setupName)
-# 0.4.0's updater only recognizes this alias; publish both names and checksum entries during migration.
-Copy-Item -LiteralPath $setup -Destination (Join-Path $directory 'CodexLight-Setup.exe')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'INSTALLATION.md') -Destination (Join-Path $directory 'INSTALLATION.md')
 $readme = @"
 # Codex Light $Version · Windows x64
 
-将整个 ZIP 解压到下载等普通文件夹，打开 $setupName。CodexLight-Setup.exe 是供 0.4.0 应用内更新使用的同内容兼容附件。
+将整个 ZIP 解压到下载等普通文件夹，打开 $setupName。0.4.0 用户需从发布页手动下载此安装包升级。
 选择安装位置后点击“安装”；已有 MSI 安装会沿用原位置更新。安装器会复用已有运行环境，只补充缺失的 Node.js、.NET Desktop 与 WebView2；无需手动安装 Node 或开发工具。
 
 EXE 已内置 MSI，不需要再找另一个安装包。默认安装到当前用户的 Programs/CodexLight，开始菜单提供应用入口。卸载使用 Windows 设置中的“已安装的应用”。安装完成不会自动打开应用。
