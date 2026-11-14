@@ -21,7 +21,7 @@ Python 3 and the .NET SDK are required. The version comes from `package.json`; a
 
 If a local NuGet feed is required, populate it with the official `wix.6.0.2.nupkg` from the NuGet flat-container endpoint and pass `--source '<local-feed>'` to `dotnet tool install`. Do not commit the downloaded tool or feed.
 
-`generate.py` curates application files and licenses, then generates `Product.wxs` and `payload-manifest.json`. Root application files, `app/src/`, `app/public/`, `licenses/` and the x64 WebView2 loader are allowlisted. Build tools, user data, other runtime architectures and obsolete installer payloads are excluded. The resulting MSI contains its cabinet; there is no external payload directory. Repeatable inputs and procedure do not imply byte-identical package output.
+`generate.py` curates application files and licenses, then generates `Product.wxs` and `payload-manifest.json`. Root application files, `app/src/`, `app/public/`, `licenses/` and the x64 WebView2 loader are allowlisted. Build tools, user data, other runtime architectures and obsolete installer payloads are excluded. The MSI omits only TypeScript declaration files (`.d.ts`, `.d.mts`, `.d.cts`) and their declaration maps inside the bundled DSH `node_modules`: the installed bridge runs JavaScript, not TypeScript tooling. Package metadata, executable JavaScript, ordinary TypeScript source, runtime source maps, resources and licenses remain intact. `payload_policy.py` centralizes this rule; run `python -m unittest discover -s desktop/msi -p test_payload_policy.py` before packaging. The resulting MSI contains its cabinet; there is no external payload directory. Repeatable inputs and procedure do not imply byte-identical package output.
 
 ## Setup contract
 

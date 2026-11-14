@@ -67,7 +67,7 @@ namespace CodexLight.Bootstrap {
    if(!System.Text.RegularExpressions.Regex.IsMatch(version??"",@"^\d{1,3}\.\d{1,3}\.\d{1,5}$")||!Version.TryParse(version,out var parsed)||parsed.Major>255||parsed.Minor>255||parsed.Build>65535)throw new InvalidOperationException("嵌入 MSI 的产品版本无效。");
    return "CodexLight-"+version+"-x64.msi";
   }
-  public static string MsiArguments(string msi,string target,string log,bool reinstall=false)=>"/i \""+msi+"\" /qn /norestart /L*v \""+log+"\" SETUP_PREREQUISITES_VERIFIED=1 MSIRESTARTMANAGERCONTROL=DisableShutdown INSTALLFOLDER=\""+target+"\""+(reinstall?" REINSTALL=ALL REINSTALLMODE=vomus":"");
+  public static string MsiArguments(string msi,string target,string log,bool reinstall=false,bool verbose=false)=>"/i \""+msi+"\" /qn /norestart "+SetupLogs.Switch(verbose)+" \""+log+"\" SETUP_PREREQUISITES_VERIFIED=1 MSIRESTARTMANAGERCONTROL=DisableShutdown INSTALLFOLDER=\""+target+"\""+(reinstall?" REINSTALL=ALL REINSTALLMODE=vomus":"");
   // The authored MSI filename must survive extraction: secure repair resolves this name in SourceDir.
   // Read identity from the embedded package, not the bootstrapper assembly/build input filename.
   internal static async Task CopyPackage(Stream input,Stream output,CancellationToken token,Action<long,long?>? progress=null){
@@ -112,12 +112,13 @@ namespace CodexLight.Bootstrap {
    InstallPaths.ValidateUpgrade(package.Version,package.ProductCode);
    RunningApplication.EnsureStopped(target);
    token.ThrowIfCancellationRequested();canCancel(false);report(SetupPhase.ApplicationInstalling,"Windows Installer 正在安装 Codex Light…"+Environment.NewLine+"Windows Installer 日志："+log);
+   bool verbose=SetupLogs.Verbose;int? exitCode=null;var installClock=Stopwatch.StartNew();
    try{
-    using(var process=Process.Start(new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"msiexec.exe"),MsiArguments(package.Path,target,log,package.InstalledForCurrentUser())){UseShellExecute=false,CreateNoWindow=true})){
-     if(process==null)throw new InvalidOperationException("Windows Installer 未启动。");await Task.Run(()=>process.WaitForExit());ExitCodePolicy.RequireSuccess(process.ExitCode,"Codex Light");return process.ExitCode==0?restart:process.ExitCode;
+    using(var process=Process.Start(new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"msiexec.exe"),MsiArguments(package.Path,target,log,package.InstalledForCurrentUser(),verbose)){UseShellExecute=false,CreateNoWindow=true})){
+     if(process==null)throw new InvalidOperationException("Windows Installer 未启动。");await Task.Run(()=>process.WaitForExit());exitCode=process.ExitCode;ExitCodePolicy.RequireSuccess(process.ExitCode,"Codex Light");return process.ExitCode==0?restart:process.ExitCode;
     }
    }catch(Win32Exception e)when(e.NativeErrorCode==1223){throw new OperationCanceledException("系统授权已取消。",e);}
-   finally{progress("安装日志保留在："+cache);}
+   finally{installClock.Stop();if(exitCode.HasValue){try{SetupLogs.Complete(cache,exitCode.Value,installClock.ElapsedMilliseconds,verbose,DateTime.UtcNow);}catch(Exception e){progress("日志整理未完成，安装结果不变："+e.Message);}}progress("安装日志保留在："+cache);}
   }
  }
  internal sealed class EmbeddedPackage {

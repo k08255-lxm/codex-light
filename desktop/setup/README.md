@@ -42,3 +42,11 @@ Exit `0` succeeds, `3010` requires a restart, `1641` reports a restart already i
 - [.NET Framework 4.8 WPF DPI support](https://devblogs.microsoft.com/dotnet/announcing-the-net-framework-4-8/)
 - [Windows manifest DPI declarations](https://learn.microsoft.com/en-us/windows/win32/hidpi/setting-the-default-dpi-awareness-for-a-process)
 - [Microsoft WPF per-monitor examples](https://github.com/microsoft/WPF-Samples/blob/main/PerMonitorDPI/readme.md)
+
+## Installation logging and update file count
+
+Normal installs use Windows Installer `/Lweamo` (warnings, errors, action starts, fatal-exit and out-of-disk-space messages), not permanent verbose `/L*v` logging. For an explicit diagnostic attempt, set `CODEX_LIGHT_SETUP_VERBOSE=1` in the environment that launches Setup. A failed attempt is never automatically replayed to collect more detail; only start a diagnostic retry after checking the failure and deciding to retry.
+
+After MSI exits, `result.txt` records its exit code, elapsed milliseconds and logging mode. Successful logs are gzip-compressed and decoded/compared byte-for-byte before the original is removed. Failed or cancelled logs remain uncompressed. Compression/retention failures are reported but do not change the installation result. Only successful archives bearing this policy's marker are eligible for retention: the newest 10, at most 30 days, on a subsequent successful installation. Existing unmarked logs, failure logs, result summaries and MSI source packages are never deleted. As a result this bounds successful diagnostic archives, not the entire SetupLogs directory; MSI sources remain available for Windows Installer repair/uninstall. No system Installer cache is cleaned.
+
+The MSI excludes only bundled DSH dependency TypeScript declarations and declaration maps. Runtime code, JavaScript source maps, resources and licenses are retained. Major-upgrade sequencing and per-file component ownership remain unchanged. The 0.4.3 payload baseline had 4049 files; this removes 1068 declarations (2981 remaining, 26.4% fewer). This is a package-count measurement, not a measured wall-clock upgrade speedup. Actual clean-machine install, upgrade/rollback and timing still need an isolated Windows VM test; build/static checks do not replace that test.

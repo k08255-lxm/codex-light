@@ -1,4 +1,5 @@
 """Curate the already-built payload and author one HKCU-keyed component per file."""
+from payload_policy import omitted_runtime_file
 import argparse
 import hashlib
 import json
@@ -96,6 +97,8 @@ for file in sorted(a.payload.resolve().rglob('*')):
         forbidden_parts.add('node_modules')
     if any(part.lower() in forbidden_parts for part in file.relative_to(a.payload.resolve()).parts):
         raise SystemExit('Unexpected private/development payload: '+rel)
+    if omitted_runtime_file(rel):
+        continue
     parent = ''
     for part in Path(rel).parts[:-1]:
         next_parent = parent+'/'+part if parent else part

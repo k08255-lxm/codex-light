@@ -126,7 +126,7 @@ internal static class Tests {
    if(args.Length==3&&args[0]=="--package-only")return PackageOnly(Path.GetFullPath(args[1]),Path.GetFullPath(args[2]));
    PackageContracts();
    ProgressContracts();
-   checks += RunningApplicationTests.Run();
+   checks += RunningApplicationTests.Run(); SetupLogsTests.Run();
    string preview=args.Length>0?Path.GetFullPath(args[0]):Path.Combine(AppContext.BaseDirectory,"previews"); Directory.CreateDirectory(preview);
    Assert(ExitCodePolicy.IsSuccess(0)&&ExitCodePolicy.IsSuccess(3010)&&ExitCodePolicy.IsSuccess(1641),"success/reboot codes");
    foreach(int code in new[]{1603,1618,1638}) Fails(()=>ExitCodePolicy.RequireSuccess(code,"test"),"must surface installer failure");
@@ -136,7 +136,7 @@ internal static class Tests {
    foreach(string path in new[]{"relative",@"C:\",@"\\server\share\app","C:relative",@"\rootrelative",@"C:\"+new string('a',201)}) Fails(()=>InstallPaths.Validate(path,false),"unsafe path refused");
    string existing=Path.GetTempPath().TrimEnd('\\'); Fails(()=>InstallPaths.Validate(existing,false),"existing directory refused"); Assert(InstallPaths.Validate(existing,true)==existing,"registered folder allowed");
    string fresh=Path.Combine(Path.GetTempPath(),"CodexLight-Test-"+Guid.NewGuid().ToString("N")); Assert(InstallPaths.Validate(fresh,false)==fresh&&!Directory.Exists(fresh),"validation never creates target");
-   string msiArgs=SetupEngine.MsiArguments(@"C:\pkg x.msi",@"C:\App x",@"C:\log x.log"); Assert(msiArgs.Contains("/qn /norestart /L*v")&&msiArgs.Contains("SETUP_PREREQUISITES_VERIFIED=1")&&msiArgs.Contains("INSTALLFOLDER=\"C:\\App x\""),"MSI invocation contract");
+   string msiArgs=SetupEngine.MsiArguments(@"C:\pkg x.msi",@"C:\App x",@"C:\log x.log"); Assert(msiArgs.Contains("/qn /norestart /Lweamo")&&msiArgs.Contains("SETUP_PREREQUISITES_VERIFIED=1")&&msiArgs.Contains("INSTALLFOLDER=\"C:\\App x\""),"MSI invocation contract");
    Assert(StartupEnvironment.IntegrityIssue(0x1000)!=null&&StartupEnvironment.IntegrityIssue(0)!=null,"low integrity blocked"); Assert(StartupEnvironment.IntegrityIssue(0x2000)==null&&StartupEnvironment.IntegrityIssue(0x3000)==null,"medium/high allowed");
    Assert(SetupView.ProgressSummary("Node.js · 下载官方依赖（仅 HTTPS）：https://nodejs.org/package")=="Node.js · 正在下载…","download URL stays in details"); Assert(SetupView.ProgressSummary("正在安装 Codex Light…\nWindows Installer 日志：C:\\cache")=="正在安装 Codex Light…","log path stays in details");
    foreach(double scale in new[]{1d,1.25d,1.5d,1.75d,2d}) {
