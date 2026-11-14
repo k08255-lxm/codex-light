@@ -170,6 +170,10 @@
       <div id="settings-notice" class="notice hidden" role="status"><span></span></div>
       <section id="settings-general" class="settings-section">
         <h1>连接与运行</h1>
+        <div id="desktop-close-preference" class="panel hidden">
+          <label class="pref-row" for="desktop-close-behavior"><div><strong>关闭窗口时</strong><small class="fine">仅此电脑。完全退出会停止后台和任务。</small></div><select id="desktop-close-behavior" disabled><option value="ask">每次询问</option><option value="tray">转入系统托盘</option><option value="exit">完全退出</option></select></label>
+          <p id="desktop-close-status" class="fine" role="status" aria-live="polite"></p>
+        </div>
         <form id="settings-form">
           <div class="panel">
             <dl class="kv">

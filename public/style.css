@@ -843,3 +843,9 @@ dialog::backdrop { background: var(--overlay); }
 @media (forced-colors: active) { .update-indicator-badge { background: Highlight; color: HighlightText; } }
 .history-load-status { margin: 0 auto 12px; text-align:center; color:var(--tertiary); font-size:.8125rem; }
 .history-load-status:empty { display:none; }
+
+/* Native host preference remains separate from connection configuration. */
+#desktop-close-preference { margin-bottom: 16px; }
+#desktop-close-preference .pref-row { border-bottom: 0; }
+#desktop-close-status { margin: 0; }
+#desktop-close-status:empty { display: none; }

@@ -3,6 +3,8 @@ namespace CodexLight.Desktop;
 internal enum CloseChoice { Cancel, Exit, Tray }
 internal sealed class CloseChoiceDialog : Form {
  public CloseChoice Choice { get; private set; }=CloseChoice.Cancel;
+ readonly CheckBox remember=new(){AutoSize=true,Text="记住我的选择",AccessibleName="记住我的选择",Margin=new Padding(0,0,0,20)};
+ public bool RememberChoice=>Choice!=CloseChoice.Cancel&&remember.Checked;
  readonly Font dialogFont=new("Microsoft YaHei UI",9f,FontStyle.Regular,GraphicsUnit.Point);
  public CloseChoiceDialog(Color surface,Color foreground){
   Text="关闭 Codex Light";FormBorderStyle=FormBorderStyle.FixedDialog;StartPosition=FormStartPosition.CenterParent;
@@ -11,7 +13,7 @@ internal sealed class CloseChoiceDialog : Form {
   BackColor=SystemInformation.HighContrast?SystemColors.Window:surface;
   ForeColor=SystemInformation.HighContrast?SystemColors.WindowText:foreground;
   AutoSize=true;AutoSizeMode=AutoSizeMode.GrowAndShrink;
-  var content=new TableLayoutPanel{AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Padding=new Padding(24)};
+  var content=new TableLayoutPanel{AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,Dock=DockStyle.Fill,ColumnCount=1,RowCount=3,Padding=new Padding(24)};
   var message=new Label{UseCompatibleTextRendering=true,AutoSize=true,MaximumSize=new Size(480,0),Margin=new Padding(0,0,0,24),Text="退出会停止后台和正在运行的任务。\n转入托盘会保留任务，稍后可恢复窗口。"};
   var buttons=new FlowLayoutPanel{AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,FlowDirection=FlowDirection.RightToLeft,WrapContents=false,Margin=Padding.Empty,Anchor=AnchorStyles.Right};
   Button Make(string text,CloseChoice choice){
@@ -20,7 +22,7 @@ internal sealed class CloseChoiceDialog : Form {
    button.Click+=(_,_)=>{Choice=choice;DialogResult=choice==CloseChoice.Cancel?DialogResult.Cancel:DialogResult.OK;Close();};return button;
   }
   var cancel=Make("取消",CloseChoice.Cancel);buttons.Controls.Add(cancel);buttons.Controls.Add(Make("转入托盘",CloseChoice.Tray));buttons.Controls.Add(Make("退出并停止",CloseChoice.Exit));
-  content.Controls.Add(message,0,0);content.Controls.Add(buttons,0,1);Controls.Add(content);
+  content.Controls.Add(message,0,0);content.Controls.Add(remember,0,1);content.Controls.Add(buttons,0,2);Controls.Add(content);
   CancelButton=cancel;AcceptButton=cancel;Shown+=(_,_)=>cancel.Focus();
  }
  protected override void Dispose(bool disposing){base.Dispose(disposing);if(disposing)dialogFont.Dispose();}

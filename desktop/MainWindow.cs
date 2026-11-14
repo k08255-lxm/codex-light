@@ -14,6 +14,8 @@ internal sealed class MainWindow : CaptionWindow {
  NotifyIcon? tray;ContextMenuStrip? trayMenu;Icon? trayIcon;Font? trayFont;
  Process? backend;ChildJob? job;Uri? origin;bool closing,allowClose,exitRequested,choosingClose,resourcesDisposed,failed,updateShutdownAttempted;
  readonly WindowSessionEnd sessionEnd=new();
+ readonly CloseBehaviorStore closeBehavior=CloseBehaviorStore.ForCurrentUser();
+ readonly string closeBehaviorNonce=Guid.NewGuid().ToString("N");
  Task? stopTask;
  string startupStage="检测运行环境";
  readonly WindowPlacementController placement;
@@ -35,6 +37,7 @@ internal sealed class MainWindow : CaptionWindow {
    string node=nodeRuntime.Path;startupStage="创建后台进程";job=new ChildJob();
    var utf8=new UTF8Encoding(false);
    var start=new ProcessStartInfo(node){UseShellExecute=false,CreateNoWindow=true,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true,StandardInputEncoding=utf8,StandardOutputEncoding=utf8,StandardErrorEncoding=utf8,WorkingDirectory=root};
+   start.Environment["CODEX_LIGHT_ACTIVE_WEBVIEW_PROFILE"]=profile;
    start.ArgumentList.Add(script);if(demo)start.ArgumentList.Add("--demo");
    backend=new Process{StartInfo=start,EnableRaisingEvents=true};
    backend.Exited+=(sender,eventArgs)=>{try{int code=((Process)sender!).ExitCode;if(!closing&&!updateShutdownAttempted&&stopTask==null&&IsHandleCreated)BeginInvoke((Action)(()=>{if(stopTask==null){ShowFailure($"本地后台退出（{startupStage}，退出码 {code}）。请重新打开应用。");_ = StopBackendAsync();}}));}catch(InvalidOperationException){}};
@@ -68,8 +71,9 @@ internal sealed class MainWindow : CaptionWindow {
     if(e.MenuItems.Count==0)e.Handled=true;
    };
    settings.IsWebMessageEnabled=true;settings.IsStatusBarEnabled=false;settings.IsPasswordAutosaveEnabled=false;settings.IsGeneralAutofillEnabled=false;
-   core.WebMessageReceived+=(_,e)=>{if(LocalPathLinks.TrustedSource(e.Source,origin)&&LocalPathLinks.TrustedSource(core.Source,origin))RevealLocalPath(e.WebMessageAsJson);};
+   core.WebMessageReceived+=(_,e)=>{if(LocalPathLinks.TrustedSource(e.Source,origin)&&LocalPathLinks.TrustedSource(core.Source,origin)){if(CloseBehaviorBridge.IsMessage(e.WebMessageAsJson))HandleCloseBehavior(e.WebMessageAsJson);else RevealLocalPath(e.WebMessageAsJson);}};
    await core.AddScriptToExecuteOnDocumentCreatedAsync(LocalPathLinks.ClickScript);
+   await core.AddScriptToExecuteOnDocumentCreatedAsync(CloseBehaviorBridge.Script(closeBehaviorNonce));
    core.PermissionRequested+=(_,e)=>{e.State=CoreWebView2PermissionState.Deny;e.Handled=true;};
    core.DownloadStarting+=(_,e)=>{e.Cancel=true;e.Handled=true;};
    core.NewWindowRequested+=(_,e)=>{e.Handled=true;if(e.IsUserInitiated)QueueExternal(e.Uri);};
@@ -166,6 +170,16 @@ internal sealed class MainWindow : CaptionWindow {
   if(MessageBox.Show(this,"在系统浏览器打开以下完整外部链接？地址中的查询参数将发送给该站点。\n"+uri.AbsoluteUri,"打开外部链接",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
   try{Process.Start(new ProcessStartInfo(uri.AbsoluteUri){UseShellExecute=true});}catch{MessageBox.Show(this,"无法打开系统浏览器。","Codex Light");}
  }
+ void HandleCloseBehavior(string json){
+  if(closing)return;
+  try{
+   var request=CloseBehaviorBridge.Read(json,closeBehaviorNonce);
+   bool saved=request.Operation!="set"||closeBehavior.Save(request.Behavior);
+   var behavior=closeBehavior.Load();
+   view.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(new{type="desktopCloseBehaviorResult",id=request.Id,behavior=CloseBehaviorStore.Name(behavior),warning=closeBehavior.ReadFailed?"无法读取关闭偏好，暂时每次询问。":null,error=saved?null:"关闭偏好未保存，请重试。"}));
+  }catch(Exception e) when(e is JsonException or InvalidDataException or InvalidOperationException or KeyNotFoundException){System.Diagnostics.Trace.WriteLine("Rejected invalid close behavior message.");}
+ }
+ void NotifyCloseBehaviorChanged(CloseBehavior behavior){try{if(view.CoreWebView2!=null)view.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(new{type="desktopCloseBehaviorChanged",behavior=CloseBehaviorStore.Name(behavior)}));}catch(InvalidOperationException){System.Diagnostics.Trace.WriteLine("Close preference saved; renderer notification unavailable.");}}
  bool revealingLocalPath;
  void RevealLocalPath(string json){
   if(closing||revealingLocalPath)return;revealingLocalPath=true;
@@ -281,8 +295,17 @@ internal sealed class MainWindow : CaptionWindow {
   if(sessionEnd.DeferCleanup(e.CloseReason)||e.CloseReason==CloseReason.TaskManagerClosing)return;
   e.Cancel=true;if(closing||choosingClose)return;
   if(!exitRequested&&e.CloseReason==CloseReason.UserClosing){
-   choosingClose=true;CloseChoice choice;
-   try{using var dialog=new CloseChoiceDialog(BackColor,ForeColor);dialog.ShowDialog(this);choice=dialog.Choice;}finally{choosingClose=false;}
+   CloseChoice choice;var preference=closeBehavior.Load();
+   if(preference==CloseBehavior.Ask){
+    choosingClose=true;
+    try{
+     using var dialog=new CloseChoiceDialog(BackColor,ForeColor);dialog.ShowDialog(this);choice=dialog.Choice;
+     if(dialog.RememberChoice){var selected=choice==CloseChoice.Tray?CloseBehavior.Tray:CloseBehavior.Exit;
+      if(closeBehavior.Save(selected))NotifyCloseBehaviorChanged(selected);
+      else MessageBox.Show(this,"这次仍按你的选择操作，但未能记住关闭偏好；下次会再次询问。","Codex Light",MessageBoxButtons.OK,MessageBoxIcon.Warning);
+     }
+    }finally{choosingClose=false;}
+   }else choice=preference==CloseBehavior.Tray?CloseChoice.Tray:CloseChoice.Exit;
    if(closing||IsDisposed)return;
    if(choice==CloseChoice.Cancel)return;
    if(choice==CloseChoice.Tray){MoveToTray();return;}
