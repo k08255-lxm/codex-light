@@ -36,3 +36,17 @@ No network feed is modified by these tools. Use a new release version after chan
 ### Prerelease policy
 
 Tool and runtime are deliberately synchronized to **1.3.39-g8d2844f (official prerelease)**. The build rejects a mismatching stable or preview CLI/runtime. The prior 1.2.161 Setup forwarding defect is historical; the selected revision contains its source fix, but this does **not** authorize migration execution or establish end-to-end migration acceptance. Keep the wrapper gate closed until isolated installation/recovery evidence is reviewed. `README.md` and `TEST_REPORT.md` distinguish real portable apply tests from untested MSI migration.
+
+### Migration-stage build (not a release)
+
+Pass `-MigrationStage` to pack with `--shortcuts None` instead of the unchanged default `StartMenuRoot`. It generates `migration-release.json`, a verified `migration-current/` expected-current tree and an explicit `MIGRATION-STAGE-ONLY.txt` marker. Do not publish this staging output as the final installer.
+
+Manifest schema 1 binds exact package identity/target version, selected Velopack pin, Setup, full nupkg, prerequisite sidecar/config and all release files by bytes/SHA256. Same-version staging is explicitly allowed in metadata; the driver still requires deliberate caller authorization. `PayloadFiles` describes installed current contents, including vendor `sq.version`; vendor `Squirrel.exe` maps to root `Update.exe` and the execution stub maps to root `Codex Light.exe`, both separately hashed. The generator verifies that the Setup embeds the exact full nupkg, shortcuts are actually `None` in package XML, runtime pin matches, and portable extraction mapping agrees.
+
+The caller must trust the manifest SHA256 and Setup SHA256 from a separate authorized channel, not merely read and accept adjacent hashes. `Files` excludes the manifest itself and `SHA256SUMS.txt` to avoid a hash cycle; final SHA256SUMS is generated afterward and includes the manifest. Staging does not prove migration health and must not retire the old MSI. No Setup is executed by the build or manifest generator.
+
+### Source identity gate
+
+A matching application version is insufficient. Before staging, `source_integrity.py` compares the complete app/src, app/public, app/package.json and app/components/dsh-bridge trees against the current checkout by exact relative paths and SHA256, including current bridge build outputs and locked dependencies. Missing, extra or changed files are rejected. After MSI-policy filtering, the expected runtime tree is verified again; only the existing dependency TypeScript-declaration omission policy applies. The source is checked once more at completion so changes during packaging fail the build.
+
+`source-tree.json` is embedded and shipped alongside the package with a deterministic source-tree fingerprint; migration manifest binds that fingerprint too. It describes these application-source scopes, not a claim that equal product version means equal native/source history. Use `desktop/build.ps1` to create a fresh complete payload, then publish the current opt-in host and worker before packaging. Never patch an old payload with only the latest health file. Actual same-version stale-payload regression found omitted update-indicator, app-update-safety and backend-health files and was rejected.

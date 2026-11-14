@@ -3,7 +3,8 @@
  [Parameter(Mandatory=$true)][string]$VelopackHostPath,
  [Parameter(Mandatory=$true)][string]$WorkerPath,
  [Parameter(Mandatory=$true)][string]$Output,
- [string]$ToolPath
+ [string]$ToolPath,
+ [switch]$MigrationStage
 )
 $ErrorActionPreference='Stop'
 $repo=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
@@ -37,11 +38,19 @@ if(!$ToolPath){
 $tool=(Resolve-Path -LiteralPath $ToolPath).Path
 $toolVersion=(& $tool --help|Out-String).Trim()
 if($LASTEXITCODE -ne 0 -or $toolVersion -notmatch 'Velopack CLI 1\.3\.39-g8d2844f \(prerelease\),'){throw "Wrong vpk version: $toolVersion"}
+$sourceFingerprint=Join-Path $work 'source-tree.json'
+& python (Join-Path $PSScriptRoot 'source_integrity.py') $repo $payload --output $sourceFingerprint
+if($LASTEXITCODE -ne 0){throw 'Payload is not the current source tree. Rebuild desktop/build.ps1; version equality is not enough.'}
 $manifestDir=Join-Path $work 'manifest'
 python (Join-Path $repo 'desktop/msi/generate.py') $payload $manifestDir --version $version
 if($LASTEXITCODE -ne 0){throw 'Existing complete-payload/licensing verification failed'}
 python (Join-Path $PSScriptRoot 'stage.py') $payload (Join-Path $manifestDir 'payload-manifest.json') $stage $workerDir $version
 if($LASTEXITCODE -ne 0){throw 'Verified payload staging failed'}
+& python (Join-Path $PSScriptRoot 'source_integrity.py') $repo $stage --filtered --output (Join-Path $work 'filtered-source-tree.json')
+if($LASTEXITCODE -ne 0){throw 'Filtered package source tree mismatch'}
+Copy-Item -LiteralPath $sourceFingerprint -Destination (Join-Path $stage 'source-tree.json')
+Copy-Item -LiteralPath $sourceFingerprint -Destination (Join-Path $release 'source-tree.json')
+
 foreach($name in @('CodexLight.exe','CodexLight.dll','CodexLight.deps.json','CodexLight.runtimeconfig.json','Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.WinForms.dll','WebView2Loader.dll','Velopack.dll')){
  $source=Join-Path $hostDir $name;Assert-Plain $source
  Copy-Item -LiteralPath $source -Destination (Join-Path $stage $name) -Force
@@ -60,11 +69,20 @@ if(!(Test-Path -LiteralPath $vendor)){throw 'Pinned vpk vendor notices missing; 
 Copy-Item -LiteralPath $vendor -Destination (Join-Path $stage 'licenses/Velopack-VENDOR-NOTICES.md')
 # CLI validation normally invokes the app; skip it to guarantee no app/window/model startup.
 # The build verifies the referenced runtime but live fast-hook behavior is a separate integration gate.
-& $tool pack --packId CodexLightDesktop --packVersion $version --packDir $stage --mainExe CodexLight.exe --packTitle 'Codex Light' --outputDir $release --runtime win-x64 --delta None --shortcuts StartMenuRoot --framework 'net10.0-x64-desktop,webview2' --skipVeloAppCheck
+$shortcuts=if($MigrationStage){'None'}else{'StartMenuRoot'}
+& $tool pack --packId CodexLightDesktop --packVersion $version --packDir $stage --mainExe CodexLight.exe --packTitle 'Codex Light' --outputDir $release --runtime win-x64 --delta None --shortcuts $shortcuts --framework 'net10.0-x64-desktop,webview2' --skipVeloAppCheck
 if($LASTEXITCODE -ne 0){throw 'Velopack packaging failed'}
 $verification=& python (Join-Path $PSScriptRoot 'verify.py') $release $stage $version --manifest (Join-Path $work 'final-payload-manifest.json')
 if($LASTEXITCODE -ne 0){throw 'Release verification failed'}
 $verification|Set-Content -LiteralPath (Join-Path $release 'verification.json') -Encoding utf8
+$finalSource=Join-Path $work 'source-tree-final.json'
+& python (Join-Path $PSScriptRoot 'source_integrity.py') $repo $payload --output $finalSource
+if($LASTEXITCODE -ne 0 -or (Get-FileHash -LiteralPath $sourceFingerprint).Hash -ne (Get-FileHash -LiteralPath $finalSource).Hash){throw 'Source changed during packaging; discard this output and rebuild.'}
+if($MigrationStage){
+ & python (Join-Path $PSScriptRoot 'migration_manifest.py') $release $version
+ if($LASTEXITCODE -ne 0){throw 'Migration stage manifest generation failed'}
+ Write-Warning 'MIGRATION-STAGE ONLY: no shortcuts; not a final release. Trusted manifest and Setup SHA required by staging driver.'
+}
 Get-ChildItem -LiteralPath $release -File -Recurse|Where-Object {$_.Name -ne 'SHA256SUMS.txt'}|Sort-Object FullName|ForEach-Object {'{0}  {1}' -f (Get-FileHash -LiteralPath $_.FullName).Hash.ToLowerInvariant(),($_.FullName.Substring($release.Length+1).Replace('\','/'))}|Set-Content -LiteralPath (Join-Path $release 'SHA256SUMS.txt') -Encoding ascii
 Write-Output "Verified full-only release assets: $release"
 Write-Warning 'Vendor Setup alone is not a supported fresh-install entrypoint: consent-aware Node preflight wrapper is required. Not published or installed. Unsigned developer packages. Node.js prerequisite, safe task-idle gate, first MSI migration and rollback remain integration/release gates.'

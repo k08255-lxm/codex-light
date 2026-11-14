@@ -5,7 +5,8 @@ static class StorageTests {
   void Reject(Action action,string name){bool rejected=false;try{action();}catch(IOException){rejected=true;}Check(rejected,name);}
   var data=Path.Combine(root,"app-data");Directory.CreateDirectory(Path.Combine(data,"state"));Directory.CreateDirectory(Path.Combine(data,"WebView","Default"));Directory.CreateDirectory(Path.Combine(data,"logs"));Directory.CreateDirectory(Path.Combine(data,"recovery"));File.WriteAllBytes(Path.Combine(data,"recovery","saved.bin"),new byte[]{4,5,6});
   File.WriteAllBytes(Path.Combine(data,"state","a.bin"),new byte[]{0,1,2,255});File.WriteAllText(Path.Combine(data,"WebView","Default","Cookies"),"fixture-profile");File.WriteAllText(Path.Combine(data,"logs","old.log"),"excluded");
-  var manifest=MigrationStorage.Capture(data);Check(manifest.Files.Length==3&&manifest.Excluded.SequenceEqual(new[]{"logs"}),"profile retained/logs explicitly excluded");
+  File.WriteAllText(Path.Combine(data,"close-behavior.json"),"{\"version\":1,\"behavior\":\"ask\"}");foreach(var name in new[]{"SetupArchives","StorageRecovery"}){Directory.CreateDirectory(Path.Combine(data,name));File.WriteAllBytes(Path.Combine(data,name,"saved.zip"),new byte[]{7,8,9});}
+  var manifest=MigrationStorage.Capture(data);Check(manifest.Files.Length==6&&manifest.Excluded.SequenceEqual(new[]{"logs"}),"profile retained/logs explicitly excluded");
   var snapshot=Path.Combine(root,"snapshot");MigrationStorage.CopySnapshot(manifest,snapshot);MigrationStorage.VerifySnapshot(manifest,snapshot);count++;
   var restored=Path.Combine(root,"restored");MigrationStorage.RestoreToFreshDirectory(manifest,snapshot,restored);Check(File.ReadAllBytes(Path.Combine(restored,"state","a.bin")).SequenceEqual(new byte[]{0,1,2,255}),"restored exact bytes");
   Reject(()=>MigrationStorage.RestoreToFreshDirectory(manifest,snapshot,data),"in-place rejected");Reject(()=>MigrationStorage.CopySnapshot(manifest,Path.Combine(data,"nested")),"nested backup rejected");
