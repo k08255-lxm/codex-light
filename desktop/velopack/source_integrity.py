@@ -4,6 +4,7 @@ from pathlib import Path
 from stage import plain
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'msi'))
 from payload_policy import omitted_runtime_file
+from bridge_bundle import validate as validate_bridge_bundle
 SCOPES=('src','public','package.json','components/dsh-bridge')
 def digest(b):return hashlib.sha256(b).hexdigest()
 def entry_plain(p):
@@ -13,6 +14,9 @@ def collect(root):
  for scope in SCOPES:
   p=root/scope;plain(p)
   if not p.exists():raise ValueError('Missing source scope: '+scope)
+  if scope=='components/dsh-bridge':
+   for name,f in validate_bridge_bundle(p/'dist',p).items():result[scope+'/'+name]=f
+   continue
   for f in ([p] if p.is_file() else p.rglob('*')):
    entry_plain(f)
    if f.is_file():result[f.relative_to(root).as_posix()]=f
@@ -23,7 +27,7 @@ def verify(repo,payload,filtered=False):
  for f in app.rglob('*'):
   entry_plain(f)
   if f.is_file():actual[f.relative_to(app).as_posix()]=f
- if filtered:expected={n:f for n,f in expected.items() if not omitted_runtime_file('app/'+n)}
+ if filtered:expected={n:f for n,f in expected.items() if n.startswith('components/dsh-bridge/') or not omitted_runtime_file('app/'+n)}
  missing=expected.keys()-actual.keys();extra=actual.keys()-expected.keys()
  if missing or extra:raise ValueError('Source/payload paths differ; missing='+str(sorted(missing)[:10])+' extra='+str(sorted(extra)[:10]))
  entries=[]

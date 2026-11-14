@@ -1,5 +1,6 @@
 """Curate the already-built payload and author one HKCU-keyed component per file."""
 from payload_policy import omitted_runtime_file
+from bridge_bundle import validate as validate_bridge_bundle
 import argparse
 import hashlib
 import json
@@ -13,6 +14,7 @@ p.add_argument('payload', type=Path)
 p.add_argument('output', type=Path)
 p.add_argument('--version', default=json.loads((Path(__file__).resolve().parents[2]/'package.json').read_text(encoding='utf-8'))['version'])
 a = p.parse_args()
+validate_bridge_bundle(a.payload / "app/components/dsh-bridge")
 host_source = (Path(__file__).resolve().parent.parent/'WebViewRuntime.cs').read_text(encoding='utf-8')
 minimum = re.search(r'const int MinimumMajor\s*=\s*(\d+)\s*;', host_source)
 if minimum is None:
@@ -97,7 +99,7 @@ for file in sorted(a.payload.resolve().rglob('*')):
         forbidden_parts.add('node_modules')
     if any(part.lower() in forbidden_parts for part in file.relative_to(a.payload.resolve()).parts):
         raise SystemExit('Unexpected private/development payload: '+rel)
-    if omitted_runtime_file(rel):
+    if not rel.startswith("app/components/dsh-bridge/") and omitted_runtime_file(rel):
         continue
     parent = ''
     for part in Path(rel).parts[:-1]:
@@ -130,8 +132,6 @@ required_payload = allowed_roots | {
     'app/components/dsh-bridge/src/light-entry.mjs',
     'app/components/dsh-bridge/src/provider-sources-adapter.json',
     'app/components/dsh-bridge/package-lock.json',
-    'app/components/dsh-bridge/node_modules/@modelcontextprotocol/sdk/package.json',
-    'app/components/dsh-bridge/node_modules/yaml/package.json',
     'app/components/dsh-bridge/licenses/manifest.json',
     'licenses/dsh-bridge/Bridge-MIT-LICENSE.txt',
     'licenses/dsh-bridge/DeepSeek-MIT-LICENSE.txt',

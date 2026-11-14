@@ -9,7 +9,9 @@ if (!(Get-Command node -ErrorAction SilentlyContinue) -or !(Get-Command npm.cmd 
 # DSH itself is optional and is never downloaded or started by this build.
 & npm.cmd ci --prefix $bridge --ignore-scripts --omit=dev --registry=https://registry.npmjs.org --audit=false --fund=false
 if ($LASTEXITCODE -ne 0) { throw 'Bundled DSH bridge dependency restore failed' }
-& node (Join-Path $bridge 'build.mjs')
+& npm.cmd ci --prefix (Join-Path $bridge 'tools') --ignore-scripts --registry=https://registry.npmjs.org --audit=false --fund=false
+if ($LASTEXITCODE -ne 0) { throw 'Bridge bundler restore failed' }
+& node (Join-Path $bridge 'build.mjs') --bundle
 if ($LASTEXITCODE -ne 0) { throw 'Bundled DSH bridge verification failed' }
 $selfContainedValue=$SelfContained.IsPresent.ToString().ToLowerInvariant()
 $stamp=Get-Date -Format 'yyyyMMdd-HHmmss'
@@ -27,7 +29,9 @@ Copy-Item (Join-Path $root 'public') $app -Recurse
 Copy-Item (Join-Path $root 'package.json') $app
 $components=Join-Path $app 'components'
 New-Item -ItemType Directory -Path $components | Out-Null
-Copy-Item -LiteralPath $bridge -Destination (Join-Path $components 'dsh-bridge') -Recurse
+& python (Join-Path $PSScriptRoot 'msi/bridge_bundle.py') (Join-Path $bridge 'dist') --source $bridge
+if ($LASTEXITCODE -ne 0) { throw 'Compact bridge distribution verification failed' }
+Copy-Item -LiteralPath (Join-Path $bridge 'dist') -Destination (Join-Path $components 'dsh-bridge') -Recurse
 Copy-Item (Join-Path $PSScriptRoot 'README.md') $out
 Copy-Item (Join-Path $PSScriptRoot 'INSTALLATION.md') $out
 # Collect notices from the exact packages selected by restore and framework
