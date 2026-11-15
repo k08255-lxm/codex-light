@@ -20,6 +20,9 @@ internal static class Program {
   if(!first){wake.Set();return;}
   try {
    using var maintenance=AcquireMaintenance();if(maintenance==null)return;
+#if VELOPACK_PROTOTYPE
+   foreach(var result in ShortcutBrandMigration.RunInstalled(AppContext.BaseDirectory))System.Diagnostics.Trace.WriteLine(result);
+#endif
    using var window=new MainWindow(args.Contains("--demo"));
    RegisteredWaitHandle? registration=null;
    window.HandleCreated+=(_,_)=>registration??=ThreadPool.RegisterWaitForSingleObject(wake,(_,_)=>{

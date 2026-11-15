@@ -76,10 +76,10 @@ export function createComposer({ document, session, drafts, ledger, thread, view
     const owned = sessionFor(state.thread?.id)?.activeTurnId === state.turnId;
     return !!(owned && state.busy && state.thread && state.turnId && state.connected && state.serverInstance && !state.sending && !state.loadingThread && !state.uploadingImages && !pendingMutations.storageError && !scopedPending('chat',{threadId:state.thread.id}).length);
   }
-  function confirmRiskyFiles(files) {
+  async function confirmRiskyFiles(files) {
     const risky = files.filter(file => file.riskWarning);
     if (!risky.length) return [];
-    if (!confirm('以下文件属于归档或未验证格式：\n' + risky.map(file => file.name + (file.warning ? '：' + file.warning : '')).join('\n') + '\n\n只将本地文件引用交给 Codex，可能按现有权限读取；不会自动解包或执行。确认随本次消息发送？')) return null;
+    if (!await confirm('以下文件属于归档或未验证格式：\n' + risky.map(file => file.name + (file.warning ? '：' + file.warning : '')).join('\n') + '\n\n只将本地文件引用交给 Codex，可能按现有权限读取；不会自动解包或执行。确认随本次消息发送？')) return null;
     return risky.map(file => file.id);
   }
   function imageCapabilityError(images) {
@@ -93,7 +93,8 @@ export function createComposer({ document, session, drafts, ledger, thread, view
     const draft = draftSnapshot(); if (!draft.text && !draft.images.length && !draft.files.length) return;
     const capability = imageCapabilityError(draft.images); if (capability) { notice(capability, true); return; }
     if (!state.cwd) { openProjectDialog(); return; }
-    const confirmed = confirmRiskyFiles(draft.files); if (confirmed === null) return;
+    const consentThread=state.thread?.id, consentTurn=state.turnId, consentServer=state.serverInstance;
+    const confirmed = draft.files.some(file=>file.riskWarning) ? await confirmRiskyFiles(draft.files) : []; if (confirmed === null || state.thread?.id!==consentThread || state.turnId!==consentTurn || state.serverInstance!==consentServer || state.sending || JSON.stringify(draftSnapshot())!==JSON.stringify(draft)) return;
     // One immutable logical submission: navigation/model/cwd edits cannot retarget its second stage.
     const submission = { cwd: state.cwd, model: $('model').value, effort: reasoningParameter(state.reasoning), text: draft.text, attachmentIds: attachmentDraft.ids(), fileAttachmentIds:fileAttachmentDraft.ids(), confirmedFileAttachmentIds:confirmed };
     try { submission.controls=sessionControls.snapshot(); } catch(error){notice(error.message,true);return;}
@@ -137,7 +138,8 @@ export function createComposer({ document, session, drafts, ledger, thread, view
     if (!runningInputAvailable()) { notice('当前任务状态未确认，暂不能立即补充。可排队，或等待任务结束。'); return; }
     const draft = draftSnapshot(); if (!draft.text && !draft.images.length && !draft.files.length) return;
     const capability = imageCapabilityError(draft.images); if (capability) { notice(capability, true); return; }
-    const confirmed = confirmRiskyFiles(draft.files); if (confirmed === null) return;
+    const consentThread=state.thread?.id, consentTurn=state.turnId, consentServer=state.serverInstance;
+    const confirmed = draft.files.some(file=>file.riskWarning) ? await confirmRiskyFiles(draft.files) : []; if (confirmed === null || state.thread?.id!==consentThread || state.turnId!==consentTurn || state.serverInstance!==consentServer || state.sending || JSON.stringify(draftSnapshot())!==JSON.stringify(draft)) return;
     const threadId = state.thread.id, turnId = state.turnId;
     let params; try { params = steerParams(threadId, turnId, draft.text); } catch (error) { notice(error.message, true); return; }
     const extras = { attachmentIds: attachmentDraft.ids(), fileAttachmentIds: fileAttachmentDraft.ids(), confirmedFileAttachmentIds: confirmed };
@@ -157,11 +159,12 @@ export function createComposer({ document, session, drafts, ledger, thread, view
     } finally { state.sending = false; renderOptimistic(); renderPendingMutations(); updateControls(); }
   }
   /** Moves the draft into this thread's ordered queue. Nothing is sent yet. */
-  function queueDraft() {
+  async function queueDraft() {
     if (!state.thread || state.sending || pendingMutations.storageError || scopedPending('chat',{threadId:state.thread.id}).length) return;
     const draft = draftSnapshot(); if (!draft.text && !draft.images.length && !draft.files.length) return;
     const capability = imageCapabilityError(draft.images); if (capability) { notice(capability, true); return; }
-    const confirmed = confirmRiskyFiles(draft.files); if (confirmed === null) return;
+    const consentThread=state.thread?.id, consentTurn=state.turnId, consentServer=state.serverInstance;
+    const confirmed = draft.files.some(file=>file.riskWarning) ? await confirmRiskyFiles(draft.files) : []; if (confirmed === null || state.thread?.id!==consentThread || state.turnId!==consentTurn || state.serverInstance!==consentServer || state.sending || JSON.stringify(draftSnapshot())!==JSON.stringify(draft)) return;
     try {
       const item = followUps.add(state.thread.id, { controls:sessionControls.snapshot(), text: draft.text, images: draft.images, files: draft.files, confirmedFileAttachmentIds: confirmed, cwd: state.thread.cwd || state.cwd, model: $('model').value, effort: reasoningParameter(state.reasoning) });
       // Ownership of attachments and their previews moves to the queued item.

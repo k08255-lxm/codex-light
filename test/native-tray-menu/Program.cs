@@ -1,0 +1,10 @@
+using CodexLight.Desktop;
+int opened=0,quit=0;
+NativeTrayMenu.Dispatch(0,()=>opened++,()=>quit++);
+NativeTrayMenu.Dispatch(100,()=>opened++,()=>quit++);
+if(opened!=0||quit!=0)throw new Exception("dismiss/unknown must not invoke actions");
+NativeTrayMenu.Dispatch(1,()=>opened++,()=>quit++);
+if(opened!=1||quit!=0)throw new Exception("open must restore only once");
+NativeTrayMenu.Dispatch(2,()=>opened++,()=>quit++);
+if(opened!=1||quit!=1)throw new Exception("quit must run only once");
+Console.WriteLine("PASS native menu command dispatch: dismiss, unknown, open, quit");

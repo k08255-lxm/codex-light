@@ -99,3 +99,27 @@ test('embedded fresh payload publishes one EXE and preserves old transports with
  }
 });
 test('embedded receipt must identify validated resource',async t=>{const {f,p,receipt}=await routerFixture(t);receipt.schema=3;await writeFile(p,JSON.stringify(receipt));await assert.rejects(assembleRelease(f),/embedded fresh/);});
+
+// Mirrors the shipped 0.4.3-0.4.6 checker asset predicate, not a new-client flag.
+function legacyAndroidHasUpdate(release,current){
+ const candidate=release.tag_name.replace(/^v/,'');
+ const newer=candidate.split('.').reduce((result,n,i)=>result||Math.sign(Number(n)-Number(current.split('.')[i])),0)>0;
+ return !release.draft&&!release.prerelease&&newer&&release.assets.some(a=>a.name===`codex-light-${candidate}.apk`&&a.browser_download_url===`https://github.com/k08255-lxm/codex-light/releases/download/${release.tag_name}/codex-light-${candidate}.apk`);
+}
+test('unchanged Android remains downloadable without notifying old APKs; desktop routes survive',async t=>{
+ const f=await fixture(t),release=await assembleRelease({...f,androidNotify:false});
+ assert.equal(legacyAndroidHasUpdate(release,'0.4.3'),false);
+ const apk=release.assets.find(a=>a.name.endsWith('.apk'));
+ assert.equal(apk.name,'codex-light-android-0.4.4.apk');
+ assert.deepEqual(await readFile(path.join(f.output,apk.name)),await readFile(f.apk));
+ assert.match(await readFile(path.join(f.output,'SHA256SUMS.txt'),'utf8'),/codex-light-android-0.4.4.apk/);
+ for(const mode of ['msi','velopack'])assert.equal(parseAppRelease(release,'0.4.3',mode).available,true);
+});
+test('normal Android release still notifies old clients and same-version does not',async t=>{
+ const release=await assembleRelease(await fixture(t));
+ assert.equal(legacyAndroidHasUpdate(release,'0.4.3'),true);
+ assert.equal(legacyAndroidHasUpdate(release,'0.4.4'),false);
+});
+test('notification flag must be explicitly boolean',async t=>{
+ await assert.rejects(assembleRelease({...await fixture(t),androidNotify:'false'}),/boolean/);
+});

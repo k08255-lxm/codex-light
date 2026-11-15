@@ -1,3 +1,4 @@
+import { confirmApp } from './app-confirm-dialog.js';
 // Explicit account actions only. Caller supplies a durable mutation-ID adapter.
 // Links and device codes live only in this mounted panel; never storage, logs or telemetry.
 export function officialLoginUrl(value){
@@ -8,7 +9,7 @@ export function officialLoginUrl(value){
 const validId=value=>typeof value==='string'&&value.length>0&&value.length<=256&&!/[\x00-\x1f\x7f]/.test(value);
 const STATES=new Set(['idle','starting','waiting','completed','failed','canceling','canceled','loggingOut','loggedOut','unknown','closed']);
 const LABELS={idle:'尚未发起登录。',starting:'正在请求官方登录流程…',waiting:'等待官方确认登录；打开页面或输入设备码不代表已登录。',completed:'官方已确认此次登录完成。',failed:'官方未确认登录成功。',canceling:'正在取消当前登录…',canceled:'当前登录已取消。',loggingOut:'正在退出共享 Codex 账户…',loggedOut:'官方已返回退出完成。',unknown:'操作结果未知；已禁止重复发起。请只读刷新账号状态。',closed:'账户服务已关闭。'};
-export function mountAccountLoginPanel(container,{api,onAccountChanged=()=>{}}){
+export function mountAccountLoginPanel(container,{api,onAccountChanged=()=>{},confirmDialog=confirmApp}){
  const doc=container.ownerDocument,make=(tag,text,className)=>{const node=doc.createElement(tag);if(text!==undefined)node.textContent=text;if(className)node.className=className;return node;};
  const title=make('h2','登录与退出'),intro=make('p','使用本机 Codex 的官方登录流程。账户由共享 CODEX_HOME 使用，改变登录状态会影响使用同一配置的 CLI 与桌面端。','account-login-note');
  const actions=make('div',undefined,'actions'),web=make('button','网页登录','subtle'),device=make('button','设备码登录','subtle'),cancel=make('button','取消当前登录','subtle'),logout=make('button','退出共享账户','subtle'),refresh=make('button','只读刷新账号','subtle');
@@ -16,7 +17,7 @@ export function mountAccountLoginPanel(container,{api,onAccountChanged=()=>{}}){
  const status=make('p',LABELS.idle,'account-login-status');status.setAttribute('role','status');status.setAttribute('aria-live','polite');
  const handoff=make('div',undefined,'account-login-handoff');handoff.hidden=true;container.append(title,intro,actions,status,handoff);
  let state='idle',loginId=null,busy=false,disposed=false,active=true,generation=0,secret=null,clearTimer=null,message='';const finished=new Set();
- const confirm=message=>{const fn=doc.defaultView?.confirm||globalThis.confirm;return typeof fn==='function'&&fn.call(doc.defaultView||globalThis,message)===true;};
+ const confirm=async message=>{const before=generation;return await confirmDialog(doc,message) && before===generation && active && !disposed;};
  const clear=()=>{clearTimeout(clearTimer);clearTimer=null;secret=null;handoff.replaceChildren();handoff.hidden=true;};
  function render(){
   const canStart=['idle','completed','failed','canceled','loggedOut'].includes(state)&&!loginId;
@@ -66,7 +67,7 @@ export function mountAccountLoginPanel(container,{api,onAccountChanged=()=>{}}){
   catch{if(g===generation&&!disposed)state='unknown';}finally{if(g===generation&&!disposed){busy=false;render();}}
  }
  async function logoutCurrent(){
-  if(logout.disabled||!confirm('退出共享 Codex 账户？使用同一 CODEX_HOME 的 Codex CLI 和桌面端也可能需要重新登录。当前登录流程会被取消；不保证其他客户端任务继续。'))return;
+  if(logout.disabled||!await confirm('退出共享 Codex 账户？使用同一 CODEX_HOME 的 Codex CLI 和桌面端也可能需要重新登录。当前登录流程会被取消；不保证其他客户端任务继续。'))return;
   const g=++generation;busy=true;message='';state='loggingOut';clear();render();try{await api('/api/account/logout',{confirmed:true});if(g!==generation||disposed)return;state='loggedOut';loginId=null;await changed();}catch{if(g===generation&&!disposed)state='unknown';}finally{if(g===generation&&!disposed){busy=false;render();}}
  }
  async function refreshState(){if(disposed||busy||!active)return;const g=generation;busy=true;message='';render();try{const snapshot=await api('/api/account/snapshot',{});if(g!==generation||disposed||!active)return;update(snapshot,{fromSnapshot:true});await changed();}catch{if(g===generation&&!disposed)message='只读刷新失败；未重试登录或退出。';}finally{if(g===generation&&!disposed){busy=false;render();}}}

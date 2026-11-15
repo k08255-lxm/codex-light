@@ -10,7 +10,7 @@ namespace CodexLight.PublicSetup {
  }
  internal sealed class FreshLease:IDisposable {
   readonly List<VerifiedLease> files=new List<VerifiedLease>();internal string Installer="";
-  internal static FreshLease Extract(VerifiedLease zip,string root){var result=new FreshLease();try{VerifiedLease.Plain(root);if(Directory.Exists(root)||File.Exists(root))throw new IOException("Fresh output already exists");Directory.CreateDirectory(root);zip.Stream.Position=0;using(var archive=new ZipArchive(zip.Stream,ZipArchiveMode.Read,true)){
+  internal static FreshLease Extract(VerifiedLease zip,string root,string installerName="CodexLight-Install.exe"){var result=new FreshLease();try{VerifiedLease.Plain(root);if(Directory.Exists(root)||File.Exists(root))throw new IOException("Fresh output already exists");Directory.CreateDirectory(root);zip.Stream.Position=0;using(var archive=new ZipArchive(zip.Stream,ZipArchiveMode.Read,true)){
    if(archive.Entries.Count>20000)throw new IOException("Too many ZIP entries");long total=0;var seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
    foreach(var e in archive.Entries){RouterPolicy.Member(e.FullName);if(!seen.Add(e.FullName.TrimEnd('/'))||(e.ExternalAttributes&0x400)!=0||((e.ExternalAttributes>>16)&0xF000)==0xA000)throw new IOException("Duplicate or linked ZIP member");total=checked(total+e.Length);if(e.Length>300L*1024*1024||total>1024L*1024*1024)throw new IOException("ZIP too large");}
    foreach(var e in archive.Entries){if(e.FullName.EndsWith("/"))continue;string target=System.IO.Path.GetFullPath(System.IO.Path.Combine(root,e.FullName));if(!target.StartsWith(root+System.IO.Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase))throw new IOException("ZIP path escapes root");VerifiedLease.Plain(target);Directory.CreateDirectory(System.IO.Path.GetDirectoryName(target)!);
@@ -22,7 +22,7 @@ namespace CodexLight.PublicSetup {
     using(var file=new FileStream(target,FileMode.CreateNew,FileAccess.Write,FileShare.None)){using(var source=e.Open())source.CopyTo(file);file.Flush(true);if(file.Length!=e.Length)throw new IOException("Incomplete extraction");}
     result.files.Add(VerifiedLease.Open(target,expected));
    }
-  }result.Installer=System.IO.Path.Combine(root,"CodexLight-Install.exe");if(!File.Exists(result.Installer))throw new IOException("Missing installer");return result;}catch{result.Dispose();throw;}}
+  }result.Installer=System.IO.Path.Combine(root,installerName);if(!File.Exists(result.Installer))throw new IOException("Missing installer");return result;}catch{result.Dispose();throw;}}
   public void Dispose(){foreach(var file in files)file.Dispose();files.Clear();}
  }
 }

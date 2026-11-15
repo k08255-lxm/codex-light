@@ -10,7 +10,7 @@ test('Android launcher avoids reconnect loop when user opens connection manageme
 test('Android connection results are generation and lifecycle guarded, unauthorized resume does not retry',()=>{
  const s=read('MainActivity.java'); assert.match(s,/attemptId != connectionGeneration \|\| isFinishing\(\) \|\| isDestroyed\(\)/);
  assert.match(s,/connectionFailed && !authorizationFailed/); assert.match(s,/connectionAttempt.cancel\(\)/);
- assert.ok(s.indexOf('Result.READY') < s.indexOf('manager.saveCurrent(target, authorizedNetwork)'));
+ assert.ok(s.indexOf('Result.READY') < s.indexOf('manager.saveCurrent(target, "")'));
 });
 test('Android secrets are encrypted without plaintext fallback and history loss',()=>{
  const s=read('ServerConfigManager.java'); assert.match(s,/CredentialCipher.seal/); assert.match(s,/remove\(KEY_CURRENT_TOKEN\)/); assert.match(s,/remove\(KEY_HISTORY_JSON\)/);
@@ -18,17 +18,18 @@ test('Android secrets are encrypted without plaintext fallback and history loss'
  const c=read('CredentialCipher.java'); assert.match(c,/AndroidKeyStore/); assert.match(c,/AES\/GCM\/NoPadding/); assert.match(c,/key\(false\)/);
 });
 
-test('Network identity fails closed and stays pinned across Activity recreation',()=>{
- const n=read('NetworkBinding.java'); const m=read('MainActivity.java'); const c=read('ServerConnectActivity.java');
- assert.match(n,/Settings.Global.getInt\(context.getContentResolver\(\), Settings.Global.BOOT_COUNT\)/);
- assert.match(n,/catch \(Exception unavailable\) \{ return ""; \}/);
- assert.match(n,/saved != null && !saved.isEmpty\(\) && saved.equals\(current\)/);
- assert.match(n,/network.openConnection\(url\)/); assert.match(n,/bindProcessToNetwork\(network\)/);
- assert.match(c,/putExtra\("authorizedNetwork", automatic \? configManager.getNetworkBinding\(\) : NetworkBinding.current\(this\)\)/);
- assert.match(m,/authorizedNetwork = intent.getStringExtra\("authorizedNetwork"\)/);
- assert.doesNotMatch(m,/authorizedNetwork = NetworkBinding.current/);
- assert.match(m,/NetworkBinding.release\(this, networkLease\)/);
+test('Android LAN connections follow default routing without VPN rejection or forced binding',()=>{
+ const m=read('MainActivity.java'),p=read('PairingClient.java'),c=read('ServerConnectActivity.java');
+ for (const source of [m,p,c]) assert.doesNotMatch(source,/NetworkBinding|TRANSPORT_VPN|bindProcessToNetwork/);
+ assert.match(m,/url.openConnection\(\)/);
+ assert.match(p,/new URL\("http:\/\//);
+ assert.match(p,/setInstanceFollowRedirects\(false\)/);
+ assert.match(p,/!privateIp\(host\)/);
+ assert.match(p,/port<1\|\|port>65535/);
+ assert.match(p,/getUserInfo\(\)!=null\|\|uri.getQuery\(\)!=null/);
+ assert.match(p,/pair=\[a-f0-9\]\{64\}/);
 });
+
 test('Storage failures are reported and background cancellation exits spinner',()=>{
  const s=read('ServerConfigManager.java'); const m=read('MainActivity.java');
  assert.match(s,/commit\(\)/); assert.match(m,/manager.hasStorageError\(\)/);

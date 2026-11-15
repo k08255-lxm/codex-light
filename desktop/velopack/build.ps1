@@ -74,7 +74,9 @@ if($LASTEXITCODE -ne 0){throw 'Lossless collected notice verification failed'}
 # CLI validation normally invokes the app; skip it to guarantee no app/window/model startup.
 # The build verifies the referenced runtime but live fast-hook behavior is a separate integration gate.
 $shortcuts=if($MigrationStage){'None'}else{'StartMenuRoot'}
-& $tool pack --packId CodexLightDesktop --packVersion $version --packDir $stage --mainExe CodexLight.exe --packTitle 'Codex Light' --outputDir $release --runtime win-x64 --delta None --shortcuts $shortcuts --framework 'net10.0-x64-desktop,webview2' --skipVeloAppCheck
+# Preserve the fixed MSI bridge identity; current releases use the public brand.
+$packTitle=if($MigrationStage){'Codex Light'}else{'码舱 CodeCang'}
+& $tool pack --packId CodexLightDesktop --packVersion $version --packDir $stage --mainExe CodexLight.exe --packTitle $packTitle --outputDir $release --runtime win-x64 --delta None --shortcuts $shortcuts --framework 'net10.0-x64-desktop,webview2' --skipVeloAppCheck
 if($LASTEXITCODE -ne 0){throw 'Velopack packaging failed'}
 $verification=& python (Join-Path $PSScriptRoot 'verify.py') $release $stage $version --manifest (Join-Path $work 'final-payload-manifest.json')
 if($LASTEXITCODE -ne 0){throw 'Release verification failed'}

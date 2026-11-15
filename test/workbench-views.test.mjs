@@ -125,9 +125,9 @@ test('pill uses the running/latest edited turn and never sums or cancels across 
 });
 
 // ---------- Statistics view ----------
-function statsHarness(responses) {
+function statsHarness(responses, ensure = async () => ({available:false})) {
   const document = createDocument(); const host = document.createElement('div'); const calls = [];
-  const api = async (path, body) => { calls.push({ path, body: structuredClone(body) }); const next = responses.shift(); if (next instanceof Error) throw next; return next; };
+  const api = async (path, body) => { if(path==='/api/pricing/ensure')return ensure(); calls.push({ path, body: structuredClone(body) }); const next = responses.shift(); if (next instanceof Error) throw next; return next; };
   const view = mountStatistics(host, { api });
   return { document, host, view, calls };
 }
@@ -153,6 +153,16 @@ test('statistics pager enables Next after load and keeps one frozen time window 
   assert.match(metrics, /回合平均输出12.5 tok\/s/); assert.doesNotMatch(metrics, /900/, 'the character-rate number is never relabelled as tok/s');
   assert.match(h.host.querySelector('.perf-strip').innerTitle ?? h.host.querySelector('.perf-strip').children[2].title, /整轮耗时/);
   assert.match(h.host.textContent, /已计价 0 · 未计价 3/);
+});
+test('late automatic price sync does not reset a newer page or its frozen time range', async () => {
+  let finish;const pending=new Promise(resolve=>{finish=resolve;});
+  const h=statsHarness([page([{id:'a'}],'c1',65),page([{id:'b'}],null,65)],()=>pending);
+  h.view.activate();await settle();h.host.querySelector('.table-pager').querySelectorAll('button')[1].click();await settle();
+  const anchor=h.calls[0].body.from;
+  finish({available:true,fetchedAt:'2026-11-15T00:00:00Z'});await settle();
+  assert.equal(h.calls.length,2,'late refresh does not issue a new query or return to first page');
+  assert.equal(h.calls[1].body.cursor,'c1');assert.equal(h.calls[1].body.from,anchor);
+  h.view.deactivate();
 });
 test('statistics query anchors time, and cost coverage is honest', () => {
   const q = statisticsQuery({ scope: 'local', range: '24h', anchor: Date.parse('2026-11-12T00:00:00Z'), model: 'm', cursor: 'x' });

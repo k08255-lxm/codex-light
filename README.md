@@ -6,9 +6,9 @@ Codex 桌面与远程客户端（原 Codex Light）。英文名称为 **CodeCang
 
 独立 Windows 桌面客户端，采用 WinForms + WebView2。通过官方 Codex CLI 的 app-server 协议工作，复用已有登录和配置；不改动官方客户端，不伪装成官方客户端。
 
-## WSL 运行环境（开发分支）
+## WSL 运行环境
 
-可在设置中发现并选择 WSL 内的 Linux Codex，保存后重启使用，账户和数据按运行环境隔离。支持标准 nvm/fnm 候选检测及手动指定 Linux CLI 路径；Windows Git、Windows DSH 自动注册和 Windows CLI 升级在 WSL 模式下禁用。**当前未完成真实 WSL 端到端验收，尚未发布。** 安装条件、使用方式与限制见 [WSL 说明](docs/WSL.md)。
+可在设置中发现并选择 WSL 内的 Linux Codex，保存后重启使用，账户和数据按运行环境隔离。支持标准 nvm/fnm 候选检测及手动指定 Linux CLI 路径；Windows Git 面板及 Windows CLI 升级在 WSL 模式下禁用；DSH 可显式选择 Windows 或 WSL 原生桥。**WSL 支持已随 v0.4.6 发布，但尚未完成真实 WSL 端到端验收。** 安装条件、使用方式与限制见 [WSL 说明](docs/WSL.md)。
 
 ## 界面预览
 
@@ -57,13 +57,15 @@ Codex 桌面与远程客户端（原 Codex Light）。英文名称为 **CodeCang
 
 Android 客户端是连接电脑的 WebView 外壳，不在手机上安装或运行 Codex CLI。需要 Android 7.0（API 24）及以上、可用的系统 WebView，以及已开启局域网访问的电脑。手机与电脑须在同一可信局域网；这不是公网远控或离线模型运行方式。
 
-APK 获取、安装与升级、配对和 Windows 源码构建步骤见 [Android 客户端说明](android/README.md)。预构建包由贡献者的 Fork Release 提供，请核对版本、来源及校验文件；它不是本仓库的自动构建产物。
+APK 获取、安装与升级、配对和 Windows 源码构建步骤见 [Android 客户端说明](android/README.md)。预构建 APK 随本仓库的 [Releases](https://github.com/k08255-lxm/codex-light/releases) 提供；请核对版本、来源及同一发布的 `SHA256SUMS.txt`。当前没有 GitHub Actions APK 自动构建工作流。
 
 ### Windows 桌面客户端
 
-使用 Windows 发行包中的 **`CodexLight-Setup-<version>-x64.exe`**（如 `CodexLight-Setup-0.4.1-x64.exe`）。它是安装入口，负责检测并复用 .NET 10 Desktop Runtime、Node.js 20+ 和 WebView2；缺失时下载经过校验的官方运行时并安装。普通用户不需要手动安装 Node.js 或开发 SDK。
+从本仓库 Release 下载 **`CodexLight-Setup-<version>-x64.exe`**（如 `CodexLight-Setup-0.4.7-x64.exe`），这是唯一需要手动下载的 Windows 安装入口。v0.4.6 起新安装内容已内嵌，不需要另下 ZIP；`full.nupkg` 和 `releases.win.json` 供应用自动更新使用。
 
-安装器内置 Windows Installer 包，已有正式安装沿用原目录升级；卸载使用 Windows 的“已安装的应用”。旧版非 MSI 目录不会被自动覆盖。项目、用户配置、会话和共享运行时不会随应用卸载删除。详见 [安装与升级](desktop/INSTALLATION.md)。
+0.4.4 起使用 Velopack。已有 Velopack 安装优先使用应用内更新；旧 MSI 安装先经固定的 0.4.4 迁移桥，再按提示更新到新版。首次安装复用兼容运行环境，缺失依赖须确认后才安装；完整应用的安装检查要求 Windows Node.js 22.15+（仅核心后端支持 Node.js 20+），WSL 内的 Node 不替代它。未检测到 Windows Codex CLI 时可选择稍后在应用中配置 WSL 或其他已有引擎。
+
+安装与更新不代表每种电脑环境都已实机验收。共享运行时、项目和用户配置不应当作应用缓存清理；迁移恢复资料须保留。详见 [安装与升级](desktop/INSTALLATION.md)。
 
 ### DSH 集成（可选）
 
@@ -83,13 +85,13 @@ APK 获取、安装与升级、配对和 Windows 源码构建步骤见 [Android 
 
 - 需要完整官方交互的复杂插件审批，请在官方客户端处理。
 - 用量覆盖取决于服务返回内容与历史格式，无法确认的数据保持未知。
-- 设置 → 关于可检查 GitHub 最新稳定版、下载并核对 SHA256，再打开安装器完成更新；不自动静默安装。目前没有代码签名。
+- 启动后及运行期间自动检查 GitHub 稳定版，发现更新只提示；也可在设置 → 关于手动检查。已有 Velopack 安装核对更新包后，经用户确认并等待任务安全空闲才应用更新；不在启动时静默安装。目前没有代码签名。
 
 ## 开发与检查
 
 Windows 构建完成后，`npm start` 启动原生窗口，`npm run browser` 才进入浏览器开发模式。`npm test` 运行无模型的 Node 测试。`npm run demo` 是明确标识的本地演示，不调用 Codex 或 DeepSeek。真实使用要求已安装官方 Codex CLI；Windows 从已安装的 npm 与桌面运行引擎中选择可用的新版本，也可显式配置 `CODEX_LIGHT_CODEX` 绝对路径。
 
-应用本体依赖 .NET 10；安装器目标为 Windows 自带的 .NET Framework 4.8。源码采用 MIT 许可证，第三方组件许可见 [THIRD-PARTY-NOTICES](docs/THIRD-PARTY-NOTICES.md)，技术结构见 [ARCHITECTURE](docs/ARCHITECTURE.md)。
+应用本体依赖 .NET 10；对外安装入口及首次安装依赖引导目标为 Windows 自带的 .NET Framework 4.8。源码采用 MIT 许可证，第三方组件许可见 [THIRD-PARTY-NOTICES](docs/THIRD-PARTY-NOTICES.md)，技术结构见 [ARCHITECTURE](docs/ARCHITECTURE.md)。
 
 ### 从源码运行
 
@@ -99,7 +101,7 @@ Windows 构建完成后，`npm start` 启动原生窗口，`npm run browser` 才
 npm run demo -- --browser
 ```
 
-连接真实 Codex 时，先安装并登录官方 Codex CLI，再执行 `npm run browser`。桌面构建需要 .NET 10 SDK；执行 `desktop/build.ps1` 生成应用 payload，再依次使用 `desktop/msi/build.ps1`、`desktop/msi/verify.ps1`、`desktop/setup/build.ps1` 生成单文件安装器。内部 MSI 构建还需要 WiX 6.0.2，具体参数见各目录 README。
+连接真实 Codex 时，先安装并登录官方 Codex CLI，再执行 `npm run browser`。桌面构建需要 .NET 10 SDK；先执行 `desktop/build.ps1` 生成完整应用 payload，再按 [Velopack 构建说明](desktop/velopack/BUILD.md) 生成当前宿主、更新 worker 和经校验的包，并按 [兼容安装入口说明](desktop/velopack/compat-router/README.md) 生成对外单文件 EXE。`desktop/msi` 与 `desktop/setup` 是历史 MSI 工具链，不是当前版本的常规发布路线。
 
 普通 Codex 聊天与浏览器演示不需要安装 npm 依赖。源码模式需要使用 DSH 桥，或完整检查 DSH 的 YAML 解析能力时，先准备桥的锁定依赖与许可清单；这一步使用 Node.js 22.15+，以满足桥自身的版本要求：
 

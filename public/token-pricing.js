@@ -6,20 +6,29 @@ export const priceStructureKey=cost=>JSON.stringify(canonical(cost));
 export function catalogPriceCandidates(catalog,model){
  return Object.entries(catalog||{}).filter(([,entry])=>Object.hasOwn(entry?.models||{},model)&&entry.models[model]?.cost).map(([provider,entry])=>({provider,model,cost:entry.models[model].cost}));
 }
+// Family identifies the model's publisher, never the user's billing route.
+// Require an exact catalog model ID; do not guess aliases or prices.
+export function modelPublisher(model){
+ const rules=[[/^(gpt-|o[134](?:-|$))/,'openai'],[/^claude-/,'anthropic'],[/^gemini-/,'google'],[/^deepseek-/,'deepseek'],[/^grok-/,'xai']];
+ return rules.find(([pattern])=>pattern.test(model))?.[1]||null;
+}
 export function modelPriceFromCatalog(catalog,model,{provider='openai',fetchedAt=null,aliases=[]}={}){
  if(typeof model!=='string'||!model||model.length>200)throw new Error('模型标识无效');
  if(typeof provider!=='string'||!provider||provider.length>100)throw new Error('供应商标识无效');
  const alias=aliases.find(row=>row?.provider===provider&&row?.model===model);
  let catalogProvider=alias?.catalogProvider||provider;const catalogModel=alias?.catalogModel||model;
  let entry=Object.hasOwn(catalog||{},catalogProvider)&&Object.hasOwn(catalog[catalogProvider]?.models||{},catalogModel)?catalog[catalogProvider].models[catalogModel]:null;
- const candidates=catalogPriceCandidates(catalog,model);let modelReference=false;
+ const candidates=catalogPriceCandidates(catalog,model);let modelReference=false,publisherReference=false;
+ const publisher=modelPublisher(model);
+ if(!entry&&!alias&&publisher&&Object.hasOwn(catalog?.[publisher]?.models||{},model)){catalogProvider=publisher;entry=catalog[publisher].models[model];publisherReference=true;}
  // Routing IDs do not identify billing providers. A model reference is safe only
  // when every full cost structure agrees, including cache fields and tiers.
  if(!entry&&!alias&&candidates.length&&candidates.every(row=>price(row.cost.input)!==null&&price(row.cost.output)!==null&&priceStructureKey(row.cost)===priceStructureKey(candidates[0].cost))){catalogProvider=candidates[0].provider;entry=catalog[catalogProvider].models[model];modelReference=true;}
  const cost=entry?.cost;
  const segmented=!!(cost?.context_over_200k||(Array.isArray(cost?.tiers)&&cost.tiers.length));
- const unsupportedReason=!cost?(candidates.length?'同名模型存在不同价格，请选择参考价格源或手填':'未找到精确模型价格，请手填参考单价'):segmented&&alias?.referenceTier!=='base'?'此模型有上下文分段价格，请明确选择基础参考档或手填':Object.keys(cost).some(key=>!['input','output','cache_read','cache_write','reasoning','tiers','context_over_200k'].includes(key))?'此模型包含额外计费维度，汇总 Token 无法确认，请手填参考单价':null;
- return Object.freeze({provider,model,catalogProvider:entry?catalogProvider:null,catalogModel,matchedBy:alias?'explicit-alias':modelReference?'consistent-model-reference':entry?'exact':'unmatched',referenceTier:alias?.referenceTier||null,segmented,input:price(cost?.input),output:price(cost?.output),cacheRead:price(cost?.cache_read),cacheWrite:price(cost?.cache_write),reasoning:price(cost?.reasoning),unsupportedReason,currency:'USD',unit:'per-million-tokens',source:'https://models.dev/api.json',fetchedAt,priceEffectiveAt:null,kind:'community-reference'});
+ const referenceTier=alias?.referenceTier||(segmented&&publisher===catalogProvider?'base':null);
+ const unsupportedReason=!cost?(candidates.length?'同名模型存在不同价格，请选择参考价格源或手填':'未找到精确模型价格，请手填参考单价'):segmented&&referenceTier!=='base'?'此模型有上下文分段价格，请明确选择基础参考档或手填':Object.keys(cost).some(key=>!['input','output','cache_read','cache_write','reasoning','tiers','context_over_200k'].includes(key))?'此模型包含额外计费维度，汇总 Token 无法确认，请手填参考单价':null;
+ return Object.freeze({provider,model,catalogProvider:entry?catalogProvider:null,catalogModel,matchedBy:alias?'explicit-alias':publisherReference?'publisher-model-reference':modelReference?'consistent-model-reference':entry?'exact':'unmatched',referenceTier,segmented,input:price(cost?.input),output:price(cost?.output),cacheRead:price(cost?.cache_read),cacheWrite:price(cost?.cache_write),reasoning:price(cost?.reasoning),unsupportedReason,currency:'USD',unit:'per-million-tokens',source:'https://models.dev/api.json',fetchedAt,priceEffectiveAt:null,kind:'community-reference'});
 }
 export function estimateTokenCost(usage,pricing){
  if(!pricing?.provider||pricing.currency!=='USD'||pricing.unit!=='per-million-tokens')throw new Error('不支持的价格口径');

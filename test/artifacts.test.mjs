@@ -63,8 +63,12 @@ test('hard links are refused even when their visible path is inside the project'
 
 test('a file changed during its bounded read is rejected rather than showing mismatched content',async t=>{
  const {service,root}=await fixture(t),file=path.join(root,'growing.png');await fs.writeFile(file,png);const original=fs.open;
- t.mock.method(fs,'open',async function(name,...args){const h=await original.call(fs,name,...args);if(name===file){const read=h.read.bind(h);h.read=async(...values)=>{const result=await read(...values);await fs.appendFile(file,'x');return result;};}return h;});
+ // The reader opens the canonical path, whose casing can differ from os.tmpdir
+ // on Windows. Match that exact path so this test actually injects the race.
+ const canonicalFile=await fs.realpath(file);let mutations=0;
+ t.mock.method(fs,'open',async function(name,...args){const h=await original.call(fs,name,...args);if(name===canonicalFile){const read=h.read.bind(h);h.read=async(...values)=>{const result=await read(...values);await fs.appendFile(file,'x');mutations++;return result;};}return h;});
  await assert.rejects(service.preview({projectId:'project-a',path:'growing.png'}),e=>e.code==='ARTIFACT_CHANGED');
+ assert.ok(mutations>0,'the canonical file read must execute the mutation hook');
 });
 
 test('synthetic link/identity rejection paths never open the refused file',async t=>{

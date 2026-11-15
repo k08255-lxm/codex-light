@@ -19,3 +19,41 @@ test('desktop and Android release versions stay synchronized', () => {
   assert.ok(read('android/app/src/main/java/com/codexlight/android/MainActivity.java').includes(`CodexLightMobile/${version}`));
   assert.ok(read('android/app/src/main/res/layout/activity_connect.xml').includes(`android:text="${version}"`));
 });
+test('public download instructions match the release asset/version contract', () => {
+  const version = JSON.parse(read('package.json')).version;
+  const readme = read('README.md');
+  const android = read('android/README.md');
+  const versionCode = read('android/app/src/main/AndroidManifest.xml').match(/android:versionCode="(\d+)"/)[1];
+  // Only current download examples are synchronized. Historical migration and
+  // scoped verification versions must remain unchanged, not globally replaced.
+  const setupExamples = [...readme.matchAll(/CodexLight-Setup-(\d+\.\d+\.\d+)-x64\.exe/g)];
+  assert.ok(setupExamples.length > 0, 'README needs an exact current Setup example');
+  for (const match of setupExamples) assert.equal(match[1], version);
+  const apkExamples = [...android.matchAll(/codex-light-(\d+\.\d+\.\d+)\.apk/g)];
+  assert.ok(apkExamples.length > 0, 'Android download instructions need an exact APK example');
+  for (const match of apkExamples) assert.equal(match[1], version);
+  assert.ok(android.includes(`versionCode 为 ${versionCode}`));
+  assert.ok(readme.includes('SHA256SUMS.txt'));
+  assert.ok(android.includes('SHA256SUMS.txt'));
+  assert.ok(readme.includes('desktop/velopack/BUILD.md'));
+  assert.ok(readme.includes('desktop/velopack/compat-router/README.md'));
+});
+
+// Historical entries are immutable release evidence, not current-version examples.
+test('Android historical release versionCode remains pinned', () => {
+  const android = read('android/README.md');
+  const historical = [...android.matchAll(/v(0\.4\.6)[^\n]*?versionCode[^\d\n]*(\d+)/g)];
+  assert.equal(historical.length, 1);
+  assert.equal(historical[0][2], '406', 'v0.4.6 AndroidManifest.xml records 406, not the current versionCode');
+});
+
+
+test('0.4.7 functional Android update contract is documented and guarded', () => {
+  const version = JSON.parse(read('package.json')).version;
+  if (version !== '0.4.7') return; // One-release policy, not a permanent suppression.
+  for (const file of ['android/README.md', 'AGENTS.md']) {
+    assert.ok(read(file).includes('codex-light-0.4.7.apk'), file);
+    assert.ok(read(file).includes('--android-unchanged'), file);
+  }
+  assert.ok(read('scripts/assemble-release.mjs').includes('androidNotify?apkInputName:'));
+});

@@ -10,7 +10,11 @@ test('rebrand preserves installed identity and old upgrade contracts',()=>{
  const pkg=JSON.parse(read('package.json'));assert.equal(pkg.name,'codex-light-local');
  assert.match(read('desktop/CodexLight.Desktop.csproj'),/<AssemblyName>CodexLight<\/AssemblyName>/);
  assert.ok(read('desktop/velopack/build.ps1').includes('--packId CodexLightDesktop'));
- assert.ok(read('desktop/velopack/build.ps1').includes("--packTitle 'Codex Light'"));
+ const packaging=read('desktop/velopack/build.ps1');
+ assert.ok(packaging.includes("$packTitle=if($MigrationStage){'Codex Light'}else{'码舱 CodeCang'}"));
+ assert.ok(packaging.includes('--packTitle $packTitle'));
+ assert.ok(read('desktop/ShortcutBrandMigration.cs').includes('velopack.CodexLightDesktop'));
+
  assert.ok(read('desktop/velopack/migration/ShortcutHandoff.cs').includes('Codex Light.lnk'));
  assert.match(read('src/rpc.mjs'),/name:'codex_light_local'/);
  assert.ok(read('android/app/src/main/AndroidManifest.xml').includes('com.codexlight.android'));

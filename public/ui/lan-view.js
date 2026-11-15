@@ -1,11 +1,13 @@
 // LAN access settings (this computer only). Default off. The access URL comes only from the
 // authenticated local management response; it is shown on demand and never stored.
 import qrcode from '../vendor/qrcode.js';
+import { confirmLanPersistence } from '../lan-confirm-dialog.js';
 import { el } from './format.js';
 
 export function mountLanAccess(host, { api, notice = () => {} }) {
   const document = host.ownerDocument;
   let status = null, busy = false, reveal = false, generation = 0, poll = null, active = false;
+  let consent = null;
   const intro = el(document, 'p', 'fine', '让同一网络中的手机打开这个界面。首次默认关闭；Windows 开启后会记住设置，应用启动时恢复，主动关闭才取消。链接包含独立访问令牌，轮换或关闭后旧链接立即失效。局域网连接是未加密的 HTTP，请只在可信网络中使用。');
   const panel = el(document, 'div', 'panel lan-panel');
   const state = el(document, 'div', 'pref-row');
@@ -27,7 +29,7 @@ export function mountLanAccess(host, { api, notice = () => {} }) {
   const qrPanel=el(document,'div','lan-qr hidden');let qrTimer=null;
   function clearQr(){clearTimeout(qrTimer);qrPanel.replaceChildren();qrPanel.classList.add('hidden');}
   qrButton.addEventListener('click',async()=>{
-   if(busy)return;const mine=++generation;qrButton.disabled=true;clearQr();
+   if(busy || consent)return;const mine=++generation;qrButton.disabled=true;clearQr();
    try{const result=await api('/api/lan/pairing',{});if(mine!==generation)return;const qr=qrcode(0,'M');qr.addData(result.url);qr.make();
     const canvas=document.createElement('canvas'),count=qr.getModuleCount(),scale=5;canvas.width=canvas.height=(count+8)*scale;canvas.style.width='min(260px,100%)';canvas.style.height='auto';canvas.setAttribute('role','img');canvas.setAttribute('aria-label','手机连接二维码，有效期两分钟，仅可使用一次');
     const ctx=canvas.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.fillStyle='#000';for(let y=0;y<count;y++)for(let x=0;x<count;x++)if(qr.isDark(y,x))ctx.fillRect((x+4)*scale,(y+4)*scale,scale,scale);
@@ -54,8 +56,8 @@ export function mountLanAccess(host, { api, notice = () => {} }) {
     select.replaceChildren(...addresses.map(row => { const option = el(document, 'option', '', `${row.address}（${row.name || '网络'}）`); option.value = row.address; return option; }));
     if (!addresses.length) { const option = el(document, 'option', '', '没有可用的私有 IPv4 地址'); option.value = ''; select.append(option); }
     select.value = addresses.some(row => row.address === current) ? current : addresses[0]?.address || '';
-    select.disabled = busy || enabled || !addresses.length;
-    toggle.disabled = busy || !!status?.restoring || !status || (!desired && !select.value);
+    select.disabled = !!consent || busy || enabled || !addresses.length;
+    toggle.disabled = !!consent || busy || !!status?.restoring || !status || (!desired && !select.value);
     linkRow.classList.toggle('hidden', !enabled || !status?.url);
     link.textContent = status?.url ? (reveal ? status.url : masked(status.url)) : '';
     show.textContent = reveal ? '隐藏链接' : '显示链接';
@@ -68,12 +70,22 @@ export function mountLanAccess(host, { api, notice = () => {} }) {
     finally { if (mine === generation) { busy = false; render(); } }
   }
   toggle.addEventListener('change', async () => {
+    if (consent || busy) { render(); return; }
     const wanted = toggle.checked; toggle.checked = !wanted; // reflect actual state only after the server confirms
     say('');
     try {
       if (wanted) {
         const persistent=!!status?.persistenceAvailable;
-        if(persistent&&!document.defaultView.confirm('记住局域网访问，并在本应用启动后自动恢复？同一已确认的 Windows 可信网络会保留端口与配对令牌；HTTP 未加密，仅用于可信网络。关闭会取消恢复并使旧配对失效。'))return;
+        if (persistent) {
+          const controller = new AbortController();
+          const mine = generation;
+          consent = controller; render();
+          const accepted = await confirmLanPersistence(document, { signal: controller.signal, opener: toggle });
+          if (consent === controller) consent = null;
+          render();
+          if (active && !toggle.disabled) toggle.focus();
+          if (!accepted || controller.signal.aborted || mine !== generation || !active) return;
+        }
         await call('/api/lan/enable', { address: select.value, port: 0, persistent, ...(persistent?{confirmed:true}:{}) });render();reveal = false;say(persistent?'已保存。下次应用启动会尝试在同一可信网络恢复；地址改变或端口冲突时保留开启设置并提示。':'已临时开启，应用退出后关闭。复制链接，在手机浏览器中打开。');
       }
       else { await call('/api/lan/disable', {});render(); reveal = false; say('已关闭；旧链接已失效。'); }
@@ -89,8 +101,8 @@ export function mountLanAccess(host, { api, notice = () => {} }) {
   select.addEventListener('change', render);
   render();
   return {
-    async activate() { active=true;clearInterval(poll); reveal = false; say(''); try { await call('/api/lan/status', {}); } catch {} if(!active)return;poll=setInterval(async()=>{if(busy)return;const mine=generation;try{const result=await api('/api/lan/status',{});if(mine===generation){status=result;render();}}catch{}},15000); },
-    deactivate() { active=false;clearInterval(poll);poll=null;clearQr(); api('/api/lan/cancelPairing',{}).catch(()=>{}); reveal = false; generation++; busy = false; render(); },
+    async activate() { active=true;clearInterval(poll); reveal = false; say(''); try { await call('/api/lan/status', {}); } catch {} if(!active)return;poll=setInterval(async()=>{if(busy || consent)return;const mine=generation;try{const result=await api('/api/lan/status',{});if(mine===generation){status=result;render();}}catch{}},15000); },
+    deactivate() { active=false;consent?.abort();consent=null;clearInterval(poll);poll=null;clearQr(); api('/api/lan/cancelPairing',{}).catch(()=>{}); reveal = false; generation++; busy = false; render(); },
     snapshot: () => status,
   };
 }

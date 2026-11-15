@@ -1,10 +1,10 @@
 # 码舱 CodeCang Windows 桌面宿主
 
-Codex Light 使用 WinForms + WebView2 承载本地界面，通过 Node 后台连接官方 Codex CLI 的 app-server，运行目标为 Windows x64。当前安装与更新采用 Velopack；历史 MSI 迁移保留兼容入口。详见 [安装与升级](INSTALLATION.md) 和 [Velopack 构建说明](velopack/BUILD.md)。
+码舱 CodeCang 使用 WinForms + WebView2 承载本地界面，通过 Node 后台连接官方 Codex CLI 的 app-server，运行目标为 Windows x64。当前安装与更新采用 Velopack；历史 MSI 迁移保留兼容入口。详见 [安装与升级](INSTALLATION.md) 和 [Velopack 构建说明](velopack/BUILD.md)。
 
 ## 运行与窗口行为
 
-应用需要 Node.js 20+、.NET 10 Windows Desktop Runtime 和 WebView2 142+。安装器复用已有兼容版本，只补充缺失依赖；普通用户不需要开发 SDK。宿主使用固定版本的 `Microsoft.Web.WebView2` NuGet 包 `1.0.4314.35`。
+核心后端需要 Node.js 20+；完整应用的首次安装检查要求 Node.js 22.15+，另需 .NET 10 Windows Desktop Runtime 和 WebView2 142+。安装器复用已有兼容版本，只补充缺失依赖；普通用户不需要开发 SDK。宿主使用固定版本的 `Microsoft.Web.WebView2` NuGet 包 `1.0.4314.35`。
 
 - 同一 Windows 用户会话只保留一个实例，再次打开会唤醒已有窗口，包括托盘中的窗口。
 - 关闭窗口时可退出并停止后台、转入托盘继续运行或取消；托盘支持恢复窗口和退出。
@@ -27,7 +27,7 @@ Codex Light 使用 WinForms + WebView2 承载本地界面，通过 Node 后台�
 
 Windows 上 `npm start` 启动该指针选定的原生应用，`npm run demo` 启动不调用模型的原生演示；没有有效构建时明确报错。`npm run browser` 显式使用浏览器开发模式。构建脚本不会自动启动生成的程序。
 
-`-SelfContained` 可生成包含 .NET 运行时的应用 payload；当前 MSI authoring 要求 framework-dependent payload，因此正式安装器使用默认构建方式。两者都需要 Node 和 WebView2。
+`-SelfContained` 可生成包含 .NET 运行时的应用 payload；当前 Velopack 发布流程使用 framework-dependent payload；历史 MSI authoring 同样要求该形式。两者都需要 Node 和 WebView2。
 
 完整 payload 包含宿主和发布依赖，以及：
 

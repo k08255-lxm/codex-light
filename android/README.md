@@ -23,9 +23,9 @@
 ### 安装与升级
 
 - 最低系统版本为 Android 7.0（API 24），Manifest 的 target SDK 为 34。需要可用的 Android System WebView；不要把 target SDK 当作最低 Android 版本。
-- 从本项目的 [Releases](https://github.com/k08255-lxm/codex-light/releases) 下载同版本 Windows 安装器和 APK，也可以按下文从源码构建。Android 0.4.3 使用 versionCode 403，高于早期测试包的 100；应用内显示版本、原生桥和 User-Agent 均为 0.4.3。下载时核对发布说明与校验文件。
+- 从本项目的 [Releases](https://github.com/k08255-lxm/codex-light/releases) 下载同版本 Windows 安装器和 APK，也可以按下文从源码构建。当前 0.4.7 构建的 APK 为 `codex-light-0.4.7.apk`，versionCode 为 407。下载时核对发布说明与校验文件。
 - 将 APK 传到手机，用系统安装器打开；如系统提示，仅为当前使用的文件管理器或浏览器允许安装该来源的应用。安装后即可关闭这项许可。
-- 若要核对下载文件，在 Windows 执行 `Get-FileHash .\codex-light.apk -Algorithm SHA256`，与同一发布的 `.sha256` 对比。哈希只校验文件一致性，不能代替对发布者和签名的信任。
+- 若要核对下载文件，在 Windows 执行 `Get-FileHash .\codex-light-0.4.7.apk -Algorithm SHA256`，与同一发布的 `SHA256SUMS.txt` 中对应文件名的条目对比。哈希只校验文件一致性，不能代替对发布者和签名的信任。
 - 覆盖升级需要相同应用 ID 和签名证书。作者发布包、自行构建包及其他机器生成的调试密钥不保证互相兼容；签名不匹配时不要直接卸载来强行升级，因为卸载会清除手机保存的连接地址和令牌。请优先使用同一来源、同一签名的更新包。
 
 ### 连接电脑
@@ -82,7 +82,7 @@ android/
 └── build.ps1                           # 无 Gradle 原生打包与签名校验脚本
 ```
 
-## 二维码配对与自动更新（待发布）
+## 二维码配对与自动更新
 
 电脑设置 → 局域网访问 → 开启 → 二维码配对。手机连接页选择“扫描电脑二维码”，仅此时申请相机权限；拒绝后仍可粘贴手动链接。二维码由电脑本地生成，手机 ZXing 本地识别，不上传相机画面，不依赖 Google Play 服务。也可用系统相机打开二维码进入纯网页客户端。
 
@@ -90,7 +90,7 @@ android/
 
 桌面启动后及每六小时自动检查稳定 Release，发现新版仅提示；设置 → 关于仍可手动检查、下载与确认安装。Android 进入前台自动检查，并在持续前台时定期检查（成功检查间隔六小时），不依赖电脑连接；只有 Release 存在匹配版本 APK 才提示，点击查看更新打开固定项目发布页，不后台安装。网络错误不会被误报为最新。
 
-APK 升级须保留同一 applicationId 与签名证书，增加 versionCode；Android 安装器会拒绝不匹配签名。不要为更新而卸载应用。当前代码仍为开发中的 0.4.3，发布前必须统一升版；本地构建不是新 Release。0.4.3 / versionCode 403; local builds do not publish a Release.
+APK 升级须保留同一 applicationId 与签名证书，增加 versionCode；Android 安装器会拒绝不匹配签名。不要为更新而卸载应用。v0.4.6 已随 Release 提供 APK，versionCode 为 406；后续构建仍须同步版本并使用原签名。本地构建脚本不会自动发布 Release，其独立 `.sha256` 输出与 Release 汇总的 `SHA256SUMS.txt` 用途不同。
 
 依赖：ZXing core 3.5.3（Apache-2.0）位于 android/libs，构建时离线编译到 DEX；相机仅扫描页使用，离开页面释放。不自动接受系统相机权限。
 
@@ -114,3 +114,15 @@ Android 普通返回按钮/边缘返回手势先交给桌面服务提供的网�
 - 开发检查：`powershell -File test/android-reconnect/run.ps1` 运行宿主 JVM 策略与 HTTP 传输假连接测试。Android APK 编译不能替代真机的 Keystore、生命周期、触摸/返回和断网恢复验收。
 
 - 自动连接额外绑定当前 Android 网络会话（Network handle、启动计数、链路地址与路由的哈希）。换网、手机重启或系统无法读取网络时暂停自动发送令牌，须明确确认当前可信网络和电脑地址。仅关闭/重开 App 不需要重新确认。此绑定不是 TLS 服务器身份验证。
+
+
+### APK release asset naming
+
+v0.4.7 now includes an Android pairing behavior fix, so download `codex-light-0.4.7.apk` and allow normal update notifications. Do not assemble this release with `--android-unchanged`. The earlier metadata-only/download-only plan is superseded. Future genuinely unchanged Android releases may use the documented download-only policy; APK identity and signing compatibility must still be verified.
+
+
+### Android 0.4.7 routing compatibility
+
+Pairing and connection requests follow Android's default network routing, as in 0.4.4. The app does not reject VPN solely because it is active and does not bind the process or sockets to a physical Wi-Fi network. A VPN's LAN exclusions remain controlled by Android and the VPN provider. URL/private-IPv4/port validation, no HTTP redirects during ticket exchange, same-origin navigation guards, encrypted credential storage and connection cancellation remain enforced.
+
+This is legacy plaintext HTTP, not TLS or cryptographic desktop identity verification. Use only a trusted network; the token and subsequent traffic can be observed on the network. Remembered automatic connections use the saved address; disable automatic connection or reconnect manually if that address may now belong to another computer. Old saved network fingerprints no longer gate connection. Device/VPN interoperability still requires a physical-device test; compilation and simulated transport tests are not that evidence.

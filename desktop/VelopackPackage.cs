@@ -47,7 +47,19 @@ internal static class VelopackPackage {
   using var input=File.OpenRead(manifest);if(input.Length>65536)throw new InvalidDataException("Metadata too large.");
   return new(root,current,updater,Metadata(input,true),data);
  }
- internal static ValidatedVelopackPackage Validate(string file,string sha256,VelopackInstalledIdentity installed){
+  internal static ValidatedVelopackPackage Validate(string file,string sha256,VelopackInstalledIdentity installed)=>ValidateCore(file,sha256,installed,null);
+ // Called only by the explicitly confirmed, build-pinned external repair helper.
+ internal static ValidatedVelopackPackage ValidateRepair(string file,string sha256,VelopackInstalledIdentity installed,string pinnedVersion,string pinnedHash){
+  ParseVersion(pinnedVersion);
+  if(!Regex.IsMatch(pinnedHash??"",@"^[a-f0-9]{64}$")||sha256!=pinnedHash)throw new InvalidDataException("Repair package pin mismatch.");
+  return ValidateCore(file,sha256,installed,pinnedVersion);
+ }
+ internal static void RequireTargetVersion(string target,string installed,string? repairPin){
+  var next=ParseVersion(target);var before=ParseVersion(installed);
+  if(repairPin!=null){ParseVersion(repairPin);if(target!=repairPin||next<before)throw new InvalidDataException("Repair cannot downgrade or differ from its target pin.");}
+  else if(next<=before)throw new InvalidDataException("Package must be a newer full update.");
+ }
+ static ValidatedVelopackPackage ValidateCore(string file,string sha256,VelopackInstalledIdentity installed,string? repairPin){
   if(sha256 is null||!Regex.IsMatch(sha256,@"^[a-f0-9]{64}$"))throw new InvalidDataException("Invalid SHA256.");
   // Re-read rather than trusting an old or caller-constructed identity record.
   var fresh=ReadInstalled(installed.CurrentDirectory,System.IO.Path.GetDirectoryName(installed.DataRoot));
@@ -56,7 +68,7 @@ internal static class VelopackPackage {
   if(!Same(System.IO.Path.GetDirectoryName(dir)!,cache))throw new InvalidDataException("Package outside updater cache.");
   var match=Regex.Match(System.IO.Path.GetFileName(dir),@"^((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))-([a-f0-9]{16})$");
   if(!match.Success||match.Groups[2].Value!=sha256[..16])throw new InvalidDataException("Cache identity mismatch.");
-  var version=match.Groups[1].Value;if(ParseVersion(version)<=ParseVersion(installed.Version)||System.IO.Path.GetFileName(target)!=$"{PackageId}-{version}-full.nupkg")throw new InvalidDataException("Package must be a newer full update.");
+  var version=match.Groups[1].Value;RequireTargetVersion(version,installed.Version,repairPin);if(System.IO.Path.GetFileName(target)!=$"{PackageId}-{version}-full.nupkg")throw new InvalidDataException("Package must be a full update.");
   Plain(target);var stream=File.Open(target,FileMode.Open,FileAccess.Read,FileShare.Read);
   try{
    if(stream.Length<1||stream.Length>MaxPackage)throw new InvalidDataException("Package size invalid.");

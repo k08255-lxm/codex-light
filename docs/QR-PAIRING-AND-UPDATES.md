@@ -1,4 +1,4 @@
-# QR pairing and update checks (0.4.3)
+# QR pairing and update checks
 
 ## Pairing
 
@@ -12,10 +12,15 @@ Transport is still HTTP on a trusted private IPv4 LAN. QR screenshots are tempor
 
 Desktop local access checks stable GitHub Releases shortly after startup and every six hours, notifying once per version per window. Existing About-page checks and explicit download/install remain available. Remote browsers do not manage desktop updates.
 
-Android 0.4.2 lacks this native checker; its first upgrade must be manual and in-place. Android 0.4.3 checks the same repository on foreground entry and periodically while foregrounded. A successful check has a six-hour cooldown; failures retry after ten minutes. Only a stable release containing the exact versioned APK asset on the expected repository is eligible. Prompts are deduplicated per version. Viewing an update opens the project release page; it does not install silently. Android itself verifies package identity, increasing versionCode and matching signing certificate on install.
+Android 0.4.2 lacks this native checker; its first upgrade must be manual and in-place. Android 0.4.3 and later check the same repository on foreground entry and periodically while foregrounded. A successful check has a six-hour cooldown; failures retry after ten minutes. Only a stable release containing the exact versioned APK asset on the expected repository is eligible. Prompts are deduplicated per version. Viewing an update opens the project release page; it does not install silently. Android itself verifies package identity, increasing versionCode and matching signing certificate on install.
 
 The APK retains the existing 0.4.2 certificate for upgrade compatibility. Its certificate subject is Android Debug; this is not a newly provisioned private production signing identity. Do not rotate it casually or instruct existing users to uninstall to overcome signature errors.
 
 ## Verification and device compatibility
 
 Automated coverage includes single-use pairing, expiry, revocation, concurrent redemption, origin checks, browser fragment clearing, remote-management restrictions and update retry/deduplication. Camera permission behavior and package upgrades should also be checked on supported physical Android devices. Windows display scaling and installed prerequisites can vary by device.
+
+
+### Unchanged Android release
+
+Use assemble-release.mjs --android-unchanged only after confirming Android runtime code/resources are unchanged apart from version metadata. It keeps the APK downloadable as codex-light-android-VERSION.apk. Shipped 0.4.3-0.4.6 clients only match codex-light-VERSION.apk: never upload that alias for an unchanged release. Desktop update feeds remain unchanged. Future functional Android releases must omit the flag to restore notifications. This suppresses this release for all old Android versions, not selectively, and cannot retract an already displayed alert. APK signature/version verification remains mandatory.

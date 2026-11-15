@@ -1,8 +1,8 @@
 # One bridge release, not recurring migration implementations
 
-0.4.4 is the intended fixed MSI-to-Velopack bridge release. This policy is a
-forward compatibility contract, not a claim that later-version routing or the
-real migration acceptance has already passed.
+0.4.4 is the fixed MSI-to-Velopack bridge release. This policy is the ongoing
+compatibility contract. The current router implements it; implementation and
+fixture tests do not establish every real installation scenario.
 
 ## Existing clients
 
@@ -34,16 +34,15 @@ users who skip 0.4.4.
 - A shortcut points at the stable Velopack root stub, never a versioned payload
   directory. Retain recovery material until final health and entrypoint checks.
 
-Before the first post-0.4.4 release, implement and test that router with old MSI
-0.4.3 skipping directly to the later release, existing Velopack 0.4.4, a fresh
-machine, missing/corrupted bridge, interrupted stage, and repeated invocation.
-The current tests prove the old client's filename/metadata constraints only;
-they do not pretend to execute this future router.
+For each changed router, check old MSI 0.4.3 skipping directly to the target,
+existing Velopack installations, fresh installation, missing/corrupted bridge,
+interrupted stage and repeated invocation. Distinguish fixture tests from actual
+installation evidence; keep the published 0.4.4 bridge immutable.
 
-## Clarified user flow (2026-11-14)
+## Two-stage user flow
 
-The user accepts 0.4.4 automatically checking latest and showing an update prompt;
-installation of that next update remains a user click. The post-bridge router
-therefore must not claim the selected latest version is already installed.
+After migration, 0.4.4 checks for the latest release and shows an update prompt;
+installing that next update remains a user action. The router must not claim the
+selected latest version is already installed at the intermediate stage.
 `compat-router/` implements this smaller fixed-bridge handoff. The former
 silent two-stage coordinator experiment is not part of the release pipeline.

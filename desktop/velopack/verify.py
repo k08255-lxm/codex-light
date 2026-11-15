@@ -47,13 +47,19 @@ def verify(release, payload, version, manifest=None):
         for relative,f in files.items():
             if sha(z.read('lib/app/'+relative))!=sha(f.read_bytes()):raise ValueError('Payload hash mismatch: '+relative)
         extras={n[8:] for n in names if n.startswith('lib/app/') and not n.endswith('/')} - files.keys()
-        if extras-{'sq.version','Codex Light_ExecutionStub.exe','Squirrel.exe'}:raise ValueError('Unknown packaged payload: '+str(extras))
+
         root=ET.fromstring(z.read('lib/app/sq.version'))
         metadata={e.tag.rsplit('}',1)[-1]:e.text for e in root.iter()}
         if metadata.get('id')!=ID or metadata.get('version')!=version or metadata.get('mainExe')!='CodexLight.exe':raise ValueError('Package identity mismatch')
+        title=metadata.get('title')
+        if title not in ('Codex Light','码舱 CodeCang'):raise ValueError('Unexpected package title')
+        stub=title+'_ExecutionStub.exe'
+        if extras != {'sq.version',stub,'Squirrel.exe'}:raise ValueError('Unexpected generated payload: '+str(extras))
+        stub_hash=sha(z.read('lib/app/'+stub))
     with zipfile.ZipFile(portable) as z:
         names=archive(z)
         if not {'.portable','Update.exe'}<=names:raise ValueError('Missing portable identity/updater')
+        if sha(z.read(title+'.exe'))!=stub_hash:raise ValueError('Portable execution stub mismatch')
         for relative,f in files.items():
             if sha(z.read('current/'+relative))!=sha(f.read_bytes()):raise ValueError('Portable mismatch: '+relative)
     exe=setup.read_bytes()

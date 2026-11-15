@@ -19,3 +19,27 @@ test('welcome changes only at date/period boundary, resumes after hidden, and di
  time=at(11);timer();assert.equal(writes,2);
  time=at(18);listener();assert.equal(writes,3);stop();timer();assert.equal(writes,3);
 });
+test('welcome offers eight concise, distinct greetings per local time period',()=>{
+ for(const hour of [0,5,11,14,18,22]){
+  const lines=new Set(Array.from({length:90},(_,i)=>welcomeGreeting(new Date(2026,0,i+1,hour)).text));
+  assert.equal(lines.size,8);
+  for(const line of lines){
+   assert.ok([...line].length<=20,`Greeting should stay concise: ${line}`);
+   assert.doesNotMatch(line,/重要的事|解决一个问题|推进|最后一步|努力|加油/);
+  }
+ }
+});
+
+test('each period uses all eight choices before repeating across month and year boundaries',()=>{
+ for(const hour of [0,5,11,14,18,22])for(const start of [new Date(2026,0,28,hour),new Date(2026,11,28,hour)]){
+  const text=offset=>welcomeGreeting(new Date(start.getFullYear(),start.getMonth(),start.getDate()+offset,hour)).text;
+  assert.equal(new Set(Array.from({length:8},(_,i)=>text(i))).size,8);
+  assert.equal(text(0),text(8));
+ }
+});
+
+test('copy is varied rather than a repeated chat or hurry template',()=>{
+ const lines=[0,5,11,14,18,22].flatMap(hour=>Array.from({length:8},(_,i)=>welcomeGreeting(new Date(2026,0,i+1,hour)).text));
+ assert.ok(new Set(lines).size>=45);
+ assert.equal(lines.filter(line=>/想聊|慢慢来|聊点|聊起/.test(line)).length,0);
+});

@@ -50,3 +50,23 @@ test('Only declared 0.157.1 missing cache-write uses protocol default; null rema
  assert.equal(run([meta({cli_version:'0.157.1'}),token(3,{cache_write_input_tokens:null})]).snapshot.cacheWriteInputTokens,null);
  assert.equal(run([meta({parent_thread_id:'22222222-2222-4222-8222-222222222222'}),token(0),token(3)]).attribution,'deferred');
 });
+
+test('explicit fresh first request anchors zero only with identical complete last and total',()=>{
+ const tid='turn-safe';const full={input_tokens:10,cached_input_tokens:2,cache_write_input_tokens:0,output_tokens:3,reasoning_output_tokens:1,total_tokens:13};
+ const start={type:'event_msg',timestamp:'2030-01-01T00:00:00Z',payload:{type:'task_started',turn_id:tid}};
+ const ctx={type:'turn_context',payload:{turn_id:tid,model:'m'}};
+ const usage={type:'event_msg',timestamp:'2030-01-01T00:00:01Z',payload:{type:'token_count',info:{total_token_usage:full,last_token_usage:full}}};
+ const done={type:'event_msg',timestamp:'2030-01-01T00:00:02Z',payload:{type:'task_complete',turn_id:tid}};
+ const result=run([meta(),start,ctx,usage,done]);assert.equal(result.increments[0].tokens.totalTokens,13);assert.equal(result.turns[0].coverageComplete,true);
+ const broken=run([meta(),start,ctx,usage,{...usage,payload:{...usage.payload,info:{total_token_usage:{...full,total_tokens:null},last_token_usage:full}}},done]);assert.equal(broken.turns[0].coverageComplete,false);
+ for(const records of [[meta(),ctx,usage,done],[meta({parent_thread_id:id}),start,ctx,usage,done],[meta({history_base:1}),start,ctx,usage,done],[meta(),start,ctx,{...usage,payload:{...usage.payload,info:{total_token_usage:full,last_token_usage:{...full,total_tokens:4}}}},done],[meta(),start,ctx,usage]]){const r=run(records);assert.ok(r.turns.every(t=>!t.coverageComplete));}
+});
+
+test('subagent lineage accepted only for own timestamped exact request deltas, copied prefixes deferred',()=>{
+ const t='child-turn',full={input_tokens:10,cached_input_tokens:2,cache_write_input_tokens:0,output_tokens:3,reasoning_output_tokens:1,total_tokens:13};
+ const m=meta({parent_thread_id:id,timestamp:'2030-01-01T00:00:00Z',source:{subagent:{thread_spawn:{parent_thread_id:id}}}});
+ const start={type:'event_msg',timestamp:'2030-01-01T00:00:01Z',payload:{type:'task_started',turn_id:t}},ctx={type:'turn_context',payload:{turn_id:t,model:'m'}};
+ const u={type:'event_msg',timestamp:'2030-01-01T00:00:02Z',payload:{type:'token_count',info:{total_token_usage:full,last_token_usage:full}}},done={type:'event_msg',timestamp:'2030-01-01T00:00:03Z',payload:{type:'task_complete',turn_id:t}};
+ const good=run([m,start,ctx,u,done]);assert.equal(good.turns[0].coverageComplete,true);assert.equal(good.increments[0].tokens.totalTokens,13);
+ for(const records of [[m,start,ctx,{...u,timestamp:'2029-12-31T23:59:59Z'},done],[m,start,ctx,{...u,payload:{...u.payload,info:{total_token_usage:full,last_token_usage:{...full,input_tokens:1}}}},done],[{...m,payload:{...m.payload,history_base:1}},start,ctx,u,done],[m,ctx,u,done]]){const r=run(records);assert.equal(r.increments.length,0);assert.ok(r.turns.every(x=>!x.coverageComplete));}
+});

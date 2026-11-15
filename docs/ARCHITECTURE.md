@@ -4,18 +4,18 @@
 Windows 原生窗口（WinForms + WebView2）
   → 127.0.0.1 随机端口 + 进程令牌 + Host/Origin 校验
   → Node HTTP 桥（限定 RPC）
-  → 官方 codex.exe app-server --listen stdio://
+  → 所选 Windows / WSL Codex app-server --listen stdio://
   → 用户现有 Codex 登录、沙箱与 MCP 配置
   → 用户配置的 MCP（含可选 DSH Subagent 集成）
 ```
 
-客户端复用用户已有 Codex 登录与配置，不额外要求模型密钥，也不修改模型服务地址。客户端身份为 `codex_light_local` / `Codex Light (unofficial)`。模型调用使用所选引擎及其提供商的额度。
+客户端复用用户已有 Codex 登录与配置，不额外要求模型密钥，也不修改模型服务地址。客户端身份为 `codex_light_local` / `码舱 CodeCang (unofficial)`。模型调用使用所选引擎及其提供商的额度。
 
 `components/dsh-bridge` 是默认分发的 MCP 桥；DSH 本体不随包，缺失不影响普通聊天。桥使用用户安装的 DSH 0.2.2 自带 Node/SQLite 运行环境，Light 主应用仍支持 Node.js 20+。显式确认注册只写用户层 `mcp_servers.dsh_subagent`，带配置版本冲突检查，保留已存在的外部同名配置；安装、启动、状态读取不自动注册。MCP reload 仅表示请求排队，连接状态以实际 `mcpServerStatus/list` 返回为准。
 
 DSH 配置来源只导入 provider 声明，原文件保持不变。自动跟随在新 runtime 创建前重新校验；现有任务继续使用已加载版本。来源与连接管理接口仅本机可用，局域网请求拒绝；原始配置与凭据不返回前端，也不进入操作收据。
 
-局域网访问是默认关闭的第二监听器，启用时绑定所选私网 IPv4。它复用同一个 HTTP 处理器，但具有独立的访问令牌和 Host/Origin 边界；手机端禁止管理监听器、主程序关闭、原生窗口和运行引擎。令牌只通过链接 fragment 交付，API 使用 Authorization，轮换与关闭会断开已有连接。HTTP 不加密，应用不修改防火墙。
+局域网访问是默认关闭的第二监听器，启用时绑定所选私网 IPv4。它复用同一个 HTTP 处理器，但具有独立的访问令牌和 Host/Origin 边界；手机端禁止管理监听器、主程序关闭、原生窗口和运行引擎。手动配对链接通过 fragment 交付令牌，二维码改用两分钟单次票据兑换；API 使用 Authorization，轮换与关闭会断开已有连接。HTTP 不加密，应用不修改防火墙。
 
 ## 状态分层
 

@@ -1,0 +1,17 @@
+// Headless, synthetic histories only. No real account or model requests.
+import assert from 'node:assert/strict';import {createRequire} from 'node:module';import {mkdir,mkdtemp,writeFile} from 'node:fs/promises';import path from 'node:path';import {fileURLToPath} from 'node:url';
+import {createServer} from '../src/server.mjs';import {DemoClient} from '../src/demo.mjs';
+const {chromium}=createRequire(import.meta.url)('playwright');const root=fileURLToPath(new URL('..',import.meta.url));const out=path.join(root,'.tmp','history-segment-browser');await mkdir(out,{recursive:true});const profile=await mkdtemp(path.join(out,'profile-'));const client=new DemoClient();
+for(let n=0;n<80;n++){const id='th'+n;client.threads.set(id,{id,name:n===0?'History fixture':'Thread '+n,cwd:root,updatedAt:1000-n});client.items.set(id,[]);client.turns.set(id,[]);}
+for(let i=0;i<300;i++){const id='t'+i;const items=[{id:'u'+i,type:'userMessage',content:[{type:'text',text:'Question '+i}]},{id:'c'+i,type:'agentMessage',phase:'commentary',text:'Inspecting '+i},{id:'x'+i,type:'commandExecution',command:'echo fixture',aggregatedOutput:'ok',status:'completed',exitCode:0},{id:'a'+i,type:'agentMessage',phase:'final_answer',text:'Final answer '+i+'\n\n'+'A readable paragraph. '.repeat(i===280?5000:12)}];client.turns.get('th0').push({id,status:'completed',durationMs:34000,items});client.items.get('th0').push(...items.map(item=>({turnId:id,item})));}
+const calls=[];const call=client.call.bind(client);client.call=async(m,p)=>{calls.push({m,p});return call(m,p)};
+const app=await createServer({client,demo:true,cwd:root,fileAttachmentRoot:path.join(profile,'attachments'),projectsRoot:path.join(profile,'projects'),desktopStateRoot:path.join(profile,'desktop')});await app.started;
+const browser=await chromium.launchPersistentContext(profile,{headless:true,viewport:{width:1440,height:920},executablePath:process.env.CHROMIUM_PATH,args:['--no-first-run','--no-default-browser-check']});const page=browser.pages()[0];const errors=[];page.on('pageerror',e=>errors.push(e.message));const checks=[];
+
+
+try{for(const width of [1440,390]){
+await page.setViewportSize({width,height:844});await page.goto(app.url);await page.waitForTimeout(1000);if(width===390)await page.locator('#rail-sidebar').click();await page.locator('button.project-group-thread').filter({hasText:'History fixture'}).click();await page.locator('[data-item-id="a299"]').waitFor();
+await page.locator('[data-turn-id="t280"], [data-virtual-turn-id="t280"]').evaluate(n=>n.scrollIntoView());await page.waitForTimeout(500);const item=page.locator('[data-item-id="a280"]');await item.waitFor();await item.locator('.long-text-nav').filter({hasText:'下一段'}).first().click();const position=await item.locator('.long-text-position').textContent();
+await page.locator('#conversation').evaluate(c=>c.scrollTop=c.scrollHeight);await page.waitForTimeout(500);assert.equal(await page.locator('[data-item-id="a280"]').count(),0);await page.locator('[data-turn-id="t280"], [data-virtual-turn-id="t280"]').evaluate(n=>n.scrollIntoView());await page.waitForTimeout(500);assert.equal(await page.locator('[data-item-id="a280"] .long-text-position').textContent(),position);checks.push({width,position});}
+console.log(JSON.stringify(checks));assert.deepEqual(errors,[]);
+}finally{await writeFile(path.join(out,'checks.json'),JSON.stringify({checks,errors},null,2));await browser.close();await app.close?.();client.close();}process.exit(0);

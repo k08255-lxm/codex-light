@@ -22,11 +22,14 @@ async function checked(directory,name){
  if(matches.length!==1||matches[0][1].toLowerCase()!==digest)throw Error('Missing/stale checksum: '+name);
  return {file,name,size:bytes.length,sha256:digest};
 }
-export async function assembleRelease({version,setupDirectory,velopackDirectory,apk,output}){
+export async function assembleRelease({version,setupDirectory,velopackDirectory,apk,output,androidNotify=true}){
  if(!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version))throw Error('Invalid release version');
+ if(typeof androidNotify!=='boolean')throw Error('androidNotify must be boolean');
  // Both transports are mandatory: never strand existing installations on a new latest release.
  const setup=`CodexLight-Setup-${version}-x64.exe`,full=`CodexLightDesktop-${version}-full.nupkg`;
- const fresh=`CodexLight-NewInstall-${version}-x64.zip`,apkName=`codex-light-${version}.apk`;
+ const fresh=`CodexLight-NewInstall-${version}-x64.zip`,apkInputName=`codex-light-${version}.apk`;
+ // Old clients only prompt for the standard exact release-version asset name.
+ const apkName=androidNotify?apkInputName:`codex-light-android-${version}.apk`;
  const verification=await json(path.join(velopackDirectory,'verification.json'));
  if(verification.version!==version||verification.packageId!=='CodexLightDesktop'||
    !['fullOnly','workerPresent','allPayloadHashesMatch','portableMatches','setupEmbedsExactPackage'].every(k=>verification[k]===true))throw Error('Velopack verification incomplete');
@@ -48,7 +51,7 @@ export async function assembleRelease({version,setupDirectory,velopackDirectory,
  if(!identity||(!legacy&&!router))throw Error('Verified migration-aware bootstrap required; legacy MSI Setup is insufficient');
  const recorded=verification.artifacts?.filter(a=>a.name===full);
  if(recorded?.length!==1||recorded[0].sha256!==files[1].sha256||recorded[0].size!==files[1].size)throw Error('Stale package verification');
- await plain(apk);if(path.basename(apk)!==apkName)throw Error('APK must have exact versioned name');
+ await plain(apk);if(path.basename(apk)!==apkInputName)throw Error('APK must have exact versioned name');
  const apkBytes=await readFile(apk);if(apkBytes[0]!==0x50||apkBytes[1]!==0x4b)throw Error('APK is not an archive');
  // APK signing/version inspection is a separate build gate, not inferred from its filename.
  files.push({file:apk,name:apkName,size:apkBytes.length,sha256:hash(apkBytes)});
@@ -67,7 +70,9 @@ export async function assembleRelease({version,setupDirectory,velopackDirectory,
  return release;
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href){
- const [version,setupDirectory,velopackDirectory,apk,output]=process.argv.slice(2);
- if(!output)throw Error('Usage: node scripts/assemble-release.mjs VERSION BOOTSTRAP_RELEASE_DIR VELOPACK_RELEASE_DIR VERSIONED_APK NEW_OUTPUT');
- console.log(JSON.stringify(await assembleRelease({version,setupDirectory,velopackDirectory,apk,output}),null,2));
+ const [version,setupDirectory,velopackDirectory,apk,output,...flags]=process.argv.slice(2);
+ if(flags.some(f=>f!=='--android-unchanged')||flags.length>1)throw Error('Unknown or repeated option');
+ const androidNotify=!flags.includes('--android-unchanged');
+ if(!output)throw Error('Usage: node scripts/assemble-release.mjs VERSION BOOTSTRAP_RELEASE_DIR VELOPACK_RELEASE_DIR VERSIONED_APK NEW_OUTPUT [--android-unchanged]');
+ console.log(JSON.stringify(await assembleRelease({version,setupDirectory,velopackDirectory,apk,output,androidNotify}),null,2));
 }

@@ -39,8 +39,9 @@ test('low-frequency settings motion is scoped; conversation scrolling remains im
  const approved=new Map([
   [':root :is(#settings-general,#settings-storage,#settings-about,#settings-appearance):not(.hidden)',/transform:\s*translateY\(4px\)/],
   [':root .update-indicator:active:not(:focus-visible) .update-indicator-badge',/transform:\s*scale\(\.96\)/],
-  [':root .sidebar',/transform:\s*translateX\(-8px\)/],
+  [':root .sidebar',/transform:\s*translateX\(-100%\)/],
   ['.update-indicator:not([hidden])',/transform:\s*translateY\(-3px\)/],
+  [':root:not([data-reduced-motion="true"]) #window-menu.app-menu:not(.hidden)',/transform:\s*translateX\(-4px\) scale\(\.98\)/],
  ]);
  const seen=new Set();
  for(const [,raw,body] of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)){
@@ -98,4 +99,16 @@ test('model catalog loading is bounded, generation-safe and preserves the last g
  const seeded=[{model:'seed'}];state.models=seeded;let page=0;rpc=async()=>({data:[{model:'m'+page}],nextCursor:'same'});await assert.rejects(()=>loadModels(),/分页游标未前进/);assert.equal(state.models,seeded);
  page=0;rpc=async()=>({data:[{model:'p'+page++}],nextCursor:'cursor-'+page});await assert.rejects(()=>loadModels(),/超过 5 页/);assert.equal(state.models,seeded);
  rpc=async()=>({data:Array.from({length:501},(_,i)=>({model:'bulk-'+i})),nextCursor:null});await assert.rejects(()=>loadModels(),/超过 500 项/);assert.equal(state.models,seeded);
+});
+
+
+test('application menu entrance is short, opt-in and isolated from conversation motion',()=>{
+ // A small one-shot entrance connects this low-frequency overlay to its trigger.
+ // Keep both system and application reduced-motion preferences authoritative.
+ const start=css.indexOf('/* Client-area application menu:');
+ assert.ok(start>=0);const menu=css.slice(start);
+ assert.match(menu,/@media \(prefers-reduced-motion: no-preference\)\s*\{\s*#window-menu\.app-menu\s*\{\s*transition: opacity 150ms ease-out, transform 150ms ease-out;\s*\}\s*@starting-style\s*\{\s*:root:not\(\[data-reduced-motion="true"\]\) #window-menu\.app-menu:not\(\.hidden\)\s*\{\s*opacity: 0; transform: translateX\(-4px\) scale\(\.98\);\s*\}\s*\}\s*\}/);
+ assert.doesNotMatch(block('#window-menu.app-menu {'),/transform:|animation:/);
+ assert.match(menu,/transform-origin: top left/);
+ assert.doesNotMatch(menu,/transition:\s*all|@keyframes/);
 });

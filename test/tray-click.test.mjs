@@ -8,7 +8,9 @@ test('tray uses the NotifyIcon-specific left-click binding', () => {
 });
 
 test('right-click menu and restore lifecycle remain intact', () => {
-  assert.match(source, /ContextMenuStrip=trayMenu/);
+  assert.match(source, /tray\.MouseUp\+=.*e\.Button==MouseButtons\.Right/);
+  assert.match(source, /NativeTrayMenu\.Dispatch\(NativeTrayMenu\.Show\(Handle,Cursor\.Position\),RestoreFromTray/);
+  assert.doesNotMatch(source, /ContextMenuStrip=trayMenu/);
   const restore=source.slice(source.indexOf('public void RestoreFromTray()'), source.indexOf('void ShowFailure('));
   assert.match(restore, /if\(closing\|\|IsDisposed\)return/);
   assert.match(restore, /Show\(\)/);

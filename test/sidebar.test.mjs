@@ -8,7 +8,7 @@ for(const id of ['app','sidebar','sidebar-overlay','rail-sidebar','settings-dial
 elements['rail-sidebar'].before=anchor=>{elements['rail-sidebar'].parentNode='rail';elements['rail-sidebar'].previousSibling=anchor;};
 elements['settings-dialog'].classList.add('hidden');
 const media={matches:false,handler:null,addEventListener(type,handler){if(type==='change')media.handler=handler;}};
-const window={matchMedia(){return media;}};
+const window={matchMedia(){return media;},addEventListener(){},setTimeout(){return 1;},clearTimeout(){}};
 const $=id=>elements[id];
 const start=app.indexOf('// sidebar-controller:start');const end=app.indexOf('// sidebar-controller:end',start);assert.ok(start>=0&&end>start,'sidebar controller markers missing');
 const source=app.slice(app.indexOf('\n',start)+1,end);
@@ -36,7 +36,7 @@ test('static shell exposes one overlay, two in-sidebar closers, and a single per
  for(const id of ['close-sidebar','settings-sidebar-close'])assert.match(html,new RegExp(`id="${id}"[^>]*aria-label="收起侧栏"`));
  assert.doesNotMatch(html,/id="toggle-sidebar"/);assert.doesNotMatch(app,/toggle-sidebar/);assert.match(html,/id="rail-sidebar"[^>]*aria-controls="sidebar"[^>]*aria-expanded="true"/);
  assert.doesNotMatch(app,/show-sidebar/);assert.doesNotMatch(css,/show-sidebar/);
- assert.match(css,/\.app\.sidebar-collapsed \.sidebar\s*\{\s*display:\s*none/);assert.match(css,/\.app\.sidebar-open \.sidebar\s*\{[^}]*visibility:\s*visible/s);assert.match(css,/\.sidebar-overlay\s*\{[^}]*position:\s*fixed[^}]*inset:\s*0 0 0 var\(--rail-width\)/s);
+ assert.match(css,/\.app\.sidebar-collapsed \.sidebar\s*\{\s*width:\s*0/);assert.match(css,/\.app\.sidebar-open \.sidebar\s*\{[^}]*visibility:\s*visible/s);assert.match(css,/\.sidebar-overlay\s*\{[^}]*position:\s*fixed[^}]*inset:\s*0 0 0 var\(--rail-width\)/s);
 });
 
 

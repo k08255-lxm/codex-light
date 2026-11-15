@@ -1,3 +1,6 @@
+import {createStatisticsRecovery} from './statistics-recovery.mjs';
+import {NativeStorageMaintenance} from './native-storage-maintenance.mjs';
+import {StorageOperationReservation} from './storage-operation-reservation.mjs';
 import {DshWakeup} from './dsh-wakeup.mjs';
 import {WslNativeDshBridge} from './dsh-wsl-native.mjs';
 import {WslWindowsDshBridge} from './dsh-wsl-windows.mjs';
@@ -71,9 +74,9 @@ for(const file of ['about-view.js','about-view.css','notifications.js'])publicFi
 publicFiles['/ui/storage-view.js']='ui/storage-view.js';
 publicFiles['/ui/panel-resize.js']='ui/panel-resize.js';publicFiles['/ui/panel-resize.css']='ui/panel-resize.css';publicFiles['/project-name-dialog.js']='project-name-dialog.js';
 for(const file of ['history-auto-load.js','format.js','chart.js','stats-view.js','account-view.js','live-changes.js','views.css','paste.js','artifacts.js','agents.js','access.js','lan-view.js','viewport.js','approvals-view.js','composer.js','dsh-view.js','preferences-view.js','remote-view.js','slash-menu.js','workbench-view.js','dsh-config-view.js','dsh-connection-view.js'])publicFiles['/ui/'+file]='ui/'+file;
-for(const file of ['engine-onboarding.js','engine-onboarding.css','activity-feed.js','activity-feed.css','projects.js','project-navigation.js','project-navigation.css'])publicFiles['/'+file]=file;
+for(const file of ['app-confirm-dialog.js','lan-confirm-dialog.js','history-viewport.js','engine-onboarding.js','engine-onboarding.css','activity-feed.js','activity-feed.css','projects.js','project-navigation.js','project-navigation.css'])publicFiles['/'+file]=file;
 async function body(req){let data='';for await(const chunk of req){data+=chunk;if(data.length>512*1024)throw new Error('请求太大');}try{return JSON.parse(data||'{}');}catch{throw new Error('无效 JSON');}}
-export async function createServer({client,cwd='',command='codex',demo=false,port=0,reopen=false,desktop=false,desktopUpdateTransport='msi',onDesktopTheme,onDesktopPickFolder,onDesktopLaunchInstaller,desktopStateRoot,storageMaintenance,storageRoot,projectStore,projectsRoot,fileAttachmentRoot,token=randomBytes(32).toString('hex'),prReviewService,runtimeManager,appUpdateService,statisticsRoot,lanOptions,dshConfigSourcesService,dshConnectionService,wslRuntimeService,wslSelectionStore:providedWslSelectionStore,engineNativeCandidate}={}){
+export async function createServer({client,cwd='',command='codex',demo=false,port=0,reopen=false,desktop=false,desktopUpdateTransport='msi',onDesktopTheme,onDesktopPickFolder,onDesktopLaunchInstaller,desktopStateRoot,nativeStorage,storageMaintenance,storageRoot,projectStore,projectsRoot,fileAttachmentRoot,token=randomBytes(32).toString('hex'),prReviewService,runtimeManager,appUpdateService,statisticsRoot,lanOptions,dshConfigSourcesService,dshConnectionService,wslRuntimeService,wslSelectionStore:providedWslSelectionStore,engineNativeCandidate}={}){
  let runtimeSource='configured',wslCandidate=null,wslLaunch=null,runtimeStartupError=null;
  const wslRuntime=wslRuntimeService||new WslRuntime();
  const wslSelectionStore=providedWslSelectionStore||new WslSelectionStore(desktopStateRoot?{root:desktopStateRoot}:{});
@@ -131,7 +134,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
   const task=(async()=>{try{const result=await rpc.call('account/read',{refreshToken:false});if(generation===accountIdentityGeneration)statistics.setAccount(result);}catch{if(generation===accountIdentityGeneration)statistics.setAccount(null);}})();
   accountIdentityPending=task;try{await task;}finally{if(accountIdentityPending===task)accountIdentityPending=null;}
  }
- let usageScan=null,usageScanPromise=null,usageScanDirectory=null,modelRecovery=null,modelRecoveryError=null,dshResetError=null;
+ let usageScan=null,usageScanPromise=null,usageScanDirectory=null,modelRecovery=createStatisticsRecovery(),modelRecoveryError=null,dshResetError=null;
  function importUsageDirectory(directory){
   if(wslActive){
    if(!wslCandidate)throw new Error('WSL environment is unavailable');
@@ -168,13 +171,14 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
  const loginTimers=new Set();
  const appVersion=JSON.parse(await readFile(new URL('../package.json',import.meta.url),'utf8')).version;
  const updateReservation=new UpdateReservation();
+ const storageReservation=new StorageOperationReservation();
  const appUpdates=appUpdateService||new AppUpdateService({currentVersion:appVersion,updateTransport:desktop?desktopUpdateTransport:'msi',...(desktop?{launchFn:async(file,metadata)=>{
   if(typeof onDesktopLaunchInstaller!=='function')throw Object.assign(new Error('当前桌面宿主不支持启动应用安装程序'),{outcome:'notExecuted',code:'APP_UPDATE_HOST_UNAVAILABLE'});
   return onDesktopLaunchInstaller(file,metadata);
  }}:{})});
  const dsh=new DshReadService(rpc);const uploads=new UploadStore();const streams=new Set();const operations=new OperationStore({hooks:desktopState?{before:r=>desktopState.before(r),after:r=>desktopState.after(r)}:undefined});const runtime=runtimeManager||new RuntimeManager({currentPath:command,currentSource:runtimeSource,operations,rpc});let origin;let stopping=false;let closing;let serviceShutdown;let shutdownError=null;let engineStopped=false;let reopener;let reopenError=null;let remoteEnvironment=null;const remoteClients=new Set();let remotePairing=null;let pairingTimer;
  function clearPairing(){clearTimeout(pairingTimer);remotePairing=null;for(const entry of operations.entries.values())if(entry.method==='remoteControl/pairing/start'&&entry.result){delete entry.result.pairingCode;delete entry.result.manualPairingCode;entry.result.expired=true;}}
- const storage=storageMaintenance||new StorageMaintenance({root:storageRoot||(process.platform==='win32'&&process.env.LOCALAPPDATA?path.join(process.env.LOCALAPPDATA,'CodexLight'):null),activeProfile:process.env.CODEX_LIGHT_ACTIVE_WEBVIEW_PROFILE||null,imageFiles:()=>uploads.storageFiles?.()||[...uploads.records.values()].map(r=>({path:r.path,size:r.size,ownedTemp:true,cleanupEligible:false})),imageLease:fn=>uploads.withMaintenance?uploads.withMaintenance(fn):fn(),busy:()=>!!(uploads.reserved||uploads.writes?.size||appUpdates.downloading||appUpdates.installing||sessions.queues.size||rpc.requests.size||sessions.snapshot().threads.some(t=>t.state!=='idle')||[...terminal.sessions.values()].some(t=>!['exited','error','disconnected'].includes(t.state))||[...dsh.threads.values()].some(t=>[...t.tasks.values()].some(x=>!['completed','failed','cancelled','canceled','interrupted','context_exhausted'].includes(String(x.status).toLowerCase()))))});
+ const storage=storageMaintenance||new NativeStorageMaintenance({native:nativeStorage,reservation:storageReservation,root:storageRoot||(process.platform==='win32'&&process.env.LOCALAPPDATA?path.join(process.env.LOCALAPPDATA,'CodexLight'):null),activeProfile:process.env.CODEX_LIGHT_ACTIVE_WEBVIEW_PROFILE||null,imageFiles:()=>uploads.storageFiles?.()||[...uploads.records.values()].map(r=>({path:r.path,size:r.size,ownedTemp:true,cleanupEligible:false})),imageLease:fn=>uploads.withMaintenance?uploads.withMaintenance(fn):fn(),busy:()=>!!(uploads.reserved||uploads.writes?.size||appUpdates.downloading||appUpdates.installing||sessions.queues.size||rpc.requests.size||sessions.snapshot().threads.some(t=>t.state!=='idle')||[...terminal.sessions.values()].some(t=>!['exited','error','disconnected'].includes(t.state))||[...dsh.threads.values()].some(t=>[...t.tasks.values()].some(x=>!['completed','failed','cancelled','canceled','interrupted','context_exhausted'].includes(String(x.status).toLowerCase()))))});
  const json=(res,status,data)=>{if(res.destroyed || res.writableEnded)return;res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(data));};
  const handle=async(req,res,context)=>{
   const requestOrigin=context?.origin??origin,requestToken=context?.token??token,requestAccess=context?.access==='lan'?'lan':'local',requestDesktop=desktop&&requestAccess==='local';
@@ -241,7 +245,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
     if(url.pathname.startsWith('/api/storage/')){
      const action=url.pathname.slice('/api/storage/'.length);
      const keys={scan:'',plan:'category',apply:'confirmed,id,manifestDigest',restore:'confirmed,recoveryId'};
-     if(!Object.hasOwn(keys,action)||!input||typeof input!=='object'||Array.isArray(input)||(!(action==='plan'&&['category','category,mode'].includes(Object.keys(input).sort().join(',')))&&Object.keys(input).sort().join(',')!==keys[action]))throw Object.assign(new Error('存储操作参数无效'),{code:'STORAGE_INVALID',status:400,outcome:'notExecuted'});
+     if(!Object.hasOwn(keys,action)||!input||typeof input!=='object'||Array.isArray(input)||(!(action==='plan'&&['category','category,mode'].includes(Object.keys(input).sort().join(',')))&&!(action==='apply'&&Object.keys(input).sort().join(',')==='confirmed,id,manifestDigest,msiConfirmed'&&typeof input.msiConfirmed==='boolean')&&Object.keys(input).sort().join(',')!==keys[action]))throw Object.assign(new Error('存储操作参数无效'),{code:'STORAGE_INVALID',status:400,outcome:'notExecuted'});
      if(demo&&action!=='scan')throw Object.assign(new Error('演示模式不能清理真实文件'),{code:'STORAGE_DEMO',status:409,outcome:'notExecuted'});
      json(res,200,await storage[action](input));return;
     }
@@ -257,7 +261,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      const keys=action==='download'?'requestId,version':'confirmed,requestId,version';
      if(Object.keys(input).sort().join(',')!==keys)throw Object.assign(new Error('应用更新参数无效'),{code:'APP_UPDATE_INPUT_INVALID',outcome:'notExecuted'});
      const {requestId,...params}=input;
-     const runUpdate=()=>appUpdates[action](params);
+     const runUpdate=()=>storageReservation.run('update',()=>appUpdates[action](params));
      const result=await operations.execute(requestId,'app-update/'+action,params,()=>action==='install'&&desktopUpdateTransport==='velopack'?updateReservation.run(()=>assertUpdateIdle({rpc,sessions,terminal,dsh,operations,runtime,requestId}),runUpdate):runUpdate());json(res,200,{...result,demo});return;
     }
     if(url.pathname.startsWith('/api/lan/')){
@@ -351,14 +355,15 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      res.writeHead(200,{'Content-Type':image.mime,'Content-Length':image.bytes.length,'Content-Disposition':'attachment; filename="artifact.'+({'image/png':'png','image/jpeg':'jpg','image/webp':'webp','image/gif':'gif','image/vnd.microsoft.icon':'ico','image/svg+xml':'svg'})[image.mime]+'"','X-Artifact-Width':String(image.width),'X-Artifact-Height':String(image.height)});res.end(image.bytes);return;
     }
     if(url.pathname==='/api/statistics/query'){
-     await readStatisticsAccount();
+     // Account RPC must not stall local usage rendering while the engine is slow.
+     await Promise.race([readStatisticsAccount(),new Promise(resolve=>{const timer=setTimeout(resolve,200);timer.unref?.();})]);
      let result=statistics.query(input);
-     if(!demo&&requestAccess==='local'&&input.scope!=='local'&&result.coverage?.unknownModelRows>0){
-      if(!modelRecovery)modelRecovery=(async()=>{
-       const found=await discoverLocalCodexUsageDirectories(wslCandidate?{env:{CODEX_HOME:wslPathToHost(wslCandidate.codexHome,wslCandidate.distribution)},home:wslPathToHost(wslCandidate.home,wslCandidate.distribution)}:wslActive?{env:{},home:''}:{});
-       if(found.directory)await importUsageDirectory(found.directory);
-      })().catch(error=>{modelRecoveryError=error.message;modelRecovery=null;});
-      await modelRecovery;result=statistics.query(input);
+     if(!demo&&requestAccess==='local'&&input.scope!=='local'&&(result.coverage?.unknownModelRows>0||result.coverage?.completeTokenRows<result.coverage?.observedTurns)){
+      await modelRecovery.run(async()=>{
+       try{const found=await discoverLocalCodexUsageDirectories(wslCandidate?{env:{CODEX_HOME:wslPathToHost(wslCandidate.codexHome,wslCandidate.distribution)},home:wslPathToHost(wslCandidate.home,wslCandidate.distribution)}:wslActive?{env:{},home:''}:{});
+       if(found.directory)await importUsageDirectory(found.directory);modelRecoveryError=null;
+       }catch(error){modelRecoveryError=error.message;}
+      });result=statistics.query(input);
       if(modelRecoveryError)result.coverage.modelRecoveryError=modelRecoveryError;
      }
      json(res,200,result);return;
@@ -374,6 +379,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      const scan=await importUsageDirectory(input.directory);
      json(res,200,url.pathname==='/api/statistics/import'?{imported:true,scan:{filesRead:scan.filesRead,bytesRead:scan.bytesRead,partial:scan.partial,diagnosticCounts:scan.diagnosticCounts},statistics:statistics.query({scope:'local'})}:scan);return;
     }
+    if(url.pathname==='/api/pricing/ensure'){if(Object.keys(input).length)throw new Error('价格参数无效');json(res,200,demo?pricing.status():await pricing.ensureFresh());return;}
     if(url.pathname==='/api/pricing/status'){if(Object.keys(input).length)throw new Error('价格参数无效');json(res,200,pricing.status());return;}
     if(url.pathname==='/api/pricing/refresh'){if(Object.keys(input).length)throw new Error('价格参数无效');if(demo)throw new Error('演示模式不请求真实价格服务');json(res,200,await pricing.refresh());return;}
     if(url.pathname==='/api/pricing/model'){if(Object.keys(input).some(k=>!['model','provider'].includes(k)))throw new Error('价格参数无效');json(res,200,{...pricing.get(input.model,input.provider),candidates:pricing.candidates(input.model)});return;}

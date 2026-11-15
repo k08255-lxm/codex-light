@@ -4,7 +4,7 @@ import {assertUpdateIdle,UpdateReservation} from '../src/app-update-safety.mjs';
 test('storage maintenance never selects pending nupkg or updater lock',async()=>{
  const root=await mkdtemp(path.join(os.tmpdir(),'codex-pending-storage-')),files=[];
  for(const rel of ['packages/CodexLightDesktop-9.0.0-full.nupkg','packages/.velopack_lock','Updates/9.0.0-0123456789abcdef/CodexLightDesktop-9.0.0-full.nupkg']){const file=path.join(root,rel);await mkdir(path.dirname(file),{recursive:true});await writeFile(file,'pending fixture');files.push(file);}
- const s=new StorageMaintenance({root});for(const category of ['cache','images','install']){const p=await s.plan({category});assert.equal(p.fileCount,0);await s.apply({...p,confirmed:true});}
+ const s=new StorageMaintenance({root});for(const category of ['cache','images','install']){const p=await s.plan({category});assert.equal(p.fileCount,0);await assert.rejects(s.apply({...p,confirmed:true}),e=>e.code==='STORAGE_SAFE_DELETE_UNAVAILABLE');}
  for(const f of files)assert.equal(await readFile(f,'utf8'),'pending fixture');
 });
 test('pending package does not bypass explicit idle and reservation gates',async()=>{

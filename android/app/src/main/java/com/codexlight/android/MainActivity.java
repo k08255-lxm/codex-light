@@ -35,8 +35,6 @@ public class MainActivity extends Activity {
     private int connectionGeneration;
     private boolean connectionFailed;
     private boolean authorizationFailed;
-    private String authorizedNetwork = "";
-    private int networkLease;
     private volatile boolean currentPageTrusted = false;
     private long lastBackPressTime = 0;
     private boolean backRequestPending = false;
@@ -107,7 +105,6 @@ public class MainActivity extends Activity {
 
         if (!isDemoMode) {
             ServerConfigManager saved = new ServerConfigManager(this);
-            authorizedNetwork = intent.getStringExtra("authorizedNetwork");
             String host = intent.getStringExtra("host");
             int port = intent.getIntExtra("port", 0);
             String token = intent.getStringExtra("token");
@@ -188,7 +185,7 @@ public class MainActivity extends Activity {
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
 
         String defaultUa = settings.getUserAgentString();
-        settings.setUserAgentString(defaultUa + " CodexLightMobile/0.4.6");
+        settings.setUserAgentString(defaultUa + " CodexLightMobile/0.4.7");
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             settings.setSafeBrowsingEnabled(false);
@@ -215,18 +212,8 @@ public class MainActivity extends Activity {
             statusDot.setBackgroundTintList(getColorStateList(R.color.status_warning));
             webView.loadUrl("file:///android_asset/web/index.html");
         } else if (currentConfig != null) {
-            String network = NetworkBinding.current(this);
-            if (!NetworkBinding.matches(authorizedNetwork, network)) {
-                authorizationFailed = true;
-                showConnectionError("网络已变化或无法确认。为避免把令牌发给同地址的其他设备，自动连接已暂停。请返回连接页，确认可信网络和电脑地址后再连接。");
-                return;
-            }
-            networkLease = NetworkBinding.bind(this, authorizedNetwork);
-            if (networkLease == 0) {
-                authorizationFailed = true;
-                showConnectionError("无法安全绑定已确认的网络，请返回连接页重试。");
-                return;
-            }
+            // Follow Android's default route, including the user's VPN LAN exclusions.
+            // Legacy LAN transport is HTTP and does not authenticate the desktop cryptographically.
             currentPageTrusted = false;
             tvServerTitle.setText(currentConfig.toDisplayAddress());
             if (tvModeBadge != null) tvModeBadge.setText("LAN");
@@ -235,8 +222,7 @@ public class MainActivity extends Activity {
             progressBar.setVisibility(View.VISIBLE);
             final int attemptId = connectionGeneration;
             final ServerConfig target = currentConfig;
-            final String expectedNetwork = authorizedNetwork;
-            final LanConnectionClient attempt = new LanConnectionClient(url -> NetworkBinding.open(this, expectedNetwork, url));
+            final LanConnectionClient attempt = new LanConnectionClient(url -> (java.net.HttpURLConnection) url.openConnection());
             connectionAttempt = attempt;
             new Thread(() -> {
                 LanConnectionClient.Result result = attempt.check(target);
@@ -246,13 +232,7 @@ public class MainActivity extends Activity {
                     progressBar.setVisibility(View.GONE);
                     if (result == LanConnectionClient.Result.READY) {
                         ServerConfigManager manager = new ServerConfigManager(this);
-                        // The network may have changed while the request was in flight.
-                        if (!NetworkBinding.matches(authorizedNetwork, NetworkBinding.current(this))) {
-                            authorizationFailed = true;
-                            showConnectionError("连接期间网络变化，请重新确认当前网络。");
-                            return;
-                        }
-                        manager.saveCurrent(target, authorizedNetwork);
+                        manager.saveCurrent(target, "");
                         if (manager.hasStorageError()) Toast.makeText(this,
                             "本次已连接，但无法安全保存凭据；下次可能需要重新配对。", Toast.LENGTH_LONG).show();
                         currentPageTrusted = true;
@@ -424,7 +404,6 @@ public class MainActivity extends Activity {
             webView.stopLoading();
             webView.destroy();
         }
-        NetworkBinding.release(this, networkLease);
         super.onDestroy();
     }
 }

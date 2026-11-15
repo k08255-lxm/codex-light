@@ -3,13 +3,56 @@ namespace CodexLight.PublicSetup {
  internal static class Program { [STAThread] static int Main(){Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);using(var gate=new Mutex(true,"CodeCang.CompatRouter."+WindowsIdentity.GetCurrent().User!.Value,out bool first)){if(!first)return 1618;try{using(var window=new RouterWindow()){Application.Run(window);return window.ExitCode;}}finally{gate.ReleaseMutex();}}} }
  internal sealed class RouterWindow:Form {
   readonly Label title=new Label{Text="码舱 CodeCang · "+Pins.Version,AutoSize=true,Font=new Font("Microsoft YaHei UI",18,FontStyle.Bold)};
-  readonly Label detail=new Label{Dock=DockStyle.Fill,Text="旧版将先使用固定的 0.4.4 安装器迁移。迁移后的应用会检查新版，您点击更新即可继续。新安装直接使用当前版本。",Padding=new Padding(0,12,0,12)};
-  readonly Button start=new Button{Text="继续",AutoSize=true,MinimumSize=new Size(104,38)},close=new Button{Text="关闭",AutoSize=true,MinimumSize=new Size(88,38)};
+  readonly Label detail=new Label{Dock=DockStyle.Fill,Text="点击继续检查安装状态，并打开适合此电脑的安装或更新流程。",Padding=new Padding(0,12,0,12)};
+  readonly Button start=new Button{Text="检查并继续",AutoSize=true,MinimumSize=new Size(104,38)},close=new Button{Text="关闭",AutoSize=true,MinimumSize=new Size(88,38)};
   readonly ProgressBar progress=new ProgressBar{Dock=DockStyle.Fill,Style=ProgressBarStyle.Marquee,Visible=false};bool busy;string legacyRoot="";internal int ExitCode{get;private set;}=1602;
-  internal RouterWindow(){Text="码舱 CodeCang 更新";Font=new Font("Microsoft YaHei UI",10);AutoScaleMode=AutoScaleMode.Dpi;ClientSize=new Size(640,330);MinimumSize=new Size(600,350);StartPosition=FormStartPosition.CenterScreen;var panel=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(28),ColumnCount=1,RowCount=4};panel.RowStyles.Add(new RowStyle(SizeType.Absolute,55));panel.RowStyles.Add(new RowStyle(SizeType.Percent,100));panel.RowStyles.Add(new RowStyle(SizeType.Absolute,8));panel.RowStyles.Add(new RowStyle(SizeType.Absolute,52));panel.Controls.Add(title);panel.Controls.Add(detail);panel.Controls.Add(progress);var actions=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,Padding=new Padding(0,12,0,0)};actions.Controls.Add(start);actions.Controls.Add(close);panel.Controls.Add(actions);Controls.Add(panel);start.Click+=async(_,__)=>await Run();close.Click+=(_,__)=>Close();FormClosing+=(_,e)=>{if(busy)e.Cancel=true;};}
-  async Task Run(){busy=true;start.Enabled=false;close.Enabled=false;progress.Visible=true;try{
+  internal RouterWindow(){
+   SuspendLayout();
+   Text="码舱 CodeCang 更新";
+   Font=new Font("Microsoft YaHei UI",10);
+   AutoScaleDimensions=new SizeF(96,96);
+   AutoScaleMode=AutoScaleMode.Dpi;
+   ClientSize=new Size(640,330);
+   MinimumSize=new Size(600,350);
+   StartPosition=FormStartPosition.CenterScreen;
+   var panel=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(28),ColumnCount=1,RowCount=4};
+   panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+   panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+   panel.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+   panel.RowStyles.Add(new RowStyle(SizeType.Absolute,8));
+   panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+   // Hidden controls do not reserve automatically assigned cells. Always pin the
+   // action row so hiding progress cannot put the buttons in its 8px row.
+   panel.Controls.Add(title,0,0);
+   panel.Controls.Add(detail,0,1);
+   panel.Controls.Add(progress,0,2);
+   var actions=new FlowLayoutPanel{Dock=DockStyle.Fill,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,WrapContents=false,FlowDirection=FlowDirection.RightToLeft,Padding=new Padding(0,12,0,0)};
+   actions.Controls.Add(start);
+   actions.Controls.Add(close);
+   panel.Controls.Add(actions,0,3);
+   Controls.Add(panel);
+   AcceptButton=start;
+   CancelButton=close;
+   start.Click+=async(_,__)=>await Run();
+   close.Click+=(_,__)=>Close();
+   FormClosing+=(_,e)=>{if(busy)e.Cancel=true;};
+   ResumeLayout(true);
+  }
+  async Task Run(){start.Text="处理中…";busy=true;start.Enabled=false;close.Enabled=false;progress.Visible=true;try{
    var route=Detect();if(route==Route.Blocked)throw new IOException("安装状态不明确或有未完成迁移。未运行安装器，请保留恢复资料。");
-   if(route==Route.Velopack){detail.Text="已使用新的安装方式。请在应用内检查更新并确认安装；此入口不会重复迁移或降级。";return;}
+   if(route==Route.Velopack){
+#if REPAIR
+    detail.Text="正在校验安装包。校验完成后，由你确认是否安装更新。";
+    await Repair.Prepare(()=>{
+     bool accepted=MessageBox.Show(this,"安装码舱 CodeCang "+Pins.Version+"？\n\n如果码舱正在运行，安装器会请求它正常退出，请先保存工作；如果已经退出，无需再次关闭。若程序仍被占用，更新会停止，不会强制结束进程。\n\n确认后将显示更新进度，只有安装及文件校验成功才会提示完成。", "安装更新",MessageBoxButtons.OKCancel,MessageBoxIcon.Information,MessageBoxDefaultButton.Button2)==DialogResult.OK;
+     if(accepted)detail.Text="正在准备更新；如码舱正在运行，将请求它正常退出。";
+     return accepted;
+    },()=>{ExitCode=0;busy=false;Close();});
+#else
+    detail.Text="已使用新的安装方式。请在应用内检查更新并确认安装；此入口不会重复迁移或降级。";
+#endif
+    return;
+   }
    bool bridge=route==Route.Migrate;detail.Text=bridge?"正在下载并验证固定 0.4.4 迁移安装器。接下来请按安装器说明保存工作并退出旧版。":"正在下载并验证当前版本安装向导。";
    string cache=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"CodexLightMigration","router-"+Guid.NewGuid().ToString("N"));Plain(cache);Directory.CreateDirectory(cache);
    string download=Path.Combine(cache,bridge?"bridge.exe":"fresh.zip");await Task.Run(()=>{if(bridge)Download(RouterPolicy.BridgeUrl,RouterPolicy.BridgeHash,download);else ExtractEmbedded(download);});
@@ -21,7 +64,7 @@ namespace CodexLight.PublicSetup {
    using(var p=Process.Start(new ProcessStartInfo(exe){UseShellExecute=true})??throw new IOException("无法打开安装器")){await Task.Run(()=>p.WaitForExit());if(p.ExitCode!=0)throw new IOException("安装器退出代码 "+p.ExitCode+"。未确认完成；恢复资料已保留。");}
    }
    ExitCode=0;title.Text="安装向导已退出";detail.Text=bridge?"此阶段仅迁移到 0.4.4，不代表已安装 "+Pins.Version+"。请在已打开的应用中等待更新提示，然后点击更新。若检查失败，可在设置中重试。":"请以安装向导和应用中的版本为准。此入口未独立验证安装结果。";
-  }catch(Exception e){ExitCode=1;title.Text="未完成";detail.Text=e.Message;}finally{busy=false;close.Enabled=true;progress.Visible=false;}}
+  }catch(Exception e){ExitCode=1;title.Text="未完成";detail.Text=e.Message;}finally{busy=false;close.Enabled=true;progress.Visible=false;start.Text=ExitCode==0?"已完成":"未完成";}}
   static void Plain(string path){for(string? p=Path.GetFullPath(path);p!=null;p=Path.GetDirectoryName(p))if((File.Exists(p)||Directory.Exists(p))&&(File.GetAttributes(p)&FileAttributes.ReparsePoint)!=0)throw new IOException("不支持链接目录");}
   static void ExtractEmbedded(string file){
    using(var input=typeof(RouterWindow).Assembly.GetManifestResourceStream("CodeCang.Fresh.zip")??throw new IOException("Missing embedded installer"))

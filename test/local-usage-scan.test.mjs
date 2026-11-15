@@ -47,12 +47,28 @@ test('invalid UTF8 and malformed JSON report partial without raw input',async t=
  const r=await scan(root);assert.equal(r.diagnosticCounts['invalid-utf8'],1);assert.equal(r.diagnosticCounts['parser-diagnostics'],1);assert.ok(!JSON.stringify(r).includes('secret'));
 });
 test('EACCES stops that entry and does not retry it or expose exception contents',async t=>{
- const root=await temp(t),filename=path.join(root,'denied.jsonl');await fs.writeFile(filename,fixture);let attempts=0;
- const original=fs.open;t.mock.method(fs,'open',async function(name,...args){if(name===filename){attempts++;const e=new Error('PRIVATE '+filename);e.code='EACCES';throw e;}return original.call(fs,name,...args);});
+ const root=await temp(t),filename=path.join(root,'denied.jsonl');await fs.writeFile(filename,fixture);const resolved=await fs.realpath(filename);let attempts=0;
+ const original=fs.open;t.mock.method(fs,'open',async function(name,...args){if(name===resolved){attempts++;const e=new Error('PRIVATE '+filename);e.code='EACCES';throw e;}return original.call(fs,name,...args);});
  const r=await scan(root);assert.equal(attempts,1);assert.equal(r.diagnosticCounts['access-denied'],1);assert.equal(r.filesRead,0);assert.ok(!JSON.stringify(r).includes('PRIVATE'));
 });
 test('growth while reading rejects captured log rather than claiming stable coverage',async t=>{
- const root=await temp(t),filename=path.join(root,'growing.jsonl');await fs.writeFile(filename,fixture);
- const original=fs.open;t.mock.method(fs,'open',async function(name,...args){const h=await original.call(fs,name,...args);if(name===filename){const read=h.read.bind(h);h.read=async(...readArgs)=>{const result=await read(...readArgs);await fs.appendFile(filename,'\n');return result;};}return h;});
+ const root=await temp(t),filename=path.join(root,'growing.jsonl');await fs.writeFile(filename,fixture);const resolved=await fs.realpath(filename);
+ const original=fs.open;t.mock.method(fs,'open',async function(name,...args){const h=await original.call(fs,name,...args);if(name===resolved){const read=h.read.bind(h);h.read=async(...readArgs)=>{const result=await read(...readArgs);await fs.appendFile(filename,'\n');return result;};}return h;});
  const r=await scan(root);assert.equal(r.filesRead,0);assert.equal(r.diagnosticCounts['file-changed-during-read'],1);assert.equal(r.sessions.length,0);
+});
+
+test('unchanged scans reuse only usage projections; changed files invalidate cache',async t=>{
+ const root=await temp(t),file=path.join(root,'cached.jsonl');await fs.writeFile(file,fixture);
+ const a=await scan(root),b=await scan(root);assert.equal(a.cacheHits,0);assert.equal(b.cacheHits,1);assert.equal(b.diskBytesRead,0);assert.equal(b.bytesRead,a.bytesRead);assert.deepEqual(b.sessions,a.sessions);
+ b.sessions[0].snapshot.totalTokens=999;const c=await scan(root);assert.equal(c.sessions[0].snapshot.totalTokens,3);
+ await fs.writeFile(file,fixture.replaceAll('"total_tokens":3','"total_tokens":4').replaceAll('"input_tokens":3','"input_tokens":4'));
+ const d=await scan(root);assert.equal(d.cacheHits,0);assert.equal(d.sessions[0].snapshot.totalTokens,4);assert.ok(d.diskBytesRead>0);
+ await fs.unlink(file);const e=await scan(root);assert.equal(e.filesRead,0);assert.equal(e.sessions.length,0);
+});
+
+test('cached projection source identity is relative to each selected scan root',async t=>{
+ const root=await temp(t),sub=path.join(root,'sub');await fs.mkdir(sub);await fs.writeFile(path.join(sub,'a.jsonl'),fixture);
+ const first=await scan(root);assert.equal(first.sessions[0].sourceId,'sub/a.jsonl');
+ const nested=await scan(sub);assert.equal(nested.cacheHits,1);assert.equal(nested.sessions[0].sourceId,'a.jsonl');
+ const again=await scan(root);assert.equal(again.sessions[0].sourceId,'sub/a.jsonl');
 });

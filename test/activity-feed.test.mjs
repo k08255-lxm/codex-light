@@ -269,3 +269,23 @@ test('rendering is keyed: re-render keeps nodes and never uses innerHTML', () =>
   assert.equal(q(host, '.turn')[0], first); assert.equal(q(host, '.step')[0], step);
   view.clear(); assert.equal(host.children.length, 0);
 });
+
+test('virtual unmount preserves a long message reading segment without retaining its DOM',()=>{
+ const {host,view}=mount();const ledger=new TurnLedger();ledger.merge({id:'long-turn',status:'completed'});
+ const list=buildTurns([agent('long-answer','long-turn','paragraph '.repeat(16000),'final_answer')],ledger);
+ view.render(list);const buttons=q(host,'button');const next=buttons.find(n=>n.textContent==='下一段');assert.ok(next);next.click();
+ const position=host.querySelector('.long-text-position').textContent;
+ view.render([]);assert.equal(q(host,'.message').length,0);view.render(list);
+ assert.equal(host.querySelector('.long-text-position').textContent,position);
+ view.clear();view.render(list);assert.notEqual(host.querySelector('.long-text-position').textContent,position);
+});
+test('live render anchors visible message, not only turn top when an earlier sibling changes height',()=>{
+ const document=createDocument(),scroller=document.createElement('section'),host=document.createElement('div');scroller.id='conversation';scroller.append(host);
+ Object.assign(scroller,{scrollTop:100,scrollHeight:2000,clientHeight:500});scroller.getBoundingClientRect=()=>({top:0,bottom:500,height:500});host.getBoundingClientRect=()=>({top:-scroller.scrollTop,bottom:1900,height:2000});
+ const view=mountConversation(host),ledger=new TurnLedger();ledger.merge({id:'t',status:'completed'});
+ const data=text=>buildTurns([user('u','t',text),agent('a','t','reading','final_answer')],ledger);
+ view.render(data('short'));const turn=host.querySelector('.turn'),u=host.querySelector('[data-item-id="u"]'),a=host.querySelector('[data-item-id="a"]');
+ turn.getBoundingClientRect=()=>({top:-scroller.scrollTop,bottom:1000-scroller.scrollTop,height:1000});u.getBoundingClientRect=()=>({top:-scroller.scrollTop,bottom:50-scroller.scrollTop,height:50});
+ a.getBoundingClientRect=()=>{const top=120+(u.textContent.includes('longer')?102:0)-scroller.scrollTop;return {top,bottom:top+50,height:50};};
+ const before=a.getBoundingClientRect().top;view.render(data('longer'));assert.equal(a.getBoundingClientRect().top,before);assert.equal(scroller.scrollTop,202);
+});

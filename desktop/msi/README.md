@@ -1,4 +1,9 @@
-# Codex Light internal MSI
+# Historical Codex Light internal MSI
+
+> Historical tooling for 0.4.3 and earlier and migration regression fixtures.
+> Current releases use [Velopack](../velopack/README.md); do not use these steps
+> as the current release pipeline.
+
 
 This is a Windows x64, per-user Windows Installer package built with pinned WiX Toolset **6.0.2**. The user-facing installer is [CodexLight-Setup-<version>-x64.exe](../setup/README.md), which embeds this MSI and invokes it silently. The MSI has no independent wizard, EULA page or automatic application launch.
 

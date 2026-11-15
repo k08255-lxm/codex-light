@@ -8,7 +8,7 @@ const validProvider=value=>typeof value==='string'&&/^[a-zA-Z0-9_.-]{1,100}$/.te
 const validModel=value=>typeof value==='string'&&value.length>0&&value.length<=200&&!/[\x00-\x1f\x7f]/.test(value);
 const identity=entry=>JSON.stringify([entry.provider,entry.model]);
 async function noLinks(target){for(let p=path.resolve(target);;p=path.dirname(p)){try{if((await fs.lstat(p)).isSymbolicLink())throw new Error('价格缓存路径是链接');}catch(error){if(error.code!=='ENOENT')throw error;}if(path.dirname(p)===p)return;}}
-// Explicit refresh only; no startup network request and no private data sent.
+// No startup network request. Opening statistics may refresh public prices; no private data sent.
 export class PricingService {
  constructor({fetchImpl=globalThis.fetch,clock=()=>Date.now(),root=null,manualPrices=[],aliases=[]}={}){if(root!==null&&(typeof root!=='string'||!path.isAbsolute(root)))throw new Error('价格缓存目录须为绝对路径');this.root=root;this.queue=Promise.resolve();this.persistenceWarning=null;this.fetch=fetchImpl;this.clock=clock;this.catalog=null;this.fetchedAt=null;this.pending=null;this.manual=new Map();this.aliases=aliases;this.modelCount=0;for(const entry of manualPrices)this.setManual(entry);}
  setManual(entry){
@@ -54,7 +54,15 @@ export class PricingService {
    temporary=path.join(this.root,'.pricing-'+randomBytes(12).toString('hex')+'.tmp');const handle=await fs.open(temporary,'wx',0o600);try{await handle.writeFile(data);await handle.sync();}finally{await handle.close();}await fs.rename(temporary,path.join(this.root,'pricing.json'));temporary=null;this.persistenceWarning=null;
   }catch{this.persistenceWarning='价格缓存保存失败，当前价格仅保留在内存中。';}finally{if(temporary)await fs.unlink(temporary).catch(()=>{});}});return this.queue;
  }
- async refresh(){if(this.pending)return this.pending;this.pending=this.fetchCatalog();try{return await this.pending;}finally{this.pending=null;}}
+ async ensureFresh(){
+  const now=this.clock(),age=now-Date.parse(this.fetchedAt);
+  if(this.catalog&&Number.isFinite(age)&&age>=0&&age<6*3600e3)return this.status();
+  if(this.lastAutoAttempt!==undefined&&now-this.lastAutoAttempt<5*60e3)return this.status();
+  this.lastAutoAttempt=now;
+  try{await this.refresh();this.refreshWarning=null;}catch{this.refreshWarning=this.catalog?'价格同步暂不可用，继续使用已缓存参考价。':'价格同步暂不可用，未知价格不会按零计算。';}
+  return this.status();
+ }
+ async refresh(){if(this.pending)return this.pending;this.pending=this.fetchCatalog();try{const result=await this.pending;this.refreshWarning=null;return result;}finally{this.pending=null;}}
  async fetchCatalog(){
   const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),15000);
   try{
@@ -84,7 +92,7 @@ export class PricingService {
    if(!modelCount)throw new Error('来源没有可识别模型价格');
    this.catalog=catalog;this.modelCount=modelCount;
  }
- status(){return {source:URL,fetchedAt:this.fetchedAt,available:this.catalog!==null||this.manual.size>0,modelCount:this.modelCount,manualCount:this.manual.size,providerCount:Object.keys(this.catalog||{}).length,matching:'manual; explicit-source; exact-provider-and-model; consistent-model-reference',priceEffectiveAt:null,persistenceWarning:this.persistenceWarning,notice:'社区参考估算，非账单；路由与账户独立。歧义价格和分段基础档须明确选择。'};}
+ status(){return {source:URL,fetchedAt:this.fetchedAt,available:this.catalog!==null||this.manual.size>0,modelCount:this.modelCount,manualCount:this.manual.size,providerCount:Object.keys(this.catalog||{}).length,matching:'manual; explicit-source; exact-provider-and-model; publisher-model-reference; consistent-model-reference',priceEffectiveAt:null,persistenceWarning:this.persistenceWarning,refreshWarning:this.refreshWarning||null,notice:'社区参考估算，非账单；路由与账户独立。默认使用模型原厂条目的参考价；分段模型按基础档估算，不代表实际扣款。'};}
  get(model,provider='openai'){return this.manual.get(JSON.stringify([provider,model]))||modelPriceFromCatalog(this.catalog,model,{provider,aliases:this.aliases,fetchedAt:this.fetchedAt});}
  candidates(model){if(!validModel(model))throw new Error('模型标识无效');return catalogPriceCandidates(this.catalog,model).map(row=>modelPriceFromCatalog(this.catalog,row.model,{provider:row.provider,fetchedAt:this.fetchedAt}));}
  async close(){await this.queue;}

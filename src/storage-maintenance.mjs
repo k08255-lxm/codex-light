@@ -12,12 +12,12 @@ export async function plain(file){for(let p=path.resolve(file);;p=path.dirname(p
 async function bounded(file,limit=MAX_FILE){await plain(file);const h=await open(file,'r');try{const before=await h.stat();if(!before.isFile()||before.size>limit)throw fail('文件过大或类型不支持');const b=Buffer.alloc(Math.min(before.size+1,limit+1));let count=0;while(count<b.length){const r=await h.read(b,count,b.length-count,null);if(!r.bytesRead)break;count+=r.bytesRead;}if(count!==before.size||fingerprint(await h.stat())!==fingerprint(before))throw fail('文件读取期间已变化');return b.subarray(0,count);}finally{await h.close();}}
 const fingerprint=s=>[s.dev,s.ino,s.size,s.mtimeMs,s.ctimeMs].join(':');
 export class StorageMaintenance {
- constructor({root,activeProfile=null,imageFiles=async()=>[],imageLease=async fn=>fn(),busy=()=>false,now=Date.now}={}){this.root=root?path.resolve(root):null;this.activeProfile=activeProfile?path.resolve(activeProfile):null;Object.assign(this,{imageFiles,imageLease,busy,now});this.plans=new Map();this.running=false;}
+ constructor({root,activeProfile=null,imageFiles=async()=>[],imageLease=async fn=>fn(),busy=()=>false,installSourceAudit=null,now=Date.now}={}){this.root=root?path.resolve(root):null;this.activeProfile=activeProfile?path.resolve(activeProfile):null;Object.assign(this,{imageFiles,imageLease,busy,installSourceAudit,now});this.plans=new Map();this.running=false;}
  async assertReady(allowBusy=false){if(!this.root)throw fail('此环境未提供本机应用存储目录','STORAGE_UNAVAILABLE');await plain(this.root);if(!allowBusy&&(this.running||this.busy()))throw fail('存在运行任务、上传或更新，请结束后重试','STORAGE_BUSY');}
  inside(file){const relative=path.relative(this.root,path.resolve(file));if(!relative||relative.startsWith('..')||path.isAbsolute(relative))throw fail('不允许访问应用目录之外的数据');return relative;}
  async candidates(category){
-  const files=[],warnings=[];let observedBytes=0,protectedBytes=0,visited=0;
-  const add=async(file,eligible=true,ownedTemp=false)=>{try{if(!ownedTemp||eligible)this.inside(file);await plain(file);const s=await lstat(file);if(!s.isFile())return;if(++visited>10000)throw fail('扫描达到文件数量上限');observedBytes+=s.size;if(!eligible||s.size>MAX_FILE){protectedBytes+=s.size;return;}files.push({file,size:s.size,fingerprint:fingerprint(s)});}catch(e){if(e.code!=='ENOENT')warnings.push('部分文件不可访问或不在安全范围，未列入清理');}};
+  const files=[],warnings=[],protectedReasons=new Map();let observedBytes=0,protectedBytes=0,visited=0;
+  const add=async(file,eligible=true,ownedTemp=false,protectedReason=null,requiresElevation=false)=>{try{if(!ownedTemp||eligible)this.inside(file);await plain(file);const s=await lstat(file);if(!s.isFile())return;if(++visited>10000)throw fail('扫描达到文件数量上限');observedBytes+=s.size;if(!eligible||s.size>MAX_FILE){protectedBytes+=s.size;const reason=!eligible?(protectedReason||(category==='install'?'安装源与安装记录（尚未核实是否仍需保留）':category==='cache'?'当前或无法确认已关闭的浏览器缓存':'已引用或引用状态未知的图片')):'超过单文件归档上限（32 MiB），并非确认必须保留';const detail=protectedReasons.get(reason)||{reason,bytes:0,fileCount:0};detail.bytes+=s.size;detail.fileCount++;if(requiresElevation)detail.requiresElevation=true;if(category==='install'){detail.files??=[];if(detail.files.length<64)detail.files.push({relative:this.inside(file).replaceAll('\\','/'),bytes:s.size});}protectedReasons.set(reason,detail);return;}files.push({file,size:s.size,fingerprint:fingerprint(s)});}catch(e){if(e.code!=='ENOENT')warnings.push('部分文件不可访问或不在安全范围，未列入清理');}};
   const walk=async(dir,eligible,depth=0)=>{if(depth>8||visited>10000){warnings.push('扫描范围过大，结果不完整');return;}try{await plain(dir);for(const e of await readdir(dir,{withFileTypes:true})){if(e.isSymbolicLink()){warnings.push('已跳过链接');continue;}const p=path.join(dir,e.name);if(e.isDirectory())await walk(p,eligible,depth+1);else if(e.isFile())await add(p,eligible);}}catch(e){if(e.code!=='ENOENT')warnings.push('部分目录不可访问');}};
   if(category==='cache'){
    const base=path.join(this.root,'WebView','Sessions');let dirs=[];try{await plain(base);dirs=await readdir(base,{withFileTypes:true});}catch(e){if(e.code!=='ENOENT')warnings.push('浏览器缓存不可访问');}
@@ -41,13 +41,21 @@ export class StorageMaintenance {
   }else if(category==='install'){
    const base=path.join(this.root,'Updates');let dirs=[];try{await plain(base);dirs=await readdir(base,{withFileTypes:true});}catch(e){if(e.code!=='ENOENT')warnings.push('安装缓存不可访问');}
    for(const d of dirs){if(!d.isDirectory()||!/^\d+\.\d+\.\d+-[a-f0-9]{16}$/.test(d.name))continue;const dir=path.join(base,d.name);try{await plain(dir);for(const e of await readdir(dir,{withFileTypes:true})){if(e.isFile()&&(e.name==='CodexLight-Setup.exe'||/^[0-9a-f-]{36}\.partial$/.test(e.name)))await add(path.join(dir,e.name));}}catch{warnings.push('部分安装缓存已跳过');}}
-   // MSI packages and their diagnostic/source directories are always protected, including current source.
-   await walk(path.join(this.root,'SetupLogs'),false);
-   warnings.push('MSI 源文件和安装记录受保护；恢复备份不计入可清理数据');
+   // Retain MSI sources and latest logs; only recognized old install.log is eligible.
+   const logs=path.join(this.root,'SetupLogs');let logDirs=[];try{await plain(logs);logDirs=(await readdir(logs,{withFileTypes:true})).filter(d=>d.isDirectory()&&!d.isSymbolicLink()&&/^\d{8}-\d{6}-[a-f0-9]{8}$/.test(d.name)).sort((a,b)=>b.name.localeCompare(a.name));}catch{}
+   try{for(const d of await readdir(logs,{withFileTypes:true})){if(d.isDirectory()&&!logDirs.some(x=>x.name===d.name))await walk(path.join(logs,d.name),false);}}catch{}
+   const logFiles=[];
+   for(const [index,d] of logDirs.entries()){const dir=path.join(logs,d.name);try{await plain(dir);for(const e of await readdir(dir,{withFileTypes:true})){if(!e.isFile())continue;const file=path.join(dir,e.name);const stat=await lstat(file);logFiles.push({file,name:e.name,index,stat});}}catch{warnings.push('Some setup logs could not be inspected');}}
+   let msiAudit=new Map();const msiFiles=logFiles.filter(x=>/\.msi$/i.test(x.name));
+   if(msiFiles.length>256)warnings.push('本次最多核验 256 个旧安装源，其余保持不动');
+   if(msiFiles.length&&this.installSourceAudit){try{const result=await this.installSourceAudit(msiFiles.slice(0,256).map(x=>this.inside(x.file)));msiAudit=new Map((result.files||[]).map(x=>[x.relative.replaceAll('\\','/'),x]));}catch{warnings.push('Windows Installer 引用核验不可用，旧安装源保持不动');}}
+   for(const {file,name,index,stat} of logFiles){const audit=msiAudit.get(this.inside(file).replaceAll('\\','/'));const msi=/\.msi$/i.test(name);const eligible=msi?audit?.eligible===true:index>0&&name==='install.log'&&this.now()-stat.mtimeMs>=86400000;await add(file,eligible,false,name==='install.log'?(index===0?'保留最近一次安装日志，用于更新故障诊断（非运行依赖）':'安装日志尚未超过 24 小时保护期'):msi?(audit?.reason||'旧 MSI 安装源：尚无法核验 Windows Installer 引用，暂不自动删除'):'未识别的安装目录文件，不自动删除',msi&&audit?.requiresElevation===true);}
+   warnings.push('MSI 安装源和最新日志保留；旧日志可清理，恢复备份不计入清理');
   }else throw fail('未知存储分类');
-  return {files,observedBytes,protectedBytes,warnings:[...new Set(warnings)]};
+  if(category==='install'){for(let i=files.length-1;i>=0;i--){const f=files[i];const allowed=/[\\/]SetupLogs[\\/].+[\\/](?:install\.log|[^\\/]+\.msi)$/.test(f.file)||(/\.partial$/.test(f.file)&&this.now()-Number(f.fingerprint.split(':')[3])>=7*86400000);if(!allowed){files.splice(i,1);protectedBytes+=f.size;const reason='完整安装包或近期未完成下载（保留）';const detail=protectedReasons.get(reason)||{reason,bytes:0,fileCount:0};detail.bytes+=f.size;detail.fileCount++;protectedReasons.set(reason,detail);}}}
+  return {files,impact:effects[category],observedBytes,protectedBytes,protectedReasons:[...protectedReasons.values()],warnings:[...new Set(warnings)]};
  }
- async scan(){await this.assertReady(true);const categories=[];for(const category of Object.keys(effects)){const s=await this.candidates(category);categories.push({category,bytes:s.observedBytes,cleanableBytes:s.files.reduce((n,f)=>n+f.size,0),protectedBytes:s.protectedBytes,fileCount:s.files.length,warnings:s.warnings,impact:effects[category]});}return{categories,recoveries:await this.recoveries(),mode:'archive',note:'默认无损归档后清理原文件。归档仍占空间，仅压缩差额可能释放空间；不自动永久删除恢复备份。'};}
+ async scan(){await this.assertReady(true);const categories=[];for(const category of Object.keys(effects)){const s=await this.candidates(category);categories.push({category,bytes:s.observedBytes,cleanableBytes:s.files.reduce((n,f)=>n+f.size,0),protectedBytes:s.protectedBytes,protectedReasons:s.protectedReasons,fileCount:s.files.length,warnings:s.warnings,impact:effects[category]});}return{categories,recoveries:await this.recoveries(),cleanupAvailable:false,mode:'archive',note:'默认无损归档后清理原文件。归档仍占空间，仅压缩差额可能释放空间；不自动永久删除恢复备份。'};}
  async recoveries(){const base=path.join(this.root,'StorageRecovery'),items=[];try{await plain(base);for(const e of (await readdir(base,{withFileTypes:true})).slice(-100)){if(!e.isDirectory()||!uuid.test(e.name))continue;try{const file=path.join(base,e.name,'manifest.json'),m=JSON.parse(await bounded(file,1024*1024));if(m.version!==1||m.root!==this.root||!Object.hasOwn(effects,m.category)||!Array.isArray(m.files)||m.files.length>MAX_FILES)continue;items.push({id:e.name,category:m.category,fileCount:m.files.length,createdAt:(await lstat(file)).mtimeMs});}catch{}}}catch(e){if(e.code!=='ENOENT')return [];}return items.sort((a,b)=>b.createdAt-a.createdAt).slice(0,20);}
  async plan({category,mode='archive'}={}){
   await this.assertReady();if(!['archive','delete'].includes(mode)||(mode==='delete'&&category!=='cache'))throw fail('仅可再生的旧浏览器缓存支持逐次确认永久删除');if(this.plans.size>=16)this.plans.clear();
@@ -55,11 +63,14 @@ export class StorageMaintenance {
   const id=randomUUID(),expiresAt=this.now()+120000;const manifestDigest=hash(Buffer.from(JSON.stringify(files.map(f=>[this.inside(f.file),f.fingerprint,f.sha256]))));this.plans.set(id,{category,mode,files,manifestDigest,expiresAt});return{id,manifestDigest,expiresAt,category,fileCount:files.length,bytes:total,mode,impact:effects[category],warning:'会移出本次选中的文件并保留可恢复归档。图片可能影响历史显示；归档不等于释放所有空间。',partial:files.length<s.files.length};
  }
  async apply({id,manifestDigest,confirmed}={}){
+  throw fail('清理暂不可用：需要安全的文件删除与更新互斥支持；原文件未改动','STORAGE_SAFE_DELETE_UNAVAILABLE');
+
   await this.assertReady();const p=this.plans.get(id);if(confirmed!==true||!p||p.manifestDigest!==manifestDigest||p.expiresAt<this.now())throw fail('必须重新预览并确认本次清理','STORAGE_CONFIRM_REQUIRED');this.plans.delete(id);this.running=true;
   try{return await this.imageLease(async()=>{
+   if(this.busy())throw fail('存在运行任务、上传或更新，请结束后重试','STORAGE_BUSY');
    if(p.mode==='delete'){
     const eligible=new Set((await this.candidates('cache')).files.map(f=>f.file));let removedFiles=0,removedBytes=0;const failures=[];
-    for(const f of p.files){try{if(!eligible.has(f.file))throw fail('不再符合清理条件');await plain(f.file);if(fingerprint(await lstat(f.file))!==f.fingerprint||hash(await bounded(f.file))!==f.sha256)throw fail('文件已变化');await unlink(f.file);removedFiles++;removedBytes+=f.size;}catch{failures.push('部分缓存已变化或被占用，未删除');}}
+    for(const f of p.files){try{if(this.busy())throw fail('存在运行任务、上传或更新');if(!eligible.has(f.file))throw fail('不再符合清理条件');await plain(f.file);if(fingerprint(await lstat(f.file))!==f.fingerprint||hash(await bounded(f.file))!==f.sha256)throw fail('文件已变化');await unlink(f.file);removedFiles++;removedBytes+=f.size;}catch{failures.push('部分缓存已变化或被占用，未删除');}}
     return{outcome:failures.length?'partial':'succeeded',removedFiles,removedBytes,archiveBytes:0,recoveryId:null,estimatedNetBytes:removedBytes,failures:[...new Set(failures)],note:'本次确认的可再生旧缓存已永久删除，无法恢复；字节数是文件逻辑大小，不是实测磁盘可用空间增量。'};
    }
    const recoveryId=randomUUID(),dir=path.join(this.root,'StorageRecovery',recoveryId);await plain(dir);await mkdir(dir,{recursive:true});
@@ -72,7 +83,9 @@ export class StorageMaintenance {
   });}finally{this.running=false;}
  }
  async restore({recoveryId,confirmed}={}){
+  throw fail('Native safe restore is unavailable; files were not changed','STORAGE_SAFE_DELETE_UNAVAILABLE');
   await this.assertReady();if(confirmed!==true||!uuid.test(recoveryId||''))throw fail('恢复需要明确确认');this.running=true;try{return await this.imageLease(async()=>{
+   if(this.busy())throw fail('存在运行任务、上传或更新，请结束后重试','STORAGE_BUSY');
    const dir=path.join(this.root,'StorageRecovery',recoveryId);await plain(dir);await plain(path.join(dir,'manifest.json'));const raw=await bounded(path.join(dir,'manifest.json'),1024*1024);if(raw.length>1024*1024)throw fail('归档清单过大');const m=JSON.parse(raw);if(m.version!==1||m.root!==this.root||!Array.isArray(m.files)||m.files.length>MAX_FILES)throw fail('归档清单无效');let restored=0;const failures=[];
    for(const f of m.files){try{if(typeof f.relative!=='string'||!/^\d+\.gz$/.test(f.archive)||! /^[a-f0-9]{64}$/.test(f.sha256)||!Number.isSafeInteger(f.size)||f.size<0||f.size>MAX_FILE)throw fail('清单无效');const target=path.resolve(this.root,f.relative);this.inside(target);const allowed=await this.restoreAllowed(m.category,target);if(!allowed)throw fail('恢复目标不在分类范围');await plain(target);await plain(path.join(dir,f.archive));const bytes=await unzip(await bounded(path.join(dir,f.archive),MAX_FILE+65536),{maxOutputLength:MAX_FILE});if(bytes.length!==f.size||hash(bytes)!==f.sha256)throw fail('归档校验失败');await mkdir(path.dirname(target),{recursive:true});await writeFile(target,bytes,{flag:'wx'});restored++;}catch{failures.push('部分文件已存在、被占用或校验失败，未覆盖；归档保留');}}
    return{outcome:failures.length?'partial':'succeeded',restoredFiles:restored,failures:[...new Set(failures)],note:'归档继续保留，不自动删除。'};

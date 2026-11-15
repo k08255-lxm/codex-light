@@ -133,7 +133,7 @@ export function extractImageContent(item) {
 }
 let imageRevision = 0;
 export class ItemStore {
-  constructor(limit = MAX_ITEMS) { this.limit = limit; this.items = new Map(); this.dirty = new Set(); this.trimmed = false; this.images = new Map(); this.imageChars = 0; this.textChars = 0; this.textSizes = new Map(); }
+  constructor(limit = MAX_ITEMS, { preserveBodies = false } = {}) { this.preserveBodies = preserveBodies; this.limit = limit; this.items = new Map(); this.dirty = new Set(); this.trimmed = false; this.images = new Map(); this.imageChars = 0; this.textChars = 0; this.textSizes = new Map(); }
   clear() { this.items.clear(); this.dirty.clear(); this.trimmed = false; this.images.clear(); this.imageChars = 0; this.textChars = 0; this.textSizes.clear(); }
   /** `{mime, data, revision}` for an extracted image, or null. */
   image(itemId, slot) { return this.images.get(itemId)?.get(slot) || null; }
@@ -227,7 +227,7 @@ export class ItemStore {
     // Message bodies bypass the bounded display snapshot; everything else stays a bounded projection.
     const body = {};
     for (const field of BODY_FIELDS) if (typeof combined[field] === 'string') { body[field] = combined[field]; delete combined[field]; }
-    const userContent = combined.type === 'userMessage' && Array.isArray(combined.content) ? combined.content.slice(0, 64) : null;
+    const userContent = combined.type === 'userMessage' && Array.isArray(combined.content) ? (this.preserveBodies ? combined.content : combined.content.slice(0, 64)) : null;
     if (userContent) delete combined.content;
     const merged = displaySnapshot(combined);
     for (const key of ['output', 'result', 'summary', 'content']) if (typeof merged[key] === 'string') merged[key] = boundedText(merged[key]);
@@ -242,7 +242,7 @@ export class ItemStore {
       // (retainBody only continues a record when the marker is still in place).
       const carried = carriedMap[key] || 0;
       const same = !known || (key.startsWith('content.') ? previous.content?.[Number(key.slice(8))]?.text === text : previous[key] === text);
-      const result = retainBody(text, same || append === key ? carried : 0);
+      const result = this.preserveBodies ? { text, omitted: same || append === key ? carried : 0 } : retainBody(text, same || append === key ? carried : 0);
       if (result.omitted) omitted[key] = result.omitted; else delete omitted[key];
       // A released body stays marked only while it is still exactly the released projection.
       if (same && append !== key && carriedReleased[key]) released[key] = carriedReleased[key];
@@ -260,7 +260,16 @@ export class ItemStore {
     else { delete merged._released; delete merged._bodyReleased; }
     this.items.set(item.id, merged); this.dirty.add(item.id); this.setTextSize(item.id, bodySize(merged));
     while (this.items.size > this.limit) { this.forget(this.items.keys().next().value); this.trimmed = true; }
-    if (this.textChars > TEXT_LIMITS.total) this.releaseBodies(item.id);
+    if (!this.preserveBodies && this.textChars > TEXT_LIMITS.total) this.releaseBodies(item.id);
+  }
+  /** Add an older page without overwriting newer event/delta state or pooled images. */
+  prependHistory(items) {
+    const existing = new Map(this.items);
+    for (const item of items) if (item?.id && !this.items.has(item.id)) this.upsert(item);
+    const ordered = new Map();
+    for (const item of items) if (item?.id && !existing.has(item.id) && this.items.has(item.id)) ordered.set(item.id, this.items.get(item.id));
+    for (const id of existing.keys()) if (this.items.has(id)) ordered.set(id, this.items.get(id));
+    this.items = ordered;
   }
   /** Removes one item from the window (e.g. a local echo replaced by the server copy). */
   delete(id) { this.forget(id); }

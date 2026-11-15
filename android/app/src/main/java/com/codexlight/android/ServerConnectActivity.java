@@ -147,7 +147,7 @@ public class ServerConnectActivity extends Activity {
         }
         new android.app.AlertDialog.Builder(this)
             .setTitle("连接已配对的电脑？")
-            .setMessage("请确认当前是可信局域网，地址属于你的电脑。HTTP 未加密；确认后会记住当前网络，下次打开 App 自动连接。更换网络或手机重启后需再次确认。")
+            .setMessage("请确认地址属于你的电脑。连接遵循系统当前网络和 VPN 路由规则。HTTP 未加密，仅限可信网络；自动连接会尝试已保存的地址，可在连接页关闭。")
             .setNegativeButton("取消", null)
             .setPositiveButton("确认连接", (dialog, which) -> launchConnection(cfg, false)).show();
     }
@@ -155,7 +155,6 @@ public class ServerConnectActivity extends Activity {
     private void launchConnection(ServerConfig cfg, boolean automatic) {
         Intent intent = new Intent(this, MainActivity.class);
         intent.putExtra("automatic", automatic);
-        intent.putExtra("authorizedNetwork", automatic ? configManager.getNetworkBinding() : NetworkBinding.current(this));
         intent.putExtra("host", cfg.getHost());
         intent.putExtra("port", cfg.getPort());
         intent.putExtra("token", cfg.getToken());

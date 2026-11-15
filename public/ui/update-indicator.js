@@ -15,7 +15,7 @@ export function mountUpdateIndicator(host,{onOpen}){
  button.className='rail-btn update-indicator';button.hidden=true;
  const badge=document.createElement('span');badge.className='update-indicator-badge';badge.append(icon(document,'download'));button.append(badge);
  button.addEventListener('click',()=>{if(!button.hidden)onOpen();});
- host.insertBefore(button,host.children[1]||null);
+ host.insertBefore(button,host.querySelector('#account-quota')||host.lastElementChild||null);
  return {update(status){
   const next=updateIndicatorState(status);button.hidden=!next.visible;
   button.title=next.label;button.setAttribute('aria-label',`${next.label}${next.version?'，版本 '+next.version:''}，查看更新`);

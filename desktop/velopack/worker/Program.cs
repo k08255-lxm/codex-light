@@ -5,6 +5,10 @@ namespace CodexLight.Desktop;
 internal static class WorkerProgram {
  static int Main(string[] args){
   string? output=null;
+#if BOOTSTRAP
+  bool handedOff=false;
+  BootstrapProgress? progress=null;
+#endif
   try{
    var local=Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
    var receipt=WorkerPolicy.ReceiptPath(args,local);WorkerPolicy.Plain(receipt);
@@ -16,12 +20,26 @@ internal static class WorkerProgram {
    using var parent=Process.GetProcessById(r.ParentPid);
    if(parent.StartTime.ToUniversalTime()!=r.ParentStartUtc||parent.HasExited)throw new InvalidOperationException("Parent absent or PID reused before readiness.");
    var original=VelopackPackage.ReadInstalled(Path.Combine(r.Root,"current"));
+#if BOOTSTRAP
+   string Pin(string name)=>typeof(WorkerProgram).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyMetadataAttribute),false).Cast<System.Reflection.AssemblyMetadataAttribute>().Single(a=>a.Key==name).Value??"";
+   using var heldPackage=VelopackPackage.ValidateRepair(r.Package,r.Hash,original,Pin("RepairVersion"),Pin("RepairSha256"));
+   BootstrapPolicy.CheckTarget(r.Root,local,heldPackage.Version,heldPackage.Sha256,Pin("RepairVersion"),Pin("RepairSha256"));
+#else
    using var heldPackage=VelopackPackage.Validate(r.Package,r.Hash,original);
+#endif
    if(File.Exists(receipt+".commit"))throw new InvalidOperationException("Premature commit marker.");
    CheckCancellation(receipt);
+   // Probe the scoped API while the host is still alive. Holders are expected
+   // here; a full empty-holder check still runs after the committed exit.
+   _ = WorkerProcesses.Holders(WorkerProcesses.InstalledResources(r.Root));
    WriteReady(receipt+".ready.json",r);
    var timer=Stopwatch.StartNew();
    while(true){if(WorkerPolicy.MayApply(Marker(receipt+".cancel"),Marker(receipt+".commit"),parent.HasExited,timer.Elapsed))break;Thread.Sleep(100);}
+   #if BOOTSTRAP
+   handedOff=true;
+   progress=BootstrapProgress.Start();
+   progress!.Report("正在检查更新条件…");
+#endif
    var sid=WindowsIdentity.GetCurrent().User?.Value??throw new InvalidOperationException("Unknown Windows user.");
    using var mutex=new Mutex(false,"CodexLight.Desktop."+sid,new NamedWaitHandleOptions{CurrentUserOnly=true,CurrentSessionOnly=true});
    bool owned=false;
@@ -35,11 +53,33 @@ internal static class WorkerProgram {
     WorkerProcesses.EnsureNoInstalledProcesses(r.Root);CheckCancellation(receipt);
     var start=new ProcessStartInfo(identity.UpdaterPath){UseShellExecute=false,CreateNoWindow=true,WindowStyle=ProcessWindowStyle.Hidden,WorkingDirectory=r.Root};
     foreach(var arg in new[]{"--silent","--rootDir",r.Root,"apply","--package",heldPackage.Path,"--norestart"})start.ArgumentList.Add(arg);
+#if BOOTSTRAP
+    progress!.Report("正在安装更新…");
+#endif
     using var update=Process.Start(start)??throw new InvalidOperationException("Updater did not start.");
-    update.WaitForExit();WriteResult(output,update.ExitCode,"Updater exited; no application restart requested.");return update.ExitCode;
+    update.WaitForExit();
+#if BOOTSTRAP
+    if(update.ExitCode==0){progress!.Report("正在校验安装文件…");BootstrapPolicy.VerifyApplied(heldPackage);}
+#endif
+    var shortcutResults=update.ExitCode==0?ShortcutBrandMigration.RunInstalled(heldPackage.Installed.CurrentDirectory):Array.Empty<string>();
+    WriteResult(output,update.ExitCode,"Updater exited; no application restart requested. "+string.Join("; ",shortcutResults));
+#if BOOTSTRAP
+    progress!.Complete(update.ExitCode==0, update.ExitCode==0 ? "更新已完成并校验。请从开始菜单重新打开码舱 CodeCang。" : "更新未完成，更新程序返回代码 "+update.ExitCode+"。诊断文件："+output);
+    progress!.WaitForClose();progress.Dispose();
+#endif
+    return update.ExitCode;
    }finally{if(owned)mutex.ReleaseMutex();}
-  }catch(Exception e){if(output!=null)try{WriteResult(output,1,e.GetType().Name+": "+e.Message);}catch{}return 1;}
+  }catch(Exception e){if(output!=null)try{WriteResult(output,1,e.GetType().Name+": "+e.Message);}catch{}
+#if BOOTSTRAP
+   if(handedOff){if(progress==null)Notify("更新未完成："+e.Message+"\n诊断文件："+output,true);else{progress.Complete(false,"更新未完成："+e.Message+"\n诊断文件："+output);progress.WaitForClose();progress.Dispose();}}
+#endif
+   return 1;}
  }
+#if BOOTSTRAP
+ [System.Runtime.InteropServices.DllImport("user32.dll",CharSet=System.Runtime.InteropServices.CharSet.Unicode)]
+ static extern int MessageBoxW(IntPtr owner,string text,string caption,uint type);
+ static void Notify(string message,bool failure){try{MessageBoxW(IntPtr.Zero,message,"码舱 CodeCang 更新",failure?0x10u:0x40u);}catch{}}
+#endif
  static void WriteReady(string path,ApplyReceipt r){WorkerPolicy.Plain(Path.GetDirectoryName(path)!);var temporary=path+".tmp";using(var stream=new FileStream(temporary,FileMode.CreateNew,FileAccess.Write,FileShare.None)){JsonSerializer.Serialize(stream,new{ready=true,parentPid=r.ParentPid,parentStartUtc=r.ParentStartUtc.ToString("O"),packageId=r.PackageId,hash=r.Hash});stream.Flush(true);}File.Move(temporary,path,false);}
  static bool Marker(string path){if(!File.Exists(path))return false;WorkerPolicy.Plain(path);if(new FileInfo(path).Length>1024)throw new InvalidDataException("Invalid handoff marker.");return true;}
  static void CheckCancellation(string receipt){if(Marker(receipt+".cancel"))throw new OperationCanceledException("Apply canceled by native caller.");}

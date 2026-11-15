@@ -7,7 +7,7 @@ import os from 'node:os';
 import {FileAttachmentStore} from '../src/file-attachments.mjs';
 import {StorageMaintenance} from '../src/storage-maintenance.mjs';
 
-test('all cleanup categories preserve historical file attachments and recovery/MSI sources across restart',async t=>{
+test('no-native cleanup gate preserves historical file attachments and recovery/MSI sources across restart',async t=>{
  const root=await mkdtemp(path.join(os.tmpdir(),'codex-storage-protection-'));
  t.after(()=>rm(root,{recursive:true,force:true}));
  const make=async(rel,content)=>{const file=path.join(root,rel);await mkdir(path.dirname(file),{recursive:true});await writeFile(file,content);return file;};
@@ -34,16 +34,14 @@ test('all cleanup categories preserve historical file attachments and recovery/M
   const service=new StorageMaintenance({root,activeProfile,imageFiles:async()=>[{path:unused,cleanupEligible:true}]});
   for(const [category,mode] of [['cache','archive'],['images','archive'],['install','archive'],['cache','delete']]){
    const candidate=category==='cache'?await make(path.join('WebView','Sessions','b'.repeat(32),'Default','Cache','old'),'old cache'):category==='install'?await make('Updates/0.4.2-0123456789abcdef/CodexLight-Setup.exe','old installer'):unused;
-   const plan=await service.plan({category,mode});assert.ok(plan.fileCount>0,category+' must exercise a real fixture cleanup');
-   const result=await service.apply({id:plan.id,manifestDigest:plan.manifestDigest,confirmed:true});assert.equal(result.outcome,'succeeded');
-   await assert.rejects(lstat(candidate),{code:'ENOENT'});
-   if(result.recoveryId){lastRecovery=result.recoveryId;const manifest=path.join(root,'StorageRecovery',lastRecovery,'manifest.json');protectedFiles.set(manifest,await readFile(manifest));}
+   const plan=await service.plan({category,mode});if(category==='install')assert.equal(plan.fileCount,0,'complete installer is protected');else assert.ok(plan.fileCount>0,category+' must exercise a real fixture cleanup');
+   await assert.rejects(service.apply({id:plan.id,manifestDigest:plan.manifestDigest,confirmed:true}),e=>e.code==='STORAGE_SAFE_DELETE_UNAVAILABLE');await lstat(candidate);
    for(const [file,expected] of protectedFiles)assert.deepEqual(await readFile(file),expected,'protected file changed: '+path.relative(root,file));
    assert.equal(JSON.parse(await readFile(oldSession,'utf8')).attachmentPath,attachment.path);
    assert.deepEqual(await readFile(attachment.path),bytes,'old session path must remain readable');
   }
  }
  const third=new StorageMaintenance({root,activeProfile});
- assert.ok((await third.recoveries()).some(r=>r.id===lastRecovery),'recovery survives service restart');
+ assert.equal((await third.recoveries()).length,0,'blocked cleanup must not create recovery output');
  for(const [file,expected] of protectedFiles)assert.deepEqual(await readFile(file),expected);
 });

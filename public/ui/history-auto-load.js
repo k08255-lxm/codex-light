@@ -36,13 +36,14 @@ export function mountHistoryAutoLoad({container, button, status, canLoad, load, 
   button.addEventListener('click',()=>void request(true));
   return {reset, request};
 }
-export function captureHistoryAnchor(container, selectors = ['[data-item-id]', '[data-turn-id]']) {
+export function captureHistoryAnchor(container, selectors = ['[data-item-id]', '[data-turn-id]', '[data-virtual-turn-id]']) {
   const top=container.getBoundingClientRect().top;
-  const node=selectors.flatMap(selector=>[...container.querySelectorAll(selector)]).find(node=>node.getBoundingClientRect().bottom>top&&node.getBoundingClientRect().height>0);
-  return {node, offset:node?node.getBoundingClientRect().top-top:0, scrollTop:container.scrollTop};
+  const node=selectors.flatMap(selector=>[...container.querySelectorAll(selector)]).find(node=>node.getBoundingClientRect().bottom>top&&node.getBoundingClientRect().top<top+(container.clientHeight||Infinity)&&node.getBoundingClientRect().height>0);
+  return {node, itemId:node?.dataset?.itemId, turnId:node?.dataset?.turnId||node?.dataset?.virtualTurnId, offset:node?node.getBoundingClientRect().top-top:0, scrollTop:container.scrollTop};
 }
 export function restoreHistoryAnchor(container,anchor) {
-  if(anchor?.node&&container.contains(anchor.node))container.scrollTop+=anchor.node.getBoundingClientRect().top-container.getBoundingClientRect().top-anchor.offset;
+  const node=anchor?.node&&container.contains(anchor.node)?anchor.node:anchor?.itemId?[...container.querySelectorAll('[data-item-id]')].find(n=>n.dataset.itemId===anchor.itemId):anchor?.turnId?[...container.querySelectorAll('[data-turn-id], [data-virtual-turn-id]')].find(n=>(n.dataset.turnId||n.dataset.virtualTurnId)===anchor.turnId):null;
+  if(node)container.scrollTop+=node.getBoundingClientRect().top-container.getBoundingClientRect().top-anchor.offset;
   else if(anchor)container.scrollTop=anchor.scrollTop;
 }
 /** Downward list paging with a manual fallback. Status belongs to the scroll content, not the dock. */

@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+ <PropertyGroup><OutputType>Exe</OutputType><ApplicationManifest>bootstrap-progress.manifest</ApplicationManifest><TargetFramework>net10.0-windows</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><EnableDefaultCompileItems>false</EnableDefaultCompileItems><AssemblyName>CodeCang.BootstrapWorker</AssemblyName><DefineConstants>$(DefineConstants);BOOTSTRAP</DefineConstants></PropertyGroup>
+ <ItemGroup><Compile Include="BootstrapProgress.cs"/><Compile Include="WorkerProcesses.cs"/><Compile Include="Program.cs"/><Compile Include="WorkerPolicy.cs"/><Compile Include="BootstrapPolicy.cs"/><Compile Include="../../ShortcutBrandMigration.cs" Link="ShortcutBrandMigration.cs"/><Compile Include="../../VelopackPackage.cs" Link="VelopackPackage.cs"/><Compile Include="../../shared/InstallMaintenance.cs" Link="InstallMaintenance.cs"/>
+ <AssemblyMetadata Include="RepairVersion" Value="$(RepairVersion)"/><AssemblyMetadata Include="RepairSha256" Value="$(RepairSha256)"/></ItemGroup>
+ <Target Name="RequireRepairPins" BeforeTargets="Publish"><Error Condition="'$(RepairVersion)' == '' Or '$(RepairSha256)' == ''" Text="Publishing a repair helper requires pinned RepairVersion and RepairSha256."/></Target>
+</Project>

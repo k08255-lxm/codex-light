@@ -501,3 +501,15 @@
 .lan-qr { margin-top:16px; }
 .lan-qr canvas { display:block; }
 .lan-qr .fine { margin:10px 0; }
+
+/* Bounded, non-blocking analytics loading feedback. */
+.stats-loading-placeholder{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin:16px 0}
+.stats-skeleton{height:96px;border-radius:12px;background:var(--surface-2,rgba(128,128,128,.12));animation:stats-breathe 1.5s ease-in-out infinite alternate}
+.stats-loading .page-status::before{content:'';display:inline-block;width:12px;height:12px;margin-right:8px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;vertical-align:-2px;animation:stats-spin .9s linear infinite}
+@keyframes stats-spin{to{transform:rotate(360deg)}}
+@keyframes stats-breathe{from{opacity:.45}to{opacity:.9}}
+@media(prefers-reduced-motion:reduce){.stats-skeleton,.stats-loading .page-status::before{animation:none}}
+
+.stats-skeleton:nth-child(n+5){grid-column:1/-1;height:220px}
+
+.storage-protected-files{margin:8px 0 16px;padding-left:20px;display:grid;gap:6px}.storage-protected-files li{overflow-wrap:anywhere;line-height:1.5}

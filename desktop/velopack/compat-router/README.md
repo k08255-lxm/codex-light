@@ -16,7 +16,7 @@ of the published bridge. A child exit code is not claimed as latest installed.
 
 Build with verified current artifacts:
 
-    ./build.ps1 -Version 0.4.5 -VelopackDirectory <verified-dir> -Output <new-dir>
+    ./build.ps1 -Version <current-version> -VelopackDirectory <verified-dir> -Output <new-dir>
 
 Then use scripts/assemble-release.mjs with its `public` output. Schema 3 receipts
 bind the output EXE hash, bridge identity and the verified embedded fresh ZIP hash.
@@ -28,74 +28,58 @@ Legacy migration still needs network to fetch the pinned bridge; an offline fail
 leaves the installation untouched. TLS/redirect host restrictions and embedded
 SHA256 are enforced. Download/extract cache and migration recovery are retained.
 
-Validation so far: net48 compilation 0 warnings/errors; 34 route/policy cases;
-12 release assembly cases, including altered bridge/fresh identities refused.
-These are not a real MSI migration, first install, or GUI acceptance test.
-The 0.4.4 published SHA256SUMS was retrieved from its fixed GitHub release and
-matches the bridge pin. Existing fixed original executable was not executed.
-No isolated Windows VM/Sandbox was discovered in checked standard tool locations.
+## Integrity and execution safety
 
-Prior two-stage-coordinator experiments are superseded, not release dependencies.
+The router verifies the pinned bridge or embedded ZIP before execution. It holds
+read-only file leases through child exit and rehashes extracted members, so an
+intervening write cannot silently substitute an executable. Existing extraction
+targets, changed content and conflicting install inventories are rejected.
+Schema 3 receipts bind the public EXE to its embedded fresh-install ZIP; legacy
+schema 2 receipts remain only for reproducing historical packages.
 
-## Final candidate assembly (2026-11-14)
+`build.ps1` reopens the compiled assembly and verifies the embedded resource
+against the build input. Keep the independent published bridge hash and the
+release-assembly checks; a self-consistent receipt is not enough on its own.
 
-Built version 0.4.5 against the verified candidate-045-20261114 fresh ZIP pin.
-The six assembled candidate assets are in the private worktree's ignored
-`.eval/release-0.4.5-candidate`; this directory was NOT uploaded or published.
-Router size: 22,016 bytes. Router SHA256:
-`0498e6fb56eeeabe4e3a2261494f891b539d6a5651c58795f431448f6483c3bc`.
-Native test harness links the exact router sources without constructing its UI.
-On Windows, fresh ZIP extraction passed and all six extracted member hashes match
-the source ZIP. No extracted executable was started. Sandboxed raw network access
-was denied; no security setting or execution policy was changed. A separately
-approved outside-sandbox run is recorded separately when complete.
+## Verification boundaries
 
-Not verified: actual legacy MSI migration end-to-end, first installation,
-installed Velopack update, real mobile device, real tray interactions. A successful
-build or unpacking result is not a claim those scenarios passed.
+Policy, receipt, extraction, file-lease and assembly regressions use isolated
+fixtures. A successful build or unpack does not prove first installation,
+legacy MSI migration on a new machine, or real mobile/tray behavior. See
+[historical integration evidence](../INTEGRATION_STATUS.md) for version-scoped
+results; rerun applicable tests for each new candidate. Temporary candidate
+paths, sizes and hashes from development are not supported download targets.
 
-Approved local-user native test result: PASS. The exact router source's net48
-Download function fetched the fixed GitHub 0.4.4 EXE and matched
-`b2410266d12946301ffecebaa9c1fa77c8cebd065fe889cdb8eb83b974245aba`.
-Fresh extraction also passed. This was run through the supported execution
-approval flow, not by changing execution policy or network/security settings.
-No installer was executed. Regression suite: 52 passed, 0 failed/skipped;
-separate native policy suite: 34 passed. These supersede only the earlier
-network-unverified note, not the remaining real installation/device gaps.
+## Recovery candidate (not release validated)
 
-## Review fixes: execution leases and fixed-policy receipts
+`build.ps1 -EnableRecovery` optionally embeds a build-pinned full nupkg and a
+self-contained external BootstrapWorker ZIP. Both resource hashes are reopened
+and compared after compilation and recorded in the build receipt. Without this
+switch, existing-install behavior remains the previous in-app update direction.
+The router uses the existing exact update-cache layout and strict receipt, checks
+worker readiness identity/liveness, asks the user to save work and approve graceful closure,
+then commits and exits only after the exact application processes close safely. The corrected external worker, not the old
+installed worker, validates occupancy and applies the package. It never forces
+termination. Cancel/readiness errors write cancellation markers. MSI and fresh
+routes are unchanged; migration text is shown only after detecting legacy MSI.
 
-The earlier 22,016-byte candidate is superseded by `.eval/release-0.4.5-leasefix`.
-Router is now 24,064 bytes, SHA256
-`ef59a771bb86464bbd0f3266fbc41077eb35fa80c1c5904ba533884ad751dc22`.
-`VerifiedLease` rehashes the bridge/ZIP after acquiring FileShare.Read and holds
-it through child exit. Fresh extraction rehashes each member from the locked ZIP
-while acquiring read-only leases for every output, including configuration and
-DLLs, and retains them through child exit. A writable creation handle is closed
-before read-lease acquisition, because retaining it can block the Windows loader.
-The intervening path is never trusted without the new lease's hash verification.
-Native Windows tests prove ZIP/member write+delete attempts fail, a modified file
-is refused, and an innocuous child executable can start under the read lease.
-No installer was started by these tests.
+2026-11-15 local candidate evidence: complete REPAIR-enabled router compiled with
+zero warnings/errors using deliberately invalid non-release resource fixtures;
+11 readiness/hash/extraction tests, 34 routing tests and 5 layout scales passed.
+No actual updater/installer was launched, no registry was modified. This is not
+an end-to-end clean install or repair validation. Native Restart Manager and a
+real isolated upgrade must pass before enabling this in published artifacts.
+All fixture binaries and router-layout-proof.png are diagnostics, not release
+assets. Recovery resource packing adds runtime size; measure final output before
+shipping. A successful handoff is not an installation-success claim.
 
-Post-0.4.4 assembly now requires schema2 fixed-bridge receipts; even internally
-consistent schema1 embedded-migration receipts are rejected by a regression test.
 
-## Single manual download implementation (unreleased)
-
-The EXE embeds `CodeCang.Fresh.zip`; build.ps1 reopens the built assembly and
-compares the resource SHA256 to the verified build input before issuing schema 3.
-No released assets or installation identities change. Existing schema 2 receipts
-remain supported for reproducing historical packages. Machine update `.nupkg`,
-`releases.win.json` and `SHA256SUMS.txt` remain published; only the redundant
-manual ZIP disappears. Fresh dependency setup may still need network.
-
-Local verification: 16 assembly tests passed, including original 0.4.3/0.4.4
-and published 0.4.5 update parsers; net48 compilation passed with no warnings.
-Using the existing verified 0.4.5 fresh ZIP produced an 8,278,016-byte EXE.
-The embedded resource and runtime extracted ZIP matched the original SHA256;
-extraction refused overwriting an existing file. No installer was launched.
-PowerShell script execution was denied by AuthorizationManager; direct dotnet
-compilation and read-only assembly/resource inspection were used without changing
-policy. Full build-script execution, actual install/migration and next-version
-WSL package integration remain to validate. This is not a release or install test.
+Real-resource follow-up: `-EnableRecovery` was built successfully against the
+verified local 0.4.6 fresh ZIP and full nupkg. The final EXE resources were reopened
+and hashed by the build script; the real fresh archive's six members passed
+Windows extraction/lease checks. The self-contained recovery runtime carries the
+exact restored .NET runtime package's LICENSE and THIRD-PARTY-NOTICES. The full
+real helper ZIP also passed the same locked extraction path, without launching
+it. This proves packaging, not installation. The historical 0.4.6 payload still
+contains the old updater, so this test output must not be released; the final
+higher-version package must contain the corrected installed worker as well.

@@ -138,14 +138,23 @@ h1,h2,h3 { text-wrap: balance; } p { text-wrap: pretty; }
 
 .sidebar { width: var(--sidebar-width); flex: none; display: flex; flex-direction: column; min-height: 0; background: var(--sidebar); border-right: 1px solid var(--border); overflow: hidden; }
 .sidebar-overlay { display: none; }
-.app.sidebar-collapsed .sidebar { display: none; }
+.app.sidebar-collapsed .sidebar { width: 0; border-right-width: 0; visibility: hidden; }
 .sidebar.route-hidden { display: none !important; }
 #rail-sidebar[hidden] { display: none; }
 .side-pane { display: flex; flex-direction: column; gap: 2px; height: 100%; min-height: 0; padding: 10px 8px 8px; }
 .side-head { display: flex; align-items: center; gap: 4px; min-height: 34px; padding: 0 2px 6px 8px; }
 .side-title { flex: 1; min-width: 0; font-size: .875rem; font-weight: 600; letter-spacing: .01em; }
 .side-close { display: none !important; }
-.native-caption-integrated #menu-app { display: none; }
+/* The native caption already owns app identity and its menu. Keep browser and
+   mobile branding intact, and retain actual navigation/close controls. */
+.native-caption-integrated .rail-brand,
+.native-caption-integrated #chat-sidebar .side-title { display: none; }
+@media (min-width:761px) {
+  .native-caption-integrated #chat-sidebar .side-head { display: none; }
+}
+@media (max-width:760px) {
+  .native-caption-integrated #chat-sidebar .side-head { justify-content: flex-end; }
+}
 .new-chat { display: flex; align-items: center; gap: 10px; width: 100%; height: var(--sidebar-row-height); padding: 0 8px; border-radius: var(--radius-row); color: var(--text); font-size: .875rem; text-align: left; }
 .new-chat .ui-icon { width: 17px; height: 17px; }
 .new-chat kbd { margin-left: auto; border: 0; padding: 0; color: var(--muted); }
@@ -204,8 +213,17 @@ dialog::backdrop { background: var(--overlay); }
 .field input { color: var(--text); }
 .field small { color: var(--tertiary); }
 .project-choices { display: flex; flex-direction: column; gap: 1px; max-height: 260px; overflow: auto; margin: 8px 0; }
-.project-choice { display: flex; align-items: center; gap: 10px; text-align: left; height: 34px; }
-.project-choice > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#project-dialog .project-choice { display: flex; justify-content: flex-start; align-items: center; gap: 10px; text-align: left; width: 100%; min-height: 36px; flex: none; }
+#project-dialog .project-choice > span:not(.ui-icon) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#project-dialog .project-choice:focus-visible { outline-offset: -2px; }
+#project-dialog { max-height: calc(100dvh - 32px); overflow-y: auto; }
+#project-dialog .dialog-header h2 { font-weight: 500; }
+#project-dialog[open], #project-dialog[open]::backdrop { animation: project-picker-enter var(--motion-panel) cubic-bezier(.4,0,.2,1); }
+@keyframes project-picker-enter { from { opacity: 0; } to { opacity: 1; } }
+:root[data-reduced-motion="true"] #project-dialog, :root[data-reduced-motion="true"] #project-dialog::backdrop { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-reduced-motion="false"]) #project-dialog, :root:not([data-reduced-motion="false"]) #project-dialog::backdrop { animation: none; }
+}
 .project-browse { width: 100%; margin: 8px 0; }
 #project-manual { margin-top: 8px; color: var(--secondary); font-size: .8125rem; }
 #project-manual summary { cursor: pointer; }
@@ -347,6 +365,7 @@ dialog::backdrop { background: var(--overlay); }
 .pricing-field { display:flex;flex-direction:column;gap:4px;min-width:120px; }
 .pricing-manual { display:flex;flex-wrap:wrap;gap:10px; }
 .pricing-manual[hidden] { display:none; }
+.pricing-form [hidden] { display: none; }
 .pricing-field input { width:150px; }
 .pricing-settings .page-sub { margin:8px 0; }
 @media(max-width:640px){.composer-overlays{left:10px;right:10px}}
@@ -835,7 +854,8 @@ dialog::backdrop { background: var(--overlay); }
 }
 
 /* A single quiet update affordance, visible only when a confirmed update exists. */
-.update-indicator { background: var(--selected); flex-shrink: 0; }
+.update-indicator { background: transparent; flex-shrink: 0; }
+.update-indicator:hover { background: var(--surface); }
 .update-indicator[hidden] { display: none; }
 .update-indicator-badge { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: #087bea; color: #fff; }
 .update-indicator .ui-icon { width: 20px; height: 20px; }
@@ -877,8 +897,10 @@ dialog::backdrop { background: var(--overlay); }
   :root :is(#desktop-close-preference select,.storage-settings .btn):active:not(:focus-visible) { opacity: .75; }
 }
 @media (max-width:760px) {
-  :root .sidebar { opacity: 0; transform: translateX(-8px); transition: transform 200ms var(--ease-out), opacity 200ms var(--ease-out), visibility 200ms; }
-  :root .app.sidebar-open .sidebar { opacity: 1; transform: none; visibility: visible; }
+  :root .sidebar { opacity: 0; transform: translateX(-100%); transition: transform 300ms cubic-bezier(.4,0,.2,1), opacity 200ms cubic-bezier(.4,0,.2,1), visibility 0s 300ms; }
+  :root .app.sidebar-open .sidebar { opacity: 1; transform: none; visibility: visible; transition-delay: 0s; }
+  .sidebar-overlay, .sidebar-overlay.hidden { display:block !important; opacity:0; visibility:hidden; pointer-events:none; transition:opacity 300ms cubic-bezier(.4,0,.2,1),visibility 0s 300ms; }
+  .app.sidebar-open .sidebar-overlay { opacity:1; visibility:visible; pointer-events:auto; transition-delay:0s; }
 }
 
 
@@ -892,3 +914,68 @@ dialog::backdrop { background: var(--overlay); }
 .wsl-runtime-panel .runtime-status { min-height: 1.5em; }
 
 .wsl-unavailable { display: none !important; }
+
+/* DSH-inspired slide/crossfade: the outer column moves, contents keep their
+   expanded geometry. Animate toggles only, never chase a resize/drag pointer. */
+@media (min-width:761px) {
+  .sidebar > .side-pane { width: var(--sidebar-width); min-width: var(--sidebar-width); opacity: 1; }
+  .app.sidebar-animating .sidebar { transition: width 300ms cubic-bezier(.4,0,.2,1), visibility 0s; }
+  .app.sidebar-animating .sidebar > .side-pane { transition: opacity 200ms cubic-bezier(.4,0,.2,1); }
+  .app.sidebar-collapsed .sidebar > .side-pane { opacity: 0; }
+  .app.sidebar-animating.sidebar-collapsed .sidebar { transition: width 300ms cubic-bezier(.4,0,.2,1), visibility 0s 300ms; }
+  .app.sidebar-animating.sidebar-collapsed .sidebar > .side-pane { transition-duration: 150ms; }
+  .panel-resizing .sidebar { transition: none !important; }
+}
+@media (prefers-reduced-motion:reduce) {
+  :root:not([data-reduced-motion="false"]) .app.sidebar-animating .sidebar, :root:not([data-reduced-motion="false"]) .app.sidebar-animating .sidebar > .side-pane { transition: none !important; }
+}
+:root[data-reduced-motion="true"] .app.sidebar-animating .sidebar,
+:root[data-reduced-motion="true"] .app.sidebar-animating .sidebar > .side-pane { transition: none !important; }
+
+/* DSH-inspired app consent: readable text groups, quiet opacity-only entrance. */
+.lan-confirm-dialog { box-sizing: border-box; width: min(440px, calc(100vw - 48px)); max-height: calc(100dvh - 48px); overflow: auto; padding: 24px; animation: lan-consent-in 180ms ease-out; }
+.lan-confirm-dialog h2 { margin: 0 0 14px; font-size: 16px; line-height: 24px; font-weight: 500; }
+.lan-confirm-body { font-size: 13px; line-height: 1.65; color: var(--muted); overflow-wrap: anywhere; }
+.lan-confirm-body p { margin: 0; }
+.lan-confirm-body p + p { margin-top: 12px; color: var(--text); }
+.lan-confirm-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 24px; }
+.lan-confirm-actions .btn { min-height: 36px; font-weight: 500; }
+@keyframes lan-consent-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* Storage groups: recovery actions belong together, not against the last category. */
+.storage-settings > p { line-height: 1.65; }
+.storage-settings > [role="status"] { margin: 16px 0; }
+.storage-settings .storage-recovery { margin-top: 20px; padding: 20px; }
+.storage-settings .storage-recovery h2 { margin: 0 0 8px; font-size: 16px; font-weight: 500; }
+.storage-settings .storage-recovery p { margin: 0 0 16px; line-height: 1.6; }
+.storage-settings .storage-recovery-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.storage-settings .storage-recovery-controls select { flex: 1 1 280px; min-width: 0; max-width: 100%; }
+.storage-settings .storage-recovery-controls button { flex: 0 0 auto; }
+.storage-settings .storage-protected { margin-top: 14px; }
+.storage-settings .storage-protected summary { cursor: pointer; color: var(--muted); line-height: 1.6; }
+.storage-settings .storage-categories .panel > p { line-height: 1.65; }
+@media (max-width: 600px) {
+ .storage-settings .storage-recovery-controls { align-items: stretch; }
+ .storage-settings .storage-recovery-controls > * { width: 100%; }
+}
+
+/* Client-area application menu: no native menu surface or duplicated brand. */
+.app-menu-trigger { flex-shrink: 0; }
+#menu-app[aria-expanded="true"] { background: var(--selected); color: var(--text); }
+#window-menu.app-menu { width: 236px; min-width: 0; padding: 6px; border: 1px solid var(--border); border-radius: 12px; max-height: calc(100dvh - 16px); overflow-y: auto; overscroll-behavior: contain; transform-origin: top left; }
+#window-menu .app-menu-item { display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 7px 9px; border-radius: 6px; font-size: 13px; line-height: 20px; color: var(--text); transition: background-color 120ms ease-out, color 120ms ease-out; }
+.app-menu-item .ui-icon { flex: 0 0 17px; color: var(--secondary); }
+.app-menu-label { flex: 1; }
+#window-menu .app-menu-item kbd { border: 0; padding: 0; font-size: 11px; color: var(--tertiary); }
+#window-menu .app-menu-item:focus-visible { outline: 2px solid var(--focus, #7187a5); outline-offset: -2px; background: var(--selected); }
+.app-menu-divider { height: 1px; margin: 5px 6px; background: var(--border); }
+@media (hover: hover) { #window-menu .app-menu-item:hover { background: var(--selected); } }
+@media (prefers-reduced-motion: no-preference) {
+  #window-menu.app-menu { transition: opacity 150ms ease-out, transform 150ms ease-out; }
+  @starting-style { :root:not([data-reduced-motion="true"]) #window-menu.app-menu:not(.hidden) { opacity: 0; transform: translateX(-4px) scale(.98); } }
+}
+@media (max-width: 760px) { #window-menu .app-menu-item { min-height: 44px; } }
+
+/* Only a host that implements clickable native branding opts into this.
+   Older hosts and browser/mobile retain the visible application-menu fallback. */
+.native-caption-brand-menu #menu-app { display: none; }

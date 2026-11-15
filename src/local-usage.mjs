@@ -15,7 +15,8 @@ export function parseLocalCodexUsage(input, {sourceId} = {}) {
   const raw = typeof input === 'string' ? input.split('\n') : input;
   let declaredVersion = null;
   let threadId = null, model = null, provider = null, turnId = null, baseline = null, snapshot = null, blocked = false, identityBlocked = false, metadataSeen = false;
-  const turns=new Map();
+  let ownSubagent=false,subagentRootTime=null;
+  const turns=new Map(),coverageStarts=new Set(),coverageGaps=new Set();
   const instant=value=>typeof value==='string'&&Number.isFinite(Date.parse(value))?new Date(value).toISOString():null;
   const turn=id=>{if(!string(id))return null;let row=turns.get(id);if(!row){row={turnId:id,model:null,provider,startedAt:null,completedAt:null,status:'unknown'};turns.set(id,row);}return row;};
   let firstTimestamp = null, lastTimestamp = null, tokenEvents = 0, duplicateEvents = 0;
@@ -37,7 +38,11 @@ export function parseLocalCodexUsage(input, {sourceId} = {}) {
       if (!id) { diagnose('invalid-thread-id',i+1); blocked = true; identityBlocked = true; }
       else if (threadId && threadId !== id) { diagnose('mixed-thread-input',i+1); blocked = true; identityBlocked = true; }
       else threadId = id;
-      if (payload?.parent_thread_id != null || payload?.forked_from_id != null || payload?.source?.subagent?.thread_spawn?.parent_thread_id != null) { diagnose('parent-baseline-unresolved',i+1); blocked = true; }
+      if (payload?.parent_thread_id != null || payload?.forked_from_id != null || payload?.source?.subagent?.thread_spawn?.parent_thread_id != null) {
+        subagentRootTime=instant(payload?.timestamp)||instant(row.timestamp);
+        ownSubagent=!!uuid(payload?.parent_thread_id)&&payload.parent_thread_id===payload?.source?.subagent?.thread_spawn?.parent_thread_id&&payload?.forked_from_id==null&&payload?.history_base==null&&!!subagentRootTime;
+        if(!ownSubagent){diagnose('parent-baseline-unresolved',i+1);blocked=true;}
+      }
       // Pagination is a storage format, not evidence that adjacent observed cumulative counters are invalid.
       if (payload?.history_mode === 'paginated') diagnose('paginated-storage',i+1);
       if (payload?.history_base != null) { diagnose('continuation-baseline-unresolved',i+1); blocked = true; }
@@ -50,28 +55,37 @@ export function parseLocalCodexUsage(input, {sourceId} = {}) {
     if (row.type === 'turn_context') { model = string(payload?.model) ?? string(payload?.info?.model);if(payload?.turn_id!==undefined)turnId=string(payload.turn_id);const t=turn(turnId);if(t)t.model=model;continue; }
     if (row.type !== 'event_msg') continue; // Chat/tool payloads deliberately never retained.
     if (payload?.type === 'thread_settings_applied') { model = string(payload.thread_settings?.model); continue; }
-    if(['task_started','turn_started'].includes(payload?.type)){turnId=string(payload.turn_id);const t=turn(turnId);if(t){t.startedAt=instant(row.timestamp);t.status='inProgress';}continue;}
+    if(['task_started','turn_started'].includes(payload?.type)){turnId=string(payload.turn_id);const t=turn(turnId);if(t){t.startedAt=instant(row.timestamp);t.status='inProgress';if(baseline&&Object.values(baseline).every(n=>n!==null))coverageStarts.add(turnId);}continue;}
     if(['task_complete','turn_complete','turn_aborted'].includes(payload?.type)){
       const t=turn(string(payload.turn_id)||turnId);if(t){t.completedAt=instant(row.timestamp);t.status=payload.type==='turn_aborted'?'interrupted':payload.error?'failed':'completed';}turnId=null;continue;
     }
-    if (payload?.type === 'token_usage_record') { diagnose('usage-record-not-supported',i+1); continue; }
+    if (payload?.type === 'token_usage_record') { diagnose('usage-record-not-supported',i+1);if(turnId)coverageGaps.add(turnId);if(ownSubagent)blocked=true; continue; }
     if (payload?.type !== 'token_count') continue;
     tokenEvents++;
     if (!threadId) { diagnose('token-before-metadata',i+1); blocked = true; }
     const total = payload.info?.total_token_usage;
-    if (!total || typeof total !== 'object' || Array.isArray(total)) { diagnose('missing-cumulative-total',i+1); baseline = null; continue; }
+    if (!total || typeof total !== 'object' || Array.isArray(total)) { diagnose('missing-cumulative-total',i+1);if(turnId)coverageGaps.add(turnId); baseline = null; continue; }
     const current = counters(total), timestamp = string(row.timestamp);
     if(declaredVersion==='0.157.1'&&!Object.hasOwn(total,'cache_write_input_tokens')){current.cacheWriteInputTokens=0;diagnose('declared-version-cache-write-default',i+1);}
     if (firstTimestamp === null) firstTimestamp = timestamp;
     lastTimestamp = timestamp;
+    if(ownSubagent&&JSON.stringify(current)!==JSON.stringify(baseline)){const last=counters(payload.info?.last_token_usage);const expected=baseline?Object.fromEntries(Object.keys(fields).map(key=>[key,current[key]===null||baseline[key]===null?null:current[key]-baseline[key]])):current;const t=turns.get(turnId);
+      if(!t?.startedAt||Date.parse(t.startedAt)<Date.parse(subagentRootTime)||!instant(timestamp)||Date.parse(timestamp)<=Date.parse(subagentRootTime)||Object.keys(fields).some(key=>expected[key]===null||last[key]!==expected[key])){diagnose('parent-baseline-unresolved',i+1);blocked=true;}
+    }
     snapshot = current;
     // rate_limits.limit_id does not reset session cumulative counters or form a new bill.
     const signature = JSON.stringify(current);
     if (baseline && signature === JSON.stringify(baseline)) { duplicateEvents++; continue; }
     if (seen.has(signature)) { diagnose('replayed-snapshot',i+1); blocked = true; baseline = current; continue; }
     seen.add(signature);
-    if (current.totalTokens === null) { diagnose('unknown-cumulative-total',i+1); baseline = null; continue; }
-    if (!baseline) { diagnose('initial-baseline-unattributed',i+1); baseline = current; continue; }
+    if (current.totalTokens === null) { diagnose('unknown-cumulative-total',i+1);if(turnId)coverageGaps.add(turnId); baseline = null; continue; }
+    // A fully observed first request can anchor zero only with an explicit turn start
+    // and identical complete last/cumulative counters. Resumes/forks remain deferred.
+    if(!baseline&&tokenEvents===1&&!blocked&&turnId&&turns.get(turnId)?.startedAt){
+      const last=counters(payload.info?.last_token_usage);
+      if(instant(timestamp)&&Date.parse(timestamp)>=Date.parse(turns.get(turnId).startedAt)&&Object.keys(fields).every(key=>current[key]!==null&&last[key]===current[key])){baseline=Object.fromEntries(Object.keys(fields).map(key=>[key,0]));coverageStarts.add(turnId);}
+    }
+    if (!baseline) { diagnose('initial-baseline-unattributed',i+1);if(turnId)coverageGaps.add(turnId); baseline = current; continue; }
     const decreasing = Object.keys(fields).some(key => current[key] !== null && baseline[key] !== null && current[key] < baseline[key]);
     if (decreasing) { diagnose('counter-reset-or-replay',i+1); blocked = true; baseline = current; continue; }
     const difference = Object.fromEntries(Object.keys(fields).map(key => [key, current[key] === null || baseline[key] === null ? null : current[key] - baseline[key]]));
@@ -89,7 +103,7 @@ export function parseLocalCodexUsage(input, {sourceId} = {}) {
   // Ambiguity discovered late invalidates attribution for the whole supplied timeline.
   if (blocked && increments.length) { diagnose('timeline-attribution-deferred',0); increments.length = 0; }
   return {source:'local-codex-jsonl',sourceId,threadId,declaredVersion,compatibilityNotice:counts.has('declared-version-cache-write-default')?'按会话声明的 0.157.1 协议，将缺失缓存写入字段按默认 0 兼容；恢复后的逐条写入版本未核实。':null,snapshot:counts.has('excluded-non-codex-source') ? null : snapshot,firstTimestamp,lastTimestamp,tokenEvents,duplicateEvents,increments,
-    provider,turns:identityBlocked||!threadId||counts.has('excluded-non-codex-source')?[]:[...turns.values()],turnAttribution:identityBlocked||!threadId?'deferred':'observed-turn-records',attribution:blocked || !threadId ? 'deferred' : 'observed-differences-only',
+    provider,turns:identityBlocked||!threadId||counts.has('excluded-non-codex-source')?[]:[...turns.values()].map(t=>({...t,coverageComplete:!blocked&&coverageStarts.has(t.turnId)&&!coverageGaps.has(t.turnId)&&!!t.startedAt&&!!t.completedAt&&increments.some(i=>i.turnId===t.turnId)&&increments.filter(i=>i.turnId===t.turnId).every(i=>Object.values(i.tokens).every(n=>n!==null)&&!!instant(i.timestamp)&&Date.parse(i.timestamp)>=Date.parse(t.startedAt)&&Date.parse(i.timestamp)<=Date.parse(t.completedAt))})),turnAttribution:identityBlocked||!threadId?'deferred':'observed-turn-records',attribution:blocked || !threadId ? 'deferred' : 'observed-differences-only',
     diagnostics,diagnosticCounts:Object.fromEntries(counts),
     notice:'仅传入本地记录的观察值；不是官方全局统计或账单，不与其他来源相加。首个累计快照不分摊到模型；缓存与推理不另加到总量。'};
 }

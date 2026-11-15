@@ -3,6 +3,7 @@ from pathlib import Path
 from verify import verify,ID
 from native_notices import ROOT as NOTICE_ROOT,NAME as NOTICE_NAME
 class VerificationTests(unittest.TestCase):
+ title="Codex Light"
  def setUp(self):
   self.t=tempfile.TemporaryDirectory();self.root=Path(self.t.name);self.p=self.root/'payload';self.r=self.root/'release';self.p.mkdir();self.r.mkdir();self.v='0.4.3'
   for name in ('Velopack.dll','licenses/Velopack-LICENSE.txt','licenses/Velopack-VENDOR-NOTICES.md','app/package.json','CodexLight.exe'):
@@ -17,9 +18,11 @@ class VerificationTests(unittest.TestCase):
   with zipfile.ZipFile(self.pkg,'w') as z:
    for f in self.p.rglob('*'):
     if f.is_file():z.writestr('lib/app/'+f.relative_to(self.p).as_posix(),f.read_bytes())
-   z.writestr('lib/app/sq.version',f'<package><metadata><id>{ID}</id><version>{self.v}</version><mainExe>CodexLight.exe</mainExe></metadata></package>')
+   z.writestr('lib/app/sq.version',f'<package><metadata><id>{ID}</id><version>{self.v}</version><title>{self.title}</title><mainExe>CodexLight.exe</mainExe></metadata></package>')
+   z.writestr('lib/app/'+self.title+'_ExecutionStub.exe',b'MZstub')
+   z.writestr('lib/app/Squirrel.exe',b'MZupdater')
   with zipfile.ZipFile(self.port,'w') as z:
-   z.writestr('.portable','');z.writestr('Update.exe','MZ')
+   z.writestr('.portable','');z.writestr('Update.exe','MZ');z.writestr(self.title+'.exe',b'MZstub')
    for f in self.p.rglob('*'):
     if f.is_file():z.writestr('current/'+f.relative_to(self.p).as_posix(),f.read_bytes())
   self.refresh()
@@ -65,4 +68,7 @@ class VerificationTests(unittest.TestCase):
  def test_worker_extra_content(self):
   (self.p/'update-worker/private.txt').write_text('no')
   with self.assertRaises(ValueError):verify(self.r,self.p,self.v)
+class BrandedVerificationTests(VerificationTests):
+ title='码舱 CodeCang'
+
 if __name__=='__main__':unittest.main()

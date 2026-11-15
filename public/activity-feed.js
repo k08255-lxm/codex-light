@@ -1,3 +1,4 @@
+import { historyViewport } from './history-viewport.js';
 // Conversation view: one keyed DOM tree per turn built from state.buildTurns().
 // Messages and compaction stay visible; consecutive operations form collapsible groups.
 import { boundedText, itemText } from './store.js';
@@ -241,7 +242,7 @@ export function retentionOf(item, keys) {
   for (const key of keys) { omitted += item?._omitted?.[key] || 0; released += item?._released?.[key] || 0; }
   return { complete: !omitted && !released, omitted, released };
 }
-function longTextView(document, { render, label = '正文', onCopy }) {
+function longTextView(document, { render, label = '正文', onCopy, initialWindow = null }) {
   const node = el(document, 'div', 'long-text');
   const bar = el(document, 'div', 'long-text-bar'); bar.setAttribute('role', 'group'); bar.setAttribute('aria-label', label + '分段浏览');
   const position = el(document, 'span', 'long-text-position'); position.setAttribute('aria-live', 'polite');
@@ -332,7 +333,7 @@ function longTextView(document, { render, label = '正文', onCopy }) {
     retention = nextRetention;
     const wasStreaming = streaming; streaming = live;
     const max = Math.max(0, split.segments.length - LONG_TEXT.window);
-    if (!seen) { start = live ? max : 0; follow = live; seen = true; }
+    if (!seen) { start = initialWindow ? initialWindow.start : live ? max : 0; follow = initialWindow ? initialWindow.follow : live; seen = true; }
     else if (live && follow) start = max;
     else if (!live && wasStreaming && follow) start = max; // finished while watching the tail: stay there
     start = Math.min(start, max);
@@ -353,8 +354,19 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
   const agentDetails = new Map();
   const fileState = new Map(); // turn id -> {expanded, openPaths:Set, all:boolean}
   const imageRefs = new Map(); // answer id -> {text, refs}
+  const longPositions = new Map(); // Reading position survives viewport-only unmounts.
   const asyncInputs = new Map(); // thread/item identity keeps unsubmitted drafts across history refreshes.
   let runningClocks = [];
+  const scroller = host.closest?.('#conversation');
+  const heights = new Map(), placeholders = new Map();
+  let lastList = [], virtualFrame = null, rendering = false;
+  function scheduleViewport() {
+    if (!scroller || virtualFrame !== null) return;
+    virtualFrame = document.defaultView.requestAnimationFrame(() => { virtualFrame = null; if (lastList.length) render(lastList); });
+  }
+  scroller?.addEventListener('scroll', scheduleViewport, {passive:true});
+  document.defaultView?.addEventListener('resize', () => { heights.clear(); scheduleViewport(); });
+
 
   const markdownSegment = source => {
     const box = el(document, 'div', 'markdown-segment');
@@ -389,7 +401,7 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
       const media = (item.content || []).filter(part => ['image', 'localImage'].includes(part?.type));
       const bubble = el(document, 'div', 'message-bubble');
       if (text) {
-        view.long ||= longTextView(document, { render: source => document.createTextNode(source), label: '消息', onCopy });
+        view.long ||= longTextView(document, { render: source => document.createTextNode(source), label: '消息', onCopy, initialWindow: longPositions.get(item.id) });
         view.long.update(text, { retention }); bubble.append(view.long.node);
       }
       parts.push(bubble);
@@ -420,7 +432,7 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     view.item = item; view.text = text; view.complete = item._complete; view.kept = kept;
     view.body.classList.add('markdown-body');
     view.node.classList.toggle('streaming', item._complete === false);
-    if (!view.long) { view.long = longTextView(document, { render: markdownSegment, label: '答复', onCopy }); view.body.replaceChildren(view.long.node); }
+    if (!view.long) { view.long = longTextView(document, { render: markdownSegment, label: '答复', onCopy, initialWindow: longPositions.get(item.id) }); view.body.replaceChildren(view.long.node); }
     view.long.update(text, { streaming: item._complete === false, retention });
   }
 
@@ -621,7 +633,7 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     return { node, footer, work, workLabel, workBody, segments: new Map(), messages: new Map(), compactions: new Map(), files: null, agents: null, agentsSig: null, art: null, artSig: null };
   }
   function releaseSegment(view){for(const row of view.rows.values())row.images?.release?.();}
-  function releaseTurn(view){view.art?.release?.();for(const segment of view.segments.values())releaseSegment(segment);for(const message of view.messages.values())message.media?.release?.();}
+  function releaseTurn(view){view.art?.release?.();for(const segment of view.segments.values())releaseSegment(segment);for(const message of view.messages.values()){if(message.long)longPositions.set(message.node.dataset.itemId,{start:message.long.window.start,follow:message.long.window.follow});message.media?.release?.();}}
 
   function timingLabel(turn, now) {
     const t = turn.timing;
@@ -631,8 +643,33 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
   }
 
   function render(list, { now = Date.now() } = {}) {
+    if (rendering) return;
+    rendering = true;
+    try {
+    lastList = list;
+    const scrollerTop = scroller?.getBoundingClientRect().top || 0;
+    const atBottom = scroller && scroller.scrollHeight-scroller.scrollTop-scroller.clientHeight < 2;
+    // Prefer the visible message; earlier siblings within its turn may change height.
+    const anchorItem = scroller && [...host.querySelectorAll('[data-item-id]')].find(node => {
+      const rect=node.getBoundingClientRect();return rect.height>0&&rect.bottom>scrollerTop&&rect.top<scrollerTop+scroller.clientHeight;
+    });
+    const anchor = anchorItem?.closest('[data-turn-id]') || (scroller && [...host.children].find(node => node.getBoundingClientRect().bottom > scrollerTop));
+    const anchorId = anchor?.dataset.turnId || anchor?.dataset.virtualTurnId;
+    const anchorOffset = anchor ? anchor.getBoundingClientRect().top-scrollerTop : 0;
+    const itemOffset = anchorItem ? anchorItem.getBoundingClientRect().top-scrollerTop : 0;
+    for (const [id, view] of turns) {
+      const height = view.node.getBoundingClientRect?.().height;
+      if (height > 0) heights.set(id, height);
+    }
+    const layout = scroller ? historyViewport(list, heights, scrollerTop-host.getBoundingClientRect().top, scroller.clientHeight) : null;
     const keep = new Set(); const nodes = []; runningClocks = [];
-    for (const turn of list) {
+    for (const [index, turn] of list.entries()) {
+      const focused = turns.get(turn.id)?.node.contains(document.activeElement);
+      if (layout && !layout[index].visible && !focused && turn.id !== anchorId) {
+        let spacer = placeholders.get(turn.id);
+        if (!spacer) { spacer=el(document,'div','history-turn-placeholder');spacer.dataset.virtualTurnId=turn.id;spacer.setAttribute('aria-hidden','true');placeholders.set(turn.id,spacer); }
+        spacer.style.height=layout[index].size+'px'; nodes.push(spacer); continue;
+      }
       keep.add(turn.id);
       let view = turns.get(turn.id);
       if (!view) { view = turnView(turn.id); turns.set(turn.id, view); }
@@ -714,6 +751,17 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     const focused = document.activeElement; const keepFocus = focused && host.contains(focused);
     reconcile(host, nodes);
     if (keepFocus && host.contains(focused) && document.activeElement !== focused) focused.focus?.({ preventScroll: true });
+    const ids=new Set(list.map(turn=>turn.id));
+    for(const id of placeholders.keys())if(!ids.has(id)){placeholders.delete(id);heights.delete(id);}
+    for(const [id,view] of turns){const size=view.node.getBoundingClientRect?.().height;if(size>0)heights.set(id,size);}
+    if(scroller){
+      const retained=nodes.find(node=>(node.dataset.turnId||node.dataset.virtualTurnId)===anchorId);
+      const retainedItem=anchorItem && [...host.querySelectorAll('[data-item-id]')].find(node=>node.dataset.itemId===anchorItem.dataset.itemId);
+      if(atBottom)scroller.scrollTop=scroller.scrollHeight;
+      else if(retainedItem)scroller.scrollTop+=retainedItem.getBoundingClientRect().top-scrollerTop-itemOffset;
+      else if(retained)scroller.scrollTop+=retained.getBoundingClientRect().top-scrollerTop-anchorOffset;
+    }
+    } finally { rendering = false; }
   }
 
   /** Updates live elapsed labels without rebuilding the tree. */
@@ -721,6 +769,6 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     for(const item of items)if(item.type==='reasoning'&&itemState(item)==='running'){const row=process.rows.get(item.id);if(row)updateRow(row,item,now);}
     const info=describeItem(items.at(-1),now);setText(process.latest,`${info.verb}${!info.code&&info.target?' · '+info.target.slice(0,90):''}`);
   } }
-  function clear() { for(const view of turns.values())releaseTurn(view);turns.clear(); userOpen.clear(); agentExpanded.clear(); agentDetails.clear(); fileState.clear(); imageRefs.clear(); runningClocks = []; host.replaceChildren(); artifacts?.clear(); }
+  function clear() { longPositions.clear(); lastList=[];heights.clear();placeholders.clear(); for(const view of turns.values())releaseTurn(view);turns.clear(); longPositions.clear(); userOpen.clear(); agentExpanded.clear(); agentDetails.clear(); fileState.clear(); imageRefs.clear(); runningClocks = []; host.replaceChildren(); artifacts?.clear(); }
   return { render, tick, clear, hasRunningClock: () => runningClocks.length > 0 };
 }

@@ -1,3 +1,4 @@
+import { confirmApp } from './app-confirm-dialog.js';
 import { createBackHandler } from './ui/back-navigation.js';
 import { mountDesktopClosePreference } from './ui/desktop-close-preference.js';
 import {mountStorageView} from './ui/storage-view.js';
@@ -71,7 +72,7 @@ const token = access.token;
 function applyAccessMode(lan) { state.lan = !!lan; document.documentElement.dataset.access = lan ? 'lan' : 'local'; }
 const pendingMutations = new PendingMutations(localSession);
 const sessionDefaults = new SessionDefaultsBridge(body => api('/api/session/defaults', body), {onChange:snapshot=>{renderReasoning();sessionControls.render();if(snapshot.error)notice('无法读取 Codex 配置默认模型/强度：'+snapshot.error+'。没有改用模型目录默认值；可打开模型列表显式重试，发送时不会强行写入默认值。',true);}});
-const state = { connected: false, demo: false, desktop: false, reasoning: restoredReasoning(null), cwd: readSession('codex-light-cwd') || '', thread: null, threads: [], nextThreads: null, nextItems: null, models: [], modelGeneration: 0, turnId: null, sending: false, busy: false, openGeneration: 0, searchGeneration: 0, requests: new Map(), store: new ItemStore(300), nodes: new Map(), rendering: false, historyFallback: false, activeTurns: new Map(), terminalTurns: new Set(), shuttingDown: false, eventController: null, detailsTab: 'tools', dshConnection: null, dshRefreshing: false, serverInstance: null, pendingQueries: new Set(), interruptingTurns: new Set(), uploadingImages: false, loadingThread: false, dshReads: new Map(), dshReadErrors: new Map(), dshReadSequence: 0, dshReadGeneration: 0, dshOpenDetails: new Set(), settingsPage: 'general', archivedThreads: [], archivedCursor: null, archivedGeneration: 0, accountLoading: false, usageLoading: false, renameTarget: null, cliVersion: null, ledger: new TurnLedger(), nextTurns: null, contexts: new Map(), threadSessions: [] };
+const state = { connected: false, demo: false, desktop: false, reasoning: restoredReasoning(null), cwd: readSession('codex-light-cwd') || '', thread: null, threads: [], nextThreads: null, nextItems: null, models: [], modelGeneration: 0, turnId: null, sending: false, busy: false, openGeneration: 0, searchGeneration: 0, requests: new Map(), store: new ItemStore(Infinity, { preserveBodies: true }), nodes: new Map(), rendering: false, historyFallback: false, activeTurns: new Map(), terminalTurns: new Set(), shuttingDown: false, eventController: null, detailsTab: 'tools', dshConnection: null, dshRefreshing: false, serverInstance: null, pendingQueries: new Set(), interruptingTurns: new Set(), uploadingImages: false, loadingThread: false, dshReads: new Map(), dshReadErrors: new Map(), dshReadSequence: 0, dshReadGeneration: 0, dshOpenDetails: new Set(), settingsPage: 'general', archivedThreads: [], archivedCursor: null, archivedGeneration: 0, accountLoading: false, usageLoading: false, renameTarget: null, cliVersion: null, ledger: new TurnLedger(), nextTurns: null, contexts: new Map(), threadSessions: [] };
 // Follow-up messages typed while a task runs. Per thread, survives navigation, never persisted.
 const followUps = new FollowUpQueue();
 const sessionControls=createSessionControls({document,defaults:()=>sessionDefaults.snapshot().value,threadId:()=>state.thread?.id,notice:(...args)=>notice(...args)});
@@ -94,7 +95,9 @@ const sidebarController = (() => {
   const sidebarButton=$('rail-sidebar'), sidebarHome=document.createComment('sidebar toggle home');
   sidebarButton.before(sidebarHome);
   const media=window.matchMedia('(max-width:760px)');
-  let open=false, returnFocus=null, mode='chat';
+  let open=false, returnFocus=null, mode='chat', motionTimer=null, initialized=false;
+  function settleMotion(){window.clearTimeout(motionTimer);app.classList.remove('sidebar-animating');}
+  function animateToggle(){settleMotion();app.classList.add('sidebar-animating');motionTimer=window.setTimeout(settleMotion,320);}
   const desktopOpen={chat:true,settings:true};
   const narrow=()=>media.matches;
   const closeButton=()=>$('settings-dialog').classList.contains('hidden')?$('close-sidebar'):$('settings-sidebar-close');
@@ -116,6 +119,7 @@ const sidebarController = (() => {
   function set(next,{focus=true}={}){
     if(!['chat','settings'].includes(mode))return;
     const wasOpen=open;open=!!next;
+      if(initialized&&wasOpen!==open)animateToggle();
     if(!narrow())desktopOpen[mode]=open;
     if(open&&!wasOpen&&narrow())returnFocus=document.activeElement;
     sync();
@@ -130,8 +134,9 @@ const sidebarController = (() => {
     if(event.shiftKey&&(active===first||!sidebar.contains(active))){event.preventDefault();last.focus();}
     else if(!event.shiftKey&&(active===last||!sidebar.contains(active))){event.preventDefault();first.focus();}
   });
-  media.addEventListener('change',()=>{open=['chat','settings'].includes(mode)&&!narrow()?desktopOpen[mode]:false;sync();});
-  set(!narrow(),{focus:false});
+  window.addEventListener('resize',settleMotion);
+    media.addEventListener('change',()=>{settleMotion();open=['chat','settings'].includes(mode)&&!narrow()?desktopOpen[mode]:false;sync();});
+  set(!narrow(),{focus:false});initialized=true;
   return {
     toggle:()=>set(!open),
     open:()=>set(true,{focus:false}),
@@ -533,7 +538,7 @@ async function handleProjectAction(group,action) {
   if(action==='archive'){
     const threads=[...group.threads];
     if(!state.connected||state.busy||state.loadingThread||pendingMutations.storageError||threads.some(thread=>threadPendingRecords(thread.id).length)){notice('当前无法归档：请等待连接恢复和待处理操作完成。',true);return;}
-    if(!threads.length||!confirm(`归档“${group.name}”中已加载的 ${threads.length} 条聊天吗？未加载的历史聊天保持不变；可以在设置 → 已归档聊天恢复。`))return;
+    if(!threads.length||!await confirm(`归档“${group.name}”中已加载的 ${threads.length} 条聊天吗？未加载的历史聊天保持不变；可以在设置 → 已归档聊天恢复。`))return;
     setProjectBusy(true);state.sending=true;updateControls();let count=0;
     try{for(const thread of threads){await performMutation('thread/archive',{threadId:thread.id});count++;if(state.thread?.id===thread.id){state.sending=false;newThread();state.sending=true;}}await loadThreads();}
     catch(error){showMutationFailure(error,`归档（已确认完成 ${count} 条）`);await loadThreads().catch(loadError=>projectError(loadError));}
@@ -584,7 +589,7 @@ async function loadThreads(more = false, current = ()=>true) {
   state.nextThreads = result.nextCursor; renderThreads();
   if (more) restoreHistoryAnchor($('thread-scroll'), anchor);
 }
-const CONVERSATION_ITEMS = 300;
+const CONVERSATION_ITEMS = 500;
 const historyCaps = historyCapabilities();
 function sessionFor(threadId) { return state.threadSessions.find(row => row.threadId === threadId) || null; }
 async function openThread(thread) {
@@ -649,7 +654,7 @@ async function loadItems(earlier = false, generation = state.openGeneration, cur
   // explicit thread/read. A fresh (non-earlier) load restarts from the newest page.
   if (earlier && (!state.pager || state.pager.threadId !== id || !state.pager.hasMore)) return;
   const pager = earlier ? state.pager : new HistoryPager(rpc, id, historyCaps);
-  const page = await pager.next(earlier ? { max: 60 } : undefined);
+  const page = await pager.next({ max: CONVERSATION_ITEMS });
   if (!current() || generation !== state.openGeneration || id !== state.thread?.id) return;
   if (!earlier) state.pager = pager; else if (state.pager !== pager) return;
   const items = page.items;
@@ -665,11 +670,7 @@ async function loadItems(earlier = false, generation = state.openGeneration, cur
   for (const item of items.slice(-CONVERSATION_ITEMS)) dshTasks.ingest(id, item, { older: earlier, source: '已加载的 Codex 对话记录' });
   const anchor = earlier ? captureHistoryAnchor($('conversation')) : null;
   if (earlier) {
-    // Prepend older history while keeping pooled image bytes of items that stay in the window.
-    const existing = state.store.values(); const seen = new Set(); const merged = [];
-    for (const item of [...items, ...existing]) if (!seen.has(item.id)) { seen.add(item.id); merged.push(item); }
-    state.store.replaceWindow(merged.slice(0, CONVERSATION_ITEMS));
-    if (merged.length > CONVERSATION_ITEMS) notice(`为保持流畅，当前只显示这一段的 ${CONVERSATION_ITEMS} 项；重新打开对话可返回最新内容。`);
+    state.store.prependHistory(items);
   } else { for (const item of items.slice(-CONVERSATION_ITEMS)) state.store.upsert(item); }
   state.nextItems = pager.hasMore ? pager.mode : null;
   $('earlier').classList.toggle('hidden', !pager.hasMore);
@@ -774,7 +775,7 @@ async function inspectRelatedRequest(marker) {
 }
 async function sendAsExplicitNewTask(marker) {
   if (state.sending || state.busy || !state.connected || !$('prompt').value.trim()) { notice('请先选择空闲对话并填写要发送的草稿。原请求仍保留，不会自动重发。'); return; }
-  if (!confirm('原请求的执行结果仍不确定。将当前草稿作为新任务发送，旧任务也可能继续执行，可能产生重复改动和重复用量。\n仍要作为新任务发送吗？')) return;
+  if (!await confirm('原请求的执行结果仍不确定。将当前草稿作为新任务发送，旧任务也可能继续执行，可能产生重复改动和重复用量。\n仍要作为新任务发送吗？')) return;
   try {
     const others=chatPendingRecords().filter(row=>row.requestId!==marker.requestId);
     if(others.length){notice('当前对话还有其他消息状态仍在同步；请等待完成后再作为新任务发送。');return;}
@@ -1121,7 +1122,7 @@ const historyAutoLoad = mountHistoryAutoLoad({
   canLoad: () => currentRoute === 'chat' && !state.loadingThread && !!state.pager?.hasMore,
   load: () => loadItems(true),
 });
-$('shutdown').addEventListener('click', async () => { if (!confirm(state.desktop ? '停止本窗口的 Codex app-server？Codex 任务可能中断，独立 DSH 任务可能继续。再次启动会重新连接官方历史，不会无缝恢复当前连接。' : '停止 GUI 本地服务？通过此 GUI 运行的任务可能会中断，独立 DSH 任务可能继续。')) return; state.shuttingDown = true; try { const result = await api('/api/shutdown', {}); if (result?.engineStopped !== true || result?.shutdownAccepted !== true) throw new Error('服务未确认引擎已停止，状态未知；请稍后检查连接状态。'); state.eventController?.abort(); setConnected(false, 'GUI 服务已停止'); activity(state.desktop ? '已停止服务。请关闭本窗口后重新启动应用；新连接会读取官方历史。' : '已停止服务。重新运行启动器即可打开。'); closeSettings(); } catch (e) { state.shuttingDown = false; notice(e.message, true); } });
+$('shutdown').addEventListener('click', async () => { if (!await confirm(state.desktop ? '停止本窗口的 Codex app-server？Codex 任务可能中断，独立 DSH 任务可能继续。再次启动会重新连接官方历史，不会无缝恢复当前连接。' : '停止 GUI 本地服务？通过此 GUI 运行的任务可能会中断，独立 DSH 任务可能继续。')) return; state.shuttingDown = true; try { const result = await api('/api/shutdown', {}); if (result?.engineStopped !== true || result?.shutdownAccepted !== true) throw new Error('服务未确认引擎已停止，状态未知；请稍后检查连接状态。'); state.eventController?.abort(); setConnected(false, 'GUI 服务已停止'); activity(state.desktop ? '已停止服务。请关闭本窗口后重新启动应用；新连接会读取官方历史。' : '已停止服务。重新运行启动器即可打开。'); closeSettings(); } catch (e) { state.shuttingDown = false; notice(e.message, true); } });
 $('model').addEventListener('change', () => populateEfforts(true)); $('dismiss-notice').addEventListener('click', () => notifications.dismiss());
 $('rail-sidebar').addEventListener('click', () => sidebarController.toggle()); $('sidebar-overlay').addEventListener('click', () => sidebarController.close()); for(const id of ['close-sidebar','settings-sidebar-close']) $(id).addEventListener('click', () => sidebarController.close());
 function showDetails(tab = state.detailsTab, force = false) {
@@ -1141,13 +1142,13 @@ $('close-details').addEventListener('click', () => { $('details').classList.add(
 $('refresh-dsh').addEventListener('click', refreshDsh); $('refresh-dsh-settings').addEventListener('click', refreshDsh);
 for (const button of document.querySelectorAll('[data-prompt]')) button.addEventListener('click', () => { $('prompt').value = button.dataset.prompt; $('prompt').focus(); updateControls(); });
 let searchTimer; $('search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => loadThreads().catch(e => notice(e.message, true)), 250); });
-document.addEventListener('keydown', e => { if ($('rename-dialog').open || $('project-dialog').open) { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') e.preventDefault(); return; } if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') { e.preventDefault(); newThread(); } if (e.key === 'Escape') { if (!$('thread-menu').classList.contains('hidden')) { closeThreadMenu(true); return; } if (activeMenu) { const previousMenu = activeMenu; closeWindowMenu(); const trigger=$('menu-' + previousMenu);if(trigger.getClientRects().length)trigger.focus();else if(!$('settings-dialog').classList.contains('hidden'))$('settings-back').focus();else $('prompt').focus();return; } if(sidebarController.isOverlayOpen()){sidebarController.close();return;} if(currentRoute!=='chat'&&!e.defaultPrevented&&!document.activeElement?.closest?.('dialog,.reasoning-popover,#queue'))route('chat'); } });
+document.addEventListener('keydown', e => { if ($('rename-dialog').open || $('project-dialog').open) { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') e.preventDefault(); return; } if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') { e.preventDefault(); newThread(); } if (e.key === 'Escape') { if (!$('thread-menu').classList.contains('hidden')) { closeThreadMenu(true); return; } if (activeMenu) { closeWindowMenu(); focusAfterWindowMenu();return; } if(sidebarController.isOverlayOpen()){sidebarController.close();return;} if(currentRoute!=='chat'&&!e.defaultPrevented&&!document.activeElement?.closest?.('dialog,.reasoning-popover,#queue'))route('chat'); } });
 // Android asks the SPA before falling back to WebView history or leaving the app.
 // No synthetic browser history entries: browser Back retains its normal contract.
 window.CodexLightNavigation = Object.freeze({ back: createBackHandler({ document,
   layers: [
     { isOpen: () => !$('thread-menu').classList.contains('hidden'), close: () => closeThreadMenu(true) },
-    { isOpen: () => !!activeMenu, close: () => { closeWindowMenu(); $('menu-app').focus(); } },
+    { isOpen: () => !!activeMenu, close: () => { closeWindowMenu(); focusAfterWindowMenu(); } },
     { isOpen: () => !$('reasoning-popover').classList.contains('hidden'), close: () => closeReasoning() },
     { isOpen: () => slashMenu.isOpen(), close: () => slashMenu.close() },
     { isOpen: () => sidebarController.isOverlayOpen(), close: () => sidebarController.close() },
@@ -1170,19 +1171,89 @@ $('rail-plugins').addEventListener('click',()=>openSettings('plugins'));
 $('rail-home').addEventListener('click', () => route('chat')); $('rail-settings').addEventListener('click', () => openSettings('general'));
 $('rail-usage').addEventListener('click', () => route('usage')); $('rail-account').addEventListener('click', () => route('account'));
 let activeMenu = null;
-function closeWindowMenu() { $('window-menu').classList.add('hidden'); for (const id of ['menu-file','menu-view','menu-app']) $(id).setAttribute('aria-expanded', 'false'); activeMenu = null; }
-function openWindowMenu(name) {
-  if (activeMenu === name) { closeWindowMenu(); return; }
-  closeWindowMenu(); activeMenu = name; const menu = $('window-menu'); menu.dataset.menu = name;
-  const entries = name === 'app' ? [['新对话',newThread],['打开项目…',openProjectDialog],['用量与性能',()=>route('usage')],['账户',()=>route('account')],['终端与 Git',showTerminal],['工具活动',()=>showDetails('tools',true)],['DSH 子代理',()=>showDetails('dsh',true)],['设置',()=>openSettings('general')],['帮助',()=>$('menu-help').click()]] : name === 'file' ? [['新对话', newThread], ['打开项目…', openProjectDialog], ['设置…', () => openSettings('general')]] : [['对话', () => route('chat')], ['用量与性能', () => route('usage')], ['账户', () => route('account')], ['终端与 Git', showTerminal], ['工具活动', () => showDetails('tools', true)], ['DSH 子代理', () => showDetails('dsh', true)], ['设置', () => openSettings('general')]];
-  const fragment = document.createDocumentFragment();
-  for (const [label, action] of entries) { const item = el('button', '', label); item.setAttribute('role', 'menuitem'); item.addEventListener('click', () => { closeWindowMenu(); action(); }); fragment.append(item); }
-  fragment.append(el('small', '', '本地客户端菜单')); menu.replaceChildren(fragment); menu.classList.remove('hidden'); if(name==='app'){const rect=$('menu-app').getBoundingClientRect();menu.style.left=Math.max(8,Math.min(rect.left,innerWidth-240))+'px';menu.style.top=(rect.bottom+6)+'px';}else{menu.style.left='52px';menu.style.top='8px';} $('menu-' + name).setAttribute('aria-expanded', 'true'); menu.querySelector('button')?.focus();
+let menuReturnFocus = null;
+function focusAfterWindowMenu() {
+  const trigger = $('menu-app');
+  const previous = menuReturnFocus;
+  const target = trigger.getClientRects().length ? trigger : previous?.isConnected && previous.getClientRects().length && !previous.closest('#window-menu') ? previous : $('rail-sidebar');
+  target?.focus({preventScroll: true});
 }
-$('menu-app').addEventListener('click',()=>openWindowMenu('app'));
-$('menu-file').addEventListener('click', () => openWindowMenu('file')); $('menu-view').addEventListener('click', () => openWindowMenu('view'));
-document.addEventListener('click', e => { if (!$('window-menu').contains(e.target) && !e.target.closest('#menu-file,#menu-view,#menu-app')) closeWindowMenu(); });
-$('window-menu').addEventListener('keydown', e => { const buttons = [...$('window-menu').querySelectorAll('button')]; if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); const n = buttons.indexOf(document.activeElement); buttons[(n + (e.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length]?.focus(); } });
+
+function closeWindowMenu() {
+  $('window-menu').classList.add('hidden');
+  for (const id of ['menu-file', 'menu-view', 'menu-app']) $(id).setAttribute('aria-expanded', 'false');
+  activeMenu = null;
+}
+function positionWindowMenu() {
+  const menu = $('window-menu'), rect = $('menu-app').getBoundingClientRect();
+  const width = menu.offsetWidth, height = menu.offsetHeight;
+  // The host's native brand lives above the client, not in the rail. Its menu
+  // starts just below that title; browser/mobile still anchor to their button.
+  const nativeBrand = document.documentElement.classList.contains('native-caption-brand-menu');
+  menu.style.left = Math.max(8, Math.min(nativeBrand ? 8 : rect.right + 8, innerWidth - width - 8)) + 'px';
+  menu.style.top = Math.max(nativeBrand ? 4 : 8, Math.min(nativeBrand ? 4 : rect.top, innerHeight - height - 8)) + 'px';
+}
+function openWindowMenu(name) {
+  if (activeMenu === name) { closeWindowMenu(); focusAfterWindowMenu(); return; }
+  if (!activeMenu) menuReturnFocus = document.activeElement;
+  closeWindowMenu(); activeMenu = name;
+  const menu = $('window-menu'); menu.dataset.menu = name;
+  const entries = [
+    ['新对话', 'compose', newThread, 'Ctrl N'],
+    ['打开目录', 'folder', openProjectDialog],
+    null,
+    ['对话', 'home', () => route('chat')],
+    ['额度与用量', 'chart', () => route('usage')],
+    ['账户', 'user', () => route('account')],
+    ['终端与 Git', 'terminal', showTerminal],
+    ['工具活动', 'activity', () => showDetails('tools', true)],
+    ['DSH 子代理', 'branch', () => showDetails('dsh', true)],
+    null,
+    ['设置', 'settings', () => openSettings('general')],
+    ['帮助', 'info', () => $('menu-help').click()]
+  ];
+  const fragment = document.createDocumentFragment();
+  for (const entry of entries) {
+    if (!entry) { const divider = el('div', 'app-menu-divider'); divider.setAttribute('role', 'separator'); fragment.append(divider); continue; }
+    const [label, glyph, action, shortcut] = entry;
+    const item = el('button', 'app-menu-item'); item.type = 'button'; item.tabIndex = -1;
+    item.setAttribute('role', 'menuitem');
+    item.append(icon(document, glyph, {size: 17}), el('span', 'app-menu-label', label));
+    if (shortcut) { const key = el('kbd', '', shortcut); key.setAttribute('aria-hidden', 'true'); item.append(key); }
+    item.addEventListener('click', () => { closeWindowMenu(); focusAfterWindowMenu(); action(); });
+    fragment.append(item);
+  }
+  menu.replaceChildren(fragment); menu.classList.remove('hidden'); positionWindowMenu();
+  $('menu-app').setAttribute('aria-expanded', 'true');
+  $('menu-' + name).setAttribute('aria-expanded', 'true');
+  menu.querySelector('button')?.focus();
+}
+for (const name of ['app', 'file', 'view']) $('menu-' + name).addEventListener('click', () => openWindowMenu(name));
+$('menu-app').addEventListener('keydown', e => {
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault(); if (!activeMenu) openWindowMenu('app');
+    const items = $('window-menu').querySelectorAll('button');
+    items[e.key === 'ArrowUp' ? items.length - 1 : 0]?.focus();
+  }
+});
+document.addEventListener('keydown', e => {
+  if (!e.defaultPrevented && (e.key === 'F10' && !e.shiftKey || e.altKey && e.key.toLowerCase() === 'm')) {
+    if (document.querySelector('dialog[open]')) return;
+    e.preventDefault(); openWindowMenu('app');
+  }
+});
+document.addEventListener('pointerdown', e => {
+  if (!$('window-menu').contains(e.target) && !e.target.closest('#menu-file,#menu-view,#menu-app')) closeWindowMenu();
+});
+window.addEventListener('resize', () => { if (activeMenu) { closeWindowMenu(); focusAfterWindowMenu(); } });
+$('window-menu').addEventListener('keydown', e => {
+  const buttons = [...$('window-menu').querySelectorAll('button')], n = buttons.indexOf(document.activeElement);
+  if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) {
+    e.preventDefault();
+    const next = e.key === 'Home' ? 0 : e.key === 'End' ? buttons.length - 1 : (n + (e.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
+    buttons[next]?.focus();
+  } else if (e.key === 'Tab') { closeWindowMenu(); focusAfterWindowMenu(); }
+});
 $('menu-help').addEventListener('click', () => notice('码舱 CodeCang 支持本地聊天、历史、审批与 DSH 任务展示，通过本机 Codex CLI 工作。设置仅显示当前可用功能。'));
 $('settings-search').addEventListener('input', () => { const query = $('settings-search').value.trim().toLowerCase(); for (const item of document.querySelectorAll('.settings-nav-item')) item.classList.toggle('hidden', !item.textContent.toLowerCase().includes(query)); });
 for (const button of document.querySelectorAll('[data-settings-section]')) button.addEventListener('click', () => {const wasOverlay=sidebarController.isOverlayOpen();selectSettingsSection(button.dataset.settingsSection);if(wasOverlay){sidebarController.closeForNavigation();$('settings-back').focus();}});
@@ -1258,7 +1329,7 @@ async function renameThread(event) {
 }
 async function archiveCurrentThread() {
   closeThreadMenu(); if (!canManageThread()) return;
-  const target = state.thread; if (!confirm(`将“${target.name || target.preview || '此对话'}”移入归档吗？可以从设置 → 已归档聊天恢复；不会删除项目文件。`)) return;
+  const target = state.thread; if (!await confirm(`将“${target.name || target.preview || '此对话'}”移入归档吗？可以从设置 → 已归档聊天恢复；不会删除项目文件。`)) return;
   state.sending = true; updateControls();
   try { await performMutation('thread/archive', {threadId:target.id}); state.sending = false; if (state.thread?.id === target.id) newThread(); await loadThreads(); }
   catch (e) { showMutationFailure(e, '归档'); }
@@ -1307,3 +1378,9 @@ init();
 if(!access.lan)startUpdateChecks({check:()=>api('/api/app-update/check',{}),onStatus:status=>updateIndicator?.update(status),notify:version=>notice('码舱 CodeCang v'+version+' 可用。打开设置 → 关于查看更新说明并下载。')});
 
 mountDesktopClosePreference();
+
+async function confirm(message) {
+ const snapshot = () => JSON.stringify([state.serverInstance,state.connected,state.cwd,state.thread?.id,state.turnId,state.loadingThread,state.shuttingDown]);
+ const before = snapshot();
+ return await confirmApp(document,message) && before === snapshot();
+}

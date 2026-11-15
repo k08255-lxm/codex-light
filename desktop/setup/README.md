@@ -1,4 +1,9 @@
-# Codex Light Setup
+# Historical Codex Light Setup
+
+> Historical tooling for 0.4.3 and earlier and migration regression fixtures.
+> Current releases use [Velopack](../velopack/README.md); do not use these steps
+> as the current release pipeline.
+
 
 `CodexLight-Setup-<version>-x64.exe` is a single .NET Framework 4.8 WPF executable containing the per-user application MSI. The installer UI uses the system Framework and does not need modern .NET or WebView2 to display. The application has its own runtime requirements; see [INSTALLATION.md](../INSTALLATION.md).
 

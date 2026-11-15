@@ -1,9 +1,10 @@
+import { confirmApp } from './app-confirm-dialog.js';
 import {Terminal} from './vendor/xterm.mjs';
 import {FitAddon} from './vendor/addon-fit.mjs';
 // Host owns visual layout. api(path,body), subscribe(handler)->unsubscribe are supplied.
 // No web links addon, clipboard bridge, external scripts, or automatically executed input.
 export function mountTerminal({container,status,api,subscribe,cwd}){
- const terminal=new Terminal({allowProposedApi:false,allowTransparency:false,scrollback:2000,convertEol:false,fontSize:13,fontFamily:'Consolas, monospace',theme:{background:'#181818',foreground:'#e5e5e5'},disableStdin:true});
+ const terminal=new Terminal({allowProposedApi:false,allowTransparency:false,scrollback:2000,convertEol:false,fontSize:13,fontFamily:'Consolas, monospace',theme:{background:'#181818',foreground:'#e5e5e5'},disableStdin:true,linkHandler:{allowNonHttpProtocols:false,async activate(event,uri){let url;try{url=new URL(uri);}catch{return;}if(!['https:','http:'].includes(url.protocol)||url.username||url.password)return;const doc=container.ownerDocument;if(!await confirmApp(doc,'打开终端中的外部链接？\n'+url.href))return;if(disposed)return;doc.defaultView.open(url.href,'_blank','noopener,noreferrer');}}});
  const fit=new FitAddon();terminal.loadAddon(fit);terminal.open(container);fit.fit();
  let id=null,disposed=false,lastSequence=0,opening=false,attempted=false,terminationRequested=false,connectionGeneration=0,writeChain=Promise.resolve(),resizeTimer;
  const report=value=>{status.textContent=value;};

@@ -36,6 +36,9 @@ export function costCoverage(cost) {
   return `已计价 ${cost.pricedRows} · 未计价 ${cost.unpricedRows??cost.totalRows-cost.pricedRows}${cost.complete?'':` · 部分估算${cost.partialRows?' '+cost.partialRows+' 条':''}`}`;
 }
 
+export function costCompletenessLabel(cost){return cost?.complete?'':cost?.pricingComplete?'覆盖未确认':'分项待补齐';}
+export function costCompletenessReason(cost){const names={input:'未缓存输入',cacheRead:'缓存读取',cacheWrite:'缓存写入',output:'输出',reasoning:'推理输出'};const missing=(cost?.components||[]).filter(p=>p.usd==null).map(p=>`${names[p.kind]||p.kind}${p.tokens==null?'计数缺失':p.pricePerMillion==null?'单价缺失':'无法计价'}`);return missing.length?missing.join('、'):(cost?.reason||(cost?.pricingComplete?'计价分项已齐全，但观察记录未确认覆盖整个回合。':'部分计数或参考单价尚未取得，当前仅显示已知分项小计。'));}
+
 export function mountStatistics(host, { api, notice = () => {}, onPickFolder = null }) {
   const document = host.ownerDocument;
   const ui = { scope: 'light', range: '30d', metric: 'tokens', tab: 'details', model: '', provider: '', account: '', cursor: null, history: [], sort: null, anchor: null };
@@ -76,12 +79,12 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
   async function discoverAndImport() {
     importBar.classList.remove('hidden');
     if (!discovered && !importInput.value.trim()) {
-      setStatus('正在查找 Codex 日志…');
+      setWaiting(true,'正在查找 Codex 日志…');
       try {
         const result = await api('/api/statistics/directories', {});
         discovered = true;
         if (!importInput.value.trim() && result.directory) importInput.value = result.directory;
-      } catch (error) { setStatus('查找失败：' + error.message, true); return; }
+      } catch (error) {setWaiting(false); setStatus('查找失败：' + error.message, true); return; }
     }
     if (!active || ui.scope !== 'local') return;
     if (importInput.value.trim()) await importDirectory();
@@ -91,7 +94,7 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
     const directory = importInput.value.trim(); if (!directory || importing) return;
     const mine = ++generation;
     importing = true; loading = true; importGo.disabled = true; importPick.disabled = true; importInput.disabled = true; refresh.disabled = true;
-    host.setAttribute('aria-busy', 'true'); setStatus('正在读取 Codex 日志…');
+    host.setAttribute('aria-busy', 'true');setWaiting(true,'正在读取本地日志并整理用量…');
     try {
       const result = await api('/api/statistics/import', { directory });
       localImported = true;
@@ -106,11 +109,12 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
     catch (error) { if (mine === generation && active) setStatus('导入失败：' + error.message, true); }
     finally {
       importing = false; importGo.disabled = false; importPick.disabled = false; importInput.disabled = false;
-      if (mine === generation) { loading = false; refresh.disabled = false; host.removeAttribute('aria-busy'); renderPager(); }
+      if (mine === generation) { loading = false; refresh.disabled = false; host.removeAttribute('aria-busy');setWaiting(false); renderPager(); }
     }
   }
 
   const status = el(document, 'p', 'page-status'); status.setAttribute('role', 'status');status.style.minHeight='1.5em';
+  const wait=el(document,'div','stats-loading-placeholder hidden');wait.setAttribute('aria-hidden','true');for(let i=0;i<6;i++)wait.append(el(document,'div','stats-skeleton'));
   const overview = el(document, 'section', 'stats-overview');
   const kpis = el(document, 'div', 'kpi-row'); kpis.setAttribute('role', 'tablist'); kpis.setAttribute('aria-label', '图表指标');
   const chartBox = el(document, 'div', 'chart-box');
@@ -154,20 +158,21 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
   const source=el(document,'select');source.setAttribute('aria-label','参考价格源');
   const option=(label,value)=>{const node=el(document,'option','',label);node.value=value;return node;};
   source.append(option('请选择价格源',''));
-  const mode=el(document,'select');mode.setAttribute('aria-label','价格模式');mode.append(option('选择 models.dev 参考源','catalog'),option('手填参考单价','manual'),option('恢复自动匹配','automatic'));
+  const mode=el(document,'select');mode.setAttribute('aria-label','价格模式');mode.append(option('自动匹配原厂参考价','automatic'),option('手填参考单价','manual'),option('指定其他参考源（高级）','catalog'));
   const manual=el(document,'div','pricing-manual'),rates={};
   for(const [key,label]of [['input','输入'],['output','输出'],['cacheRead','缓存读取'],['cacheWrite','缓存写入'],['reasoning','推理输出']]){const input=el(document,'input');input.type='number';input.min='0';input.step='any';input.placeholder='未知';input.setAttribute('aria-label',label+'单价');rates[key]=input;manual.append(field(label,input));}
   const savePrice=el(document,'button','btn primary','保存参考价');savePrice.type='submit';
   const priceState=el(document,'p','page-status');priceState.setAttribute('role','status');
-  const updateMode=()=>{manual.hidden=mode.value!=='manual';source.hidden=mode.value!=='catalog';lookup.hidden=mode.value==='automatic';};mode.addEventListener('change',updateMode);updateMode();
+  const updateMode=()=>{manual.hidden=mode.value!=='manual';source.hidden=mode.value!=='catalog';if(source.parentElement)source.parentElement.hidden=mode.value!=='catalog';lookup.hidden=mode.value==='automatic';};mode.addEventListener('change',updateMode);updateMode();
   priceForm.append(field('路由',priceProvider),field('模型',priceModel),lookup,field('计价方式',mode),field('价格源 / USD 每百万 tokens',source),manual,savePrice);
-  pricePanel.append(priceForm,el(document,'p','page-sub','基础参考档按所选基础单价估算；不推断每次调用的上下文档位。空白单价保留未知。'),priceState);
+  updateMode();pricePanel.append(priceForm,el(document,'p','page-sub','基础参考档按所选基础单价估算；不推断每次调用的上下文档位。空白单价保留未知。'),priceState);
   let priceLookupGeneration=0,candidates=[],candidateIdentity=null;
   async function lookupPrices(){
     const mine=++priceLookupGeneration;const provider=priceProvider.value.trim(),model=priceModel.value.trim();lookup.disabled=true;savePrice.disabled=true;candidateIdentity=null;priceState.textContent='正在查找…';
     try{const result=await api('/api/pricing/model',{provider,model});if(mine!==priceLookupGeneration)return;candidates=result.candidates||[];candidateIdentity=JSON.stringify([provider,model]);source.replaceChildren(option('请选择价格源',''),...candidates.map((row,index)=>option(`${row.catalogProvider} · ${row.input??'未知'} / ${row.output??'未知'}${row.segmented?' · 基础参考档':''}`,String(index))));
       for(const [key,input]of Object.entries(rates))input.value=result.matchedBy==='manual'?result[key]??'':'';
       if(result.matchedBy==='manual')mode.value='manual';
+      else if(result.matchedBy==='explicit-alias'){mode.value='catalog';const selected=candidates.findIndex(row=>row.catalogProvider===result.catalogProvider&&row.catalogModel===result.catalogModel);source.value=selected<0?'':String(selected);}
       priceState.textContent=result.unsupportedReason||(result.catalogProvider?`当前参考：${result.catalogProvider}${result.referenceTier==='base'?' · 基础参考档':''}`:'手工参考单价');updateMode();
     }catch(error){if(mine===priceLookupGeneration)priceState.textContent=error.message;}
     finally{if(mine===priceLookupGeneration){lookup.disabled=false;savePrice.disabled=false;}}
@@ -181,8 +186,8 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
       const result=await api('/api/pricing/configure',entry);resetPaging();await load();priceState.textContent=result.persistenceWarning||result.unsupportedReason||'已保存参考价';
     }catch(error){priceState.textContent=error.message;}finally{savePrice.disabled=false;}
   });
-  function openPrice(row){pricePanel.open=true;priceProvider.value=row.provider||'';priceModel.value=row.model||'';mode.value='catalog';updateMode();lookupPrices();}
-  host.replaceChildren(header, importBar, status, pricePanel, overview, perf, table, scopeNote);
+  function openPrice(row){pricePanel.open=true;priceProvider.value=row.provider||'';priceModel.value=row.model||'';mode.value='automatic';updateMode();lookupPrices();}
+  host.replaceChildren(header, importBar, status, pricePanel, wait, overview, perf, table, scopeNote);
 
   function segmented(options, value, onChange) {
     const node = el(document, 'div', 'segmented'); node.setAttribute('role', 'radiogroup');
@@ -194,6 +199,7 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
     const set = key => { for (const button of buttons) button.setAttribute('aria-checked', String(button.dataset.value === key)); };
     set(value); return { node, set };
   }
+  function setWaiting(value,label='正在读取统计…'){host.classList.toggle('stats-loading',value);wait.classList.toggle('hidden',!value||!!data);for(const section of [overview,perf,table,scopeNote])section.classList.toggle('hidden',value&&!data);if(value)setStatus(label);}
   function setStatus(text, error = false) { status.textContent = text; status.classList.toggle('error', error);status.hidden=false; }
   // A fresh query: new time anchor, first page. Paging keeps both.
   function resetPaging() { ui.cursor = null; ui.history = []; ui.anchor = null; }
@@ -204,7 +210,7 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
     if (ui.anchor === null) ui.anchor = Date.now();
     renderPager();
     importBar.classList.toggle('hidden', ui.scope !== 'local');
-    refresh.setAttribute('aria-label','正在更新统计');if(!data)setStatus('正在读取…');
+    refresh.setAttribute('aria-label','正在更新统计');setWaiting(true,data?'正在刷新，先显示已有数据…':'正在读取统计…');
     try {
       const query=statisticsQuery(ui);const result = await api('/api/statistics/query', query);
       if (mine !== generation) return;
@@ -212,7 +218,7 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
     } catch (error) {
       if (mine !== generation) return;
       loading = false; setStatus('统计读取失败：' + error.message, true); render();
-    } finally { if (mine === generation) { loading = false; refresh.disabled = false;refresh.setAttribute('aria-label','刷新统计'); host.removeAttribute('aria-busy'); renderPager(); } }
+    } finally { if (mine === generation) { loading = false; refresh.disabled = false;refresh.setAttribute('aria-label','刷新统计'); host.removeAttribute('aria-busy');setWaiting(false); renderPager(); } }
   }
 
   function render() {
@@ -296,7 +302,7 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
     ['input', '输入', row => compact(row.inputTokens), row => row.inputTokens ?? -1, 'num'],
     ['output', '输出', row => compact(row.outputTokens), row => row.outputTokens ?? -1, 'num'],
     ['cache', '缓存命中', row => percent(row.cacheHitRate), row => row.cacheHitRate ?? -1, 'num'],
-    ['cost', '参考小计', row => `${usd(row.estimatedCost?.usd)}${row.estimatedCost?.usd!=null&&!row.estimatedCost?.complete?' · 部分':''}`, row => row.estimatedCost?.usd ?? -1, 'num'],
+    ['cost', '参考小计', row => `${usd(row.estimatedCost?.usd)}${row.estimatedCost?.usd!=null&&!row.estimatedCost?.complete?' · '+costCompletenessLabel(row.estimatedCost):''}`, row => row.estimatedCost?.usd ?? -1, 'num'],
     ['success', '成功率', row => percent(row.successRate), row => row.successRate ?? -1, 'num'],
     ['p50', '耗时 p50', row => seconds(row.performance?.durationMs?.p50), row => row.performance?.durationMs?.p50 ?? -1, 'num'],
     ['tps', '回合 tok/s p50', row => rate(row.performance?.turnOutputTokensPerSecond?.p50, 'tok/s'), row => row.performance?.turnOutputTokensPerSecond?.p50 ?? -1, 'num'],
@@ -345,12 +351,13 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
       for (const [key, , text, , kind] of columns) {
         const td = el(document, 'td', [kind, key === 'model' ? 'mono' : ''].filter(Boolean).join(' '), text(row));
         if(detail&&key==='cost'){
-          const cost=row.estimatedCost,details=el(document,'details'),summary=el(document,'summary','',cost?.usd===null?'未计价':`${usd(cost?.usd)}${cost?.complete?'':' · 部分'}`);summary.title='展开该回合参考成本分项；不是底层每次模型 API 请求成本';details.append(summary);
+          const cost=row.estimatedCost,details=el(document,'details'),summary=el(document,'summary','',cost?.usd===null?'未计价':`${usd(cost?.usd)}${cost?.complete?'':' · '+costCompletenessLabel(cost)}`);summary.title='展开该回合参考成本分项；不是底层每次模型 API 请求成本';details.append(summary);
           const labels={input:'未缓存输入',cacheRead:'缓存读取',cacheWrite:'缓存写入',output:'输出',reasoning:'推理输出'};
           for(const part of cost?.components||[])details.append(el(document,'p','',`${labels[part.kind]||part.kind}：${compact(part.tokens)} tokens × ${usd(part.pricePerMillion)} / 百万 = ${usd(part.usd)}`));
-          if(cost?.usd!==null&&!cost?.complete)details.append(el(document,'p','','已知分项参考小计；缺失计数或单价的分项未计入，不是完整回合成本。'));
-          if(cost?.reason)details.append(el(document,'p','',cost.reason));td.replaceChildren(details);
-          if(cost?.reference){const ref=cost.reference;details.append(el(document,'p','',ref.source==='manual'?'手填参考价':`${ref.catalogProvider||'未选择价格源'} / ${ref.catalogModel||row.model}${ref.referenceTier==='base'?' · 基础参考档':''}${ref.matchedBy==='consistent-model-reference'?' · 同名一致价参考':''}`));}
+          if(cost?.tokenSource==='verified-local-turn')details.append(el(document,'p','','已按同一回合原始日志校准用量；未与本应用观察值重复相加。'));
+          if(cost?.usd!==null&&!cost?.complete)details.append(el(document,'p','',costCompletenessReason(cost)+'；这不是实际扣款账单。'));
+          if(cost?.reason&&(cost?.usd===null||cost?.complete))details.append(el(document,'p','',cost.reason));td.replaceChildren(details);
+          if(cost?.reference){const ref=cost.reference;details.append(el(document,'p','',ref.source==='manual'?'手填参考价':`${ref.catalogProvider||'暂无对应价格'} / ${ref.catalogModel||row.model}${ref.referenceTier==='base'?' · 基础参考档':''}${ref.matchedBy==='publisher-model-reference'?' · 原厂条目参考':ref.matchedBy==='consistent-model-reference'?' · 同名一致价参考':''}`));}
           if(row.provider&&row.model){const configure=el(document,'button','btn small','设置参考价');configure.type='button';configure.addEventListener('click',()=>openPrice(row));details.append(configure);}
         }
         line.append(td);
@@ -377,7 +384,7 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
     lines.push('两个范围可能重叠，界面不会相加。官方账户用量见“账户”。');
     lines.push('“首次可见输出等待”包含思考与工具时间，不是 API 首 token。“回合平均输出 tok/s”= 已完成回合输出 tokens ÷ 整轮耗时（含思考、工具与等待），不是纯模型生成速度；当前协议不提供纯推理耗时，因此纯生成速度与 TTFT 不显示。');
     if (pricing) lines.push(`价格：${pricing.available ? `${pricing.source || '参考价格'}${pricing.fetchedAt ? '，' + localTime(pricing.fetchedAt) + ' 获取' : ''}` : '未获取参考价格，成本不可估算'}。估算不是账单。`);
-    if(pricing?.persistenceWarning)lines.push(pricing.persistenceWarning);
+    if(pricing?.persistenceWarning)lines.push(pricing.persistenceWarning);if(pricing?.refreshWarning)lines.push(pricing.refreshWarning);
     if (c?.partial) lines.push('覆盖不完整：部分记录被排除或截断。');
     if(Number.isFinite(c?.knownModelRows))lines.push(`模型已确认 ${integer(c.knownModelRows)} 条，未知 ${integer(c.unknownModelRows)} 条。历史未知仅按相同对话与回合的日志上下文恢复，不套用当前默认模型。`);
     if (c?.excludedOverlappingThreads || c?.excludedAmbiguousSessions) lines.push(`Token 归属暂缓：重叠对话 ${integer(c.excludedOverlappingThreads)}，歧义会话 ${integer(c.excludedAmbiguousSessions)}；可确认的回合仍保留。`);
@@ -390,8 +397,20 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
 
   render();
   return {
-    activate() { active = true; if (ui.scope === 'local' && !localImported) discoverAndImport(); else load(); },
-    deactivate() { active = false; generation++; loading = false; },
+    activate() {
+      active = true;
+      const initial = ui.scope === 'local' && !localImported ? discoverAndImport() : load();
+      const started = generation;
+      api('/api/pricing/ensure',{}).then(async info=>{
+        await initial;
+        // A late price refresh must not reset pagination, its frozen time range,
+        // or a newer user query. Only refresh the unchanged visible query.
+        if(!active||generation!==started)return;
+        if(info?.refreshWarning)setStatus(info.refreshWarning);
+        else if(info?.available&&info.fetchedAt!==data?.pricing?.fetchedAt)load();
+      }).catch(()=>{});
+    },
+    deactivate() { active = false; generation++; loading = false;setWaiting(false);host.removeAttribute('aria-busy'); },
     reset() { data = null; resetPaging(); render(); },
   };
 }

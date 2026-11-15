@@ -40,7 +40,8 @@ export function createRemoteView({ document, state, $, el, rpc, notice, confirm,
    if(!state.connected){notice('尚未连接 Codex，不能执行远控操作，也未撤销设备。',true);return;}
    if(remote.busy||scopedPending('remote').length){notice('远控状态仍在自动同步，请稍后再试。',true);return;}
    if(method==='remoteControl/client/revoke'&&!canRevokeDevice(remote.status,params.environmentId)){notice('远控环境已变化或未连接，未撤销任何设备。请刷新后重试。',true);return;}
-   if(!confirm(question))return;
+   const consentGeneration=remote.generation,consentInstance=state.serverInstance,consentEnvironment=remoteEnvironmentId(remote.status);
+   if(!await confirm(question)||remote.busy||consentGeneration!==remote.generation||consentInstance!==state.serverInstance||consentEnvironment!==remoteEnvironmentId(remote.status))return;
    const generation=++remote.generation,instance=state.serverInstance,environment=remoteEnvironmentId(remote.status);
    remote.busy=true;remoteControls();
    const current=()=>generation===remote.generation&&state.connected&&state.serverInstance===instance&&remoteEnvironmentId(remote.status)===environment;

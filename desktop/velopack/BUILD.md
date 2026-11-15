@@ -1,6 +1,6 @@
-# Optional Velopack release build
+# Velopack release build
 
-This tooling builds/verifies artifacts only. It never publishes, installs, starts the normal application, changes the MSI release path, or migrates a user installation.
+This tooling builds/verifies artifacts only. It never publishes, installs, starts the normal application, changes an installed application, or migrates a user installation.
 
 ## Inputs
 
@@ -35,7 +35,7 @@ No network feed is modified by these tools. Use a new release version after chan
 
 ### Prerelease policy
 
-Tool and runtime are deliberately synchronized to **1.3.39-g8d2844f (official prerelease)**. The build rejects a mismatching stable or preview CLI/runtime. The prior 1.2.161 Setup forwarding defect is historical; the selected revision contains its source fix, but this does **not** authorize migration execution or establish end-to-end migration acceptance. Keep the wrapper gate closed until isolated installation/recovery evidence is reviewed. [Historical verification](INTEGRATION_STATUS.md) distinguishes earlier portable tests from the later 0.4.4 migration evidence; neither substitutes for acceptance of a newly built installer.
+Tool and runtime are deliberately synchronized to **1.3.39-g8d2844f (official prerelease)**. The build rejects a mismatching stable or preview CLI/runtime. The prior 1.2.161 Setup forwarding defect is historical; the selected revision contains its source fix, but this does **not** authorize migration execution or establish end-to-end migration acceptance. Review isolated installation/recovery evidence before exposing a newly built wrapper to users. [Historical verification](INTEGRATION_STATUS.md) distinguishes earlier portable tests from the later 0.4.4 migration evidence; neither substitutes for acceptance of a newly built installer.
 
 ### Migration-stage build (not a release)
 

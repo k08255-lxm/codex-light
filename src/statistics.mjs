@@ -36,7 +36,7 @@ function cleanRow(raw){
  if(!raw||!id(raw.threadId)||!id(raw.turnId)||raw.source!=='light-events'||!statuses.has(raw.status))throw new Error('Invalid statistics record');
  const row=blankRow(raw.threadId,raw.turnId,'light-events');
  Object.assign(row,{timestamp:iso(raw.timestamp),startedAt:iso(raw.startedAt),completedAt:iso(raw.completedAt),model:id(raw.model),provider:providerId(raw.provider),status:raw.status,submissionCount:n(raw.submissionCount)??0,tokens:tokens(raw.tokens),tokensComplete:raw.tokensComplete===true,outputTokensComplete:raw.outputTokensComplete===true,unknownTokenFields:TOKEN_KEYS.filter(key=>raw.unknownTokenFields?.includes(key)),performance:Object.fromEntries(METRICS.map(key=>[key,metric(raw.performance?.[key])]))});
- row.account=publicAccountIdentity(raw.account);
+ row.account=publicAccountIdentity(raw.account);if(raw.tokenSource==='verified-local-turn')row.tokenSource='verified-local-turn';
  return row;
 }
 function addUsage(row,delta){for(const key of TOKEN_KEYS){const value=n(delta[key]);if(value===null){row.tokens[key]=null;if(!row.unknownTokenFields.includes(key))row.unknownTokenFields.push(key);row.tokensComplete=false;}else if(!row.unknownTokenFields.includes(key)){row.tokens[key]=row.tokens[key]===null?value:plus(row.tokens[key],value);if(row.tokens[key]===null){row.unknownTokenFields.push(key);row.tokensComplete=false;}}}}
@@ -54,7 +54,7 @@ function turnThroughput(row){
 function cost(row,pricing){
  let estimate=null,reference=null;
  if(row.provider&&row.model&&row.model.length<=200){try{reference=pricing.get(row.model,row.provider);estimate=estimateTokenCost({...row.tokens,model:row.model,provider:row.provider},reference);}catch{/* Invalid model/provider or schema cannot be priced. */}}
- return {kind:'reference-estimate',currency:'USD',usd:estimate?.complete?estimate.usd:estimate?.knownUsd??null,complete:estimate?.complete===true&&row.tokensComplete===true,components:estimate?.components||[],reason:estimate?.reason||(!row.model||!row.provider?'模型或路由未知':null),reference:reference?{source:reference.source,catalogProvider:reference.catalogProvider||null,catalogModel:reference.catalogModel||null,matchedBy:reference.matchedBy,referenceTier:reference.referenceTier||null,fetchedAt:reference.fetchedAt||null}:null};
+ return {kind:'reference-estimate',currency:'USD',usd:estimate?.complete?estimate.usd:estimate?.knownUsd??null,complete:estimate?.complete===true&&row.tokensComplete===true,tokenSource:row.tokenSource||'observed',components:estimate?.components||[],pricingComplete:estimate?.complete===true,usageComplete:row.tokensComplete===true,reason:estimate?.reason||(estimate?.complete&&!row.tokensComplete?'计价分项已齐全，但观察记录未确认覆盖整个回合':null)||(!row.model||!row.provider?'模型或路由未知':null),reference:reference?{source:reference.source,catalogProvider:reference.catalogProvider||null,catalogModel:reference.catalogModel||null,matchedBy:reference.matchedBy,referenceTier:reference.referenceTier||null,fetchedAt:reference.fetchedAt||null}:null};
 }
 function aggregate(rows){
  const tokenTotals=Object.fromEntries(TOKEN_KEYS.map(key=>{const known=rows.map(row=>n(row.tokens[key])).filter(value=>value!==null);const sum=known.reduce((a,b)=>a+b,0);return [key,known.length&&Number.isSafeInteger(sum)?sum:null];}));
@@ -202,6 +202,10 @@ export class StatisticsService {
    }
   }
   for(const row of out.values())row.unknownTokenFields=TOKEN_KEYS.filter(key=>row.tokens[key]===null);
+  // Recover only a uniquely identified, fully covered native turn; never add local totals to live totals.
+  const proofs=new Map();for(const session of scan.sessions||[]){if(overlap.has(session.threadId)||session.attribution!=='observed-differences-only')continue;for(const turn of session.turns||[]){if(turn.coverageComplete!==true)continue;const key=keyFor(session.threadId,turn.turnId);proofs.set(key,(proofs.get(key)||0)+1);}}
+  let tokenRows=0;for(const row of out.values()){if(proofs.get(row.id)!==1||row.unknownTokenFields.length||row.kind!=='turn')continue;row.tokensComplete=true;row.outputTokensComplete=true;row.tokenSource='verified-local-turn';const live=this.rows.get(row.id);if(!live||live.tokensComplete||live.status==='inProgress'||live.model!==row.model||live.provider!==row.provider)continue;if(TOKEN_KEYS.some(k=>n(live.tokens[k])!==null&&live.tokens[k]>row.tokens[k]))continue;live.tokens={...row.tokens};live.tokensComplete=true;live.outputTokensComplete=true;live.unknownTokenFields=[];live.tokenSource='verified-local-turn';tokenRows++;}if(tokenRows)this.changed();recovered.tokenRows=tokenRows;
+
   this.localRows=[...out.values()].sort((a,b)=>(b.timestamp||'').localeCompare(a.timestamp||'')).slice(0,this.limit);this.localCoverage={partial:scan.partial||out.size>this.limit||excluded>0||overlap.size>0,excludedOverlappingThreads:overlap.size,excludedAmbiguousSessions:excluded};this.revision++;return {recovered};
  }
  query(input={}){

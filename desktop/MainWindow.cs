@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -11,7 +12,9 @@ internal sealed class MainWindow : CaptionWindow {
  readonly bool demo; readonly string profile=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"CodexLight","WebView","Sessions",Guid.NewGuid().ToString("N"));
  readonly CancellationTokenSource hostMessages=new();
  readonly SemaphoreSlim hostWrites=new(1,1);
- NotifyIcon? tray;ContextMenuStrip? trayMenu;Icon? trayIcon;Font? trayFont;
+ NotifyIcon? tray;Icon? trayIcon;
+ const bool NativeStorageReady=true; // Pinned-handle native path independently reviewed; no pathname fallback.
+ StorageNativeService? nativeStorage;
  Process? backend;ChildJob? job;Uri? origin;bool closing,allowClose,exitRequested,choosingClose,resourcesDisposed,failed,updateShutdownAttempted;
  readonly WindowSessionEnd sessionEnd=new();
  readonly CloseBehaviorStore closeBehavior=CloseBehaviorStore.ForCurrentUser();
@@ -19,10 +22,31 @@ internal sealed class MainWindow : CaptionWindow {
  Task? stopTask;
  string startupStage="检测运行环境";
  readonly WindowPlacementController placement;
- public MainWindow(bool demo){this.demo=demo;Text="码舱 CodeCang";Icon=Icon.ExtractAssociatedIcon(Application.ExecutablePath);Size=new Size(1257,945);MinimumSize=new Size(800,600);BackColor=Color.FromArgb(24,24,24);Controls.Add(view);Controls.Add(loading);BuildCaptionMenu();placement=new WindowPlacementController(this,WindowPlacementStore.ForCurrentUser());Shown+=async(_,_)=>await StartAsync();FormClosing+=OnClosing;}
+ public MainWindow(bool demo){this.demo=demo;Text="码舱 CodeCang";Icon=Icon.ExtractAssociatedIcon(Application.ExecutablePath);Size=new Size(1257,945);MinimumSize=new Size(800,600);BackColor=Color.FromArgb(24,24,24);Controls.Add(view);Controls.Add(loading);BuildCaptionMenu();CaptionBrandInvoked+=async(_,_)=>await ClickWebAsync("menu-app");placement=new WindowPlacementController(this,WindowPlacementStore.ForCurrentUser());Shown+=async(_,_)=>await StartAsync();FormClosing+=OnClosing;}
  protected override void OnLoad(EventArgs e){base.OnLoad(e);placement.Restore();try{ShowTray();}catch{DisposeTray();ShowTrayFailure();}}
  protected override void OnMove(EventArgs e){base.OnMove(e);placement?.Capture();}
- protected override void OnResize(EventArgs e){base.OnResize(e);placement?.Capture();}
+ FormWindowState previousWindowState;bool restorePaintQueued;
+ protected override void OnResize(EventArgs e){
+  bool restored=previousWindowState==FormWindowState.Minimized&&WindowState!=FormWindowState.Minimized;
+  base.OnResize(e);previousWindowState=WindowState;placement?.Capture();
+  if(restored)QueueRestorePaint();
+ }
+ protected override void OnVisibleChanged(EventArgs e){base.OnVisibleChanged(e);if(Visible)QueueRestorePaint();}
+ // A restored HWND can retain a stale compositor surface although its DOM is
+ // alive. Request a fresh frame after Show/WM_SIZE has completed. Never reload,
+ // recreate the WebView, or resend a task to recover a paint-only failure.
+ void QueueRestorePaint(){
+  if(restorePaintQueued||closing||IsDisposed||!IsHandleCreated||view==null||view.IsDisposed||view.CoreWebView2==null)return;
+  restorePaintQueued=true;
+  BeginInvoke((Action)(()=>{
+   restorePaintQueued=false;
+   if(closing||IsDisposed||!Visible||WindowState==FormWindowState.Minimized||view.IsDisposed)return;
+   PerformLayout();view.Refresh();
+   // INVALIDATE | ALLCHILDREN | UPDATENOW | FRAME. No background erasure.
+   RedrawWindow(Handle,IntPtr.Zero,IntPtr.Zero,0x0581);
+  }));
+ }
+ [DllImport("user32.dll")][return:MarshalAs(UnmanagedType.Bool)]static extern bool RedrawWindow(IntPtr hwnd,IntPtr rect,IntPtr region,uint flags);
  protected override void OnResizeEnd(EventArgs e){base.OnResizeEnd(e);placement.Capture();placement.Save();}
  void SetStartupStage(string stage,StartupPhase phase){startupStage=stage;loading.SetProgress(phase,stage);}
  async Task StartAsync(){
@@ -45,7 +69,7 @@ internal sealed class MainWindow : CaptionWindow {
    if(!backend.Start())throw new InvalidOperationException("无法启动 Node 后台。");
    SetStartupStage("绑定后台进程",StartupPhase.Backend);try{job.Assign(backend);}catch{backend.Kill(true);throw;}
    backend.ErrorDataReceived+=(_,_)=>{};backend.BeginErrorReadLine(); // never persist secrets/diagnostics
-   SetStartupStage("后台握手",StartupPhase.Backend);await WriteHostAsync(JsonSerializer.Serialize(new{action="start",updateTransport=VelopackApplyLauncher.Available?"velopack":"msi"}));
+   SetStartupStage("后台握手",StartupPhase.Backend);nativeStorage=new StorageNativeService(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"CodexLight"),profile,AcquireStorageMaintenance);await WriteHostAsync(JsonSerializer.Serialize(new{action="start",storageNative=NativeStorageReady,updateTransport=VelopackApplyLauncher.Available?"velopack":"msi"}));
    using var timeout=CancellationTokenSource.CreateLinkedTokenSource(hostMessages.Token);timeout.CancelAfter(TimeSpan.FromSeconds(30));
    string line=await ReadBoundedLineAsync(backend.StandardOutput,timeout.Token);
    using var result=JsonDocument.Parse(line);string? url=result.RootElement.GetProperty("url").GetString();
@@ -95,7 +119,7 @@ internal sealed class MainWindow : CaptionWindow {
    core.NavigationCompleted+=(_,e)=>{if(e.IsSuccess){if(!failed)loading.Hide();}else ShowFailure("页面加载失败。请关闭并重新打开应用。");};
    if(HasIntegratedCaption){
     // Host-only style: preserve browser mode while removing the duplicate WebUI bar.
-    await core.AddScriptToExecuteOnDocumentCreatedAsync("document.addEventListener('DOMContentLoaded',()=>{document.documentElement.classList.add('native-caption-integrated');});");
+    await core.AddScriptToExecuteOnDocumentCreatedAsync("document.addEventListener('DOMContentLoaded',()=>{document.documentElement.classList.add('native-caption-integrated','native-caption-brand-menu');});");
    }
    SetStartupStage("载入界面",StartupPhase.Interface);core.Navigate(uri.AbsoluteUri);
    _ = ReadHostMessagesAsync(backend.StandardOutput);
@@ -112,12 +136,27 @@ internal sealed class MainWindow : CaptionWindow {
    File.WriteAllText(Path.Combine(directory,"webview-startup.json"),JsonSerializer.Serialize(new{time=DateTimeOffset.UtcNow,ready,attempts}));
   }catch(IOException){}catch(UnauthorizedAccessException){} // Optional diagnostics must not prevent startup.
  }
+ // Acquired and disposed synchronously on the UI thread, matching Program's lifetime lease.
+ static IDisposable AcquireStorageMaintenance(){
+  var current=CodexLight.Shared.InstallMaintenance.Acquire(AppContext.BaseDirectory);
+  try{var dir=new DirectoryInfo(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar));
+   var parent=dir.Name.Equals("current",StringComparison.OrdinalIgnoreCase)?CodexLight.Shared.InstallMaintenance.Acquire(dir.Parent!.FullName):null;
+   return new StorageLeases(current,parent);
+  }catch{current.Dispose();throw;}
+ }
+ sealed class StorageLeases(IDisposable current,IDisposable? parent):IDisposable{public void Dispose(){parent?.Dispose();current.Dispose();}}
  async Task ReadHostMessagesAsync(StreamReader reader){
   try{
    while(!closing){
-    string line=await ReadBoundedLineAsync(reader,hostMessages.Token);
+    string line=await ReadBoundedLineAsync(reader,hostMessages.Token,262144);
     using var document=JsonDocument.Parse(line);var message=document.RootElement;
     if(message.ValueKind!=JsonValueKind.Object||!message.TryGetProperty("type",out var type)||type.ValueKind!=JsonValueKind.String)throw new InvalidDataException();
+    if(type.GetString()=="storage"){
+     if(message.EnumerateObject().Count()!=4||!message.TryGetProperty("requestId",out var storageRequest)||!Guid.TryParseExact(storageRequest.GetString(),"D",out var storageId)||!message.TryGetProperty("action",out var storageAction)||!message.TryGetProperty("input",out var storageInput))throw new InvalidDataException();
+     object? result=null;string? error=null;
+     try{if(InvokeRequired||closing||nativeStorage==null)throw new IOException("Native storage unavailable");result=nativeStorage.Execute(storageAction.GetString()??"",storageInput);}catch{error="Native cleanup refused: files changed, are busy, or are outside the approved scope.";}
+     await WriteHostAsync(JsonSerializer.Serialize(new{action="storageResult",requestId=storageId.ToString("D"),result,error}));continue;
+    }
     if(type.GetString()=="pickFolder"){
      if(message.EnumerateObject().Count()!=2||!message.TryGetProperty("requestId",out var request)||request.ValueKind!=JsonValueKind.String||!Guid.TryParseExact(request.GetString(),"D",out var id))throw new InvalidDataException();
      await PickFolderAsync(id.ToString("D"));continue;
@@ -159,15 +198,13 @@ internal sealed class MainWindow : CaptionWindow {
   SetCaptionTheme(false);RefreshCaptionLayout();
  }
  protected override bool ProcessCmdKey(ref Message msg,Keys keyData){
-  if(keyData==Keys.F10){fileMenu?.Select();CaptionMenu.Focus();return true;}
-  if(keyData==(Keys.Alt|Keys.F)||keyData==(Keys.Alt|Keys.V)){
-   var submenu=keyData==(Keys.Alt|Keys.F)?fileMenu:viewMenu;submenu?.Select();submenu?.ShowDropDown();return true;
-  }
+  // The application menu belongs to the styled WebUI, never a GDI popup on glass.
+  if(keyData==Keys.F10||keyData==(Keys.Alt|Keys.M)||keyData==(Keys.Alt|Keys.F)||keyData==(Keys.Alt|Keys.V)){_ = ClickWebAsync("menu-app");return true;}
   if(keyData==(Keys.Alt|Keys.H)){_ = ClickWebAsync("menu-help");return true;}
   if(keyData==(Keys.Alt|Keys.E)){view.Focus();return true;} // Editing uses the focused WebView's normal Ctrl shortcuts.
   return base.ProcessCmdKey(ref msg,keyData);
  }
- async Task ClickWebAsync(string id){if(closing||view.CoreWebView2==null)return;try{await view.CoreWebView2.ExecuteScriptAsync($"document.getElementById({JsonSerializer.Serialize(id)})?.click()");}catch{}}
+ async Task ClickWebAsync(string id){if(closing||view.CoreWebView2==null)return;try{if(id=="menu-app")view.Focus();await view.CoreWebView2.ExecuteScriptAsync($"document.getElementById({JsonSerializer.Serialize(id)})?.click()");}catch{}}
  bool IsOwn(string value)=>Uri.TryCreate(value,UriKind.Absolute,out var uri)&&origin!=null&&uri.Scheme==origin.Scheme&&uri.Host==origin.Host&&uri.Port==origin.Port&&uri.UserInfo=="";
  void QueueExternal(string value){
   if(closing||IsDisposed||!IsHandleCreated)return;
@@ -271,27 +308,25 @@ internal sealed class MainWindow : CaptionWindow {
  }
  void ShowTray(){
   if(tray==null){
-   trayFont=new Font("Microsoft YaHei UI",9f,FontStyle.Regular,GraphicsUnit.Point);
-   trayMenu=new ContextMenuStrip{Font=trayFont};trayMenu.Items.Add("打开窗口",null,(_,_)=>RestoreFromTray());trayMenu.Items.Add(new ToolStripSeparator());
-   trayMenu.Items.Add("退出",null,(_,_)=>{exitRequested=true;Close();});
    trayIcon=TrayAppearance.CreateIcon(Math.Max(16,SystemInformation.SmallIconSize.Width),TrayAppearance.IsLightTaskbar());
-   TrayAppearance.Apply(trayMenu,TrayAppearance.IsLightTaskbar());
-   trayMenu.Opening+=(_,_)=>RefreshTrayAppearance();
-   tray=new NotifyIcon{Text="码舱 CodeCang",Icon=trayIcon,ContextMenuStrip=trayMenu};
+   tray=new NotifyIcon{Text="码舱 CodeCang",Icon=trayIcon};
    TrayInteraction.BindRestore(tray,RestoreFromTray);
+   tray.MouseUp+=(_,e)=>{if(e.Button==MouseButtons.Right){
+    try{NativeTrayMenu.Dispatch(NativeTrayMenu.Show(Handle,Cursor.Position),RestoreFromTray,()=>{exitRequested=true;Close();});}
+    catch(System.ComponentModel.Win32Exception){RestoreFromTray();ShowTrayFailure();}
+   }};
   }
   tray.Visible=true;
   if(!tray.Visible)throw new InvalidOperationException("Tray icon unavailable");
  }
  void RefreshTrayAppearance(){
-  if(tray==null||trayMenu==null)return;
+  if(tray==null)return;
   bool light=TrayAppearance.IsLightTaskbar();
   var next=TrayAppearance.CreateIcon(Math.Max(16,SystemInformation.SmallIconSize.Width),light);
   var previous=trayIcon;tray.Icon=next;trayIcon=next;previous?.Dispose();
-  TrayAppearance.Apply(trayMenu,light);
  }
  void ShowTrayFailure()=>MessageBox.Show(this,"无法显示系统托盘图标，窗口将保持打开。","码舱 CodeCang",MessageBoxButtons.OK,MessageBoxIcon.Error);
- void DisposeTray(){if(tray!=null){tray.Visible=false;tray.Dispose();tray=null;}trayMenu?.Dispose();trayMenu=null;trayIcon?.Dispose();trayIcon=null;trayFont?.Dispose();trayFont=null;}
+ void DisposeTray(){if(tray!=null){tray.Visible=false;tray.Dispose();tray=null;}trayIcon?.Dispose();trayIcon=null;}
  protected override void WndProc(ref Message message){
   sessionEnd.Observe(message.Msg,message.WParam);
   if(message.Msg==0x001A||message.Msg==0x031A||message.Msg==0x02E0)RefreshTrayAppearance();
@@ -349,5 +384,5 @@ internal sealed class MainWindow : CaptionWindow {
   if(disposing&&!resourcesDisposed){resourcesDisposed=true;placement?.Save();placement?.Dispose();closing=true;hostMessages.Cancel();ReleaseBackend();DisposeTray();hostMessages.Dispose();hostWrites.Dispose();}
   base.Dispose(disposing);
  }
- static async Task<string> ReadBoundedLineAsync(StreamReader reader,CancellationToken cancellation){var line=new System.Text.StringBuilder();var buffer=new char[1];while(line.Length<8192){int count=await reader.ReadAsync(buffer.AsMemory(),cancellation);if(count==0)throw new EndOfStreamException();if(buffer[0]=='\n')return line.ToString();line.Append(buffer[0]);}throw new InvalidDataException("Backend handshake oversized");}
+ static async Task<string> ReadBoundedLineAsync(StreamReader reader,CancellationToken cancellation,int limit=8192){var line=new System.Text.StringBuilder();var buffer=new char[1];while(line.Length<limit){int count=await reader.ReadAsync(buffer.AsMemory(),cancellation);if(count==0)throw new EndOfStreamException();if(buffer[0]=='\n')return line.ToString();line.Append(buffer[0]);}throw new InvalidDataException("Backend handshake oversized");}
 }
