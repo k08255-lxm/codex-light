@@ -4,8 +4,31 @@ internal static class Tests {
  static int checks;
  static void Check(bool result,string message){checks++;if(!result)throw new Exception(message);}
  static IEnumerable<Control> Descendants(Control control){foreach(Control child in control.Controls){yield return child;foreach(var item in Descendants(child))yield return item;}}
- [STAThread]static void Main(string[] args){
+ [STAThread]static void Main(string[] args){try{Run(args);}catch(Exception error){Console.Error.WriteLine(error);Environment.ExitCode=1;}}
+ static void Run(string[] args){
   Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);Application.EnableVisualStyles();
+  if(args.Contains("--dialog-only")){
+   string destination=args.FirstOrDefault(value=>value!="--dialog-only")??Path.Combine(Path.GetTempPath(),"codecang-close-font-previews");Directory.CreateDirectory(destination);
+   var foreground=GetForegroundWindow();
+   foreach(bool light in new[]{false,true})foreach(float scale in new[]{1f,1.5f,2f}){
+    using var dialog=new CloseChoiceDialog(light?Color.White:Color.FromArgb(24,24,24),light?Color.FromArgb(32,32,32):Color.White);
+    dialog.StartPosition=FormStartPosition.Manual;dialog.Location=new Point(-32000,-32000);dialog.ShowInTaskbar=false;dialog.Opacity=0;
+    // A disabled offscreen window cannot activate; enable only after Show for normal text rendering.
+    dialog.Enabled=false;dialog.Show();dialog.Enabled=true;dialog.PerformLayout();Application.DoEvents();
+    if(scale!=1f)dialog.Scale(new SizeF(scale,scale));
+    dialog.PerformLayout();
+    var buttons=Descendants(dialog).OfType<Button>().ToArray();Check(buttons.Length==3,"three close actions");
+    foreach(var control in Descendants(dialog).Where(value=>value is Button or Label or CheckBox)){
+     var position=control.Location;for(Control? parent=control.Parent;parent!=null&&parent!=dialog;parent=parent.Parent)position.Offset(parent.Location);
+     var bounds=new Rectangle(position,control.Size);
+     Check(dialog.ClientRectangle.Contains(bounds),$"dialog text stays inside at scale {scale}: {bounds} within {dialog.ClientRectangle}: "+control.Text);
+    }
+    Check(ReferenceEquals(dialog.AcceptButton,dialog.CancelButton),"Enter and Escape cancel");
+    using var bitmap=new Bitmap(dialog.Width,dialog.Height);dialog.DrawToBitmap(bitmap,new Rectangle(Point.Empty,bitmap.Size));bitmap.Save(Path.Combine(destination,$"dialog-{light}-{scale:0.0}.png"),ImageFormat.Png);
+    dialog.Hide();Check(GetForegroundWindow()==foreground,"font preview stays offscreen without taking focus");
+   }
+   Console.WriteLine($"Passed {checks} hidden close-dialog layout assertions at 100/150/200 percent; previews: {destination}");return;
+  }
   CheckCaptionCommands();
   if(args.Contains("--native-visible")){
    var folder=Path.Combine(AppContext.BaseDirectory,"visible-previews");Directory.CreateDirectory(folder);

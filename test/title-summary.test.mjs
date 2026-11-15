@@ -38,12 +38,84 @@ test('one selected-model title inference uses an empty ephemeral cwd, restricted
  assert.equal(turn.threadId,'summary');assert.equal(turn.model,'chosen-model');assert.deepEqual(turn.sandboxPolicy,{type:'readOnly',networkAccess:false});assert.equal(JSON.parse(turn.input[0].text).user_text.length,4000);assert.ok(!JSON.stringify(turn.input).includes('PRIVATE_FILE'));assert.equal(turn.outputSchema.additionalProperties,false);await assert.rejects(fs.stat(start.cwd),{code:'ENOENT'});
  h.service.beforeRpc('turn/start',{threadId:'original',input:[{type:'text',text:'second'}]});h.service.observe({method:'turn/completed',params:{threadId:'original',turn:{id:'second',status:'completed'}}});await h.service.queue;assert.equal(h.calls.filter(row=>row.method==='turn/start').length,1);await h.service.close();
 });
-test('manual rename, a new original turn, and disabling cancel and interrupt an in-progress title',async()=>{
- for(const cancel of ['rename','next-turn','disable']){
+test('manual rename and disabling cancel and interrupt an in-progress title',async()=>{
+ for(const cancel of ['rename','disable']){
   const h=fixture({hold:true});await h.service.configure({enabled:true,model:'chosen-model'});h.first();await until(()=>h.calls.some(row=>row.method==='turn/start'));
-  if(cancel==='disable')await h.service.configure({enabled:false,model:'chosen-model'});else h.service.beforeRpc(cancel==='rename'?'thread/name/set':'turn/start',{threadId:'original',input:[{type:'text',text:'second'}]});
+  if(cancel==='disable')await h.service.configure({enabled:false,model:'chosen-model'});else h.service.beforeRpc('thread/name/set',{threadId:'original',name:'手动名称'});
   await h.service.queue;assert.ok(h.calls.some(row=>row.method==='turn/interrupt'));assert.equal(h.names.size,0);assert.ok(h.calls.some(row=>row.method==='thread/unsubscribe'));await h.service.close();
  }
+});
+
+test('leaving during the first response or title generation does not cancel its title',async()=>{
+ for(const phase of ['first-turn','summarizing']){
+  const h=fixture({hold:phase==='summarizing'});await h.service.configure({enabled:true,model:'chosen-model'});
+  if(phase==='first-turn'){
+   h.service.acknowledge('thread/start',{}, {thread:{id:'original',name:null}});
+   h.service.beforeRpc('turn/start',{threadId:'original',input:[{type:'text',text:'首条消息'}]});
+   h.service.observe({method:'turn/started',params:{threadId:'original',turn:{id:'first'}}});
+   h.service.beforeRpc('thread/unsubscribe',{threadId:'original'});
+   h.service.observe({method:'turn/completed',params:{threadId:'original',turn:{id:'first',status:'completed'}}});
+  }else{
+   h.first();await until(()=>h.calls.some(row=>row.method==='turn/start'));
+   h.service.beforeRpc('thread/unsubscribe',{threadId:'original'});h.finish();
+  }
+  await h.service.queue;
+  assert.equal(h.names.get('original'),'精简的测试标题',phase);
+  assert.equal(h.calls.filter(row=>row.method==='turn/start').length,1,'navigation never duplicates title inference');
+  await h.service.close();
+ }
+});
+
+test('continuing the original conversation while summarizing preserves the first text and one title inference',async()=>{
+ const h=fixture({hold:true});await h.service.configure({enabled:true,model:'chosen-model'});h.first('original','第一条原文');
+ await until(()=>h.calls.some(row=>row.method==='turn/start'));
+ h.service.beforeRpc('turn/start',{threadId:'original',input:[{type:'text',text:'第二条问题'}]});
+ h.service.observe({method:'turn/started',params:{threadId:'original',turn:{id:'second'}}});
+ h.service.observe({method:'turn/completed',params:{threadId:'original',turn:{id:'second',status:'completed'}}});
+ h.finish();await h.service.queue;
+ assert.equal(h.names.get('original'),'精简的测试标题');
+ const turns=h.calls.filter(row=>row.method==='turn/start');assert.equal(turns.length,1);
+ assert.deepEqual(JSON.parse(turns[0].params.input[0].text),{user_text:'第一条原文'});
+ assert.ok(!h.calls.some(row=>row.method==='turn/interrupt'));
+ await h.service.close();
+});
+
+test('an original second turn cannot cancel a queued first-turn title or resurrect canceled work',async()=>{
+ const h=fixture();await h.service.configure({enabled:true,model:'chosen-model'});
+ let release;const gate=new Promise(resolve=>{release=resolve;});h.service.queue=gate;
+ h.first('queued','排队的第一条原文');
+ h.service.beforeRpc('turn/start',{threadId:'queued',input:[{type:'text',text:'第二条'}]});
+ h.service.observe({method:'turn/started',params:{threadId:'queued',turn:{id:'second'}}});
+ h.service.observe({method:'turn/completed',params:{threadId:'queued',turn:{id:'second',status:'completed'}}});
+ const queue=h.service.queue;release();await queue;
+ assert.equal(h.names.get('queued'),'精简的测试标题');assert.equal(h.calls.filter(row=>row.method==='turn/start').length,1);
+ h.service.observe({method:'turn/completed',params:{threadId:'queued',turn:{id:'first',status:'completed'}}});
+ await h.service.queue;assert.equal(h.calls.filter(row=>row.method==='turn/start').length,1);
+ await h.service.close();
+ const canceled=fixture();await canceled.service.configure({enabled:true,model:'chosen-model'});
+ canceled.service.acknowledge('thread/start',{}, {thread:{id:'canceled',name:null}});
+ canceled.service.beforeRpc('turn/start',{threadId:'canceled',input:[{type:'text',text:'用户原文'}]});
+ canceled.service.observe({method:'turn/started',params:{threadId:'canceled',turn:{id:'first'}}});
+ canceled.service.beforeRpc('thread/archive',{threadId:'canceled'});
+ canceled.service.observe({method:'turn/completed',params:{threadId:'canceled',turn:{id:'first',status:'completed'}}});
+ await canceled.service.queue;assert.equal(canceled.calls.filter(row=>row.method==='turn/start').length,0);
+ await canceled.service.close();
+});
+
+test('named new threads and later explicit title changes are preserved without summary inference',async()=>{
+ const h=fixture();await h.service.configure({enabled:true,model:'chosen-model'});
+ h.service.acknowledge('thread/start',{}, {thread:{id:'named',name:'自定标题',preview:'首条原文'}});
+ h.service.beforeRpc('turn/start',{threadId:'named',input:[{type:'text',text:'首条原文'}]});
+ h.service.observe({method:'turn/started',params:{threadId:'named',turn:{id:'first'}}});
+ h.service.observe({method:'turn/completed',params:{threadId:'named',turn:{id:'first',status:'completed'}}});
+ await h.service.queue;assert.equal(h.calls.filter(row=>row.method==='turn/start').length,0);
+ h.service.acknowledge('thread/start',{}, {thread:{id:'changed',name:null}});
+ h.service.beforeRpc('turn/start',{threadId:'changed',input:[{type:'text',text:'首条原文'}]});
+ h.service.observe({method:'turn/started',params:{threadId:'changed',turn:{id:'first'}}});
+ h.service.observe({method:'thread/name/updated',params:{threadId:'changed',threadName:'其他客户端命名'}});
+ h.service.observe({method:'turn/completed',params:{threadId:'changed',turn:{id:'first',status:'completed'}}});
+ await h.service.queue;assert.equal(h.calls.filter(row=>row.method==='turn/start').length,0);
+ await h.service.close();
 });
 test('explicit tool activity, timeout, and unconfirmed ephemeral isolation fail without rename or retry',async()=>{
  for(const options of [{tool:true},{hold:true,timeoutMs:15},{unsafe:true}]){

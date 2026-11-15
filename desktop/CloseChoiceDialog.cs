@@ -3,9 +3,10 @@ namespace CodexLight.Desktop;
 internal enum CloseChoice { Cancel, Exit, Tray }
 internal sealed class CloseChoiceDialog : Form {
  public CloseChoice Choice { get; private set; }=CloseChoice.Cancel;
- readonly CheckBox remember=new(){AutoSize=true,Text="记住我的选择",AccessibleName="记住我的选择",Margin=new Padding(0,0,0,20)};
+ readonly CheckBox remember=new(){UseCompatibleTextRendering=false,AutoSize=true,Text="记住我的选择",AccessibleName="记住我的选择",Margin=new Padding(0,0,0,20)};
  public bool RememberChoice=>Choice!=CloseChoice.Cancel&&remember.Checked;
- readonly Font dialogFont=new("Microsoft YaHei UI",9f,FontStyle.Regular,GraphicsUnit.Point);
+ // Keep Chinese dialog text at 14 px at 96 DPI and use one native GDI text renderer.
+ readonly Font dialogFont=new("Microsoft YaHei UI",10.5f,FontStyle.Regular,GraphicsUnit.Point);
  public CloseChoiceDialog(Color surface,Color foreground){
   Text="关闭 码舱 CodeCang";FormBorderStyle=FormBorderStyle.FixedDialog;StartPosition=FormStartPosition.CenterParent;
   MinimizeBox=false;MaximizeBox=false;ShowInTaskbar=false;
@@ -14,10 +15,10 @@ internal sealed class CloseChoiceDialog : Form {
   ForeColor=SystemInformation.HighContrast?SystemColors.WindowText:foreground;
   AutoSize=true;AutoSizeMode=AutoSizeMode.GrowAndShrink;
   var content=new TableLayoutPanel{AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,Dock=DockStyle.Fill,ColumnCount=1,RowCount=3,Padding=new Padding(24)};
-  var message=new Label{UseCompatibleTextRendering=true,AutoSize=true,MaximumSize=new Size(480,0),Margin=new Padding(0,0,0,24),Text="退出会停止后台和正在运行的任务。\n转入托盘会保留任务，稍后可恢复窗口。"};
+  var message=new Label{UseCompatibleTextRendering=false,AutoSize=true,MaximumSize=new Size(480,0),Margin=new Padding(0,0,0,24),Text="退出会停止后台和正在运行的任务。\n转入托盘会保留任务，稍后可恢复窗口。"};
   var buttons=new FlowLayoutPanel{AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,FlowDirection=FlowDirection.RightToLeft,WrapContents=false,Margin=Padding.Empty,Anchor=AnchorStyles.Right};
   Button Make(string text,CloseChoice choice){
-   var button=new Button{UseCompatibleTextRendering=true,Text=text,AccessibleName=text,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,MinimumSize=new Size(80,36),Padding=new Padding(14,6,14,6),Margin=new Padding(8,0,0,0),BackColor=BackColor,ForeColor=ForeColor,UseVisualStyleBackColor=false,FlatStyle=SystemInformation.HighContrast?FlatStyle.Standard:FlatStyle.Flat};
+   var button=new Button{UseCompatibleTextRendering=false,Text=text,AccessibleName=text,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,MinimumSize=new Size(80,36),Padding=new Padding(14,6,14,6),Margin=new Padding(8,0,0,0),BackColor=BackColor,ForeColor=ForeColor,UseVisualStyleBackColor=false,FlatStyle=SystemInformation.HighContrast?FlatStyle.Standard:FlatStyle.Flat};
    if(!SystemInformation.HighContrast){button.FlatAppearance.BorderColor=Blend(BackColor,ForeColor,0.22f);button.FlatAppearance.MouseOverBackColor=Blend(BackColor,ForeColor,0.08f);button.FlatAppearance.MouseDownBackColor=Blend(BackColor,ForeColor,0.14f);}
    button.Click+=(_,_)=>{Choice=choice;DialogResult=choice==CloseChoice.Cancel?DialogResult.Cancel:DialogResult.OK;Close();};return button;
   }

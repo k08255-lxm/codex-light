@@ -1,0 +1,63 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {createSessionControls} from '../public/session-controls.js';
+import {createDocument} from './mini-dom.mjs';
+
+const configured={model:'configured-model',approvalPolicy:'never',approvalsReviewer:'user',sandbox:'danger-full-access',sandboxPolicy:{type:'dangerFullAccess'},serviceTier:'fast'};
+const autoPermission={approvalPolicy:'on-request',approvalsReviewer:'auto_review',sandbox:'workspace-write',sandboxPolicy:{type:'workspaceWrite'}};
+function fixture({id=null,config=structuredClone(configured)}={}){
+ const document=createDocument(),host=document.createElement('div');document.body.append(host);
+ const chip=document.createElement('button');chip.id='permissions-info';const oldIcon=document.createElement('span');oldIcon.className='ui-icon';
+ const label=document.createElement('span');label.className='label';chip.append(oldIcon,label);host.append(chip);
+ const query=chip.querySelector.bind(chip);chip.querySelector=selector=>selector.startsWith(':scope')?oldIcon:query(selector);
+ const fast=document.createElement('button');fast.id='fast-toggle';host.append(fast);document.defaultView.innerHeight=900;
+ const notices=[];const controller=createSessionControls({document,defaults:()=>config,threadId:()=>id,notice:(...args)=>notices.push(args)});
+ const choose=mode=>document.getElementById('permission-menu').querySelector(`[data-value="${mode}"]`).click();
+ return {controller,notices,label,fast,choose,get config(){return config;},setConfig(value){config=value;},setId(value){id=value;controller.restore();}};
+}
+
+test('a new draft defaults to auto review and sends its real approval fields without overriding model or Fast',()=>{
+ const h=fixture(),before=structuredClone(h.config);
+ assert.equal(h.label.textContent,'帮我批准');
+ const snapshot=h.controller.snapshot();assert.deepEqual(snapshot,{permission:autoPermission,serviceTier:null});
+ assert.deepEqual(h.controller.params(snapshot,'thread'),{approvalPolicy:'on-request',approvalsReviewer:'auto_review',sandbox:'workspace-write'});
+ assert.deepEqual(h.controller.params(snapshot,'turn'),{approvalPolicy:'on-request',approvalsReviewer:'auto_review',sandboxPolicy:{type:'workspaceWrite'}});
+ assert.equal(h.fast.getAttribute('aria-pressed'),'true','Fast still follows its configured value');
+ assert.deepEqual(h.config,before,'configuration is read-only');
+});
+
+test('an existing thread inherits configuration instead of gaining the new-draft permission override',()=>{
+ const h=fixture({id:'existing'});
+ assert.equal(h.label.textContent,'完全访问权限');
+ assert.deepEqual(h.controller.snapshot(),{permission:null,serviceTier:null});
+ assert.deepEqual(h.controller.params(h.controller.snapshot(),'thread'),{});
+ assert.deepEqual(h.controller.params(h.controller.snapshot(),'turn'),{});
+ h.setId(null);assert.deepEqual(h.controller.snapshot().permission,autoPermission);
+ h.setId('existing');assert.equal(h.controller.snapshot().permission,null);
+});
+
+test('explicit choices survive draft adoption while the next new draft returns to auto review',()=>{
+ for(const mode of ['request','full','custom']){
+  const h=fixture();h.choose(mode);const selected=h.controller.snapshot();
+  assert.equal(h.label.textContent,mode==='request'?'请求批准':mode==='full'?'完全访问权限':'自定义');
+  assert.equal(selected.permission.approvalsReviewer,'user');
+  // Composer adopts the created id before replacing its current draft thread.
+  h.controller.adopt('created');h.setId('created');
+  assert.deepEqual(h.controller.snapshot(),selected,mode);
+  h.setId(null);assert.equal(h.label.textContent,'帮我批准');assert.deepEqual(h.controller.snapshot().permission,autoPermission);
+  h.setId('created');assert.deepEqual(h.controller.snapshot(),selected,'revisiting preserves the explicit choice');
+ }
+});
+
+test('restoring custom from the default auto mode needs complete configuration and preserves errors',()=>{
+ const h=fixture({config:null});h.choose('custom');
+ assert.equal(h.label.textContent,'帮我批准');assert.deepEqual(h.controller.snapshot().permission,autoPermission);
+ assert.equal(h.notices.length,1);assert.match(h.notices[0][0],/配置权限尚未完整读取/);assert.equal(h.notices[0][1],true);
+ h.setConfig({approvalPolicy:'on-request',approvalsReviewer:'user',sandbox:'workspace-write',sandboxPolicy:{type:'workspaceWrite',networkAccess:true},serviceTier:'default'});
+ h.choose('custom');const snapshot=h.controller.snapshot();
+ assert.equal(snapshot.permission.approvalsReviewer,'user');
+ assert.deepEqual(h.controller.params(snapshot,'turn'),{approvalPolicy:'on-request',approvalsReviewer:'user',sandboxPolicy:{type:'workspaceWrite',networkAccess:true}});
+ assert.equal(snapshot.serviceTier,null);
+ h.setConfig({...h.config,sandboxPolicy:null});
+ assert.throws(()=>h.controller.params(h.controller.snapshot(),'turn'),/沙箱策略.*草稿已保留/);
+});

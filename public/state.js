@@ -120,6 +120,8 @@ export function buildTurns(items, ledger, { activeTurnId = null, cwd = '', deleg
     if (!turn) { turn = { id, local: id.startsWith('local:'), items: [] }; byId.set(id, turn); order.push(turn); }
     turn.items.push(item); current = turn;
   }
+  // A started turn may precede its first user/reasoning item.
+  if (activeTurnId && !byId.has(activeTurnId)) order.push({ id: activeTurnId, local: false, items: [] });
   return order.map(turn => {
     const meta = turn.local ? null : ledger?.get?.(turn.id) || null;
     const status = turnStatus(meta, turn.items, activeTurnId, turn.local ? null : turn.id);
@@ -155,9 +157,6 @@ export function buildTurns(items, ledger, { activeTurnId = null, cwd = '', deleg
 
 const stripPrefix = path => path.replace(/^[ab]\//, '');
 export function normalizePath(path) { return text(path).replace(/\\/g, '/').replace(/\/+/g, '/'); }
-// Windows paths are case-insensitive; POSIX paths are not.
-const isWindowsPath = path => /^[A-Za-z]:[\\/]/.test(path) || path.startsWith('\\\\') || path.includes('\\');
-const pathKey = path => isWindowsPath(text(path)) ? normalizePath(path).toLowerCase() : normalizePath(path);
 
 /** Decodes a Git C-style quoted path ("a/\346\226\207.md"), including octal UTF-8 bytes. */
 export function unquoteGitPath(value) {
@@ -222,13 +221,17 @@ export function parseUnifiedDiff(source) {
 
 function displayPath(path, cwd) {
   const normal = normalizePath(path); const base = normalizePath(cwd).replace(/\/$/, '');
-  if (base && normal.toLowerCase().startsWith(base.toLowerCase() + '/')) return normal.slice(base.length + 1);
+  const canonical=absolutePath(path,cwd),canonicalBase=absolutePath(cwd).replace(/\/$/,'');
+  if (base && canonical.startsWith(canonicalBase + '/')) {
+    const parts=canonical.slice(canonicalBase.length+1).split('/').length;
+    return normal.split('/').slice(-parts).join('/');
+  }
   return normal;
 }
 
 /**
  * Per-turn file summary. fileChange items are deduplicated by path; when a turn diff exists
- * it is authoritative for stats (net change) and absolute item paths are matched by suffix.
+ * it is authoritative for stats (net change); both item and Git paths use the workspace key.
  */
 export function fileSummary(items, turnDiff, { cwd = '', running = false } = {}) {
   const files = new Map();
@@ -251,11 +254,10 @@ export function fileSummary(items, turnDiff, { cwd = '', running = false } = {})
   if (authoritative && (parsed.length || !text(turnDiff).trim())) {
     const merged = new Map();
     for (const entry of parsed) {
-      const rel = pathKey(entry.path);
-      let match = null;
-      for (const [key, row] of files) if (key === rel || key.endsWith('/' + rel)) { match = [key, row]; break; }
+      const key = absolutePath(entry.path,cwd);
+      const match = files.has(key) ? [key,files.get(key)] : null;
       if (match) files.delete(match[0]);
-      merged.set(rel, { path: entry.path, fullPath: match?.[1].fullPath || entry.path, kind: match?.[1].kind || null, added: entry.added, removed: entry.removed,
+      merged.set(key, { path: entry.path, fullPath: match?.[1].fullPath || entry.path, kind: match?.[1].kind || null, added: entry.added, removed: entry.removed,
         known: entry.added !== null,statsReasons:entry.statsReason?[entry.statsReason]:[],statsBasis:'net', diffs: [entry.diff], live: match?.[1].live || false });
     }
     // Edited files absent from the net diff currently have no net change (e.g. reverted).

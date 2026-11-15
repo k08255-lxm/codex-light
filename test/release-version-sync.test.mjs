@@ -29,7 +29,10 @@ test('public download instructions match the release asset/version contract', ()
   const setupExamples = [...readme.matchAll(/CodexLight-Setup-(\d+\.\d+\.\d+)-x64\.exe/g)];
   assert.ok(setupExamples.length > 0, 'README needs an exact current Setup example');
   for (const match of setupExamples) assert.equal(match[1], version);
-  const apkExamples = [...android.matchAll(/codex-light-(\d+\.\d+\.\d+)\.apk/g)];
+  const installStart = android.indexOf('### 安装与升级');
+  const installEnd = android.indexOf('### 连接电脑', installStart);
+  assert.ok(installStart >= 0 && installEnd > installStart, 'Android download section must be identifiable');
+  const apkExamples = [...android.slice(installStart, installEnd).matchAll(/codex-light-(?:android-)?(\d+\.\d+\.\d+)\.apk/g)];
   assert.ok(apkExamples.length > 0, 'Android download instructions need an exact APK example');
   for (const match of apkExamples) assert.equal(match[1], version);
   assert.ok(android.includes(`versionCode 为 ${versionCode}`));

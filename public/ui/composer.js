@@ -11,14 +11,14 @@ import { OptimisticMessages } from './optimistic-messages.js';
  * - session: shared `state`, `followUps` queue, `sessionFor(threadId)`
  * - drafts: attachment drafts + previews, `clearSubmittedDraft`, `renderAttachments`, `autosizePrompt`
  * - ledger: `performMutation`, `pendingMutations`, `scopedPending`, `currentSendAvailability`, `renderPendingMutations`
- * - thread: `restoreThreadReasoning`, `loadThreads`, `syncStatus`, DSH resets for a new thread
+ * - thread: `restoreThreadReasoning`, `loadThreads`, `syncStatus`, DSH resets and `rememberThread` after a confirmed send
  * - view: `$`, `el`, `notice`, `activity`, `updateControls`, `renderMessages`, `scheduleRender`, `scrollBottom`, `renderContext`, `openProjectDialog`, `openInlineCwd`
  */
 export function createComposer({ document, session, drafts, ledger, thread, view }) {
   const { state, followUps, sessionFor, sessionControls } = session;
   const { attachmentDraft, fileAttachmentDraft, attachmentPreviews, queuedPreviews, clearSubmittedDraft, renderAttachments, autosizePrompt } = drafts;
   const { performMutation, pendingMutations, scopedPending, currentSendAvailability, renderPendingMutations } = ledger;
-  const { restoreThreadReasoning, loadThreads, syncStatus, resetThreadDsh } = thread;
+  const { restoreThreadReasoning, loadThreads, syncStatus, resetThreadDsh, rememberThread } = thread;
   const { $, el, notice, activity, confirm, openImage, updateControls, renderMessages, scheduleRender, scrollBottom, renderContext, openProjectDialog, openInlineCwd } = view;
   const optimistic=new OptimisticMessages();
   const optimisticHost=document.createElement('div');optimisticHost.id='optimistic-messages';optimisticHost.className='optimistic-messages';optimisticHost.hidden=true;
@@ -108,9 +108,11 @@ export function createComposer({ document, session, drafts, ledger, thread, view
         sessionControls.adopt(result.thread.id);
         state.thread = result.thread; restoreThreadReasoning(result, submission.effort); resetThreadDsh(state.thread.id); $('thread-title').textContent = submission.text.slice(0, 55) || '附件对话'; $('welcome').classList.add('hidden'); renderContext();
       }
-      const params = { threadId: state.thread.id, cwd: submission.cwd, input: [{ type: 'text', text: submission.text }] }; if (submission.model) params.model = submission.model; if (submission.effort) params.effort = submission.effort;
+      const submittedThread = state.thread;
+      const params = { threadId: submittedThread.id, cwd: submission.cwd, input: [{ type: 'text', text: submission.text }] }; if (submission.model) params.model = submission.model; if (submission.effort) params.effort = submission.effort;
       Object.assign(params,sessionControls.params(submission.controls,'turn'));
       const result = await performMutation('turn/start', params, { attachmentIds: submission.attachmentIds, fileAttachmentIds:submission.fileAttachmentIds, confirmedFileAttachmentIds:submission.confirmedFileAttachmentIds,onRequest:envelope=>optimistic.patch(optimisticRow.id,{requestId:envelope.requestId,method:'turn/start'}) });
+      rememberThread({ ...submittedThread, preview: submission.text.slice(0, 55) || submittedThread.preview });
       optimistic.patch(optimisticRow.id,{status:'accepted',turnId:result.turn?.id});renderOptimistic();
       clearSubmittedDraft({ preserveText:true, method: 'turn/start', params, attachmentIds: submission.attachmentIds, fileAttachmentIds:submission.fileAttachmentIds });
       if (generation !== state.openGeneration) { notice('消息已发送到原对话，未发送到当前页面。'); return; }
@@ -127,8 +129,9 @@ export function createComposer({ document, session, drafts, ledger, thread, view
   /** Records a confirmed turn/start for whichever thread it belongs to. */
   function acceptStartedTurn(threadId, turn) {
     const id = turn?.id; const running = !!id && !state.terminalTurns.has(id) && !['completed', 'failed', 'interrupted'].includes(turn?.status);
+    if (running) state.activeTurns.set(threadId, id);
+    if (threadId !== state.thread?.id) return;
     if (id) state.ledger.merge(turn, { observedStartMs: Date.now() });
-    if (threadId !== state.thread?.id) { if (running) state.activeTurns.set(threadId, id); return; }
     state.turnId = running ? id : null; state.busy = running;
     if (running) state.ledger.activate(id, Date.now());
     activity(''); renderMessages(); updateControls();

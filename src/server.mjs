@@ -96,7 +96,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
  const runtimeProfile=wslActive?wslProfileId(wslCandidate||wslSelection):null;
  const runtimeDescriptor={kind:wslActive?'wsl':'native',distribution:wslSelection?.distribution||null};
  const wslCurrent=wslActive?{target:'wsl',distribution:wslSelection.distribution,user:wslCandidate?.user||wslSelection.user,...(wslSelection.codexPath?{codexPath:wslSelection.codexPath}:{})}:{target:'native'};
- const wslLimitations=['WSL 模式不使用 Windows Git 面板，请在 WSL 终端操作。','DSH 必须显式选择所在环境；Windows DSH 仅支持 Windows 盘目录，自动唤醒仅投递到原父对话，失败时可通过 dsh_wait 获取结果。'];
+ const wslLimitations=['WSL 模式可读取所选发行版的 Git 状态和差异；暂存、提交和推送请在 WSL 终端操作。','DSH 必须显式选择所在环境；Windows DSH 仅支持 Windows 盘目录，自动唤醒仅投递到原父对话，失败时可通过 dsh_wait 获取结果。'];
  async function wslStatus(canSelect=true){const selected=wslRuntime.platform==='win32'&&!demo?await wslSelectionStore.read():null;const next=selected?{target:'wsl',...selected}:{target:'native'};return {supported:wslRuntime.platform==='win32'&&!demo,canSelect:canSelect&&wslRuntime.platform==='win32'&&!demo,current:wslCurrent,selected:next,restartRequired:JSON.stringify(next)!==JSON.stringify(wslCurrent),limitations:wslLimitations};}
  function assertEngineSelectionIdle(){if(runtime.upgrading||sessions.queues.size||sessions.snapshot().threads.some(t=>t.state!=='idle'))throw Object.assign(new Error('Finish active work before changing runtime'),{code:'RUNTIME_BUSY',outcome:'notExecuted'});}
  async function saveRuntimeSelection(selection){
@@ -119,7 +119,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
  if(runtimeStartupError){rpc.connected=false;rpc.start=async()=>{throw runtimeStartupError;};}
  const sessions=new ThreadSessions(rpc,{onEvent:message=>broadcast(message),onThreadLoaded:result=>statistics.thread(result?.thread,result)});
  const artifacts=new ArtifactPreviewService({projects,...(wslCandidate?{wslDistribution:wslCandidate.distribution,rolloutRoots:['sessions','archived_sessions'].map(part=>wslPathToHost(wslCandidate.codexHome+'/'+part,wslCandidate.distribution))}:{})});
- const git=new GitService();
+ const git=new GitService(wslCandidate?{run:(directory,args)=>wslRuntime.gitRead(directory,args,wslCandidate),validateDirectory:async directory=>{await wslRuntime.toLinux(directory,wslCandidate);await projects.directory(directory);}}:{});
  const gitActions=new GitCommandActions();
  const metadataRoot=statisticsRoot??(!demo&&!client?defaultStatisticsRoot():null);
  const pricing=new PricingService({root:metadataRoot});await pricing.load();
@@ -193,7 +193,8 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
    const auth=req.headers.authorization||'';const expected=`Bearer ${requestToken}`;
    if(Buffer.byteLength(auth)!==Buffer.byteLength(expected)||!timingSafeEqual(Buffer.from(auth),Buffer.from(expected))){json(res,401,{error:'访问凭据已失效，请重新启动 GUI'});return;}
    try{
-    if(wslActive&&['/api/git/','/api/dsh/config-sources/'].some(prefix=>url.pathname.startsWith(prefix))){json(res,409,{error:'此 Windows 宿主功能暂不支持 WSL，请在所选发行版内配置 Git 或 MCP。',code:'WSL_UNSUPPORTED',outcome:'notExecuted'});return;}
+    if(wslActive&&(url.pathname.startsWith('/api/dsh/config-sources/')||url.pathname.startsWith('/api/git/')&&url.pathname!=='/api/git/read')){json(res,409,{error:url.pathname.startsWith('/api/git/')?'WSL 模式暂不提供 Git 写操作；可读取状态和差异，暂存、提交和推送请在 WSL 终端操作。':'WSL 模式暂不支持编辑 Windows DSH 配置来源；可在 DSH 连接中选择 Windows DSH。',code:'WSL_UNSUPPORTED',outcome:'notExecuted'});return;}
+    if(wslActive&&!wslCandidate&&url.pathname==='/api/git/read')throw Object.assign(new Error('所选 WSL 运行环境不可用，请恢复连接后读取 Git。'),{code:'WSL_RUNTIME_UNAVAILABLE',status:409,outcome:'notExecuted'});
     if(['/api/dsh/config-sources/','/api/dsh/connection/'].some(prefix=>url.pathname.startsWith(prefix))&&requestAccess!=='local'){json(res,403,{error:'DSH 配置和连接管理仅限本机',code:'LOCAL_ONLY',outcome:'notExecuted'});return;}
     if(url.pathname.startsWith('/api/storage/')&&requestAccess!=='local'){json(res,403,{error:'存储清理仅限本机，远程设备不能清理宿主数据',code:'LOCAL_ONLY',outcome:'notExecuted'});return;}
     if(storage.running&&req.method==='POST')throw Object.assign(new Error('本机存储维护中，请稍后再试'),{code:'STORAGE_BUSY',status:409,outcome:'notExecuted'});
@@ -205,7 +206,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      const heartbeat=setInterval(()=>{if(res.writableLength>4*1024*1024)res.destroy();else res.write(': keepalive\n\n');},15000);
      req.on('close',()=>{streams.delete(res);clearInterval(heartbeat);});return;
     }
-    if(url.pathname==='/api/status' && req.method==='GET'){json(res,200,{connected:rpc.connected,runtimeTarget:wslActive?'wsl':'native',runtimeUnsupported:wslActive?['git','dshConfigSources','runtimeUpgrade',...(!wslCandidate?['dshConnection']:[])]:[],demo,desktop:requestDesktop,access:requestAccess,stopping,engineStopped,shutdownError,threadSessions:sessions.snapshot(),persistenceWarning:operations.persistenceWarning||desktopState?.persistenceWarning||null,version:rpc.version||null,error:rpc.lastError||null,dshError:dsh.releaseError||dshResetError,dshWakeup:dshWakeup?.status()||{automaticWakeup:false,error:dshWakeupError},pendingRequests:[...rpc.requests.values()].map(presentRequest),serverInstance:operations.serverInstance,operationRetentionMs:operations.retentionMs,reopenAvailable:requestAccess==='local'&&!!reopener,reopenError:requestAccess==='local'?reopenError:null});return;}
+    if(url.pathname==='/api/status' && req.method==='GET'){json(res,200,{connected:rpc.connected,runtimeTarget:wslActive?'wsl':'native',runtimeUnsupported:wslActive?['gitWrite','dshConfigSources','runtimeUpgrade',...(!wslCandidate?['dshConnection','gitRead']:[])]:[],demo,desktop:requestDesktop,access:requestAccess,stopping,engineStopped,shutdownError,threadSessions:sessions.snapshot(),persistenceWarning:operations.persistenceWarning||desktopState?.persistenceWarning||null,version:rpc.version||null,error:rpc.lastError||null,dshError:dsh.releaseError||dshResetError,dshWakeup:dshWakeup?.status()||{automaticWakeup:false,error:dshWakeupError},pendingRequests:[...rpc.requests.values()].map(presentRequest),serverInstance:operations.serverInstance,operationRetentionMs:operations.retentionMs,reopenAvailable:requestAccess==='local'&&!!reopener,reopenError:requestAccess==='local'?reopenError:null});return;}
     if(url.pathname==='/api/operations' && req.method==='GET'){json(res,200,operations.get(url.searchParams.get('requestId')));return;}
     if(url.pathname==='/api/config' && req.method==='GET'){json(res,200,{cwd,codexCommand:command});return;}
     if(url.pathname==='/api/projects'&&req.method==='GET'){json(res,200,{...await projects.list(),canPickFolder:requestDesktop&&typeof onDesktopPickFolder==='function'});return;}

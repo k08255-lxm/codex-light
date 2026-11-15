@@ -23,9 +23,9 @@
 ### 安装与升级
 
 - 最低系统版本为 Android 7.0（API 24），Manifest 的 target SDK 为 34。需要可用的 Android System WebView；不要把 target SDK 当作最低 Android 版本。
-- 从本项目的 [Releases](https://github.com/k08255-lxm/codex-light/releases) 下载同版本 Windows 安装器和 APK，也可以按下文从源码构建。当前 0.4.7 构建的 APK 为 `codex-light-0.4.7.apk`，versionCode 为 407。下载时核对发布说明与校验文件。
+- 从本项目的 [Releases](https://github.com/k08255-lxm/codex-light/releases) 下载同版本 Windows 安装器和 APK，也可以按下文从源码构建。当前 0.4.8 构建的 APK 为 `codex-light-android-0.4.8.apk`，versionCode 为 408。此版 Android 仅同步版本信息，仍提供 APK 下载，但不触发旧手机客户端更新提示。下载时核对发布说明与校验文件。
 - 将 APK 传到手机，用系统安装器打开；如系统提示，仅为当前使用的文件管理器或浏览器允许安装该来源的应用。安装后即可关闭这项许可。
-- 若要核对下载文件，在 Windows 执行 `Get-FileHash .\codex-light-0.4.7.apk -Algorithm SHA256`，与同一发布的 `SHA256SUMS.txt` 中对应文件名的条目对比。哈希只校验文件一致性，不能代替对发布者和签名的信任。
+- 若要核对下载文件，在 Windows 执行 `Get-FileHash .\codex-light-android-0.4.8.apk -Algorithm SHA256`，与同一发布的 `SHA256SUMS.txt` 中对应文件名的条目对比。哈希只校验文件一致性，不能代替对发布者和签名的信任。
 - 覆盖升级需要相同应用 ID 和签名证书。作者发布包、自行构建包及其他机器生成的调试密钥不保证互相兼容；签名不匹配时不要直接卸载来强行升级，因为卸载会清除手机保存的连接地址和令牌。请优先使用同一来源、同一签名的更新包。
 
 ### 连接电脑
@@ -118,7 +118,9 @@ Android 普通返回按钮/边缘返回手势先交给桌面服务提供的网�
 
 ### APK release asset naming
 
-v0.4.7 now includes an Android pairing behavior fix, so download `codex-light-0.4.7.apk` and allow normal update notifications. Do not assemble this release with `--android-unchanged`. The earlier metadata-only/download-only plan is superseded. Future genuinely unchanged Android releases may use the documented download-only policy; APK identity and signing compatibility must still be verified.
+v0.4.8 changes desktop behavior and Android version metadata only. Assemble this release with `--android-unchanged`: publish `codex-light-android-0.4.8.apk` for manual download, without the standard APK alias that would notify older clients. Package identity, increased versionCode and the existing signing certificate remain required.
+
+Historical v0.4.7 included an Android pairing behavior fix and published `codex-light-0.4.7.apk` with normal update notifications. That release must not be assembled with `--android-unchanged`; its functional-update policy is not extended to v0.4.8.
 
 
 ### Android 0.4.7 routing compatibility

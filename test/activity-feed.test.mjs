@@ -18,6 +18,26 @@ function mount() {
 }
 const q = (host, selector) => host.querySelectorAll(selector);
 
+test('whole-turn feedback spans waiting, thinking and streaming and stops on terminal states', () => {
+  const ledger = new TurnLedger(); ledger.merge({ id: 't', status: 'inProgress' }, { observedStartMs: 1000 });
+  const { host, view } = mount();
+  view.render(buildTurns([], ledger, { activeTurnId: 't' }), { now: 3000 });
+  assert.ok(host.querySelector('.turn-working'), 'waiting before the first item still shows running feedback');
+  const items = [user('u', 't', '任务')];
+  for (const item of [null, { id: 'r', type: 'reasoning', _turnId: 't', _complete: true }, agent('a', 't', '正在回复', 'final_answer', false)]) {
+    if (item) items.push(item);
+    view.render(buildTurns(items, ledger, { activeTurnId: 't' }), { now: 3000 });
+    const feedback = host.querySelector('.turn-working');
+    assert.ok(feedback, 'model work must remain visible without a running tool');
+    assert.equal(feedback.dataset.running, 'true'); assert.match(feedback.textContent, /正在工作.*2s/);
+    assert.equal(view.hasRunningClock(), true); view.tick(4000); assert.match(feedback.textContent, /3s/);
+  }
+  for (const status of ['completed', 'failed', 'interrupted']) {
+    ledger.merge({ id: 't', status, completedAtMs: 5000 }); view.render(buildTurns(items, ledger));
+    assert.equal(host.querySelector('.turn-working'), null); assert.equal(view.hasRunningClock(), false);
+  }
+});
+
 test('context compaction stays visible in chronology between independently collapsed operation groups', () => {
   const ledger = new TurnLedger(); ledger.merge({ id: 't', status: 'inProgress' });
   const compact = { id: 'compact', type: 'contextCompaction', _turnId: 't', _complete: false };

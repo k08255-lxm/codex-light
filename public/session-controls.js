@@ -2,7 +2,8 @@
 import { icon } from './icons.js';
 export function createSessionControls({document, defaults, threadId, notice}) {
  const sessions=new Map();
- const current=()=>{const id=threadId()||'draft';if(!sessions.has(id))sessions.set(id,{permission:null,fast:null,restore:false});return sessions.get(id);};
+ // New drafts start with automatic review; existing threads retain configuration inheritance.
+ const current=()=>{const id=threadId()||'draft';if(!sessions.has(id))sessions.set(id,{permission:id==='draft'?'auto':null,fast:null,restore:false});return sessions.get(id);};
  const chip=document.getElementById('permissions-info'), fast=document.getElementById('fast-toggle');
  document.querySelector('.reasoning-heading')?.firstElementChild?.replaceWith(fast);
  const menu=document.createElement('div');menu.className='permission-menu hidden';menu.id='permission-menu';menu.setAttribute('role','menu');

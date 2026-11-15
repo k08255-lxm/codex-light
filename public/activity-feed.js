@@ -720,8 +720,12 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
         if (!view.files) view.files = filesView(turn.id);
         updateFiles(view.files, turn.files, turn.id); children.push(view.files.node);
       }
-      const footer = turn.status === 'interrupted' ? '已停止' : turn.status === 'failed' ? `任务失败${turn.error ? '：' + turn.error : ''}` : turn.finished&&turn.timing.durationMs!==null?timingLabel(turn,now):'';
+      const working = turn.status === 'running';
+      const footer = working ? timingLabel(turn, now) : turn.status === 'interrupted' ? '已停止' : turn.status === 'failed' ? `任务失败${turn.error ? '：' + turn.error : ''}` : turn.finished&&turn.timing.durationMs!==null?timingLabel(turn,now):'';
       setText(view.footer, footer);
+      view.footer.classList.toggle('turn-working', working);
+      view.footer.dataset.running = String(working);
+      if (working) runningClocks.push({ footer: view.footer, turn });
       view.footer.dataset.kind = turn.status;
       if (turn.finished) {
         // Keep the prompt and final answer outside; completed intermediate work is one disclosure
@@ -765,7 +769,8 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
   }
 
   /** Updates live elapsed labels without rebuilding the tree. */
-  function tick(now = Date.now()) { for (const {process,items} of runningClocks) {
+  function tick(now = Date.now()) { for (const {process,items,footer,turn} of runningClocks) {
+    if (footer) { setText(footer, timingLabel(turn, now)); continue; }
     for(const item of items)if(item.type==='reasoning'&&itemState(item)==='running'){const row=process.rows.get(item.id);if(row)updateRow(row,item,now);}
     const info=describeItem(items.at(-1),now);setText(process.latest,`${info.verb}${!info.code&&info.target?' · '+info.target.slice(0,90):''}`);
   } }

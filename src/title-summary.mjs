@@ -45,9 +45,12 @@ export class TitleSummaryService {
   const entry=this.eligible.get(params.threadId);
   if(method==='thread/name/set'){if(entry)this.cancelEntry(entry);return this.pendingNames.get(params.threadId)?.catch(()=>{});}
   if(!entry)return;
-  if(['thread/archive','thread/unsubscribe','thread/compact/start','review/start'].includes(method)){this.cancelEntry(entry);return;}
+  // Leaving the view retains active work; only an unsent empty thread is discarded.
+  if(method==='thread/unsubscribe'){if(entry.phase==='new')this.cancelEntry(entry);return;}
+  if(['thread/archive','thread/compact/start','review/start'].includes(method)){this.cancelEntry(entry);return;}
   if(method!=='turn/start')return;
-  if(entry.phase!=='new'){this.cancelEntry(entry);return;}
+  // Continue summarizing the captured first message even if normal chatting resumes.
+  if(entry.phase!=='new')return;
   const text=(params.input||[]).filter(row=>row.type==='text'&&typeof row.text==='string').map(row=>row.text).join('\n').trim().slice(0,4000);
   if(!text){this.cancelEntry(entry);return;}entry.text=text;entry.phase='first-turn';
  }

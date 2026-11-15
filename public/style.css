@@ -818,17 +818,18 @@ dialog::backdrop { background: var(--overlay); }
 .reasoning-track.unknown #reasoning-range::-webkit-slider-thumb { opacity:0; }
 .reasoning-track.unknown #reasoning-range::-moz-range-thumb { opacity:0; }
 
-/* Running feedback is confined to the operation header, including collapsed groups. */
-:is(.step, .turn-process, .agent-operation-group) > summary { position:relative; isolation:isolate; overflow:hidden; border-radius:var(--radius-control); }
-:is(.step, .turn-process, .agent-operation-group)[data-running="true"] > summary::before {
+/* Whole-turn feedback also covers model-only thinking and streaming between tools. */
+.turn-working { width:fit-content; padding:4px 10px; }
+:is(.step, .turn-process, .agent-operation-group) > summary, .turn-working { position:relative; isolation:isolate; overflow:hidden; border-radius:var(--radius-control); }
+:is(.step, .turn-process, .agent-operation-group)[data-running="true"] > summary::before, .turn-working[data-running="true"]::before {
   content:""; position:absolute; inset:0; z-index:-1; pointer-events:none;
   background:linear-gradient(100deg, transparent 20%, color-mix(in srgb, var(--chart) 13%, transparent) 50%, transparent 80%);
   animation:thread-running-sweep 2.6s ease-in-out infinite;
 }
 @media (prefers-reduced-motion:reduce) {
-  :is(.step, .turn-process, .agent-operation-group)[data-running="true"] > summary::before { animation:none; transform:none; }
+  :is(.step, .turn-process, .agent-operation-group)[data-running="true"] > summary::before, .turn-working::before { animation:none; transform:none; }
 }
-:root[data-reduced-motion="true"] :is(.step, .turn-process, .agent-operation-group)[data-running="true"] > summary::before { animation:none; transform:none; }
+:root[data-reduced-motion="true"] :is(.step, .turn-process, .agent-operation-group)[data-running="true"] > summary::before, :root[data-reduced-motion="true"] .turn-working::before { animation:none; transform:none; }
 
 /* Config uses the same restrained typography and rows as the other settings. */
 .config-settings-panel { padding:20px; }

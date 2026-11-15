@@ -185,7 +185,7 @@ public class MainActivity extends Activity {
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
 
         String defaultUa = settings.getUserAgentString();
-        settings.setUserAgentString(defaultUa + " CodexLightMobile/0.4.7");
+        settings.setUserAgentString(defaultUa + " CodexLightMobile/0.4.8");
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             settings.setSafeBrowsingEnabled(false);

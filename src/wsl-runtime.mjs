@@ -50,7 +50,7 @@ ch=$(realpath -m -- "\${CODEX_HOME:-$HOME/.codex}" 2>/dev/null || printf '%s' "\
 printf 'CODECANG_WSL\\n'; id -un; printf '%s\\n' "$h" "$ch" "$c" "$kind" "$nodebin"`;
 function isolatedWslEnvironment(source){
  const env={...source};
- const blocked=key=>/^(?:CODEX_HOME|CODEX_LIGHT_CODEX|OPENAI_API_KEY|DEEPSEEK_API_KEY|DEEPSEEK_BASE_URL|ELECTRON_RUN_AS_NODE|WSLENV)$/i.test(key)||/^DSH_/i.test(key);
+ const blocked=key=>/^(?:CODEX_HOME|CODEX_LIGHT_CODEX|OPENAI_API_KEY|DEEPSEEK_API_KEY|DEEPSEEK_BASE_URL|ELECTRON_RUN_AS_NODE|WSLENV)$/i.test(key)||/^(?:DSH_|GIT_)/i.test(key);
  for(const key of Object.keys(env))if(blocked(key))delete env[key];
  // Arbitrary custom credential names may be listed in WSLENV. Do not carry any
  // Windows-selected variables into Linux; the Linux login shell owns its env.
@@ -87,6 +87,32 @@ export class WslRuntime {
   const result=String(await this.invoke(['--distribution',candidate.distribution,'--user',candidate.user,'--exec','wslpath','-a','-u',value])).trim();
   if(!result.startsWith('/')||!cleanPath(result))throw fail('Could not map the Windows path into WSL','WSL_PATH_UNSUPPORTED');
   return result;
+ }
+ async gitRead(cwd,args,candidate){
+  if(this.platform!=='win32')throw fail('WSL is available only on Windows','WSL_UNAVAILABLE');
+  validateWslSelection({distribution:candidate?.distribution,user:candidate?.user});
+  if(!candidate?.user||!Array.isArray(args)||args.some(value=>typeof value!=='string'))throw fail('Invalid WSL Git read parameters');
+  const directory=await this.toLinux(cwd,candidate);
+  // Preserve the selected Linux user's Git configuration, but never allow an
+  // inherited GIT_DIR/GIT_WORK_TREE to redirect the explicitly selected repo.
+  const script=`for key in $(env | sed -n 's/^\\(GIT_[A-Za-z0-9_]*\\)=.*/\\1/p'); do unset "$key"; done
+g=$(command -v git 2>/dev/null || true)
+case "$g" in /*) ;; *) printf '%s\\n' '所选 WSL 发行版未找到 Linux Git，请先在该发行版安装 Git。' >&2; exit 127;; esac
+g=$(readlink -f -- "$g")
+magic=$(head -c 4 -- "$g" | od -An -tx1 | tr -d ' \\n')
+[ "$magic" = 7f454c46 ] || { printf '%s\\n' '所选 WSL 环境中的 Git 不是 Linux 可执行文件；未改用 Windows Git。' >&2; exit 126; }
+export GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 GIT_LITERAL_PATHSPECS=1
+exec "$g" --no-pager -c core.fsmonitor=false "$@"`;
+  const argv=['--distribution',candidate.distribution,'--user',candidate.user,'--cd',directory,'--exec','/bin/sh','-lc',script,'codecang-git',...args];
+  try{
+   const result=await this.run(this.command,argv,{cwd:os.tmpdir(),encoding:'utf8',env:isolatedWslEnvironment(this.env),windowsHide:true,shell:false,timeout:15000,maxBuffer:2*1024*1024});
+   return {exitCode:0,stdout:result.stdout||'',stderr:result.stderr||''};
+  }catch(error){
+   if(error.code==='ERR_CHILD_PROCESS_STDIO_MAXBUFFER')throw fail('WSL Git 输出超过限制，请缩小查询范围','WSL_GIT_OUTPUT_LIMIT');
+   if(error.killed)throw fail('WSL Git 查询超时','WSL_GIT_TIMEOUT');
+   if(Number.isInteger(error.code))return {exitCode:error.code,stdout:error.stdout||'',stderr:error.stderr||''};
+   throw fail('无法在所选 WSL 发行版中启动 Git：'+(typeof error.code==='string'?error.code:'unknown'),'WSL_GIT_UNAVAILABLE');
+  }
  }
  launch(candidate){
   if(!candidate?.available||!candidate.codexPath)throw fail('Codex was not found in the selected WSL user environment','WSL_CODEX_NOT_FOUND');

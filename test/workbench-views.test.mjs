@@ -277,7 +277,7 @@ async function composerHarness({ mutation } = {}) {
     session: { state, followUps,sessionControls:{snapshot:()=>({permission:null,serviceTier:null}),params:()=>({})}, sessionFor: id => id === 't' && state.busy ? { activeTurnId: state.turnId } : null },
     drafts: { attachmentDraft: empty, fileAttachmentDraft: empty, attachmentPreviews: new Map(), queuedPreviews: new Map(), clearSubmittedDraft: env => { if ($('prompt').value.trim() === env.params.input[0].text) $('prompt').value = ''; }, renderAttachments() {}, autosizePrompt() {} },
     ledger: { performMutation: async (method, params) => { calls.push([method, structuredClone(params)]); return mutation ? mutation(method, params) : method === 'turn/steer' ? { turnId: 'turn-1' } : { turn: { id: 'turn-2', status: 'inProgress' } }; }, pendingMutations: { storageError: null }, scopedPending: () => [], currentSendAvailability: () => ({ disabled: false }), renderPendingMutations() {} },
-    thread: { restoreThreadReasoning() {}, loadThreads: async () => {}, syncStatus: async () => {}, resetThreadDsh() {} },
+    thread: { restoreThreadReasoning() {}, rememberThread() {}, loadThreads: async () => {}, syncStatus: async () => {}, resetThreadDsh() {} },
     view: { $, el: (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; }, notice: (...a) => calls.push(['notice', ...a]), activity() {}, confirm: () => true, updateControls() {}, renderMessages() {}, scheduleRender() {}, scrollBottom() {}, renderContext() {}, openProjectDialog() {}, openInlineCwd() {} } });
   return { composer, state, followUps, calls, $ };
 }

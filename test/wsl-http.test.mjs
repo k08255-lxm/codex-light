@@ -8,10 +8,10 @@ import {DemoClient} from '../src/demo.mjs';
 import {WslSelectionStore} from '../src/wsl-runtime.mjs';
 
 const candidate={distribution:'Ubuntu',user:'lee',home:'/home/lee',codexHome:'/home/lee/.codex',codexPath:'/usr/bin/codex',available:true};
-async function fixture(t,selected=null,probeCandidate=candidate){
+async function fixture(t,selected=null,probeCandidate=candidate,options={}){
  const root=await mkdtemp(path.join(os.tmpdir(),'codecang wsl http-'));const store=new WslSelectionStore({root});await store.save(selected);
  const calls=[];const service={platform:'win32',probe:async input=>{calls.push(input);return {...probeCandidate,...input};},launch:()=>({command:'never-run',args:[],cwd:os.tmpdir()}),discover:async()=>{calls.push('discover');return {available:true,candidates:[probeCandidate]};},toLinux:async p=>p};
- const client=new DemoClient();const app=await createServer({client,wslRuntimeService:service,wslSelectionStore:store,statisticsRoot:path.join(root,'stats'),projectsRoot:path.join(root,'projects'),fileAttachmentRoot:path.join(root,'attachments')});await app.started;
+ const client=new DemoClient();const app=await createServer({client,wslRuntimeService:service,wslSelectionStore:store,statisticsRoot:path.join(root,'stats'),projectsRoot:path.join(root,'projects'),fileAttachmentRoot:path.join(root,'attachments'),desktopStateRoot:path.join(root,'desktop'),...options});await app.started;
  t.after(async()=>{await app.close();await rm(root,{recursive:true,force:true});});return {app,store,calls,service};
 }
 const post=(app,url,data={})=>fetch(app.origin+url,{method:'POST',headers:{Authorization:`Bearer ${app.token}`,'Content-Type':'application/json'},body:JSON.stringify(data)});
@@ -30,12 +30,48 @@ test('WSL selector rejects unauthenticated/cross-origin requests and invalid pay
 });
 test('WSL current target and unsupported native actions are explicit',async t=>{
  const {app}=await fixture(t,{distribution:'Ubuntu',user:'lee'});
- const status=await (await fetch(app.origin+'/api/status',{headers:{Authorization:`Bearer ${app.token}`}})).json();assert.equal(status.runtimeTarget,'wsl');assert.ok(status.runtimeUnsupported.includes('git'));
- for(const url of ['/api/git/read','/api/git/plan','/api/git/apply','/api/dsh/config-sources/status']){const result=await post(app,url);assert.equal(result.status,409);assert.equal((await result.json()).code,'WSL_UNSUPPORTED');}
+ const status=await (await fetch(app.origin+'/api/status',{headers:{Authorization:`Bearer ${app.token}`}})).json();assert.equal(status.runtimeTarget,'wsl');assert.ok(status.runtimeUnsupported.includes('gitWrite'));assert.ok(!status.runtimeUnsupported.includes('git'));
+ for(const url of ['/api/git/plan','/api/git/apply','/api/dsh/config-sources/status']){const result=await post(app,url);assert.equal(result.status,409);assert.equal((await result.json()).code,'WSL_UNSUPPORTED');}
  const connection=await (await post(app,'/api/dsh/connection/status')).json();assert.equal(connection.selectionRequired,true);assert.ok(connection.modes.includes('windows'));
  const runtime=await (await post(app,'/api/runtime/status')).json();assert.equal(runtime.current.source,'wsl');assert.equal(runtime.canUpgrade,false);
  assert.equal((await post(app,'/api/runtime/upgrade')).status,400);
  const selection=await (await post(app,'/api/runtime/wsl/status')).json();assert.equal(selection.restartRequired,false);assert.equal(selection.current.user,'lee');
+});
+
+test('WSL Git reads use the selected Linux runtime, while write plans stay unavailable',async t=>{
+ const {app,service}=await fixture(t,{distribution:'Ubuntu',user:'lee'}),calls=[];
+ service.toLinux=async()=>'/home/lee/Repo';
+ service.gitRead=async(cwd,args,selected)=>{calls.push({cwd,args,selected});return {exitCode:0,stdout:args[0]==='config'?'':args[0]==='status'?' M 文件.txt\0':'diff --git a/文件.txt b/文件.txt\n--- a/文件.txt\n+++ b/文件.txt\n@@ -1 +1 @@\n-a\n+b\n',stderr:''};};
+ const response=await post(app,'/api/git/read',{cwd:process.cwd(),kind:'diff'});
+ assert.equal(response.status,200,await response.clone().text());
+ assert.match((await response.json()).diff,/\+b/);
+ assert.deepEqual(calls.map(row=>row.args[0]),['config','diff']);
+ assert.equal(calls[0].selected.distribution,'Ubuntu');assert.equal(calls[0].selected.user,'lee');
+ const status=await post(app,'/api/git/read',{cwd:process.cwd(),kind:'status'});
+ assert.deepEqual((await status.json()).files,[{index:' ',worktree:'M',path:'文件.txt'}]);
+ for(const url of ['/api/git/plan','/api/git/apply'])assert.equal((await post(app,url,{cwd:process.cwd()})).status,409);
+});
+
+test('WSL desktop keeps its native folder chooser and reports cancellation without changing runtime',async t=>{
+ let picks=0,selected=process.cwd();
+ const {app,store}=await fixture(t,{distribution:'Ubuntu',user:'lee'},candidate,{desktop:true,onDesktopPickFolder:async()=>{picks++;return selected;}});
+ const projects=await(await fetch(app.origin+'/api/projects',{headers:{Authorization:`Bearer ${app.token}`}})).json();
+ assert.equal(projects.canPickFolder,true);
+ assert.deepEqual(await(await post(app,'/api/desktop/pick-folder')).json(),{path:process.cwd()});
+ selected=null;assert.deepEqual(await(await post(app,'/api/desktop/pick-folder')).json(),{path:null});
+ assert.equal(picks,2);assert.deepEqual(await store.read(),{distribution:'Ubuntu',user:'lee'});
+});
+
+test('WSL Git filter confirmation remains per read and failure never becomes empty diff',async t=>{
+ const {app,service}=await fixture(t,{distribution:'Ubuntu',user:'lee'});const calls=[];
+ service.toLinux=async()=>'/home/lee/Repo';
+ service.gitRead=async(cwd,args)=>{calls.push(args[0]);return args[0]==='config'?{exitCode:0,stdout:'filter.lfs.clean\n',stderr:''}:{exitCode:128,stdout:'',stderr:'not a repository'};};
+ let response=await post(app,'/api/git/read',{cwd:process.cwd(),kind:'diff'});
+ assert.equal((await response.json()).code,'GIT_INSPECTION_CONFIRMATION_REQUIRED');assert.deepEqual(calls,['config']);
+ response=await post(app,'/api/git/read',{cwd:process.cwd(),kind:'diff',confirmedInspection:true});
+ assert.equal(response.status,400);assert.match((await response.json()).error,/not a repository/);
+ response=await post(app,'/api/git/read',{cwd:process.cwd(),kind:'status'});
+ assert.equal((await response.json()).code,'GIT_INSPECTION_CONFIRMATION_REQUIRED');assert.equal(calls.at(-1),'config');
 });
 test('manual Linux CLI selection is persisted without rewriting Codex configuration',async t=>{
  const {app,store,calls}=await fixture(t);const codexPath='/home/lee/.nvm/versions/node/v24/bin/codex';

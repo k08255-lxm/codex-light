@@ -1,5 +1,6 @@
 // Structured successful edit evidence only. Assistant prose and whole-workspace diffs are not evidence.
 import {changeEvidence,summarizeFileRows} from './change-stats.js';
+import {projectPathKey} from './projects.js';
 export function projectDelegatedEdit(event) {
   if (!event || typeof event !== 'object') return null;
   const changes = [];
@@ -26,7 +27,9 @@ export function projectDelegatedEdit(event) {
 export function absolutePath(value, cwd) {
   const path = String(value || '').replace(/\\/g, '/');
   const base = String(cwd || '').replace(/\\/g, '/').replace(/\/$/, '');
-  const absolute = /^(?:[A-Za-z]:\/|\/)/.test(path) ? path : base ? `${base}/${path}` : path;
+  const wslShare = /^\/\/(?:wsl\.localhost|wsl\$)\/[^/]+/i.exec(base)?.[0];
+  // Diff text may use Linux absolute names while typed RPC paths use the host share.
+  const absolute = wslShare && path.startsWith('/') && !path.startsWith('//') ? wslShare + path : /^(?:[A-Za-z]:\/|\/)/.test(path) ? path : base ? `${base}/${path}` : path;
   const prefix = absolute.startsWith('//') ? '//' : absolute.startsWith('/') ? '/' : '';
   const parts = [];
   for (const part of absolute.replace(/^\/+/, '').split('/')) {
@@ -35,7 +38,8 @@ export function absolutePath(value, cwd) {
     else parts.push(part);
   }
   const normal = prefix + parts.join('/');
-  return /^[A-Za-z]:\//.test(normal) || normal.startsWith('//') ? normal.toLowerCase() : normal;
+  // WSL shares expose a case-sensitive Linux filesystem, unlike ordinary Windows paths.
+  return projectPathKey(normal) || normal;
 }
 
 export function mergeDelegatedFileSummary(primary, delegated, { cwd = '' } = {}) {
