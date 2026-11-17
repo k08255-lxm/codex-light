@@ -47,7 +47,8 @@ export function createAsyncInputCard(document, initialItem, initialOptions = {})
   const status = el('p', 'approval-scope'); status.setAttribute('role', 'status');
   const error = el('p', 'inline-error'); error.setAttribute('role', 'alert'); error.hidden = true;
   const actions = el('div', 'actions');
-  const submit = el('button', 'accept', '提交回答'); submit.type = 'button'; actions.append(submit);
+  const progress=el('span','answer-progress');progress.setAttribute('aria-live','polite');
+  const submit = el('button', 'accept answer-submit', '发送回答'); submit.type = 'button'; actions.append(progress,submit);
   node.append(title, body, status, error, actions);
   let item, options, signature, definition, readers = [], busy = false, outcome = null;
   function readAnswers() { return readers.map(reader => ({ question: reader.question, answer: reader.read() || null })); }
@@ -55,9 +56,14 @@ export function createAsyncInputCard(document, initialItem, initialOptions = {})
     const answered = readAnswers().filter(answer => answer.answer !== null).length;
     const available = !!options?.threadId && typeof options?.onAnswerAsync === 'function';
     for (const control of body.querySelectorAll('input,textarea,button')) control.disabled = busy || !!outcome;
+    for (const reader of readers) { reader.summary.hidden = outcome?.status !== 'sent'; reader.summary.textContent = reader.read() || '未回答'; }
     submit.disabled = busy || !!outcome || !definition?.supported || !available || !answered;
+    progress.textContent=definition?.supported?`已回答 ${answered} / ${readers.length}`:'';
+    submit.textContent=busy?'正在发送…':outcome?.status==='queued'?'已加入队列':outcome?.status==='unknown'?'等待确认':'发送回答';
+    node.dataset.outcome=outcome?.status||'';
+    title.textContent=outcome?.status==='sent'?'已回答':'需要你回答';
     if (busy) status.textContent = '正在发送回答…';
-    else if (outcome) status.textContent = outcome.message || ({ sent: '已回复', queued: '已加入待发送队列', unknown: '发送结果待确认，请勿重复提交。' })[outcome.status];
+    else if (outcome) status.textContent = outcome.message || ({ sent: '回答已发送', queued: '已加入待发送队列', unknown: '发送结果待确认，请勿重复提交。' })[outcome.status];
     else if (!definition?.supported) status.textContent = definition?.reason || '';
     else if (!available) status.textContent = '当前无法发送回答，请在原对话中回复。';
     else status.textContent = answered && answered < readers.length ? `${readers.length - answered} 题未答` : '';
@@ -86,7 +92,8 @@ export function createAsyncInputCard(document, initialItem, initialOptions = {})
         input.addEventListener('input', () => { if (input.value.trim()) { for (const radio of radios) radio.checked = radio === other; } refresh(); });
         read = () => other.checked ? (input.value.trim() ? input.value : null) : question.options.find((_, optionIndex) => radios[optionIndex].checked) || null;
       } else input.addEventListener('input', refresh);
-      group.append(input); body.append(group); readers.push({ question: question.title, read });
+      const summary=el('p','answer-value');summary.hidden=true;
+      group.append(input,summary); body.append(group); readers.push({ question: question.title, read, summary });
     }
   }
   submit.addEventListener('click', async () => {

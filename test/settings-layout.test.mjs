@@ -11,7 +11,7 @@ test('DSH settings are an independent section, not a scroll alias',()=>{
 test('close dialog owns logical font and measures content instead of clipping fixed-width actions',()=>{
  const source=read('desktop/CloseChoiceDialog.cs');
  const size=Number(/dialogFont=new\("Microsoft YaHei UI",([\d.]+)f/.exec(source)?.[1]);
- assert.ok(size>=10,'Chinese dialog text stays readable at normal DPI');assert.ok(source.includes('GraphicsUnit.Point'));
+ assert.ok(size>=9&&size<10,'Chinese dialog text matches the Windows dialog body size, neither tiny nor oversized');assert.ok(source.includes('GraphicsUnit.Point'));
  assert.ok(!source.includes('UseCompatibleTextRendering=true'),'dialog controls share the native text renderer');
  assert.ok(source.includes('AutoSizeMode.GrowAndShrink'));assert.ok(!source.includes('ClientSize=new Size(468,152)'));
  assert.ok(!read('desktop/MainWindow.cs').includes('CloseChoiceDialog(BackColor,ForeColor,Font)'));

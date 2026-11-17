@@ -16,8 +16,6 @@ Changing the visible brand must not change either identity.
   and reuse of installed runtimes.
 - [Migration bootstrap](public-bootstrap/README.md) and [migration recovery](migration/README.md).
 - [Worker](worker/README.md) and [runtime safety](safety/README.md).
-- [Historical verification](INTEGRATION_STATUS.md): scoped regression evidence,
-  measurements and remaining limitations, not a current release checklist.
 
 ## Update boundaries
 
@@ -32,9 +30,7 @@ The official tool and runtime are pinned together to **1.3.39-g8d2844f
 property remains `EnableVelopackPrototype=true` for compatibility with the existing
 build scripts; its name does not mean all current updates use the legacy MSI path.
 
-Full packages are the current release route. Historical delta measurements saved
-network bytes but increased local reconstruction time; they are not a production
-speed guarantee. Successful updates do not establish automatic rollback after
+Full packages are the current release route. Successful updates do not establish automatic rollback after
 success. Preserve migration recovery material and stop on uncertain transactions.
 
 The benchmark scripts are isolated developer tools, not application update

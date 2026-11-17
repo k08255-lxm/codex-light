@@ -118,7 +118,7 @@ test('pill uses the running/latest edited turn and never sums or cancels across 
   const turns = buildTurns(items, ledger, { cwd: 'C:/p' });
   assert.equal(turns[0].files.count, 1, 'turn 1 card keeps its own +3');
   const pill = pillChanges(turns);
-  assert.equal(pill.turnId, null); assert.equal(pill.count, 0, 'terminal changes remain solely in the transcript summary');
+  assert.equal(pill.turnId, 't2'); assert.equal(pill.count, 0, 'latest turn restored its own files; do not display a stale earlier turn');
   ledger.merge({ id: 't3', status: 'inProgress' });
   const running = buildTurns([...items, { id: 'u3', type: 'userMessage', content: [], _turnId: 't3' }, { id: 'e3', type: 'fileChange', status: 'inProgress', changes: [{ path: 'C:/p/b.md', kind: { type: 'add' }, diff: 'a\n' }], _turnId: 't3' }], ledger, { activeTurnId: 't3', cwd: 'C:/p' });
   const live = pillChanges(running); assert.equal(live.turnId, 't3'); assert.equal(live.running, true); assert.equal(live.count, 1); assert.equal(live.added, 1);

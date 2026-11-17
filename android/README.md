@@ -4,7 +4,7 @@
 
 ## 已实现的功能
 
-- **移动端专属工作台布局**：与桌面端共享统一的碳黑单色视觉体系（`#181818` 画布、`#202020` 面板与高对比主操作按钮）。顶部采用独立状态胶囊栏（不遮挡网页顶栏），窄屏下自动将左侧图标轨重构为底部六栏导航（目录、对话、用量、终端、账户、设置），释放 100% 横向对话与代码阅读宽度，并在软键盘弹起时自动收起底栏。
+- **移动端专属工作台布局**：连接后将原生连接栏融入网页顶栏，利用顶栏显示连接状态与实际可用额度；项目选择行同时容纳审批方式和上下文信息。窄屏使用底部五栏导航（对话、用量、终端、账户、设置），软键盘弹起时自动收起底栏；加载失败和连接管理仍保留原生入口。
 - **局域网连接与配对**：支持并排输入主机 IP / 端口与访问令牌，或从系统剪贴板一键解析桌面端生成的 `http://<IP>:<PORT>/#token=<TOKEN>` 链接；保留最近 8 条连接记录并支持清空。
 - **令牌刷新保持**：桌面端局域网模式默认在提取 `#token` 后清除地址栏片段且不写入 Web Storage；Android 外壳仅对当前已校验的同源目标通过受控桥接回传当前会话令牌，页面刷新后无需重新粘贴链接。
 - **非安全上下文与剪贴板兼容**：局域网 HTTP 下浏览器默认隐藏 `[SecureContext]` API（如 `crypto.randomUUID` 与 `navigator.clipboard`）；前端入口模块内置符合 CSP（`script-src 'self'`）的 UUIDv4 生成与原生剪贴板同步校验兜底——当系统或浏览器拒绝剪贴板写入时如实拒绝 Promise，绝不误报“复制成功”。
@@ -17,15 +17,16 @@
 - 外壳禁用应用备份（`android:allowBackup="false"`），`MainActivity` 不向外部应用导出（`android:exported="false"`）。
 - WebView 导航严格锁定在当前配置的同源 `http://<host>:<port>`（或演示模式下的 `file:///android_asset/`）；对话内容中的外部网页链接统一交由系统浏览器打开，不会在持有原生桥接的 WebView 内加载第三方站点。
 - 遵循服务端局域网权限边界：手机端无法调用主程序关闭、运行引擎升级、DSH 连接注册、应用更新及打开本机资源管理器等仅限本机窗口的接口。
+- 连接使用 Android 默认网络路由，不因 VPN 已开启就拒绝连接，也不把进程或 socket 强绑到物理 Wi-Fi；局域网绕行由系统与 VPN 配置控制。旧网络指纹不再阻止连接，URL、私有 IPv4、端口、同源导航及配对兑换禁止重定向的检查仍保留。
 
 ## 连接步骤
 
 ### 安装与升级
 
 - 最低系统版本为 Android 7.0（API 24），Manifest 的 target SDK 为 34。需要可用的 Android System WebView；不要把 target SDK 当作最低 Android 版本。
-- 从本项目的 [Releases](https://github.com/k08255-lxm/codex-light/releases) 下载同版本 Windows 安装器和 APK，也可以按下文从源码构建。当前 0.4.8 构建的 APK 为 `codex-light-android-0.4.8.apk`，versionCode 为 408。此版 Android 仅同步版本信息，仍提供 APK 下载，但不触发旧手机客户端更新提示。下载时核对发布说明与校验文件。
+- 从本项目的 [Releases](https://github.com/k08255-lxm/codex-light/releases) 下载匹配发布版本的 Windows 安装器和 APK，也可以按下文从源码构建。v0.4.9 包含移动布局、任务通知与离线快照等实质更新，下载文件为 `codex-light-0.4.9.apk`，versionCode 为 409。
 - 将 APK 传到手机，用系统安装器打开；如系统提示，仅为当前使用的文件管理器或浏览器允许安装该来源的应用。安装后即可关闭这项许可。
-- 若要核对下载文件，在 Windows 执行 `Get-FileHash .\codex-light-android-0.4.8.apk -Algorithm SHA256`，与同一发布的 `SHA256SUMS.txt` 中对应文件名的条目对比。哈希只校验文件一致性，不能代替对发布者和签名的信任。
+- 若要核对下载文件，在 Windows 执行 `Get-FileHash .\codex-light-0.4.9.apk -Algorithm SHA256`，与同一发布的 `SHA256SUMS.txt` 中对应文件名的条目对比。哈希只校验文件一致性，不能代替对发布者和签名的信任。
 - 覆盖升级需要相同应用 ID 和签名证书。作者发布包、自行构建包及其他机器生成的调试密钥不保证互相兼容；签名不匹配时不要直接卸载来强行升级，因为卸载会清除手机保存的连接地址和令牌。请优先使用同一来源、同一签名的更新包。
 
 ### 连接电脑
@@ -113,18 +114,24 @@ Android 普通返回按钮/边缘返回手势先交给桌面服务提供的网�
 - 仅支持严格私有 IPv4 + 有效端口 + 64 位小写十六进制 LAN 令牌。HTTP 仍未加密，可信局域网要求不变；固定地址不是服务器身份认证，不能抵御同 IP 冒充。
 - 开发检查：`powershell -File test/android-reconnect/run.ps1` 运行宿主 JVM 策略与 HTTP 传输假连接测试。Android APK 编译不能替代真机的 Keystore、生命周期、触摸/返回和断网恢复验收。
 
-- 自动连接额外绑定当前 Android 网络会话（Network handle、启动计数、链路地址与路由的哈希）。换网、手机重启或系统无法读取网络时暂停自动发送令牌，须明确确认当前可信网络和电脑地址。仅关闭/重开 App 不需要重新确认。此绑定不是 TLS 服务器身份验证。
+## 未连接时查看上次页面
 
+连接中或连接失败时，如该电脑已有保存记录，手机会显示可滚动的只读文字快照和保存时间，保留“重新连接”“更换电脑”入口；真实连接就绪后切回实时页面。快照保存当前已加载的对话、用量或账户内容，不包含图片、未加载历史、输入草稿、设置凭据或终端；离线页面不能发送消息、批准操作或打开网页链接。
 
-### APK release asset naming
+连接正常时约每 30 秒及离开页面前尝试更新，空白、未就绪或断线状态不会覆盖上次可用快照。内容最多 10 万字符，按电脑地址与端口隔离，在 Android 应用私有 `noBackup` 目录原子保存，最多保留 8 台电脑；当前访问令牌在写入前脱敏。展示使用独立的无 JavaScript、无原生 bridge、禁止网络和导航的 WebView。原生网页归档不承诺剔除认证元数据，因此这里保存的是受控文字，而非可重新执行的整页资源。
 
-v0.4.8 changes desktop behavior and Android version metadata only. Assemble this release with `--android-unchanged`: publish `codex-light-android-0.4.8.apk` for manual download, without the standard APK alias that would notify older clients. Package identity, increased versionCode and the existing signing certificate remain required.
+## 任务通知与系统胶囊
 
-Historical v0.4.7 included an Android pairing behavior fix and published `codex-light-0.4.7.apk` with normal update notifications. That release must not be assembled with `--android-unchanged`; its functional-update policy is not extended to v0.4.8.
+在手机设置中主动开启任务通知，Android 13+ 会申请系统通知权限。运行任务使用 ongoing 通知，等待回答/批准、完成、失败和停止使用普通通知；每个对话一条，最多三条。通知点击回到对应对话，“取消固定”或划除后不再提醒同一轮。系统通知设置入口可调整权限和渠道。
 
+运行任务仅通过 Android 公开的 [Live Updates](https://developer.android.com/develop/ui/views/notifications/live-update) 接口申请提升显示，不调用需要厂商审核的专用接口。公开的 [`android.requestPromotedOngoing` extra](https://developer.android.com/reference/android/app/Notification#EXTRA_REQUEST_PROMOTED_ONGOING) 标为 36.1；Android 16 系列只是可尝试的候选，是否显示为荣耀、小米、OPPO、vivo、三星等系统的胶囊/岛，取决于系统版本、厂商实现和用户授权，尚未逐机型实测。系统不支持时保留标准通知，不能把这称作已完成所有厂商上岛适配。
 
-### Android 0.4.7 routing compatibility
+状态仍来自 WebView 的真实任务与连接事件，没有新增常驻后台服务。连接正常时每 30 秒续报，90 秒没有续报就降级为“任务状态暂未同步”；Android 8+ 另设系统超时，进程被杀后旧运行通知也会移除。Android 7.x 只显示普通状态通知。后台 WebView 可能暂停，因此无法保证离开应用后持续收到完成事件。
 
-Pairing and connection requests follow Android's default network routing, as in 0.4.4. The app does not reject VPN solely because it is active and does not bind the process or sockets to a physical Wi-Fi network. A VPN's LAN exclusions remain controlled by Android and the VPN provider. URL/private-IPv4/port validation, no HTTP redirects during ticket exchange, same-origin navigation guards, encrypted credential storage and connection cancellation remain enforced.
+维护入口为 `TaskNotificationController`、`TaskNotificationState`、`TaskNotificationReceiver` 和 `CodexLightNative` bridge。页面只在用户操作时调用 `setTaskNotificationsEnabled`；用 `getTaskNotificationStatus` 读取实际权限，并通过 `updateTaskNotification({threadId,turnId,title,state})` 的 JSON 字符串上报有限状态。`promotedCandidate` 只代表可尝试，`idle` 主动清除一个对话。原生校验可信页面、字段、ID 和标题长度；点击回调为 `window.CodexLightTaskNotifications.open(threadId)`。回归入口：`node --test test/android-task-notifications.test.mjs`；编译和 JVM 检查不能替代真机通知、后台生命周期及厂商胶囊验证。
 
-This is legacy plaintext HTTP, not TLS or cryptographic desktop identity verification. Use only a trusted network; the token and subsequent traffic can be observed on the network. Remembered automatic connections use the saved address; disable automatic connection or reconnect manually if that address may now belong to another computer. Old saved network fingerprints no longer gate connection. Device/VPN interoperability still requires a physical-device test; compilation and simulated transport tests are not that evidence.
+## APK 发布命名
+
+每个 Release 都附带 APK。Android 有实质代码或资源变化时使用旧客户端兼容的 `codex-light-VERSION.apk`，发布前核查已发布更新器的实际匹配规则。仅确认 Android 除版本外没有实质变化时才使用 `--android-unchanged`，输出 `codex-light-android-VERSION.apk` 且不上传标准名别名。v0.4.7 的配对修复属于实质更新，不能使用静默命名；过去某版仅同步版本的例外不适用于后续功能更新。两种命名都必须保持包 ID、签名兼容和递增 versionCode，并校验内部版本与哈希。
+
+v0.4.9 使用标准 APK 名称，不能沿用 v0.4.8 的 `--android-unchanged` 例外。

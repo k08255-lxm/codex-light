@@ -42,6 +42,11 @@ public class MainActivity extends Activity {
     private int navigationGeneration = 0;
     private android.window.OnBackInvokedCallback systemBackCallback;
     private ValueCallback<Uri[]> fileUploadCallback;
+    private TaskNotificationController taskNotifications;
+    private String pendingNotificationThread;
+    private OfflineSnapshotController offlineSnapshots;
+    private boolean snapshotPageReady;
+    private boolean requestedToolbarIntegrated;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -49,8 +54,15 @@ public class MainActivity extends Activity {
         setContentView(R.layout.activity_main);
 
         initViews();
+        taskNotifications = new TaskNotificationController(this);
+        acceptTaskNotificationIntent(getIntent());
         resolveIntent();
         setupWebView();
+        offlineSnapshots = new OfflineSnapshotController(this, this::captureOfflineSnapshot, () -> {
+            errorOverlay.setVisibility(View.GONE);
+            webView.setVisibility(View.INVISIBLE);
+            applyToolbarIntegrated(false);
+        }, this::loadTargetUrl, this::openServerManager);
         if (Build.VERSION.SDK_INT >= 33) {
             systemBackCallback = this::handleSystemBack;
             getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
@@ -94,6 +106,10 @@ public class MainActivity extends Activity {
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
+        if (acceptTaskNotificationIntent(intent)) {
+            deliverTaskNotificationIntent();
+            return;
+        }
         setIntent(intent);
         resolveIntent();
         loadTargetUrl();
@@ -147,11 +163,13 @@ public class MainActivity extends Activity {
     }
 
     public void updatePageOrigin(String url) {
+        snapshotPageReady = false;
         navigationGeneration++;
         backRequestPending = false;
         lastBackPressTime = 0;
         if (url == null || url.isEmpty()) {
             currentPageTrusted = false;
+            if (taskNotifications != null) taskNotifications.disconnected();
             return;
         }
         try {
@@ -159,6 +177,7 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             currentPageTrusted = false;
         }
+        if (!currentPageTrusted && taskNotifications != null) taskNotifications.disconnected();
     }
 
     public String getCurrentToken() {
@@ -166,6 +185,84 @@ public class MainActivity extends Activity {
             return "";
         }
         return currentConfig.getToken();
+    }
+
+    public boolean trustedTaskNotificationPage() {
+        return !isDemoMode && currentPageTrusted && currentConfig != null && !isFinishing() && !isDestroyed();
+    }
+
+    public String getTaskNotificationStatus() {
+        return trustedTaskNotificationPage() && taskNotifications != null
+            ? taskNotifications.status() : "{\"supported\":false}";
+    }
+
+    public void setTaskNotificationsEnabled(boolean enabled) {
+        if (trustedTaskNotificationPage() && taskNotifications != null) {
+            taskNotifications.setEnabled(enabled);
+            notifyTaskNotificationStatus();
+        }
+    }
+
+    public void openTaskNotificationSettings() {
+        if (trustedTaskNotificationPage() && taskNotifications != null) taskNotifications.openSettings();
+    }
+
+    public void updateTaskNotification(String json) {
+        if (trustedTaskNotificationPage() && taskNotifications != null) {
+            taskNotifications.update(json);
+            deliverTaskNotificationIntent();
+        }
+    }
+
+    private boolean acceptTaskNotificationIntent(Intent intent) {
+        if (intent == null || !TaskNotificationController.ACTION_OPEN.equals(intent.getAction())) return false;
+        String threadId = intent.getStringExtra("threadId");
+        String turnId = intent.getStringExtra("turnId");
+        if (TaskNotificationState.validId(threadId) && TaskNotificationState.validId(turnId)) {
+            pendingNotificationThread = threadId;
+        }
+        return true;
+    }
+
+    public void deliverTaskNotificationIntent() {
+        if (!trustedTaskNotificationPage() || webView == null || pendingNotificationThread == null) return;
+        final String thread = pendingNotificationThread;
+        webView.evaluateJavascript("(() => { const api = window.CodexLightTaskNotifications; "
+            + "if (api && typeof api.open === 'function') api.open("
+            + org.json.JSONObject.quote(thread) + "); })()", null);
+    }
+
+    public void taskNotificationOpened(String threadId) {
+        if (trustedTaskNotificationPage() && TaskNotificationState.validId(threadId)
+                && threadId.equals(pendingNotificationThread)) pendingNotificationThread = null;
+    }
+
+    public void offlineSnapshotReady() {
+        if (!trustedTaskNotificationPage() || offlineSnapshots == null) return;
+        snapshotPageReady = true;
+        webView.setVisibility(View.VISIBLE);
+        errorOverlay.setVisibility(View.GONE);
+        offlineSnapshots.liveReady();
+        applyToolbarIntegrated(requestedToolbarIntegrated);
+    }
+
+    private void captureOfflineSnapshot() {
+        if (offlineSnapshots == null || webView == null) return;
+        final ServerConfig target = currentConfig;
+        offlineSnapshots.capture(webView, target,
+            () -> snapshotPageReady && target == currentConfig && trustedTaskNotificationPage());
+    }
+
+    private void notifyTaskNotificationStatus() {
+        if (trustedTaskNotificationPage() && webView != null) {
+            webView.evaluateJavascript("window.dispatchEvent(new Event('codexlight-task-notification-status'))", null);
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == TaskNotificationController.PERMISSION_REQUEST) notifyTaskNotificationStatus();
     }
 
     private void setupWebView() {
@@ -185,7 +282,7 @@ public class MainActivity extends Activity {
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
 
         String defaultUa = settings.getUserAgentString();
-        settings.setUserAgentString(defaultUa + " CodexLightMobile/0.4.8");
+        settings.setUserAgentString(defaultUa + " CodexLightMobile/0.4.9");
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             settings.setSafeBrowsingEnabled(false);
@@ -197,7 +294,22 @@ public class MainActivity extends Activity {
         webView.setWebViewClient(new AppWebViewClient(this, progressBar));
     }
 
+    public void setToolbarIntegrated(boolean integrated) {
+        if (integrated && (isDemoMode || !currentPageTrusted)) return;
+        requestedToolbarIntegrated = integrated;
+        applyToolbarIntegrated(integrated && (offlineSnapshots == null || !offlineSnapshots.showing()));
+    }
+
+    private void applyToolbarIntegrated(boolean integrated) {
+        topBar.setVisibility(integrated ? View.GONE : View.VISIBLE);
+        findViewById(R.id.topBarDivider).setVisibility(integrated ? View.GONE : View.VISIBLE);
+    }
+
     private void loadTargetUrl() {
+        snapshotPageReady = false;
+        setToolbarIntegrated(false);
+        if (offlineSnapshots != null) offlineSnapshots.beginConnection(isDemoMode ? null : currentConfig);
+        if (taskNotifications != null) taskNotifications.disconnected();
         cancelConnectionAttempt();
         if (webView != null) webView.stopLoading();
         connectionFailed = false;
@@ -207,6 +319,7 @@ public class MainActivity extends Activity {
         lastBackPressTime = 0;
         if (isDemoMode) {
             currentPageTrusted = false;
+            webView.setVisibility(View.VISIBLE);
             tvServerTitle.setText("离线界面预览");
             if (tvModeBadge != null) tvModeBadge.setText("DEMO");
             statusDot.setBackgroundTintList(getColorStateList(R.color.status_warning));
@@ -215,7 +328,7 @@ public class MainActivity extends Activity {
             // Follow Android's default route, including the user's VPN LAN exclusions.
             // Legacy LAN transport is HTTP and does not authenticate the desktop cryptographically.
             currentPageTrusted = false;
-            tvServerTitle.setText(currentConfig.toDisplayAddress());
+            tvServerTitle.setText("连接电脑");
             if (tvModeBadge != null) tvModeBadge.setText("LAN");
             statusDot.setBackgroundTintList(getColorStateList(R.color.status_warning));
             tvModeBadge.setText("连接中");
@@ -262,8 +375,10 @@ public class MainActivity extends Activity {
     }
 
     public void showConnectionError(String detail) {
+        snapshotPageReady = false;
         connectionFailed = true;
         currentPageTrusted = false;
+        if (taskNotifications != null) taskNotifications.disconnected();
         progressBar.setVisibility(View.GONE);
         if (tvModeBadge != null) tvModeBadge.setText(authorizationFailed ? "需配对" : "离线");
         if (errorOverlay == null) return;
@@ -274,6 +389,7 @@ public class MainActivity extends Activity {
         tvErrorMessage.setText(detail + (currentConfig == null ? "" : "\n\n目标地址：" + currentConfig.toDisplayAddress()));
         btnErrorRetry.setVisibility(authorizationFailed ? View.GONE : View.VISIBLE);
         btnErrorChangeServer.setText(authorizationFailed ? "重新配对" : "取消重连 / 更换电脑");
+        if (offlineSnapshots != null) offlineSnapshots.connectionFailed(detail);
     }
 
     public void setFileUploadCallback(ValueCallback<Uri[]> callback) {
@@ -289,7 +405,8 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void openServerManager() {
+    public void openServerManager() {
+        if (taskNotifications != null) taskNotifications.clear();
         cancelConnectionAttempt();
         if (webView != null) { webView.stopLoading(); webView.loadUrl("about:blank"); }
         currentPageTrusted = false;
@@ -328,6 +445,10 @@ public class MainActivity extends Activity {
     }
 
     private void handleSystemBack() {
+        if (offlineSnapshots != null && offlineSnapshots.showing()) {
+            openServerManager();
+            return;
+        }
         if (errorOverlay.getVisibility() == View.VISIBLE) {
             openServerManager();
             return;
@@ -375,6 +496,7 @@ public class MainActivity extends Activity {
         super.onResume();
         AppUpdateChecker.start(this);
         if (webView != null) webView.onResume();
+        if (offlineSnapshots != null) offlineSnapshots.resume();
         if (connectionFailed && !authorizationFailed && new ServerConfigManager(this).isAutoConnectEnabled()) {
             errorOverlay.setVisibility(View.GONE);
             loadTargetUrl();
@@ -383,6 +505,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onPause() {
+        if (offlineSnapshots != null) offlineSnapshots.pause();
         AppUpdateChecker.stop(this);
         if (connectionAttempt != null) {
             cancelConnectionAttempt();
@@ -394,6 +517,8 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (offlineSnapshots != null) offlineSnapshots.destroy();
+        if (taskNotifications != null) taskNotifications.destroy();
         cancelConnectionAttempt();
         navigationGeneration++;
         if (Build.VERSION.SDK_INT >= 33 && systemBackCallback != null) {

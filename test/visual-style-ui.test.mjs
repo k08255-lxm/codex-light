@@ -35,9 +35,11 @@ test('success notices are neutral while error, approval and primary semantics st
 test('low-frequency settings motion is scoped; conversation scrolling remains immediate',()=>{
  // The owner explicitly requested visible settings/disclosure motion. Do not
  // restore the old global scale/slide ban or permit it on conversation content.
- assert.doesNotMatch(css,/--motion-press|transition:\s*all|@keyframes\s+fade-in|animation:\s*fade-in|menu-enter|panel-enter|page-enter/);
+ assert.doesNotMatch(css,/--motion-press|transition:\s*all|@keyframes\s+fade-in|animation:\s*fade-in|menu-enter|panel-enter/);
+ assert.match(css,/:root :is\(\.stage,\.settings-section,\.work\[role="tabpanel"\]\):not\(\.hidden\)\{animation:page-enter 200ms var\(--ease-out\)\}/);
+ assert.match(css,/@keyframes page-enter\{from\{opacity:0\}to\{opacity:1\}\}/);
  const approved=new Map([
-  [':root :is(#settings-general,#settings-storage,#settings-about,#settings-appearance):not(.hidden)',/transform:\s*translateY\(4px\)/],
+  [':root :is(.reasoning-popover,.changes-panel,.inspector):not(.hidden)',/transform:\s*translateY\(4px\)/],
   [':root .update-indicator:active:not(:focus-visible) .update-indicator-badge',/transform:\s*scale\(\.96\)/],
   [':root .sidebar',/transform:\s*translateX\(-100%\)/],
   ['.update-indicator:not([hidden])',/transform:\s*translateY\(-3px\)/],

@@ -14,6 +14,33 @@ const decimal = value => finite(value) ? value.toLocaleString('zh-CN', { maximum
 const RESET_STATUS = { available: '可用', redeeming: '处理中', redeemed: '已使用', unknown: '状态未知' };
 const REACHED = { rate_limit_reached: '已达使用限额', workspace_owner_credits_depleted: '工作区额度已耗尽', workspace_member_credits_depleted: '成员额度已耗尽', workspace_owner_usage_limit_reached: '已达工作区用量上限', workspace_member_usage_limit_reached: '已达成员用量上限' };
 
+// RPC messages can contain request URLs or authorization details. Keep only diagnostic codes;
+// an HTTP error reports this read's outcome, not an account suspension or a zero usage result.
+export function usageReadFailure(error) {
+  const message = typeof error?.message === 'string' ? error.message : '';
+  const match = message.match(/\bHTTP(?:\s+status(?:\s+(?:server|client)\s+error)?|\s+error)?[\s:(]+([45]\d\d)\b/i)
+    || message.match(/\b([45]\d\d)\s+(?:Internal Server Error|Unauthorized|Forbidden|Not Found|Too Many Requests|Bad Gateway|Service Unavailable)\b/i);
+  const reported = error?.httpStatus ?? error?.status;
+  const httpStatus = Number.isInteger(reported) && reported >= 400 && reported <= 599 ? reported : match ? Number(match[1]) : null;
+  const knownCodes = ['RPC_TIMEOUT', 'NOT_CONNECTED', 'PROCESS_EXITED', 'INPUT_BACKPRESSURE', 'TOO_MANY_REQUESTS'];
+  const rpcCode = Number.isSafeInteger(error?.code) || knownCodes.includes(error?.code) ? error.code : null;
+  const kind = httpStatus >= 500 ? 'service' : [401,403].includes(httpStatus) ? 'authorization' : httpStatus === 429 ? 'rateLimit'
+    : httpStatus === 408 || rpcCode === 'RPC_TIMEOUT' ? 'timeout' : rpcCode === -32601 ? 'unsupported'
+    : ['NOT_CONNECTED','PROCESS_EXITED'].includes(rpcCode) ? 'connection' : 'unknown';
+  return { kind, httpStatus, rpcCode };
+}
+
+function usageFailureText(scope, failure) {
+  const descriptions = {
+    service: '用量服务暂时出错，可稍后刷新重试', authorization: '用量服务拒绝了本次授权，请检查登录状态',
+    rateLimit: '用量读取请求受到限制，请稍后重试', timeout: '读取超时，可稍后刷新重试',
+    unsupported: '当前 Codex 引擎不支持此用量读取', connection: 'Codex 连接已断开，恢复连接后可重试',
+    unknown: '读取失败，可刷新重试',
+  };
+  const codes = [failure.httpStatus ? `HTTP ${failure.httpStatus}` : '', failure.rpcCode !== null ? `RPC ${failure.rpcCode}` : ''].filter(Boolean);
+  return `${scope}：${descriptions[failure.kind]}${codes.length ? `（${codes.join('；')}）` : ''}。`;
+}
+
 export function mountAccount(host, { rpc, loginPanelHost, pendingHost, demo = () => false, getThreadId = () => null, onQuota = () => {} }) {
   const document = host.ownerDocument;
   let generation = 0, accountEpoch = 0, active = false, quotaResult = null, attempt = null, selectedCredit = null, bucketId = null, usageTab = 'overview';
@@ -197,11 +224,12 @@ export function mountAccount(host, { rpc, loginPanelHost, pendingHost, demo = ()
     if (finite(summary.longestStreakDays)) strip.append(stat('最长连续', `${integer(summary.longestStreakDays)} 天`));
     const buckets = Array.isArray(result?.dailyUsageBuckets) ? result.dailyUsageBuckets.filter(row => typeof row?.startDate === 'string' && finite(row.tokens)).sort((a, b) => a.startDate.localeCompare(b.startDate)) : [];
     const thread = result?.threadUsage;
-    const tabs = [{ id: 'overview', name: '概览' }];
+    const tabs = result?.accountUsageError && thread?.threadId === getThreadId() ? [] : [{ id: 'overview', name: '概览' }];
     if (buckets.length) tabs.push({ id: 'daily', name: '每日用量' });
     if (thread && thread.threadId === getThreadId()) tabs.push({ id: 'thread', name: '当前对话' });
-    if (!tabs.some(tab => tab.id === usageTab)) usageTab = 'overview';
+    if (!tabs.some(tab => tab.id === usageTab)) usageTab = tabs[0]?.id || 'overview';
     const children = [];
+    if (tabs.length === 1 && usageTab === 'thread') children.push(el(document, 'p', 'acct-usage-caption', '当前对话'));
     if (tabs.length > 1) {
       const nav = el(document, 'div', 'acct-tabs'); nav.setAttribute('role', 'group'); nav.setAttribute('aria-label', '官方用量维度');
       for (const tab of tabs) { const button = el(document, 'button', '', tab.name); button.type = 'button'; button.setAttribute('aria-pressed', String(tab.id === usageTab)); button.addEventListener('click', () => { usageTab = tab.id; renderUsage(result); usage.querySelector(`[data-tab="${tab.id}"]`)?.focus(); }); button.dataset.tab = tab.id; button.dataset.focusKey = `usage:${tab.id}`; nav.append(button); }
@@ -215,7 +243,7 @@ export function mountAccount(host, { rpc, loginPanelHost, pendingHost, demo = ()
         chart.append(barChart(document, shown.map(row => ({ label: row.startDate.slice(5), value: row.tokens, title: `${row.startDate} · ${integer(row.tokens)} tokens` })), { height: 140 })); children.push(chart);
         children.push(el(document, 'p', 'acct-usage-caption', `${shown[0].startDate} — ${shown[shown.length - 1].startDate} · ${integer(shown.reduce((sum, row) => sum + row.tokens, 0))} Tokens（返回日期合计）`));
       }
-      if (!strip.childNodes.length && !buckets.length) children.push(el(document, 'p', 'empty-line', '服务没有返回账户用量统计。'));
+      if (!strip.childNodes.length && !buckets.length && !result?.accountUsageError) children.push(el(document, 'p', 'empty-line', '服务没有返回账户用量统计。'));
     } else if (usageTab === 'daily') {
       const sum = buckets.reduce((total, row) => total + row.tokens, 0);
       children.push(el(document, 'p', 'acct-usage-caption', `服务返回 ${integer(buckets.length)} 个日期 · 合计 ${integer(sum)} Tokens`));
@@ -235,7 +263,11 @@ export function mountAccount(host, { rpc, loginPanelHost, pendingHost, demo = ()
         children.push(dataTable(columns.map(([, name]) => name), groups.map(group => columns.map(([key, , format]) => group[key] == null ? UNKNOWN : format(group[key])))));
       }
     }
-    if (result?.threadUsageError) children.push(el(document, 'p', 'inline-error', '当前对话的官方用量估算暂时无法读取，可刷新重试。'));
+    if (result?.accountUsageError) children.push(el(document, 'p', 'inline-error', usageFailureText('官方账户汇总', result.accountUsageError)));
+    if (result?.usageThreadId && result.usageThreadId === getThreadId()) {
+      if (result.threadUsageError) children.push(el(document, 'p', 'inline-error', usageFailureText('当前对话的官方用量估算', result.threadUsageError)));
+      else if (!thread) children.push(el(document, 'p', 'empty-line', '官方尚未提供当前对话的用量估算。账户汇总与额度会独立读取。'));
+    }
     section(usage, '官方账户用量', ...children);
   }
 
@@ -284,11 +316,18 @@ export function mountAccount(host, { rpc, loginPanelHost, pendingHost, demo = ()
     const readUsage = async () => {
       const threadId = getThreadId();
       // A thread-scoped request returns thread estimates instead of account-wide activity.
-      const requests = [rpc('account/usage/read', {})];
-      if (threadId) requests.push(rpc('account/usage/read', { threadId }));
+      const requests = [Promise.resolve().then(() => rpc('account/usage/read', {}))];
+      if (threadId) requests.push(Promise.resolve().then(() => rpc('account/usage/read', { threadId })));
       const [accountResult, threadResult] = await Promise.allSettled(requests);
-      if (accountResult.status === 'rejected') throw accountResult.reason;
-      return { ...accountResult.value, threadUsage: threadResult?.status === 'fulfilled' ? threadResult.value?.threadUsage : null, threadUsageError: threadResult?.status === 'rejected' };
+      const accountUsageError = accountResult.status === 'rejected' ? usageReadFailure(accountResult.reason) : null;
+      const threadUsageError = threadResult?.status === 'rejected' ? usageReadFailure(threadResult.reason) : null;
+      const threadUsage = threadResult?.status === 'fulfilled' ? threadResult.value?.threadUsage : null;
+      if (accountUsageError && !threadUsage) {
+        const errors = [usageFailureText('官方账户汇总', accountUsageError)];
+        if (threadUsageError) errors.push(usageFailureText('当前对话的官方用量估算', threadUsageError));
+        throw new Error(errors.join(' '));
+      }
+      return { ...accountResult.value, threadUsage, usageThreadId: threadId, accountUsageError, threadUsageError };
     };
     loadTask = Promise.all([
       settle(Promise.resolve().then(() => rpc('account/read', { refreshToken: false })), identity, renderIdentity),

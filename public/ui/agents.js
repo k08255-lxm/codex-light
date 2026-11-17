@@ -70,7 +70,7 @@ export function agentDisplayMetadata(agent) {
   const provider=safe(agent.native?agent.actualProvider:agent.provider);
   const model=actualModel||requestedModel,effort=actualEffort||requestedEffort;
   const shortModel=model.split('/').at(-1).replace(/^gpt-/i,'GPT-').replace(/^deepseek-/i,'DeepSeek-');
-  const effortLabel=({none:'无',minimal:'最低',low:'低',medium:'中',high:'高',xhigh:'极高',max:'最高',ultra:'极致'})[effort]||effort;
+  const effortLabel=effort;
   const source=agent.native?'GPT':provider?`DSH · ${provider}`:'DSH';
   const title=[agent.native?'Codex 原生子代理':'DSH 子代理',
     actualModel?`${agent.native?'实际报告':'任务报告'}模型：${actualModel}`:requestedModel?`请求模型：${requestedModel}；尚无实际模型确认`:'',

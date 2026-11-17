@@ -10,6 +10,7 @@ const PROCESS_TYPES = new Set(['reasoning', 'commandExecution', 'fileChange', 'm
   'functionCallOutput', 'sleep', 'enteredReviewMode', 'exitedReviewMode']);
 const ANSWER_PHASES = new Set(['final_answer', 'partial_answer']);
 const TURN_STATUS = { inProgress: 'running', completed: 'completed', interrupted: 'interrupted', failed: 'failed' };
+const TERMINAL_TURN_STATUS = new Set(['completed', 'interrupted', 'failed']);
 
 const finite = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 const text = value => typeof value === 'string' ? value : '';
@@ -32,10 +33,17 @@ export class TurnLedger {
   clear() { this.turns.clear(); }
   get(id) { return this.turns.get(id) || null; }
   merge(turn, { observedStartMs, observedEndMs } = {}) {
-    const meta = turnMeta(turn, this.turns.get(turn?.id));
+    const previous = this.turns.get(turn?.id);
+    const meta = turnMeta(turn, previous);
     if (!meta) return null;
+    // A late history page or replayed start cannot resurrect this same native turn.
+    // A different turn ID remains independent, including real concurrent work.
+    if (TERMINAL_TURN_STATUS.has(previous?.status) && turn.status === 'inProgress') {
+      meta.status = previous.status;
+      for (const key of ['completedAtMs', 'durationMs', 'error']) if (Object.hasOwn(previous, key)) meta[key] = previous[key];
+    }
     if (finite(observedStartMs) && meta.observedStartMs === undefined) meta.observedStartMs = observedStartMs;
-    if (finite(observedEndMs) && meta.status && meta.status !== 'inProgress') meta.observedEndMs = observedEndMs;
+    if (finite(observedEndMs) && meta.status && meta.status !== 'inProgress' && meta.observedEndMs === undefined) meta.observedEndMs = observedEndMs;
     this.turns.set(meta.id, meta);
     return meta;
   }
@@ -95,8 +103,9 @@ function isAnswer(item, finished, lastLegacyId, hasPhasedAnswer) {
 }
 
 function turnStatus(meta, items, activeTurnId, id) {
-  if (id && id === activeTurnId) return 'running';
   const mapped = TURN_STATUS[meta?.status];
+  if (TERMINAL_TURN_STATUS.has(meta?.status)) return mapped;
+  if (id && id === activeTurnId) return 'running';
   if (mapped) return mapped;
   if (items.some(item => item._complete === false)) return 'running';
   return 'unknown';

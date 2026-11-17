@@ -1,0 +1,241 @@
+package com.codexlight.android;
+
+import android.Manifest;
+import android.app.Activity;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
+import android.provider.Settings;
+import android.widget.Toast;
+import org.json.JSONException;
+import org.json.JSONObject;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Iterator;
+
+/** Standard Android notifications only. No OEM APIs, foreground service or fabricated progress. */
+final class TaskNotificationController {
+    static final String PREFS = "task_notifications";
+    static final String ACTION_OPEN = "com.codexlight.android.OPEN_TASK";
+    static final String ACTION_DISMISS = "com.codexlight.android.DISMISS_TASK";
+    static final String TAG = "monitored_task";
+    static final int PERMISSION_REQUEST = 1002;
+    private static final String CHANNEL = "monitored_tasks";
+    // Documented public extra; string keeps this project compatible with its API 34 build toolchain.
+    private static final String REQUEST_PROMOTED = "android.requestPromotedOngoing";
+    private final Activity activity;
+    private final NotificationManager manager;
+    private final SharedPreferences prefs;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private final TaskNotificationState tasks = new TaskNotificationState();
+    private final Runnable expire = this::expireTasks;
+
+    TaskNotificationController(Activity activity) {
+        this.activity = activity;
+        manager = (NotificationManager) activity.getSystemService(Context.NOTIFICATION_SERVICE);
+        prefs = activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        if (Build.VERSION.SDK_INT >= 26 && manager != null) {
+            NotificationChannel channel = new NotificationChannel(CHANNEL, "任务状态", NotificationManager.IMPORTANCE_DEFAULT);
+            channel.setDescription("你主动开启的运行任务监控，以及任务完成、失败和等待回答提醒");
+            channel.setShowBadge(false);
+            manager.createNotificationChannel(channel);
+        }
+    }
+
+    String status() {
+        boolean enabled = prefs.getBoolean("enabled", false);
+        boolean permission = permissionGranted();
+        boolean channelEnabled = true;
+        if (Build.VERSION.SDK_INT >= 26 && manager != null) {
+            NotificationChannel channel = manager.getNotificationChannel(CHANNEL);
+            channelEnabled = channel == null || channel.getImportance() != NotificationManager.IMPORTANCE_NONE;
+        }
+        try {
+            return new JSONObject().put("supported", manager != null).put("enabled", enabled)
+                .put("permissionGranted", permission).put("promotedCandidate", Build.VERSION.SDK_INT >= 36)
+                .put("reason", !enabled ? "disabled" : !permission ? "permission_required"
+                    : !channelEnabled ? "channel_blocked" : "ready").toString();
+        } catch (JSONException impossible) { return "{\"supported\":false}"; }
+    }
+
+    private boolean permissionGranted() {
+        return manager != null && manager.areNotificationsEnabled()
+            && (Build.VERSION.SDK_INT < 33 || activity.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                == PackageManager.PERMISSION_GRANTED);
+    }
+
+    void setEnabled(boolean enabled) {
+        prefs.edit().putBoolean("enabled", enabled).apply();
+        if (!enabled) { clear(); return; }
+        if (Build.VERSION.SDK_INT >= 33 && activity.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED) {
+            activity.requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, PERMISSION_REQUEST);
+        } else if (!permissionGranted()) {
+            Toast.makeText(activity, "请在系统通知设置中允许任务通知", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    void openSettings() {
+        Intent intent;
+        if (Build.VERSION.SDK_INT >= 26) {
+            intent = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                .putExtra(Settings.EXTRA_APP_PACKAGE, activity.getPackageName());
+        } else {
+            intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:" + activity.getPackageName()));
+        }
+        if (intent.resolveActivity(activity.getPackageManager()) != null) activity.startActivity(intent);
+    }
+
+    void update(String json) {
+        if (!prefs.getBoolean("enabled", false) || !permissionGranted() || json == null || json.length() > 4096) return;
+        try {
+            JSONObject data = new JSONObject(json);
+            if (data.length() > 4) return;
+            Iterator<String> keys = data.keys();
+            while (keys.hasNext()) {
+                String key = keys.next();
+                if (!"threadId".equals(key) && !"turnId".equals(key) && !"title".equals(key) && !"state".equals(key)) return;
+                if (!(data.get(key) instanceof String)) return;
+            }
+            String threadId = data.optString("threadId", "");
+            String state = data.optString("state", "");
+            if (!TaskNotificationState.validId(threadId) || !TaskNotificationState.validState(state)) return;
+            if ("idle".equals(state)) {
+                TaskNotificationState.Entry removed = tasks.entries.remove(threadId);
+                if (removed != null) manager.cancel(TAG, removed.notificationId);
+                return;
+            }
+            String turnId = data.optString("turnId", "");
+            String title = data.optString("title", "");
+            if (!TaskNotificationState.validId(turnId) || !TaskNotificationState.validTitle(title)) return;
+            if (prefs.getStringSet("dismissed", Collections.emptySet()).contains(threadId + "\n" + turnId)) return;
+            // Expire old entries before enforcing the three-task cap.
+            expireTasks();
+            TaskNotificationState.Entry old = tasks.entries.get(threadId);
+            if (old == null && tasks.entries.size() >= TaskNotificationState.MAX_TASKS) {
+                for (TaskNotificationState.Entry entry : new ArrayList<>(tasks.entries.values())) {
+                    if (!entry.active()) { tasks.entries.remove(entry.threadId); manager.cancel(TAG, entry.notificationId); break; }
+                }
+            }
+            boolean same = old != null && old.turnId.equals(turnId) && old.state.equals(state) && old.title.equals(title);
+            TaskNotificationState.Entry entry = tasks.update(threadId, turnId, title, state, SystemClock.elapsedRealtime());
+            if (entry != null && (!same || entry.active())) post(entry);
+            scheduleExpiry();
+        } catch (JSONException invalid) {
+            android.util.Log.w("TaskNotifications", "Rejected invalid task notification JSON");
+        }
+    }
+
+    private void post(TaskNotificationState.Entry entry) {
+        if (!permissionGranted() || prefs.getStringSet("dismissed", Collections.emptySet()).contains(entry.key())) return;
+        boolean running = "running".equals(entry.state);
+        // API 24-25 cannot expire notifications after process death. Never pin live state there.
+        if (running && Build.VERSION.SDK_INT < 26) return;
+        Intent open = new Intent(activity, MainActivity.class).setAction(ACTION_OPEN)
+            .setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            .putExtra("threadId", entry.threadId).putExtra("turnId", entry.turnId);
+        Intent dismiss = new Intent(activity, TaskNotificationReceiver.class).setAction(ACTION_DISMISS)
+            .putExtra("threadId", entry.threadId).putExtra("turnId", entry.turnId)
+            .putExtra("notificationId", entry.notificationId);
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE;
+        PendingIntent contentIntent = PendingIntent.getActivity(activity, entry.notificationId, open, flags);
+        PendingIntent deleteIntent = PendingIntent.getBroadcast(activity, entry.notificationId, dismiss, flags);
+        String text = message(entry.state);
+        Notification.Builder builder = Build.VERSION.SDK_INT >= 26
+            ? new Notification.Builder(activity, CHANNEL) : new Notification.Builder(activity);
+        builder.setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle(entry.title).setContentText(text)
+            .setStyle(new Notification.BigTextStyle().bigText(text))
+            .setCategory(running ? Notification.CATEGORY_PROGRESS : Notification.CATEGORY_STATUS)
+            .setVisibility(Notification.VISIBILITY_PRIVATE)
+            .setOnlyAlertOnce(true).setShowWhen(false).setOngoing(running).setAutoCancel(!running)
+            .setContentIntent(contentIntent).setDeleteIntent(deleteIntent);
+        if (running) builder.addAction(new Notification.Action.Builder(
+            android.graphics.drawable.Icon.createWithResource(activity, R.drawable.ic_launcher_foreground),
+            "取消固定", deleteIntent).build());
+        if (Build.VERSION.SDK_INT >= 26) {
+            builder.setTimeoutAfter(entry.active() ? TaskNotificationState.STALE_AFTER_MS + 15_000L
+                : TaskNotificationState.FINISHED_AFTER_MS);
+        }
+        if (Build.VERSION.SDK_INT >= 36 && running) {
+            Bundle extras = new Bundle();
+            extras.putBoolean(REQUEST_PROMOTED, true);
+            builder.addExtras(extras);
+        }
+        try { manager.notify(TAG, entry.notificationId, builder.build()); }
+        catch (SecurityException denied) {
+            android.util.Log.w("TaskNotifications", "Notification permission was revoked");
+        }
+    }
+
+    private static String message(String state) {
+        switch (state) {
+            case "running": return "正在工作 · 点击返回对话";
+            case "waiting": return "等待你的回答或批准 · 点击继续";
+            case "completed": return "本轮任务已完成 · 点击查看回答";
+            case "failed": return "本轮任务失败 · 点击查看原因";
+            case "interrupted": return "本轮任务已停止";
+            default: return "任务状态暂未同步 · 返回应用重新连接";
+        }
+    }
+
+    void disconnected() {
+        for (TaskNotificationState.Entry entry : tasks.entries.values()) {
+            if (entry.active()) {
+                entry.state = "disconnected";
+                entry.updatedAt = SystemClock.elapsedRealtime();
+                post(entry);
+            }
+        }
+        scheduleExpiry();
+    }
+
+    private void expireTasks() {
+        long now = SystemClock.elapsedRealtime();
+        for (TaskNotificationState.Entry entry : new ArrayList<>(tasks.entries.values())) {
+            if (prefs.getStringSet("dismissed", Collections.emptySet()).contains(entry.key())
+                    || entry.expired(now)) {
+                tasks.entries.remove(entry.threadId);
+                manager.cancel(TAG, entry.notificationId);
+                TaskNotificationReceiver.suppress(activity, entry.threadId, entry.turnId);
+            } else if (entry.stale(now)) {
+                entry.state = "disconnected";
+                entry.updatedAt = now;
+                post(entry);
+            }
+        }
+        scheduleExpiry();
+    }
+
+    private void scheduleExpiry() {
+        handler.removeCallbacks(expire);
+        if (!tasks.entries.isEmpty()) handler.postDelayed(expire, 15_000L);
+    }
+
+    void clear() {
+        handler.removeCallbacks(expire);
+        if (manager != null) {
+            for (android.service.notification.StatusBarNotification notification : manager.getActiveNotifications()) {
+                if (TAG.equals(notification.getTag())) manager.cancel(TAG, notification.getId());
+            }
+        }
+        tasks.entries.clear();
+    }
+
+    void destroy() {
+        disconnected();
+        handler.removeCallbacks(expire);
+    }
+}

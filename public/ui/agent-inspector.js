@@ -8,7 +8,7 @@ import {readAgentThread} from '../agent-history.js';
 import {asyncInputDefinition,asyncInputBodyText,createAsyncInputCard} from './async-input.js';
 
 // One list, one detail view, one scrolling parent. Reads happen only on opening or refreshing.
-export function createAgentInspector({document,state,host,dshTasks,dshLive,rpc,readDshTask,el,onAnswerAsync,artifactFactory}){
+export function createAgentInspector({document,state,host,dshTasks,dshLive,rpc,readDshTask,el,onAnswerAsync,artifactFactory,onLocalLink}){
  const cache=new Map();let selected=null,scope=null;
  const asyncInputs=new Map();
  const readQueue=[];
@@ -40,7 +40,7 @@ export function createAgentInspector({document,state,host,dshTasks,dshLive,rpc,r
   if(Date.now()>=nextRefresh)hydrate();
  },1000);
  clockTimer?.unref?.();
- function markdown(text,cwd){const body=el('div','agent-markdown');body.append(renderMarkdown(document,boundedText(text,65536),{cwd:cwd||state.thread?.cwd||state.cwd,complete:true}));return body;}
+ function markdown(text,cwd,threadId=state.thread?.id){const body=el('div','agent-markdown');const directory=cwd||(threadId===state.thread?.id?state.thread?.cwd||state.cwd:'');body.append(renderMarkdown(document,boundedText(text,65536),{cwd:directory,complete:true,...(onLocalLink?{onLocalLink:(ref,node)=>onLocalLink(ref,node,threadId)}:{})}));return body;}
  function toolRecord(item,key,artifacts){const record=renderActivityRecord(document,item,{artifacts});record.open=expandedTools.has(`${scope}:${key}`);record.addEventListener('toggle',()=>{if(!record.isConnected)return;const id=`${scope}:${key}`;if(record.open)expandedTools.add(id);else expandedTools.delete(id);});return record;}
  function object(value){if(value&&typeof value==='object'&&!Array.isArray(value))return value;if(typeof value==='string'&&value.length<=65536){try{const parsed=JSON.parse(value);return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:null;}catch{}}return null;}
  function eventRecord(event){
@@ -133,7 +133,7 @@ export function createAgentInspector({document,state,host,dshTasks,dshLive,rpc,r
    if(!['agentMessage','userMessage'].includes(item.type)){operations.push(item);continue;}
    flush(false);
    const text=item.type==='agentMessage'?asyncInputBodyText(item,item.text):(item.content||[]).filter(part=>part.type==='text').map(part=>part.text).join('\n');
-   if(text){const content=markdown(text,cwd);if(item.type==='userMessage')content.classList.add('agent-user-input');body.append(content);}
+   if(text){const content=markdown(text,cwd,threadId||state.thread?.id);if(item.type==='userMessage')content.classList.add('agent-user-input');body.append(content);}
    if(asyncInputDefinition(item)){
     const inputKey=JSON.stringify([threadId,item.id]);let input=asyncInputs.get(inputKey);
     if(!input){input=createAsyncInputCard(document,item,{threadId,onAnswerAsync});asyncInputs.set(inputKey,input);}
@@ -147,31 +147,49 @@ export function createAgentInspector({document,state,host,dshTasks,dshLive,rpc,r
   const saved=cache.get(`${scope}:${row.id}`);
   if(saved?.error)body.append(el('p','inline-error',saved.error));
   if(!saved?.thread){
-   if(row.prompt){const input=markdown(row.prompt);input.classList.add('agent-user-input');body.append(input);}
-   if(row.message)body.append(markdown(row.message));
+   if(row.prompt){const input=markdown(row.prompt,row.cwd,row.id);input.classList.add('agent-user-input');body.append(input);}
+   if(row.message)body.append(markdown(row.message,row.cwd,row.id));
    if(!body.children.length)body.append(el('p','muted',saved?.loading||saved?.queued?'正在读取…':'尚无内容'));
    return;
   }
-  const items=saved.thread.turns.flatMap(turn=>turn.items||[]);
-  if(items.length>100)body.append(el('p','muted','显示最近 100 条记录'));
-  appendSequence(body,items.slice(-100),row.id,saved.thread.cwd,lifecycle(row).tone==='run',row.id,saved.artifacts);
+  const turns=saved.thread.turns,items=turns.flatMap(turn=>turn.items||[]);
+  let omitted=Math.max(0,items.length-100);
+  if(omitted)body.append(el('p','muted','显示最近 100 条记录，按任务分组'));
+  for(const [index,turn]of turns.entries()){
+   const skip=Math.min(omitted,(turn.items||[]).length);omitted-=skip;
+   const visible=(turn.items||[]).slice(skip);if(!visible.length)continue;
+   const group=el('section','agent-run');group.dataset.turnId=turn.id;
+   const head=el('header','agent-run-heading');head.append(el('strong','',`任务 ${index+1}`),el('span','',({inProgress:'进行中',completed:'已完成',failed:'失败',interrupted:'已停止'})[turn.status]||''));
+   const started=stamp(turn.startedAt);if(started!==null){const time=el('time','',new Date(started).toLocaleString());time.dateTime=new Date(started).toISOString();head.append(time);}
+   group.append(head);appendSequence(group,visible,`${row.id}:${turn.id}`,saved.thread.cwd,turn.status==='inProgress',row.id,saved.artifacts);body.append(group);
+  }
  }
  function renderDshDetail(row,body){
   const snapshot=dshLive.snapshot();
   const live=snapshot.selectedAgentId===row.agentId?snapshot.selected:null;
   const finalText=live?.final_text||row.finalText||live?.answer||row.answer||'';
   const events=(live?.events||row.liveEvents||[]).slice(-100);
-  const items=events.map((event,index)=>{
+  const toItem=(event,index)=>{
    const id=String(event.event_id||event.seq||index);
    if(/tool|command|function|file.?change/i.test(event.type)||event.details||object(event.text)||object(event.summary))return {...eventRecord(event),id};
    return {id,type:'agentMessage',text:event.text||event.summary||''};
-  });
-  if(row.prompt||row.task){const task=markdown(row.prompt||row.task);task.classList.add('agent-user-input');body.append(task);}
-  appendSequence(body,items,row.agentId,row.cwd,lifecycle(row).tone==='run');
-  if(finalText&&!items.some(item=>item.type==='agentMessage'&&item.text===finalText))body.append(markdown(finalText));
+  };
+  const items=events.map(toItem);
+  if(row.prompt||row.task){const task=markdown(row.prompt||row.task,row.cwd);task.classList.add('agent-user-input');body.append(task);}
+  const groups=[];
+  for(const [index,event]of events.entries()){
+   const task=Number.isSafeInteger(event.taskTurn)&&event.taskTurn>0?event.taskTurn:null;
+   let group=groups.at(-1);if(!group||group.task!==task){group={task,items:[]};groups.push(group);}group.items.push(items[index]);
+  }
+  for(const [index,group]of groups.entries()){
+   const section=el('section','agent-run');section.dataset.taskTurn=String(group.task??'unknown');
+   const head=el('header','agent-run-heading');head.append(el('strong','',group.task?`任务 ${group.task}`:'任务记录（未提供轮次）'));section.append(head);
+   appendSequence(section,group.items,`${row.agentId}:run:${group.task??index}`,row.cwd,index===groups.length-1&&lifecycle(row).tone==='run');body.append(section);
+  }
+  if(finalText&&!items.some(item=>item.type==='agentMessage'&&item.text===finalText))body.append(markdown(finalText,row.cwd));
   if(!events.length&&!finalText){
    const text=live?.partial_text||row.partial_text||live?.progress||row.progress;
-   if(text)body.append(markdown(text));
+   if(text)body.append(markdown(text,row.cwd));
   }
   for(const error of new Set([row.error,row.callError,live?.event_error,live?.status_error,state.dshReadErrors.get(`${scope}:${row.agentId}`)].filter(Boolean)))body.append(el('p','inline-error',boundedText(error,2000)));
   if(live?.has_more||live?.syncing_history)body.append(el('p','muted','事件记录尚未完整'));

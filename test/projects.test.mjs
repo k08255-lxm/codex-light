@@ -156,3 +156,35 @@ test('thread groups merge saved and historical directories without mutating inpu
   assert.equal(projectThreadGroups(projects, threads, {searching: true}).length, 3);
   assert.equal(JSON.stringify({projects, threads}), before);
 });
+
+test('project order preserves pins then promotes recently used projects without prioritizing running chats',()=>{
+ const projects=[{id:'a',path:'/a'},{id:'b',path:'/b'},{id:'c',path:'/c'},{id:'pin',path:'/pin',pinned:true}];
+ const threads=[{id:'a1',cwd:'/a',updatedAt:100},{id:'a2',cwd:'/a',updatedAt:90},{id:'b',cwd:'/b',updatedAt:200},{id:'c',cwd:'/c',updatedAt:300}];
+ assert.deepEqual(projectThreadGroups(projects,threads).map(row=>row.path),['/pin','/c','/b','/a']);
+ const groups=projectThreadGroups(projects,threads,{runningThreadIds:new Set(['a2']),recent:{'/b':400}});
+ assert.deepEqual(groups.map(row=>row.path),['/pin','/b','/c','/a']);
+ const runningGroup=groups.find(row=>row.path==='/a');
+ assert.equal(runningGroup.running,true);
+ assert.equal(groups.find(row=>row.path==='/b').running,false);
+ assert.deepEqual(runningGroup.threads.map(row=>row.id),['a1','a2']);
+ assert.deepEqual(projectThreadGroups(projects,threads,{runningThreadIds:new Set(['a2']),recent:{'/b':400,'/c':500}}).map(row=>row.path),['/pin','/c','/b','/a']);
+});
+
+test('local project use takes precedence over newer background timestamps while unused projects use history',()=>{
+ const projects=[{id:'a',path:'/a'},{id:'b',path:'/b'},{id:'c',path:'/c'},{id:'empty',path:'/empty'}];
+ const threads=[{id:'a',cwd:'/a',updatedAt:900},{id:'b',cwd:'/b',updatedAt:200},{id:'c',cwd:'/c',createdAt:300}];
+ const options={runningThreadIds:new Set(['a']),recent:{'/a':100,'/b':400}};
+ const groups=projectThreadGroups(projects,threads,options);
+ assert.deepEqual(groups.map(row=>row.path),['/b','/c','/a','/empty']);
+ assert.equal(groups.find(row=>row.path==='/a').lastActivity,100000);
+ assert.equal(groups.find(row=>row.path==='/empty').lastActivity,0);
+ assert.deepEqual(projectThreadGroups(projects,threads,{...options,recent:{...options.recent,'/a':500}}).map(row=>row.path),['/a','/b','/c','/empty']);
+});
+
+test('project history fallback normalizes seconds and milliseconds and ignores invalid local timestamps',()=>{
+ const projects=[{id:'a',path:'/a'},{id:'b',path:'/b'}];
+ const threads=[{id:'a',cwd:'/a',updatedAt:1700000000},{id:'b',cwd:'/b',updatedAt:1700000001000}];
+ const groups=projectThreadGroups(projects,threads,{recent:{'/a':'invalid','/b':-1}});
+ assert.deepEqual(groups.map(row=>row.path),['/b','/a']);
+ assert.deepEqual(groups.map(row=>row.lastActivity),[1700000001000,1700000000000]);
+});

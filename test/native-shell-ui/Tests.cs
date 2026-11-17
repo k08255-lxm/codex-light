@@ -4,17 +4,68 @@ internal static class Tests {
  static int checks;
  static void Check(bool result,string message){checks++;if(!result)throw new Exception(message);}
  static IEnumerable<Control> Descendants(Control control){foreach(Control child in control.Controls){yield return child;foreach(var item in Descendants(child))yield return item;}}
- [STAThread]static void Main(string[] args){try{Run(args);}catch(Exception error){Console.Error.WriteLine(error);Environment.ExitCode=1;}}
+ [STAThread]static void Main(string[] args){
+  try{
+   if(args.Contains("--web-caption-worker")){
+    if(args.Length!=2||args[0]!="--web-caption-worker")throw new ArgumentException("Invalid isolated worker arguments");
+    isolatedDesktopName=args[1];CheckIsolatedDesktop();Run(new[]{"--web-caption-layout"});
+   }else if(args.Contains("--web-caption-layout"))RunOnIsolatedDesktop();else Run(args);
+  }catch(Exception error){Console.Error.WriteLine(error);Environment.ExitCode=1;}
+ }
+ static string? isolatedDesktopName;
+ static void RunOnIsolatedDesktop(){
+  // Select the desktop at process creation, before .NET/WinForms creates STA
+  // windows. Never request SWITCHDESKTOP access or fall back to the input desktop.
+  string name="CodeCangUiTest-"+Guid.NewGuid().ToString("N");
+  var desktop=CreateDesktop(name,IntPtr.Zero,IntPtr.Zero,0,0x00C7,IntPtr.Zero); // Read/write objects, create windows/menus, enumerate.
+  if(desktop==IntPtr.Zero)throw new System.ComponentModel.Win32Exception(System.Runtime.InteropServices.Marshal.GetLastWin32Error(),"Cannot create isolated test desktop");
+  string log=Path.Combine(AppContext.BaseDirectory,name+".log");
+  try{
+   string executable=Environment.ProcessPath??throw new InvalidOperationException("Cannot locate test executable");
+   string command="\""+executable+"\"";
+   if(string.Equals(Path.GetFileNameWithoutExtension(executable),"dotnet",StringComparison.OrdinalIgnoreCase))command+=" \""+typeof(Tests).Assembly.Location+"\"";
+   command+=" --web-caption-worker "+name;
+   using var capture=new FileStream(log,FileMode.CreateNew,FileAccess.ReadWrite,FileShare.ReadWrite);
+   var output=capture.SafeFileHandle.DangerousGetHandle();
+   if(!SetHandleInformation(output,1,1))throw new System.ComponentModel.Win32Exception(System.Runtime.InteropServices.Marshal.GetLastWin32Error());
+   var startup=new StartupInfo{Size=System.Runtime.InteropServices.Marshal.SizeOf<StartupInfo>(),Desktop=name,Flags=0x180,Input=output,Output=output,Error=output}; // Std handles + no startup cursor feedback.
+   if(!CreateProcess(executable,new System.Text.StringBuilder(command),IntPtr.Zero,IntPtr.Zero,true,0x08000000,IntPtr.Zero,null,ref startup,out var process))throw new System.ComponentModel.Win32Exception(System.Runtime.InteropServices.Marshal.GetLastWin32Error(),"Cannot launch isolated test worker");
+   try{
+    if(WaitForSingleObject(process.Process,45000)!=0){TerminateProcess(process.Process,1);WaitForSingleObject(process.Process,5000);throw new TimeoutException("Isolated test worker did not exit; no input-desktop fallback was attempted");}
+    capture.Dispose();Console.Write(File.ReadAllText(log));
+    if(!GetExitCodeProcess(process.Process,out var exitCode))throw new System.ComponentModel.Win32Exception(System.Runtime.InteropServices.Marshal.GetLastWin32Error());
+    Check(exitCode==0,"isolated desktop worker failed; no input-desktop fallback was attempted (exit "+exitCode+")");
+   }finally{CloseHandle(process.Thread);CloseHandle(process.Process);}
+  }finally{
+   if(File.Exists(log))File.Delete(log);
+   if(!CloseDesktop(desktop))throw new System.ComponentModel.Win32Exception(System.Runtime.InteropServices.Marshal.GetLastWin32Error(),"Cannot close isolated test desktop");
+  }
+ }
+ static string DesktopName(IntPtr desktop){
+  var name=new System.Text.StringBuilder(256);
+  if(!GetUserObjectInformation(desktop,2,name,(uint)(name.Capacity*2),out _))throw new System.ComponentModel.Win32Exception(System.Runtime.InteropServices.Marshal.GetLastWin32Error());
+  return name.ToString();
+ }
+ static void CheckIsolatedDesktop(){
+  const string prefix="CodeCangUiTest-";
+  if(isolatedDesktopName==null||!isolatedDesktopName.StartsWith(prefix,StringComparison.Ordinal)||!Guid.TryParseExact(isolatedDesktopName[prefix.Length..],"N",out _))throw new InvalidOperationException("Geometry checks require an isolated desktop");
+  var input=OpenInputDesktop(0,false,0x0001);
+  if(input==IntPtr.Zero)throw new System.ComponentModel.Win32Exception(System.Runtime.InteropServices.Marshal.GetLastWin32Error(),"Cannot verify the input desktop; refusing geometry checks");
+  try{
+   Check(string.Equals(DesktopName(GetThreadDesktop(GetCurrentThreadId())),isolatedDesktopName,StringComparison.OrdinalIgnoreCase),"fixture thread is attached to its dedicated desktop");
+   Check(!string.Equals(DesktopName(input),isolatedDesktopName,StringComparison.OrdinalIgnoreCase),"fixture desktop is not the user's input desktop");
+  }finally{CloseDesktop(input);}
+ }
  static void Run(string[] args){
   Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);Application.EnableVisualStyles();
   if(args.Contains("--dialog-only")){
    string destination=args.FirstOrDefault(value=>value!="--dialog-only")??Path.Combine(Path.GetTempPath(),"codecang-close-font-previews");Directory.CreateDirectory(destination);
-   var foreground=GetForegroundWindow();
    foreach(bool light in new[]{false,true})foreach(float scale in new[]{1f,1.5f,2f}){
     using var dialog=new CloseChoiceDialog(light?Color.White:Color.FromArgb(24,24,24),light?Color.FromArgb(32,32,32):Color.White);
+    bool activated=false,focused=false;dialog.Activated+=(_,_)=>activated=true;dialog.GotFocus+=(_,_)=>focused=true;
     dialog.StartPosition=FormStartPosition.Manual;dialog.Location=new Point(-32000,-32000);dialog.ShowInTaskbar=false;dialog.Opacity=0;
-    // A disabled offscreen window cannot activate; enable only after Show for normal text rendering.
-    dialog.Enabled=false;dialog.Show();dialog.Enabled=true;dialog.PerformLayout();Application.DoEvents();
+    // Shown intentionally focuses Cancel in production; never raise Shown for a layout-only fixture.
+    _=dialog.Handle;dialog.PerformLayout();Application.DoEvents();
     if(scale!=1f)dialog.Scale(new SizeF(scale,scale));
     dialog.PerformLayout();
     var buttons=Descendants(dialog).OfType<Button>().ToArray();Check(buttons.Length==3,"three close actions");
@@ -24,12 +75,29 @@ internal static class Tests {
      Check(dialog.ClientRectangle.Contains(bounds),$"dialog text stays inside at scale {scale}: {bounds} within {dialog.ClientRectangle}: "+control.Text);
     }
     Check(ReferenceEquals(dialog.AcceptButton,dialog.CancelButton),"Enter and Escape cancel");
+    Check(dialog.Opacity==0&&!dialog.ShowInTaskbar&&!Screen.AllScreens.Any(screen=>screen.Bounds.IntersectsWith(dialog.Bounds)),"font preview remains transparent and outside every display");
     using var bitmap=new Bitmap(dialog.Width,dialog.Height);dialog.DrawToBitmap(bitmap,new Rectangle(Point.Empty,bitmap.Size));bitmap.Save(Path.Combine(destination,$"dialog-{light}-{scale:0.0}.png"),ImageFormat.Png);
-    dialog.Hide();Check(GetForegroundWindow()==foreground,"font preview stays offscreen without taking focus");
+    Check(!dialog.Visible&&!IsWindowVisible(dialog.Handle),"font preview never shows its HWND");
+    Check(!activated&&!focused&&GetForegroundWindow()!=dialog.Handle,"font preview never activates or receives focus");
    }
    Console.WriteLine($"Passed {checks} hidden close-dialog layout assertions at 100/150/200 percent; previews: {destination}");return;
   }
   CheckCaptionCommands();
+  if(args.Contains("--web-caption-layout")){
+   CheckIsolatedDesktop();
+   using var probe=new CaptionProbe{Text="Caption layout fixture",AllowCommands=true,Size=new Size(880,540),StartPosition=FormStartPosition.Manual,Location=new Point(-32000,-32000),ShowInTaskbar=false,Opacity=0,Enabled=false};
+   probe.UseWebCaption();probe.Show();Application.DoEvents();var original=probe.Bounds;
+   foreach(var state in new[]{FormWindowState.Maximized,FormWindowState.Normal,FormWindowState.Minimized,FormWindowState.Normal}){
+    CheckIsolatedDesktop();
+    probe.WindowState=state;Application.DoEvents();
+    Check(probe.WindowState==state,"web caption preserves native window state "+state);
+    if(state==FormWindowState.Maximized)Check(new Rectangle(probe.PointToScreen(Point.Empty),probe.ClientSize)==Screen.FromHandle(probe.Handle).WorkingArea,"maximized web client matches work area");
+    if(state==FormWindowState.Normal)Check(probe.Bounds==original,"web caption restore preserves bounds");
+    Check(probe.Opacity==0&&!probe.Enabled&&!probe.ShowInTaskbar,"layout fixture stays transparent and noninteractive");
+    CheckIsolatedDesktop();
+   }
+   probe.Hide();CheckIsolatedDesktop();Console.WriteLine($"Passed {checks} isolated web caption layout assertions; input desktop was never switched, no model calls.");return;
+  }
   if(args.Contains("--native-visible")){
    var folder=Path.Combine(AppContext.BaseDirectory,"visible-previews");Directory.CreateDirectory(folder);
    using var preview=new CaptionProbe{Text="CodeCang test - no account or backend",AllowCommands=true,Size=new Size(880,540),StartPosition=FormStartPosition.CenterScreen};
@@ -85,7 +153,7 @@ internal static class Tests {
    using var dialog=new CloseChoiceDialog(light?Color.White:Color.FromArgb(24,24,24),light?Color.FromArgb(32,32,32):Color.White);
    dialog.StartPosition=FormStartPosition.Manual;dialog.Location=new Point(-32000,-32000);dialog.ShowInTaskbar=false;dialog.Opacity=0;dialog.Show();dialog.PerformLayout();Application.DoEvents();
    var buttons=Descendants(dialog).OfType<Button>().ToArray();Check(buttons.Length==3,"three actions");
-   foreach(var button in buttons){Check(button.FlatAppearance.BorderColor.A==255,"opaque button border");var c=button.FlatAppearance.BorderColor;Check(c.R==c.G&&c.G==c.B,"neutral border");Check(button.Height>=36&&button.Width>=80,"usable action size");Check(!string.IsNullOrWhiteSpace(button.AccessibleName),"accessible action");}
+   foreach(var button in buttons){Check(button.FlatAppearance.BorderColor.A==255,"opaque button border");var c=button.FlatAppearance.BorderColor;Check(c.R==c.G&&c.G==c.B,"neutral border");Check(button.Height>=32&&button.Width>=80,"usable action size");Check(!string.IsNullOrWhiteSpace(button.AccessibleName),"accessible action");}
    Check(ReferenceEquals(dialog.AcceptButton,dialog.CancelButton),"default and escape remain cancel");Check(dialog.Choice==CloseChoice.Cancel,"safe initial choice");
    using var bitmap=new Bitmap(dialog.Width,dialog.Height);dialog.DrawToBitmap(bitmap,new Rectangle(Point.Empty,bitmap.Size));bitmap.Save(Path.Combine(output,$"dialog-{light}.png"),ImageFormat.Png);dialog.Close();
   }
@@ -93,27 +161,42 @@ internal static class Tests {
  }
  static void CheckCaptionCommands(){
   // Never show or activate this HWND. Consume commands before Windows changes state.
-  IntPtr foreground=GetForegroundWindow();
   using var window=new CaptionProbe();var handle=window.Handle;
-  Check(GetWindowRect(handle,out var outer)&&GetClientRect(handle,out var client)&&outer.Height==client.Height,"native overlay gives full client area");
+  GetClientRect(handle,out var client);
+  Check(GetWindowRect(handle,out var outer)&&outer.Height>client.Height,"startup retains native frame until WebView is ready");
+  var originalHeight=client.Height;window.UseWebCaption();
+  Check(GetClientRect(handle,out client)&&client.Height>originalHeight,"web caption reclaims the native title area");
+  var webHeight=client.Height;
   Check((window.NativeStyle&0x00C00000)==0x00C00000,"native caption semantics retained");
   Check((window.NativeStyle&0x000F0000)==0x000F0000,"resize/system/min/max styles retained");
   Check(!window.Visible,"probe remains hidden");
   Check(!Descendants(window).OfType<Button>().Any(),"no duplicate client caption buttons");
   foreach(var title in new[]{"CodeCang","CodeCang - New conversation",""}){
    window.Text=title;Application.DoEvents();Check(window.Text==title,"native title update retained");
-   Check(GetWindowRect(handle,out outer)&&GetClientRect(handle,out client)&&outer.Height==client.Height,"title update retains overlay area");
-   Check(!window.Visible&&GetForegroundWindow()==foreground,"title update cannot show or activate probe");
+   Check(GetWindowRect(handle,out outer)&&GetClientRect(handle,out client)&&client.Height==webHeight,"title update retains web caption area");
+   CheckHiddenProbe(window,"title update");
   }
   window.Icon=SystemIcons.Application;Application.DoEvents();Check(!window.Visible,"icon update stays hidden");
-  Check(GetForegroundWindow()==foreground,"probe never steals foreground");
+  CheckHiddenProbe(window,"icon update");
 
+ }
+ static void CheckHiddenProbe(CaptionProbe window,string operation){
+  // The user may switch other apps while a hidden test runs. Track this HWND's
+  // transitions instead of requiring the entire desktop's foreground to freeze.
+  Check(!window.Visible&&!IsWindowVisible(window.Handle)&&!window.SawVisible,operation+" never shows probe");
+  Check(!window.SawActivation&&!window.SawFocus,operation+" never activates or focuses probe");
+  Check(GetForegroundWindow()!=window.Handle,operation+" leaves foreground outside probe");
  }
  sealed class CaptionProbe:CaptionWindow {
   protected override bool ShowWithoutActivation=>true;
   public void SetTheme(bool light)=>SetCaptionTheme(light);
+  public void UseWebCaption()=>EnableWebCaption();
   public bool AllowCommands;public readonly List<int> Commands=new();public int NativeStyle=>CreateParams.Style;
+  public bool SawActivation,SawFocus,SawVisible;
+  protected override void OnVisibleChanged(EventArgs e){if(Visible)SawVisible=true;base.OnVisibleChanged(e);}
   protected override void WndProc(ref Message message){
+   if(message.Msg==0x0006&&(message.WParam.ToInt64()&0xffff)!=0)SawActivation=true;
+   if(message.Msg==0x0007)SawFocus=true;
    if(message.Msg==0x0112&&!AllowCommands){Commands.Add((int)message.WParam&0xFFF0);message.Result=IntPtr.Zero;return;}
    base.WndProc(ref message);
   }
@@ -123,6 +206,21 @@ internal static class Tests {
  [System.Runtime.InteropServices.DllImport("user32.dll")]static extern bool GetWindowRect(IntPtr window,out NativeRect rect);
  [System.Runtime.InteropServices.DllImport("user32.dll")]static extern bool GetClientRect(IntPtr window,out NativeRect rect);
  [System.Runtime.InteropServices.DllImport("user32.dll")]static extern IntPtr GetForegroundWindow();
+ [System.Runtime.InteropServices.DllImport("user32.dll")]static extern bool IsWindowVisible(IntPtr window);
+ [System.Runtime.InteropServices.DllImport("user32.dll",EntryPoint="CreateDesktopW",CharSet=System.Runtime.InteropServices.CharSet.Unicode,SetLastError=true)]static extern IntPtr CreateDesktop(string name,IntPtr device,IntPtr mode,uint flags,uint access,IntPtr attributes);
+ [System.Runtime.InteropServices.DllImport("user32.dll",SetLastError=true)]static extern IntPtr OpenInputDesktop(uint flags,bool inherit,uint access);
+ [System.Runtime.InteropServices.DllImport("user32.dll",SetLastError=true)]static extern bool CloseDesktop(IntPtr desktop);
+ [System.Runtime.InteropServices.DllImport("user32.dll")]static extern IntPtr GetThreadDesktop(uint thread);
+ [System.Runtime.InteropServices.DllImport("kernel32.dll")]static extern uint GetCurrentThreadId();
+ [System.Runtime.InteropServices.DllImport("user32.dll",EntryPoint="GetUserObjectInformationW",CharSet=System.Runtime.InteropServices.CharSet.Unicode,SetLastError=true)]static extern bool GetUserObjectInformation(IntPtr handle,int index,System.Text.StringBuilder value,uint size,out uint required);
+ [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential,CharSet=System.Runtime.InteropServices.CharSet.Unicode)]struct StartupInfo {public int Size;public string? Reserved,Desktop,Title;public uint X,Y,XSize,YSize,XChars,YChars,Fill,Flags;public ushort Show,ReservedSize;public IntPtr ReservedBytes,Input,Output,Error;}
+ [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]struct ProcessInfo {public IntPtr Process,Thread;public uint ProcessId,ThreadId;}
+ [System.Runtime.InteropServices.DllImport("kernel32.dll",EntryPoint="CreateProcessW",CharSet=System.Runtime.InteropServices.CharSet.Unicode,SetLastError=true)]static extern bool CreateProcess(string executable,System.Text.StringBuilder command,IntPtr processAttributes,IntPtr threadAttributes,bool inherit,uint flags,IntPtr environment,string? directory,ref StartupInfo startup,out ProcessInfo process);
+ [System.Runtime.InteropServices.DllImport("kernel32.dll",SetLastError=true)]static extern uint WaitForSingleObject(IntPtr handle,uint milliseconds);
+ [System.Runtime.InteropServices.DllImport("kernel32.dll",SetLastError=true)]static extern bool GetExitCodeProcess(IntPtr process,out uint code);
+ [System.Runtime.InteropServices.DllImport("kernel32.dll",SetLastError=true)]static extern bool TerminateProcess(IntPtr process,uint code);
+ [System.Runtime.InteropServices.DllImport("kernel32.dll",SetLastError=true)]static extern bool SetHandleInformation(IntPtr handle,uint mask,uint flags);
+ [System.Runtime.InteropServices.DllImport("kernel32.dll")]static extern bool CloseHandle(IntPtr handle);
  [System.Runtime.InteropServices.DllImport("user32.dll")]static extern IntPtr SendMessage(IntPtr hwnd,int msg,IntPtr wp,IntPtr lp);
  [System.Runtime.InteropServices.DllImport("dwmapi.dll")]static extern int DwmGetWindowAttribute(IntPtr hwnd,int attr,out NativeRect value,int size);
  [System.Runtime.InteropServices.DllImport("user32.dll")]static extern bool PrintWindow(IntPtr hwnd,IntPtr hdc,uint flags);

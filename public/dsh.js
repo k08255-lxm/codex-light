@@ -30,6 +30,19 @@ export function dshModelMetadata(value) {
 }
 const isDshServer = name => /^dsh[-_]subagent(?:\s*\(demo\))?$/i.test(String(name || ''));
 export function isDshItem(item) { return item?.type === 'mcpToolCall' && isDshServer(item.server) && /^dsh_/.test(item.tool || ''); }
+export function dshLifecycleEvent(item) {
+  if(!isDshItem(item)||item.status!=='completed'||runCallRejected(item))return null;
+  const args=object(item.arguments)||{},reported=dshToolResultAgentId(item.result);
+  if(reported==='conflict'||reported&&args.agent_id&&reported!==args.agent_id)return null;
+  const id=reported||args.agent_id;if(typeof id!=='string'||!id)return null;
+  const row=payloads(item.result).find(row=>!row.agent_id||row.agent_id===id);
+  if(!row||runCallRejected(item,row))return null;
+  const status=row.status;
+  const started=['dsh_start','dsh_followup','dsh_send'].includes(item.tool)&&['starting','running'].includes(status);
+  const ended=['dsh_wait','dsh_status','dsh_interrupt','dsh_close'].includes(item.tool)&&['completed','interrupted','error','failed','closed'].includes(status);
+  if(!started&&!ended)return null;
+  return {id,name:typeof row.name==='string'?row.name:typeof args.name==='string'?args.name:id.slice(0,12),kind:started?'started':status,label:started?(item.tool==='dsh_start'?'已启动':'开始新任务'):({completed:'已完成',interrupted:'已中断',error:'出错',failed:'失败',closed:'已关闭'})[status]};
+}
 export function dshRuntimeStatusLabel(status) { return ({notStarted:'尚未启动',starting:'正在启动',connected:'已连接',authenticationRequired:'需要身份验证',failed:'连接失败',cancelled:'连接已取消',disabled:'已禁用'})[status] || (status ? `未知状态（${text(status,120)}）` : '会话连接状态未知'); }
 export function dshConnectionSummary(data, scope = '全局', {sessionScoped = false} = {}) {
   const entries = (Array.isArray(data) ? data : []).filter(row => isDshServer(row.name)).slice(0, 10);
@@ -244,6 +257,8 @@ function normalizeEvent(event) {
   if(edit?.changes.length)row.changes=edit.changes;
   if(typeof event.success==='boolean')row.success=edit.success;
   if(edit?.taskTurn)row.taskTurn=edit.taskTurn;
+  const reportedTurn=event.taskTurn??event.turn??data?.turn??object(event.summary)?.turn;
+  if(Number.isSafeInteger(reportedTurn)&&reportedTurn>0)row.taskTurn=reportedTurn;
   if(edit?.callId)row.callId=edit.callId;
   if (eventText) row.text = eventText;
   if (summary) row.summary = summary;

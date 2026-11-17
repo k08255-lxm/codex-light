@@ -61,7 +61,7 @@ test('recommended options start unchecked and only an explicit submit sends sele
   assert.equal(view.posted[0].threadId, 'main-thread'); assert.equal(view.posted[0].itemId, 'ask-one');
   assert.match(view.posted[0].text, /回答：本地提炼/); assert.match(view.posted[0].text, /回答：未回答/);
   assert.doesNotMatch(view.posted[0].text, /回答：模型总结/);
-  assert.match(visibleText(view.node), /已回复/); assert.equal(view.submit.disabled, true);
+  assert.match(visibleText(view.node), /回答已发送/); assert.equal(view.submit.disabled, true);
 });
 
 test('typing Other is explicit and a pending submit preserves drafts through identical history updates', async () => {

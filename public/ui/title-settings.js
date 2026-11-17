@@ -4,7 +4,7 @@ export function mountTitleSettings(host,{api}){
  const document=host.ownerDocument;let busy=false;
  const panel=el(document,'div','panel');
  const enabled=el(document,'input');enabled.type='checkbox';enabled.setAttribute('aria-label','自动总结对话标题');
- const toggle=el(document,'label','pref-row');const copy=el(document,'div');copy.append(el(document,'strong','','自动总结对话标题'),el(document,'small','fine','默认关闭；开启后，新对话首轮结束时额外调用所选模型一次。'));toggle.append(copy,enabled);
+ const toggle=el(document,'label','pref-row');const copy=el(document,'div');copy.append(el(document,'strong','','自动总结对话标题'),el(document,'small','fine','默认从首条消息提炼本地标题，无需模型。开启后，首轮结束时用所选模型优化一次；失败或超时会保留本地标题，手动命名优先。'));toggle.append(copy,enabled);
  const model=el(document,'select');model.setAttribute('aria-label','标题总结模型');
  const modelRow=el(document,'label','pref-row');modelRow.append(el(document,'strong','','总结模型'),model);
  const refresh=el(document,'button','btn','刷新模型');refresh.type='button';const save=el(document,'button','btn primary','保存标题设置');save.type='button';

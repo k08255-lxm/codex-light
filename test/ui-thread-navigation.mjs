@@ -80,10 +80,13 @@ try {
   await check('first running thread survives a stale history list', async () => {
     await page.locator('.project-group-thread.running').waitFor({ timeout: 2000 });
   });
+  if (!process.argv.includes('--baseline')) await check('running conversations have no blue unread dot',async()=>{
+    assert.equal(await page.locator('.project-group-thread.running .thread-unread-indicator:visible').count(),0);
+  });
   await check('model-only work shows continuous running feedback', async () => {
     await page.locator('.turn-working[data-running="true"]').waitFor({ timeout: 2000 });
     const name = await page.locator('.turn-working').evaluate(node => getComputedStyle(node, '::before').animationName);
-    assert.equal(name, 'thread-running-sweep');
+    assert.equal(name, 'working-dot');
   });
   await check('leave a first running turn and reopen it before history indexing', async () => {
     await page.locator('#new-thread').click();
@@ -98,11 +101,11 @@ try {
   for (const [rail, stage] of [['usage', 'usage-page'], ['account', 'account-page'], ['terminal', 'terminal-page']]) {
     await page.locator('#rail-' + rail).click();
     await page.locator('#' + stage).waitFor();
-    await check(`project sidebar remains available on ${rail}`, async () => assert.equal(await page.locator('#chat-sidebar').isVisible(), true));
+    await check(`project sidebar closes by default on ${rail}`, async () => assert.equal(await page.locator('#rail-sidebar').getAttribute('aria-expanded'), 'false'));
     await check(`conversation click returns from ${rail} to chat`, async () => {
       // Baseline dispatch reaches the old callback even when its sidebar is hidden.
       if (process.argv.includes('--baseline')) await page.locator('.project-group-thread').dispatchEvent('click');
-      else await page.locator('.project-group-thread').click();
+      else {await page.locator('#rail-sidebar').click();await page.locator('.project-group-thread').click();}
       await page.locator('#chat-page').waitFor({ timeout: 2000 });
       assert.equal(await page.locator('#app').getAttribute('data-view'), 'chat');
     });
@@ -131,10 +134,26 @@ try {
   turn.status = 'completed';
   client.emit('event', { method: 'turn/completed', params: { threadId: runningId, turn } });
   await page.waitForFunction(() => !document.querySelector('.project-group-thread.running'));
+  if (!process.argv.includes('--baseline')) await check('a background completed turn shows an unread dot',async()=>{
+    await page.locator('.project-group-thread .thread-unread-indicator:visible').waitFor({timeout:2000});
+    assert.match(await page.locator('.project-group-thread').getAttribute('aria-label'),/新一轮已完成，未读/);
+  });
   await page.locator('.project-group-thread').click();
   await page.locator('#stop').waitFor({ state: 'hidden' });
   assert.equal(await page.locator('.turn-working[data-running="true"]').count(), 0);
   if (!process.argv.includes('--baseline')) {
+    await check('opening the completed conversation clears its unread dot',async()=>{
+      await page.waitForFunction(()=>document.querySelector('.thread-unread-indicator')?.hidden===true);
+    });
+    await page.locator('#new-thread').click();
+    await check('completion replay after reading does not restore an unread dot',async()=>{
+      client.emit('event', { method: 'turn/completed', params: { threadId: runningId, turn } });
+      // The event triggers a list refresh; waiting for its response gives the event a deterministic fence.
+      await page.waitForResponse(response=>response.url().endsWith('/api/rpc')&&response.request().postDataJSON()?.method==='thread/list');
+      assert.equal(await page.locator('.thread-unread-indicator:visible').count(),0);
+    });
+    await page.locator('.project-group-thread').click();
+    await page.waitForFunction(()=>!document.querySelector('#thread-menu-button').disabled);
     await page.locator('#thread-menu-button').click();
     await page.locator('#archive-thread').click();
     await page.getByRole('dialog').getByRole('button', { name: '确认', exact: true }).click();

@@ -1,0 +1,59 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {createTaskMonitor,mountTaskNotifications} from '../public/ui/task-notifications.js';
+import {createDocument} from './mini-dom.mjs';
+function fixture(){
+ const sent=[];let waits=false;
+ const monitor=createTaskMonitor({post:data=>sent.push(data),title:()=> '任务\n标题',waiting:()=>waits});
+ return {monitor,sent,setWaiting:value=>{waits=value;},event:(method,id='turn1',status)=>monitor.observe({method,params:{threadId:'thread1',turn:{id,status}}})};
+}
+test('task notifications require opt-in and report only confirmed turn results',()=>{
+ const f=fixture();f.event('turn/started');assert.equal(f.sent.length,0);
+ f.monitor.setEnabled(true);assert.equal(f.sent.at(-1).state,'running');assert.equal(f.sent.at(-1).title,'任务 标题');
+ f.setWaiting(true);f.monitor.refresh();assert.equal(f.sent.at(-1).state,'waiting');
+ f.setWaiting(false);f.monitor.refresh();assert.equal(f.sent.at(-1).state,'running');
+ f.event('turn/completed','turn1','completed');assert.equal(f.sent.at(-1).state,'completed');
+ const count=f.sent.length;f.monitor.refresh();f.event('turn/completed','turn1','completed');assert.equal(f.sent.length,count);
+ f.monitor.reconcile([{threadId:'thread1',activeTurnId:'turn1'}],true);assert.equal(f.sent.length,count);
+});
+test('old results never replace a newer task; failed and interrupted remain distinct',()=>{
+ const f=fixture();f.monitor.setEnabled(true);f.event('turn/started');f.event('turn/started','turn2');
+ const count=f.sent.length;f.event('turn/completed','turn1','completed');assert.equal(f.sent.length,count);
+ f.event('turn/completed','turn2','failed');assert.equal(f.sent.at(-1).state,'failed');
+ f.event('turn/started','turn3');f.event('turn/completed','turn3','interrupted');assert.equal(f.sent.at(-1).state,'interrupted');
+});
+test('disconnect stops live heartbeats until an authoritative snapshot resumes work',()=>{
+ const f=fixture();f.monitor.setEnabled(true);f.event('turn/started');f.monitor.disconnected();
+ assert.equal(f.sent.at(-1).state,'disconnected');const count=f.sent.length;f.monitor.refresh();assert.equal(f.sent.length,count);
+ f.monitor.reconcile([{threadId:'thread1',activeTurnId:'turn1'}],true);assert.equal(f.sent.at(-1).state,'running');
+ f.monitor.reconcile([],true);assert.equal(f.sent.at(-1).state,'disconnected');
+ f.event('turn/completed','turn1','completed');assert.equal(f.sent.at(-1).state,'completed','idle session snapshot precedes terminal event in the real server');
+});
+test('reset clears completed notifications too, and invalid native IDs are rejected',()=>{
+ const f=fixture();f.monitor.setEnabled(true);f.event('turn/started','bad\nturn');assert.equal(f.sent.length,0);
+ f.event('turn/started');f.event('turn/completed','turn1','completed');f.monitor.reset();
+ assert.deepEqual(f.sent.at(-1),{threadId:'thread1',state:'idle'});
+});
+
+test('cold notification clicks wait for readiness and acknowledge only the loaded conversation',async()=>{
+ const document=createDocument(),window=new EventTarget(),calls=[];let ready=false,finish;
+ for(const id of ['mobile-task-notifications','mobile-task-enabled','mobile-task-status','mobile-task-system-settings']){const node=document.createElement('div');node.id=id;document.body.append(node);}
+ window.setInterval=()=>0;
+ window.CodexLightNative={getTaskNotificationStatus:()=>JSON.stringify({supported:true,enabled:true,reason:'ready'}),setTaskNotificationsEnabled(){},updateTaskNotification(){},openTaskNotificationSettings(){},taskNotificationOpened:id=>calls.push(['ack',id])};
+ const controller=mountTaskNotifications({document,window,snapshot:()=>({connected:ready,canOpen:ready,threads:[]}),openThread:id=>{calls.push(['open',id]);return new Promise(resolve=>{finish=resolve;});},notice:()=>assert.fail('unexpected failure')});
+ window.CodexLightTaskNotifications.open('thread1');assert.deepEqual(calls,[]);
+ ready=true;controller.reconcile();window.CodexLightTaskNotifications.open('thread1');assert.deepEqual(calls,[['open','thread1']]);
+ finish();await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(calls,[['open','thread1'],['ack','thread1']]);
+});
+
+test('permission toggle awaits native confirmation and stale connection stops heartbeat',()=>{
+ const document=createDocument(),window=new EventTarget(),calls=[];let enabled=false,live=true,reads=0,heartbeat;
+ for(const id of ['mobile-task-notifications','mobile-task-enabled','mobile-task-status','mobile-task-system-settings']){const node=document.createElement('div');node.id=id;document.body.append(node);}
+ window.setInterval=callback=>{heartbeat=callback;};
+ window.CodexLightNative={getTaskNotificationStatus:()=>{reads++;return JSON.stringify({supported:true,enabled,reason:enabled?'ready':'disabled'});},setTaskNotificationsEnabled:value=>calls.push(['enable',value]),updateTaskNotification:data=>calls.push(JSON.parse(data)),openTaskNotificationSettings(){}};
+ const controller=mountTaskNotifications({document,window,snapshot:()=>({connected:live,canOpen:false,threads:[]}),notice:()=>assert.fail('unexpected failure')});
+ const toggle=document.getElementById('mobile-task-enabled');toggle.checked=true;toggle.dispatch('change');assert.equal(reads,1,'no premature native preference read');
+ enabled=true;window.dispatchEvent(new Event('codexlight-task-notification-status'));
+ controller.observe({method:'turn/started',params:{threadId:'thread1',turn:{id:'turn1'}}});assert.equal(calls.at(-1).state,'running');
+ live=false;heartbeat();assert.equal(calls.at(-1).state,'disconnected');heartbeat();assert.equal(calls.at(-1).state,'disconnected');
+});

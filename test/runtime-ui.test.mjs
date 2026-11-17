@@ -38,7 +38,7 @@ test('WSL adapters are fixed local endpoints and remain available without a conn
 });
 
 test('runtime upgrade has a 31 minute transport timeout and validates operation outcomes',()=>{
- assert.match(app,/async function api\(path, body, \{timeoutMs=90000\}=\{\}\)/);assert.match(app,/setTimeout\(\(\) => controller\.abort\(\), timeoutMs\)/);
+ assert.match(app,/async function api\(path, body, \{timeoutMs=90000,signal\}=\{\}\)/);assert.match(app,/setTimeout\(\(\) => controller\.abort\(\), timeoutMs\)/);
  assert.match(app,/await api\('\/api\/runtime\/upgrade',\{\.\.\.envelope\.params,requestId:envelope\.requestId\},\{timeoutMs:1860000\}\)/);
  assert.match(app,/decision=marker\?lookupDecision\(marker,\{serverInstance:state\.serverInstance,method,state:'succeeded',result\}\):'unknown'/);assert.match(app,/pendingMutations\.mark\(envelope\.requestId,'unknown'\)/);
 });

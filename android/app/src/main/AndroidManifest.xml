@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.codexlight.android"
-    android:versionCode="408"
-    android:versionName="0.4.8">
+    android:versionCode="409"
+    android:versionName="0.4.9">
 
     <uses-sdk
         android:minSdkVersion="24"
@@ -12,6 +12,8 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
 
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
@@ -27,6 +29,7 @@
         android:networkSecurityConfig="@xml/network_security_config">
 
         <activity android:name=".QrScanActivity" android:exported="false" android:screenOrientation="portrait" />
+        <receiver android:name=".TaskNotificationReceiver" android:exported="false" />
         <activity
             android:name=".ServerConnectActivity"
             android:label="@string/app_name"

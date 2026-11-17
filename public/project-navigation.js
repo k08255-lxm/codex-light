@@ -77,7 +77,14 @@ export function mountProjectNavigation(host, { onSelect, onOpenThread, onRemove,
   const list = element(document, 'div', 'project-navigation-list');
   const empty = element(document, 'p', 'project-navigation-empty');
   empty.hidden = true;
-  host.replaceChildren(errorNode, list, empty);
+  // Search feedback: shown immediately while a query runs, and as the result count afterwards.
+  const statusNode = element(document, 'p', 'project-navigation-status');
+  statusNode.setAttribute('role', 'status'); statusNode.setAttribute('aria-live', 'polite'); statusNode.hidden = true;
+  const statusText = element(document, 'span', 'project-navigation-status-text');
+  statusNode.append(element(document, 'span', 'project-navigation-spinner'), statusText);
+  host.replaceChildren(errorNode, statusNode, list, empty);
+  const reducedMotion = () => document.documentElement?.dataset?.reducedMotion === 'true';
+  let previousOrder = '';
 
   function setOpen(view, open, remember = true) {
     if (remember) openGroups.set(view.group.key, open);
@@ -126,10 +133,10 @@ export function mountProjectNavigation(host, { onSelect, onOpenThread, onRemove,
         const button = element(document, 'button', 'project-group-thread');
         button.type = 'button';
         const title = element(document, 'span', 'thread-name');
-        const runningIndicator = element(document, 'span', 'thread-running-indicator');
-        runningIndicator.setAttribute('aria-hidden', 'true');
-        button.append(title, runningIndicator);
-        row = { button, title, runningIndicator, thread };
+        const unreadIndicator = element(document, 'span', 'thread-unread-indicator');
+        unreadIndicator.setAttribute('aria-hidden', 'true');
+        button.append(title, unreadIndicator);
+        row = { button, title, unreadIndicator, thread };
         button.addEventListener('click', () => onOpenThread(row.thread.id));
         view.threadViews.set(thread.id, row);
       }
@@ -137,11 +144,12 @@ export function mountProjectNavigation(host, { onSelect, onOpenThread, onRemove,
       const title = thread.name || thread.preview || '未命名对话';
       setText(row.title, title);
       const running = view.runningThreadIds.has(thread.id);
-      const description = running ? `${title} · 运行中` : title;
+      const unread = !running && view.unreadThreadIds.has(thread.id);
+      const description = running ? `${title} · 运行中` : unread ? `${title} · 新一轮已完成，未读` : title;
       row.button.title = description;
       row.button.setAttribute('aria-label', description);
       row.button.classList.toggle('running', running);
-      row.runningIndicator.hidden = !running;
+      row.unreadIndicator.hidden = !unread;
       const active = thread.id === activeThreadId;
       row.button.classList.toggle('active', active);
       if (active) row.button.setAttribute('aria-current', 'page');
@@ -156,7 +164,7 @@ export function mountProjectNavigation(host, { onSelect, onOpenThread, onRemove,
     for (const id of view.threadViews.keys()) if (!ids.has(id)) view.threadViews.delete(id);
   }
 
-  function render({ projects = [], threads = [], selectedPath = '', activeThreadId = '', runningThreadIds = new Set(), searching = false, busy: isBusy = false, error = '' }) {
+  function render({ projects = [], threads = [], selectedPath = '', activeThreadId = '', runningThreadIds = new Set(), unreadThreadIds = new Set(), recent = {}, searching = false, searchStatus = '', busy: isBusy = false, error = '' }) {
     const focused = document.activeElement;
     const keepFocus = focused && host.contains(focused);
     const scrollTop = host.scrollTop;
@@ -164,7 +172,7 @@ export function mountProjectNavigation(host, { onSelect, onOpenThread, onRemove,
     const selectedKey = projectPathKey(selectedPath);
     const selectionChanged = selectedKey !== previousSelectedKey;
     previousSelectedKey = selectedKey;
-    const groups = projectThreadGroups(projects, threads, { selectedPath, searching });
+    const groups = projectThreadGroups(projects, threads, { selectedPath, searching, runningThreadIds, recent });
     const keys = new Set();
     const nodes = [];
     for (const group of groups) {
@@ -172,7 +180,7 @@ export function mountProjectNavigation(host, { onSelect, onOpenThread, onRemove,
       let view = views.get(group.key);
       if (!view) { view = createGroup(group); views.set(group.key, view); }
       view.group = group;
-      view.searching = searching; view.activeThreadId = activeThreadId; view.runningThreadIds = runningThreadIds;
+      view.searching = searching; view.activeThreadId = activeThreadId; view.runningThreadIds = runningThreadIds; view.unreadThreadIds = unreadThreadIds;
       view.compose.hidden = !group.path; view.compose.disabled = busy;
       view.more.disabled = busy;
       view.node.dataset.projectKey = group.key;
@@ -194,13 +202,24 @@ export function mountProjectNavigation(host, { onSelect, onOpenThread, onRemove,
       updateThreads(view, activeThreadId);
       nodes.push(view.node);
     }
+    // A newly used or pinned project moves to its new position with a short FLIP slide.
+    const order = groups.map(group => group.key).join('\n');
+    const before = new Map();
+    if (previousOrder && order !== previousOrder && !reducedMotion()) for (const node of nodes) if (node.isConnected) { const top = node.getBoundingClientRect?.().top; if (Number.isFinite(top)) before.set(node, top); }
+    previousOrder = order;
     reconcile(list, nodes);
+    for (const [node, top] of before) {
+      const delta = top - node.getBoundingClientRect().top;
+      if (Math.abs(delta) > 1) node.animate?.([{ transform: `translateY(${delta}px)` }, { transform: 'none' }], { duration: 260, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' });
+    }
     if(menuOwner&&!keys.has(menuOwner.group.key))closeMenu();
     for (const key of views.keys()) if (!keys.has(key)) views.delete(key);
     setText(errorNode, error);
     errorNode.hidden = !error;
+    const status = typeof searchStatus === 'string' ? { text: searchStatus, busy: false } : searchStatus || { text: '', busy: false };
+    setText(statusText, status.text || ''); statusNode.hidden = !status.text; statusNode.dataset.busy = String(!!status.busy);
     setText(empty, searching ? '无搜索结果' : '添加项目，或打开已有对话。');
-    empty.hidden = groups.length > 0;
+    empty.hidden = groups.length > 0 || (searching && !!status.busy);
     if (keepFocus && host.contains(focused) && document.activeElement !== focused) focused.focus({ preventScroll: true });
     if (host.scrollTop !== scrollTop) host.scrollTop = scrollTop;
   }

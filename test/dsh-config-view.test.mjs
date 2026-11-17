@@ -85,7 +85,7 @@ test('built-in only: deselecting every source saves sourceIds [] instead of dema
   h.byText('保存选择').click(); await settle();
   assert.deepEqual(h.calls[1], ['/api/dsh/config-sources/configure', { sourceIds: [], autoFollow: true, expectedRevision: 'r1' }]);
   assert.doesNotMatch(h.host.textContent, /至少选择/);
-  assert.match(h.host.textContent, /已保存为仅使用内置模型；重启 DSH 桥后才会对新 runtime 生效/);
+  assert.match(h.host.textContent, /已保存为使用 DSH 默认服务配置；重启 DSH 桥后才会对新 runtime 生效/);
   assert.match(h.host.textContent, /仅 DSH 内置 provider（不额外导入）/);
   assert.equal(h.host.querySelector('.dshcfg-activation').dataset.mode, 'builtin');
   assert.equal(h.byText('立即更新快照').disabled, true, 'no source file to re-read');
@@ -102,7 +102,7 @@ test('a fresh install (no sources, builtin effective mode) is usable and shows t
   const h = harness([status({ selectedSourceIds: [], sources: [], effective: { revision: 'snap0', generatedAt: '2026-11-12T06:00:00Z', sourceIds: [], mode: 'builtin', providerCount: 0 } })]);
   h.view.activate(); await settle();
   assert.equal(builtinRadio(h).checked, true);
-  assert.match(h.host.textContent, /仅使用 DSH 内置模型/); assert.match(h.host.textContent, /可只使用内置模型/);
+  assert.match(h.host.textContent, /使用 DSH 默认服务配置/); assert.match(h.host.textContent, /可只使用内置模型/);
   assert.doesNotMatch(h.host.textContent, /个导入 provider/);
 });
 test('a broken explicitly selected source still reports its backend error and blocks saving it', async () => {

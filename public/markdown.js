@@ -33,7 +33,7 @@ export function localPathRef(value, { cwd = '' } = {}) {
     if (/^[A-Za-z]:[\\/]/.test(rest)) path = rest;
     else if (fileUrl[1]) path = '/' + rest;
     else return null;
-  } else if (/^[A-Za-z][A-Za-z0-9+.-]+:/.test(path)) return null;
+  }
   path = decode(path);
   if (CONTROL.test(path)) return null;
   let line = null, column = null, endLine = null;
@@ -49,6 +49,10 @@ export function localPathRef(value, { cwd = '' } = {}) {
   }
   path = path.trim();
   if (!path || path === '.' || path === '..') return null;
+  if ((line !== null && line < 1) || (column !== null && column < 1) || (endLine !== null && endLine < line)) return null;
+  // Strip a valid source location before classifying schemes: README.md:12 is a
+  // file reference. Remaining schemes still cannot become local file controls.
+  if (!/^[A-Za-z]:[\\/]/.test(path) && /^[A-Za-z][A-Za-z0-9+.-]*:/.test(path)) return null;
   const windows = /^[A-Za-z]:[\\/]/.test(path), unc = /^\\\\[^\\/]+[\\/]/.test(path), posix = path.startsWith('/') && !path.startsWith('//');
   const absolute = windows || unc || posix;
   // Bare words such as "foo" are not treated as files; a relative path needs a separator or an extension.

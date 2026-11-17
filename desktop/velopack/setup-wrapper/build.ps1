@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$VendorSetup,[Parameter(Mandatory=$true)][string]$Output,[Parameter(Mandatory=$true)][string]$Version,[string]$CliPrerequisiteProject)
+﻿param([Parameter(Mandatory=$true)][string]$VendorSetup,[Parameter(Mandatory=$true)][string]$Output,[Parameter(Mandatory=$true)][string]$Version,[string]$CliPrerequisiteProject)
 $ErrorActionPreference='Stop'
 $vendor=(Resolve-Path -LiteralPath $VendorSetup).Path
 $out=[IO.Path]::GetFullPath($Output)

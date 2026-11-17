@@ -63,7 +63,7 @@ export function mountDshConfig(host, { api }) {
   function header() {
     const head = el(document, 'div', 'dshcfg-head');
     const titles = el(document, 'div');
-    titles.append(el(document, 'h2', 'section-title', 'DSH 配置来源'), el(document, 'p', 'fine', 'DSH 默认使用内置 provider。可额外选择导入哪些 profile 或自定义 cordis.patch.yml，只导入其中的 provider 声明，不修改源文件，不返回密钥。'));
+    titles.append(el(document, 'h2', 'section-title', 'DSH 模型来源'), el(document, 'p', 'fine', '这里决定 DSH 从哪里读取模型服务配置，不是选择本次任务的模型。默认使用 DSH 随包提供的服务配置；如需自己的服务商，可勾选下方配置文件额外导入。源文件不会被修改。'));
     const reload = el(document, 'button', 'btn icon-only ghost'); reload.type = 'button'; reload.setAttribute('aria-label', '重新读取状态'); reload.title = '重新读取状态'; reload.append(icon(document, 'refresh', { size: 16 }));
     reload.disabled = busy; reload.addEventListener('click', () => { message = { text: '', error: false }; load(); });
     head.append(titles, reload);
@@ -96,8 +96,8 @@ export function mountDshConfig(host, { api }) {
     box.setAttribute('aria-describedby', 'dshcfg-builtin-detail');
     box.addEventListener('change', () => { if (box.checked) { draft.selected.clear(); message = { text: '', error: false }; render(); } });
     const text = el(document, 'div', 'dshcfg-source-text');
-    const name = el(document, 'div', 'dshcfg-source-name'); name.append(el(document, 'strong', '', '仅使用 DSH 内置模型'), el(document, 'span', 'plan-badge', '内置'));
-    const detail = el(document, 'div', 'fine', '不导入任何第三方 provider 配置；无需先添加私人 provider。勾选下方任一来源即改为同时导入该来源。'); detail.id = 'dshcfg-builtin-detail';
+    const name = el(document, 'div', 'dshcfg-source-name'); name.append(el(document, 'strong', '', '使用 DSH 默认服务配置'), el(document, 'span', 'plan-badge', '不额外导入'));
+    const detail = el(document, 'div', 'fine', '不额外导入你自己的服务商配置。“默认”指 DSH 随包预设，不表示模型在本机离线运行。勾选下方文件可添加自己的服务商和模型。'); detail.id = 'dshcfg-builtin-detail';
     text.append(name, detail); label.append(box, text); row.append(label);
     return row;
   }
@@ -144,12 +144,12 @@ export function mountDshConfig(host, { api }) {
     const save = el(document, 'button', 'btn primary', '保存选择'); save.type = 'button'; save.disabled = busy || !dirty();
     save.addEventListener('click', () => {
       const plan = configureBody(status, draft); if (plan.error) { say(plan.error, true); return; }
-      const what = plan.body.sourceIds.length ? '' : '仅使用内置模型';
+      const what = plan.body.sourceIds.length ? '' : '使用 DSH 默认服务配置';
       call('/api/dsh/config-sources/configure', plan.body, status.activation?.state === 'active' ? `已保存${what ? '为' + what : ''}：之后新建的 runtime 生效，运行中的任务不受影响。` : `已保存${what ? '为' + what : '配置'}；重启 DSH 桥后才会对新 runtime 生效。`);
     });
     const revert = el(document, 'button', 'btn', '撤销修改'); revert.type = 'button'; revert.disabled = busy || !dirty(); revert.addEventListener('click', () => { resetDraft(); message = { text: '', error: false }; render(); });
     const refresh = el(document, 'button', 'btn', '立即更新快照'); refresh.type = 'button'; refresh.disabled = busy || dirty() || !(status.selectedSourceIds || []).length;
-    refresh.title = dirty() ? '先保存或撤销当前修改' : !(status.selectedSourceIds || []).length ? '仅使用内置模型时没有需要重新读取的来源文件' : '重新读取所选文件并生成下一个新 runtime 使用的快照；不重启现有 runtime';
+    refresh.title = dirty() ? '先保存或撤销当前修改' : !(status.selectedSourceIds || []).length ? '尚未导入额外配置文件，无需重新读取' : '重新读取所选文件，下次启动 DSH 任务环境时生效';
     refresh.addEventListener('click', () => call('/api/dsh/config-sources/refresh', {}, '快照已更新；只影响之后新建的 runtime。'));
     actions.append(save, revert, refresh);
     const panel = el(document, 'div', 'panel'); panel.append(follow, actions);

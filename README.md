@@ -2,7 +2,7 @@
 
 Codex 桌面与远程客户端（原 Codex Light）。英文名称为 **CodeCang**。
 
-本次只更新显示名称；仓库地址、安装包文件名、Windows 更新身份、Android 包名及已有数据目录保持兼容，不需要重新登录或迁移个人配置。详见 [品牌与兼容标识](docs/BRANDING.md)。
+仓库地址、安装包文件名、Windows 更新身份、Android 包名及已有数据目录保持兼容，不需要因名称变化重新登录或迁移个人配置。详见 [品牌与兼容标识](docs/BRANDING.md)。
 
 独立 Windows 桌面客户端，采用 WinForms + WebView2。通过官方 Codex CLI 的 app-server 协议工作，复用已有登录和配置；不改动官方客户端，不伪装成官方客户端。
 
@@ -12,29 +12,15 @@ Codex 桌面与远程客户端（原 Codex Light）。英文名称为 **CodeCang
 
 ## 界面预览
 
-以下为当前源码在 Windows 无头 Edge 中运行的桌面宽屏界面（1440px 视口）。全部为合成演示数据，不读取个人对话、不调用真实模型；账户、额度及用量仅用于展示，更新按钮与 `v0.4.6-demo` 为模拟可更新状态，不代表真实发布。
+以下为当前源码在 Windows Chrome 中实际渲染的桌面与手机界面。对话、文件变更及额度均为合成演示数据，不读取个人对话、不调用真实模型。手机图展示 Android WebView 共用的网页界面，不包含系统状态栏。
 
-![对话页面：顶部用时、折叠过程、文件变更及左下角额度](docs/assets/conversation-demo.png)
+**电脑端 · 1440 × 920**
 
-<details>
-<summary>查看更多桌面功能页面</summary>
+![电脑端：顶部导航、项目侧栏、对话与文件变更](docs/assets/conversation-demo.png)
 
-### 文件变更
-![展开文件 diff](docs/assets/file-diff-demo.png)
+**手机端 · 393 × 850**
 
-### 账户与额度
-![账户额度与每日用量（合成数据）](docs/assets/account-demo.png)
-
-### 外观设置
-![界面风格、主题与文字大小](docs/assets/appearance-demo.png)
-
-### 应用更新
-![更新入口及发布说明（模拟状态）](docs/assets/update-demo.png)
-
-### 模型与思考强度
-![模型与思考强度弹层（演示模型）](docs/assets/model-demo.png)
-
-</details>
+<img src="docs/assets/narrow-layout-demo.png" alt="手机端：顶部额度、完整对话、文件变更与底部输入操作" width="393">
 
 ## 已实现的主要功能
 
@@ -61,7 +47,7 @@ APK 获取、安装与升级、配对和 Windows 源码构建步骤见 [Android 
 
 ### Windows 桌面客户端
 
-从本仓库 Release 下载 **`CodexLight-Setup-<version>-x64.exe`**（如 `CodexLight-Setup-0.4.8-x64.exe`），这是唯一需要手动下载的 Windows 安装入口。v0.4.6 起新安装内容已内嵌，不需要另下 ZIP；`full.nupkg` 和 `releases.win.json` 供应用自动更新使用。
+从本仓库 Release 下载 **`CodexLight-Setup-<version>-x64.exe`**（如 `CodexLight-Setup-0.4.9-x64.exe`），这是唯一需要手动下载的 Windows 安装入口。v0.4.6 起新安装内容已内嵌，不需要另下 ZIP；`full.nupkg` 和 `releases.win.json` 供应用自动更新使用。
 
 0.4.4 起使用 Velopack。已有 Velopack 安装优先使用应用内更新；旧 MSI 安装先经固定的 0.4.4 迁移桥，再按提示更新到新版。首次安装复用兼容运行环境，缺失依赖须确认后才安装；完整应用的安装检查要求 Windows Node.js 22.15+（仅核心后端支持 Node.js 20+），WSL 内的 Node 不替代它。未检测到 Windows Codex CLI 时可选择稍后在应用中配置 WSL 或其他已有引擎。
 

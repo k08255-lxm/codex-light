@@ -37,19 +37,14 @@ if($EnableRecovery){
 }
 & dotnet build (Join-Path $PSScriptRoot 'Router.csproj') -c Release "-p:Version=$Version" "-p:RouterPins=$pins" "-p:RouterFresh=$fresh" -p:DebugSymbols=false -p:DebugType=none -o (Join-Path $out 'bin') --nologo @repairArgs
 if($LASTEXITCODE -ne 0){throw 'Router build failed'}
-# Verify the resource in the final EXE before issuing the receipt.
-$assembly=[Reflection.Assembly]::LoadFile((Join-Path $out 'bin/CodexLight-Setup.exe'))
-$resource=$assembly.GetManifestResourceStream('CodeCang.Fresh.zip')
-if(!$resource){throw 'Embedded archive missing'}
-try {$shaTool=[Security.Cryptography.SHA256]::Create();try {$embeddedHash=([BitConverter]::ToString($shaTool.ComputeHash($resource))).Replace('-','').ToLowerInvariant()}finally{$shaTool.Dispose()}}finally{$resource.Dispose()}
-if($embeddedHash -ne $hash){throw 'Embedded archive differs from verified fresh archive'}
-if($EnableRecovery){
- foreach($entry in @(@('CodeCang.Repair.zip',$helperHash),@('CodeCang.Repair.nupkg',$packageHash))){
-  $r=$assembly.GetManifestResourceStream($entry[0]);if(!$r){throw 'Recovery resource missing'}
-  try{$h=[Security.Cryptography.SHA256]::Create();try{$actual=([BitConverter]::ToString($h.ComputeHash($r))).Replace('-','').ToLowerInvariant()}finally{$h.Dispose()}}finally{$r.Dispose()}
-  if($actual -ne $entry[1]){throw 'Recovery resource hash mismatch'}
- }
-}
+# Inspect PE metadata/bytes; never load the final EXE as an assembly to verify it.
+$verifier=Join-Path $out 'resource-verify'
+& dotnet build (Join-Path $PSScriptRoot 'resource-verify/ResourceVerify.csproj') -c Release -o $verifier --nologo
+if($LASTEXITCODE -ne 0){throw 'Resource verifier build failed'}
+$resourceArgs=@((Join-Path $out 'bin/CodexLight-Setup.exe'),'CodeCang.Fresh.zip',$hash)
+if($EnableRecovery){$resourceArgs+=@('CodeCang.Repair.zip',$helperHash,'CodeCang.Repair.nupkg',$packageHash)}
+& dotnet (Join-Path $verifier 'ResourceVerify.dll') @resourceArgs
+if($LASTEXITCODE -ne 0){throw 'Embedded resource verification failed'}
 $public=Join-Path $out 'public';New-Item -ItemType Directory $public|Out-Null
 $setup="CodexLight-Setup-$Version-x64.exe";Copy-Item (Join-Path $out 'bin/CodexLight-Setup.exe') (Join-Path $public $setup)
 $sha=(Get-FileHash (Join-Path $public $setup)).Hash.ToLowerInvariant()

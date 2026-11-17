@@ -70,6 +70,9 @@ export function retainBody(value, omitted = 0) {
   return { text: text.slice(0, headEnd) + OMITTED_MARKER + text.slice(tailStart), omitted: (marker >= 0 ? omitted : 0) + (tailStart - bodyStart) };
 }
 const BODY_FIELDS = ['text', 'aggregatedOutput'];
+// Identity and lifecycle data are protocol fields, not display text. A large
+// tool payload must never turn its trailing turn ID or status into an omission marker.
+const ITEM_METADATA_FIELDS = ['id', 'type', 'status', 'phase', '_turnId', '_complete', '_startedAtMs', '_completedAtMs', 'durationMs', 'exitCode', 'success', '_local', '_echoClaim'];
 /** Body strings of an item: [{key, text}] where key is a field name or `content.N`. */
 function bodies(item) {
   const rows = [];
@@ -229,7 +232,10 @@ export class ItemStore {
     for (const field of BODY_FIELDS) if (typeof combined[field] === 'string') { body[field] = combined[field]; delete combined[field]; }
     const userContent = combined.type === 'userMessage' && Array.isArray(combined.content) ? (this.preserveBodies ? combined.content : combined.content.slice(0, 64)) : null;
     if (userContent) delete combined.content;
-    const merged = displaySnapshot(combined);
+    const metadata = {};
+    for (const key of ITEM_METADATA_FIELDS) if (Object.hasOwn(combined, key)) {metadata[key] = combined[key]; delete combined[key];}
+    if (combined.error === null) {metadata.error = null; delete combined.error;}
+    const merged = {...displaySnapshot(combined), ...metadata};
     for (const key of ['output', 'result', 'summary', 'content']) if (typeof merged[key] === 'string') merged[key] = boundedText(merged[key]);
     const omitted = {};
     // A re-upserted stored projection (window rebuild) carries its own omission/release records.

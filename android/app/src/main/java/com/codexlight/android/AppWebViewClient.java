@@ -53,6 +53,7 @@ public class AppWebViewClient extends WebViewClient {
     @Override
     public void onPageFinished(WebView view, String url) {
         progressBar.setVisibility(android.view.View.GONE);
+        activity.deliverTaskNotificationIntent();
     }
 
     @Override

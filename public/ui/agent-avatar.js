@@ -23,7 +23,10 @@ export function createAgentAvatar(document, identity) {
   svg.setAttribute('focusable', 'false'); svg.classList.add('agent-avatar'); svg.dataset.avatarIndex = String(index);
   const [light, dark] = COLORS[PALETTE[index]];
   // Inherits the app's color-scheme; theme switches recolor existing nodes without observers or IDs.
-  svg.setAttribute('style', `color:light-dark(${light},${dark});--agent-outline:color-mix(in srgb,currentColor 64%,#172020);--agent-glow:color-mix(in srgb,currentColor 68%,white)`);
+  // Set individual CSS properties: a style attribute is blocked by the app's CSP.
+  svg.style.color = `light-dark(${light},${dark})`;
+  svg.style.setProperty('--agent-outline','color-mix(in srgb,currentColor 64%,#172020)');
+  svg.style.setProperty('--agent-glow','color-mix(in srgb,currentColor 68%,white)');
   svg.setAttribute('fill', 'currentColor'); svg.setAttribute('stroke', 'var(--agent-outline)');
   svg.setAttribute('stroke-width', '.4'); svg.setAttribute('stroke-linejoin', 'round');
   const shape = (tag, attributes, parent = svg) => {

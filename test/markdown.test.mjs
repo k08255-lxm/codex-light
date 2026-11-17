@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { performance } from 'node:perf_hooks';
-import { parseMarkdown, parseInline, renderMarkdown, safeLink, MARKDOWN_LIMITS } from '../public/markdown.js';
+import { parseMarkdown, parseInline, renderMarkdown, safeLink, localPathRef, MARKDOWN_LIMITS } from '../public/markdown.js';
 
 class Node {
  constructor(tag = '#fragment', text = '') { this.tag = tag; this.text = text; this.children = []; this.attributes = {}; this.listeners = {}; }
@@ -88,6 +88,23 @@ test('dangerous schemes and non-path destinations stay literal text', () => {
   const tokens = parseInline(`[x](${url})`);
   assert.ok(tokens.every(t => t.type === 'text'), url);
  }
+});
+
+test('bare relative filenames with source locations are files, while actual schemes stay rejected', () => {
+ for (const [source, file, line, column, endLine] of [
+  ['README.md:12', 'README.md', 12, null, null],
+  ['child.txt:1', 'child.txt', 1, null, null],
+  ['README.md:12:3', 'README.md', 12, 3, null],
+  ['README.md:12-20', 'README.md', 12, null, 20],
+  ['目录/foo:12', '目录/foo', 12, null, null],
+  ['C:\\work\\README.md:12', 'C:\\work\\README.md', 12, null, null],
+  ['/work/README.md:12', '/work/README.md', 12, null, null],
+ ]) {
+  const ref = localPathRef(source); assert.ok(ref, source); assert.equal(ref.path, file); assert.equal(ref.line, line); assert.equal(ref.column, column); assert.equal(ref.endLine, endLine);
+  assert.equal(parseInline(`[文件](${source})`)[0].type, 'file', source);
+ }
+ for (const source of ['javascript:alert(1):12', 'javascript:12', 'data:text/html,evil:12', 'data:12', 'shell:startup:12', 'x:exec.txt:12', 'https://example.com/file.js:12', 'README.md:0', 'README.md:12:0', 'README.md:12-3']) assert.equal(localPathRef(source), null, source);
+ const external = parseInline('[网页](https://example.com/file.js:12)')[0]; assert.equal(external.type, 'link'); assert.equal(external.href, 'https://example.com/file.js:12');
 });
 test('local file controls are buttons that never set href and call the supplied handler', async () => {
  const seen = []; const root = renderMarkdown(document, '打开 [规范](C:/文档/规范 v2.md#L12)', { onLocalLink: ref => seen.push(ref) });

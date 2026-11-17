@@ -33,17 +33,28 @@ export class RpcClient extends EventEmitter {
     this.child.stdin.write(JSON.stringify(message)+'\n');
   }
   async call(method,params={},options={}) {
-    if(Object.keys(options).some(key=>!['timeoutMs','beforeSend'].includes(key))||(options.beforeSend!==undefined&&(method!=='turn/start'||typeof options.beforeSend!=='function'))||(options.timeoutMs!==undefined&&options.timeoutMs!==null)||(options.timeoutMs===null&&method!=='command/exec'))return Promise.reject(failure('不支持的内部请求时限','INVALID_TIMEOUT'));
+    if(Object.keys(options).some(key=>!['timeoutMs','beforeSend','signal'].includes(key))||(options.beforeSend!==undefined&&(method!=='turn/start'||typeof options.beforeSend!=='function'))||(options.signal!==undefined&&(method!=='thread/list'||!options.signal||typeof options.signal.addEventListener!=='function'||typeof options.signal.removeEventListener!=='function'))||(options.timeoutMs!==undefined&&options.timeoutMs!==null)||(options.timeoutMs===null&&method!=='command/exec'))return Promise.reject(failure('不支持的内部请求时限','INVALID_TIMEOUT'));
     if(this.closed) return Promise.reject(failure('Codex 未连接', 'NOT_CONNECTED'));
     if(this.pending.size >= 256) return Promise.reject(failure('待处理请求过多，此请求未发送', 'TOO_MANY_REQUESTS'));
+    const aborted=()=>Object.assign(failure('对话搜索已取消','SEARCH_ABORTED'),{name:'AbortError'});
+    if(options.signal?.aborted)throw aborted();
     if(this.mapRequest)params=await this.mapRequest(params,method);
+    if(options.signal?.aborted)throw aborted();
     if(this.closed)return Promise.reject(failure('Codex disconnected while preparing the request','NOT_CONNECTED'));
     if(this.pending.size>=256)return Promise.reject(failure('Too many pending requests','TOO_MANY_REQUESTS'));
     const id=++this.sequence;
     return new Promise((resolve,reject)=>{
-      const timer=options.timeoutMs===null?null:setTimeout(()=>{this.pending.delete(id);reject(failure('请求超时，结果未知；请刷新状态，不要重复提交。','RPC_TIMEOUT'));},this.timeout);
-      this.pending.set(id,{resolve,reject,timer});
-      try{options.beforeSend?.();this.write({id,method,params});}catch(e){clearTimeout(timer);this.pending.delete(id);reject(e);}
+      let timer;
+      const cleanup=()=>{clearTimeout(timer);this.pending.delete(id);options.signal?.removeEventListener('abort',onAbort);};
+      const succeed=value=>{cleanup();resolve(value);},fail=error=>{cleanup();reject(error);};
+      // Codex has no negotiated cancellation method for thread/list. Drop the
+      // bridge waiter/timer, ignore late replies, and never interrupt a turn.
+      const onAbort=()=>fail(aborted());
+      timer=options.timeoutMs===null?null:setTimeout(()=>fail(failure('请求超时，结果未知；请刷新状态，不要重复提交。','RPC_TIMEOUT')),this.timeout);
+      this.pending.set(id,{resolve:succeed,reject:fail,timer});
+      options.signal?.addEventListener('abort',onAbort,{once:true});
+      if(options.signal?.aborted){onAbort();return;}
+      try{options.beforeSend?.();this.write({id,method,params});}catch(e){fail(e);}
     });
   }
   consume(data) {

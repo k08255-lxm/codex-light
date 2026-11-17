@@ -38,6 +38,9 @@
 .step-target { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--tertiary); }
 .step-target.code { font-family: "Cascadia Code", Consolas, "SFMono-Regular", monospace; font-size: .8125rem; }
 .step-state { flex: none; font-size: .75rem; color: var(--tertiary); }
+.step-change-stats{flex:none;max-width:55%;font-size:.75rem}
+.step-change-stats[hidden]{display:none}
+.step-change-stats .diff-stats{display:inline-flex;flex-wrap:wrap;gap:4px;white-space:normal}
 .step[data-state="failed"] .step-state, .step[data-state="declined"] .step-state { color: var(--error); }
 .step[data-state="running"] .step-verb { color: var(--secondary); }
 .step-detail { max-height: 320px; overflow: auto; margin: 2px 0 8px 22px; padding: 8px 10px; background: var(--code-bg); border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--secondary); font-size: .75rem; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; overscroll-behavior: contain; }
@@ -60,7 +63,16 @@ div.step-detail { white-space: normal; padding: 6px 0; }
 .md-plain { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .md-plain-note { font-size: .75rem; color: var(--tertiary); }
 @media (pointer:coarse) { .long-text-nav { min-height: 44px; min-width: 44px; } }
-.diff-file-name { padding: 2px 10px 4px; font-size: .75rem; color: var(--secondary); overflow-wrap: anywhere; }
+/* Several edited files: one bordered block per file with its own header, never one continuous stream. */
+div.step-detail.step-files { max-height: none; overflow: visible; padding: 0; background: none; border: 0; }
+.diff-files { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.diff-file { min-width: 0; border: 1px solid var(--border-strong); border-radius: var(--radius-control); background: var(--code-bg); overflow: hidden; }
+.diff-file-head { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 5px 10px; background: var(--code-header); border-bottom: 1px solid var(--border); font-size: .75rem; line-height: 1.4; }
+.diff-file-head > .ui-icon { color: var(--muted); }
+.diff-file-head .file-name { flex: 1; }
+.diff-file-kind { flex: none; padding: 0 6px; border: 1px solid var(--border); border-radius: 999px; color: var(--tertiary); font-size: .6875rem; line-height: 1.6; }
+.diff-file .diff-view { border-top: 0; max-height: 360px; }
+.diff-file .diff-empty { background: var(--code-bg); }
 .turn-footer { margin: 0; font-size: .8125rem; color: var(--tertiary); }
 .turn-footer[data-kind="failed"] { color: var(--error); overflow-wrap: anywhere; }
 
@@ -75,7 +87,14 @@ div.step-detail { white-space: normal; padding: 6px 0; }
 .files-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--border); }
 .file-row { min-width: 0; border-bottom: 1px solid var(--border); }
 .file-row:last-child { border-bottom: 0; }
-.file-row-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-height: 36px; padding: 6px 12px; border-radius: 0; text-align: left; font-size: .8125rem; }
+.file-row-head { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 36px; padding: 6px 12px 6px 8px; border-radius: 0; text-align: left; font-size: .8125rem; }
+.file-row-head .file-name { flex: 1; }
+.file-chevron { display: inline-flex; flex: none; color: var(--muted); transition: transform var(--motion-feedback) var(--ease-out); }
+.file-row.open > .file-row-head .file-chevron { transform: rotate(90deg); }
+.file-row.open > .file-row-head { background: var(--code-header); font-weight: 500; }
+.file-row.open { border-bottom: 1px solid var(--border-strong); }
+.file-row.open + .file-row { border-top: 6px solid var(--surface); }
+.file-row.open + .file-row.open > .file-row-head { border-top: 1px solid var(--border-strong); }
 .file-name { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; direction: ltr; }
 .file-dir { color: var(--tertiary); }
 .file-base { color: var(--text); }
@@ -91,7 +110,8 @@ div.step-detail { white-space: normal; padding: 6px 0; }
 .diff-line { display: block; padding: 0 12px; min-width: max-content; }
 .diff-add { background: color-mix(in srgb, var(--success) 13%, transparent); }
 .diff-del { background: color-mix(in srgb, var(--error) 13%, transparent); }
-.diff-hunk { color: var(--tertiary); }
+.diff-hunk { color: var(--tertiary); background: color-mix(in srgb, var(--chart) 7%, transparent); }
+.diff-line.diff-hunk:not(:first-child) { margin-top: 6px; border-top: 1px dashed var(--border); }
 .diff-meta { color: var(--muted); }
 .diff-empty { margin: 0; padding: 8px 12px; font-size: .75rem; color: var(--tertiary); }
 

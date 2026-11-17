@@ -39,6 +39,8 @@ const ICONS = {
   queue: [['path', { d: 'M4.5 7h11M4.5 12h11M4.5 17h7' }], ['path', { d: 'M17.5 14.5v5M15 17h5' }]],
   // State and actions
   plus: [['path', { d: 'M12 5.5v13M5.5 12h13' }]],
+  minimize: [['path', { d: 'M6 12h12' }]],
+  maximize: [['rect', { x: '6', y: '6', width: '12', height: '12', rx: '1' }]],
   close: [['path', { d: 'M6.5 6.5l11 11M17.5 6.5l-11 11' }]],
   check: [['path', { d: 'M5.5 12.5l4 4 9-9' }]],
   down: [['path', { d: 'M7 10l5 5 5-5' }]],

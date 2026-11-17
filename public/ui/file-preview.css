@@ -1,0 +1,36 @@
+.file-preview { width: min(1000px, calc(100vw - 32px)); max-width: none; height: min(800px, calc(100dvh - 48px)); max-height: calc(100dvh - 48px); padding: 0; border: 1px solid var(--border-strong); border-radius: 14px; color: var(--text); background: var(--canvas); overflow: hidden; }
+.file-preview[open] { display: flex; flex-direction: column; animation: file-preview-enter 180ms var(--ease-out); }
+.file-preview[open]::backdrop { animation: file-preview-backdrop 180ms ease-out; }
+.file-preview-header { display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--border); flex: none; }
+.file-preview-heading { min-width: 0; flex: 1; }
+.file-preview-title { display: block; font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-preview-path { margin-top: 2px; font-size: 11px; color: var(--muted); overflow-wrap: anywhere; max-height: 3em; overflow-y: auto; }
+.file-preview-close { flex: none; width: 36px; height: 36px; font-size: 24px; line-height: 1; }
+.file-preview-stage { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; position: relative; }
+.file-preview-code { min-width: 100%; width: max-content; padding: 12px 0; font: 12px/1.8 Consolas, "SFMono-Regular", monospace; tab-size: 4; }
+.file-preview-row { display: flex; min-height: 1.8em; }
+.file-preview-row.is-selected { background: var(--chart-soft); }
+.file-preview-number { position: sticky; left: 0; flex: none; width: 6ch; padding-right: 1.5ch; margin-right: 1.5ch; text-align: right; user-select: none; background: var(--canvas); color: var(--muted); }
+.file-preview-row.is-selected .file-preview-number { color: var(--chart); }
+.file-preview-source { display: block; font: inherit; white-space: pre; padding-right: 20px; }
+.file-preview-image { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+.file-preview-state { display: grid; justify-items: center; align-content: center; min-height: 180px; padding: 24px; gap: 12px; color: var(--secondary); text-align: center; font-size: 13px; }
+.file-preview-state p { margin: 0; overflow-wrap: anywhere; }
+.file-preview-state.is-error { color: var(--error); }
+.file-preview-footer { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 16px; min-height: 42px; border-top: 1px solid var(--border); flex: none; }
+.file-preview-detail { font-size: 12px; color: var(--muted); }
+.file-preview-paging { display: flex; gap: 6px; }
+.file-preview-paging[hidden] { display: none; }
+@keyframes file-preview-enter { from { opacity: 0; transform: translateY(8px) scale(.99); } to { opacity: 1; transform: none; } }
+@keyframes file-preview-backdrop { from { opacity: 0; } to { opacity: 1; } }
+@media (max-width: 700px) {
+  .file-preview { width: calc(100vw - 16px); height: calc(100dvh - 24px); max-height: calc(100dvh - 24px); border-radius: 12px; }
+  .file-preview-header { padding: 10px 12px; }
+  .file-preview-close { width: 44px; height: 44px; }
+  .file-preview-footer { padding: 8px 12px; }
+  .file-preview-paging button { min-height: 44px; }
+}
+:root[data-reduced-motion="true"] .file-preview, :root[data-reduced-motion="true"] .file-preview::backdrop { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-reduced-motion="false"]) .file-preview, :root:not([data-reduced-motion="false"]) .file-preview::backdrop { animation: none; }
+}

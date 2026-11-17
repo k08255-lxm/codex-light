@@ -118,7 +118,9 @@ export function createComposer({ document, session, drafts, ledger, thread, view
       if (generation !== state.openGeneration) { notice('消息已发送到原对话，未发送到当前页面。'); return; }
       if (submission.effort) state.reasoning.inherited = submission.effort;
       acceptStartedTurn(params.threadId, result.turn);
-      loadThreads().catch(() => {}); scrollBottom();
+      // The optimistic insertion already revealed the submitted message. A delayed
+      // acknowledgement must respect any reading position chosen while it was pending.
+      loadThreads().catch(() => {});
     } catch (e) {
       const outcome = outcomeFromError(e);
       optimistic.patch(optimisticRow.id,{status:outcome,error:e.message});restoreUnsentText(optimisticRow);renderOptimistic();

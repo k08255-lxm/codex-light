@@ -9,8 +9,8 @@ function harness() {
   const state = { threads: [], activeTurns: new Map(), searchGeneration: 0, nextThreads: null };
   const unindexedThreads = new Map(), search = { value: '' };
   let list = { data: [], nextCursor: null };
-  const ports = { state, unindexedThreads, $: () => search, threadAutoLoad: {reset() {}}, captureHistoryAnchor: () => null, restoreHistoryAnchor() {}, sessionFor: () => null, renderThreads() {}, notice() {}, rpc: async () => list };
-  return { state, search, unindexedThreads, setList(value) { list = value; }, ...new Function(...Object.keys(ports), source + ';return {rememberThread,loadThreads};')(...Object.values(ports)) };
+  const ports = { state, unindexedThreads, threadSearchCache:new Map(),searchStatus:{}, $: () => search, threadAutoLoad: {reset() {}}, captureHistoryAnchor: () => null, restoreHistoryAnchor() {}, sessionFor: () => null, renderThreads() {}, notice() {}, rpc: async () => list };
+  return { state, search, unindexedThreads, setList(value) { list = value; }, ...new Function(...Object.keys(ports), 'let threadSearchController=null;'+source + ';return {rememberThread,loadThreads};')(...Object.values(ports)) };
 }
 
 test('confirmed new threads appear immediately and survive repeated incomplete list refreshes', async () => {

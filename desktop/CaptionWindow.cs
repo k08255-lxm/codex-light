@@ -1,13 +1,18 @@
 using System.Runtime.InteropServices;
 namespace CodexLight.Desktop;
 
-// Keep the whole caption in the non-client area. Ordinary GDI controls cannot
-// safely draw into DWM's extended glass: their glyph alpha becomes transparent.
-// DWM owns the title, icon, caption buttons, hit testing and restore animations.
+// Use the native caption during startup, then an opaque WebView caption when
+// ready. Windows retains resizing, system commands and restore geometry.
 internal class CaptionWindow : Form {
  protected readonly MenuStrip CaptionMenu=new(){Dock=DockStyle.Top,Visible=false,TabStop=true,AccessibleName="应用菜单"};
  protected event EventHandler? CaptionBrandInvoked;
  bool lightTheme;string visualStyle="codex";bool trackingBrandPress,brandDragObserved,brandPressCanceled;
+ bool webCaption;
+ protected void EnableWebCaption(){
+  webCaption=true;
+  // Recalculate the frame without activating a window the user left in the background.
+  if(IsHandleCreated)SetWindowPos(Handle,IntPtr.Zero,0,0,0,0,0x0037);
+ }
  bool InCaptionBrand(Point screen){
   if(!IsHandleCreated||!ControlBox)return false;
   // Measure against the actual HWND DPI. The OS still renders every pixel.
@@ -57,6 +62,26 @@ internal class CaptionWindow : Form {
  }
  protected override void OnHandleCreated(EventArgs e){base.OnHandleCreated(e);ApplyNativeCaption();}
  protected override void WndProc(ref Message m){
+  if(webCaption&&m.Msg==0x0083&&m.WParam!=IntPtr.Zero){
+   // Keep DefWindowProc's side/bottom resize borders and maximized bounds. Only
+   // replace the caption height with an opaque WebView title bar; no glass/GDI overlay.
+   var original=Marshal.PtrToStructure<CaptionRect>(m.LParam);
+   base.WndProc(ref m);
+   var client=Marshal.PtrToStructure<CaptionRect>(m.LParam);
+   int border=GetSystemMetricsForDpi(33,(uint)DeviceDpi)+GetSystemMetricsForDpi(92,(uint)DeviceDpi);
+   client.Top=original.Top+(IsZoomed(Handle)?border:1);
+   Marshal.StructureToPtr(client,m.LParam,false);m.Result=IntPtr.Zero;return;
+  }
+  if(webCaption){
+   base.WndProc(ref m);
+   if(m.Msg==0x0084&&m.Result==(IntPtr)1&&!IsZoomed(Handle)){
+    var point=PointToClient(Cursor.Position);
+    int edge=Math.Max(4,(int)Math.Round(6*DeviceDpi/96d));
+    if(point.Y<edge)m.Result=(IntPtr)(point.X<edge?13:point.X>=ClientSize.Width-edge?14:12);
+   }
+   if(IsHandleCreated&&(m.Msg is 0x031A or 0x0320 or 0x001A or 0x031E))ApplyNativeCaption();
+   return;
+  }
   if(trackingBrandPress){if(m.Msg==0x0216)brandDragObserved=true;if(m.Msg==0x0100&&m.WParam.ToInt64()==27)brandPressCanceled=true;}
   // Do not paint an overlay or turn the whole title into a button. Let Windows
   // run its normal caption move loop, then distinguish a click from a drag.
@@ -88,4 +113,8 @@ internal class CaptionWindow : Form {
   public override Color MenuItemPressedGradientBegin=>Popup;public override Color MenuItemPressedGradientMiddle=>Popup;public override Color MenuItemPressedGradientEnd=>Popup;
  }
  [DllImport("dwmapi.dll")]static extern int DwmSetWindowAttribute(IntPtr hwnd,int attribute,ref int value,int size);
+ [StructLayout(LayoutKind.Sequential)]struct CaptionRect{public int Left,Top,Right,Bottom;}
+ [DllImport("user32.dll")]static extern bool IsZoomed(IntPtr hwnd);
+ [DllImport("user32.dll")]static extern int GetSystemMetricsForDpi(int index,uint dpi);
+ [DllImport("user32.dll")]static extern bool SetWindowPos(IntPtr hwnd,IntPtr after,int x,int y,int width,int height,uint flags);
 }

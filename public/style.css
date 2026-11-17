@@ -819,17 +819,26 @@ dialog::backdrop { background: var(--overlay); }
 .reasoning-track.unknown #reasoning-range::-moz-range-thumb { opacity:0; }
 
 /* Whole-turn feedback also covers model-only thinking and streaming between tools. */
-.turn-working { width:fit-content; padding:4px 10px; }
-:is(.step, .turn-process, .agent-operation-group) > summary, .turn-working { position:relative; isolation:isolate; overflow:hidden; border-radius:var(--radius-control); }
-:is(.step, .turn-process, .agent-operation-group)[data-running="true"] > summary::before, .turn-working[data-running="true"]::before {
+/* "正在工作" is quiet text that shimmers in place: no tinted box, no rule below it, no hard edges. */
+.turn-footer.turn-working { display:inline-flex; align-items:center; gap:8px; width:fit-content; padding:2px 0; border-bottom:0; color:var(--tertiary); }
+.turn-working[data-running="true"]::before { content:""; flex:none; width:6px; height:6px; border-radius:50%; background:var(--tertiary); animation:working-dot 1.6s ease-in-out infinite; }
+.turn-working[data-running="true"] { background:linear-gradient(90deg, var(--tertiary) 0%, var(--tertiary) 40%, var(--text) 50%, var(--tertiary) 60%, var(--tertiary) 100%) 0 0 / 250% 100% no-repeat text; -webkit-background-clip:text; color:transparent; animation:working-shimmer 2.4s linear infinite; }
+@keyframes working-shimmer { from { background-position:100% 0; } to { background-position:0 0; } }
+@keyframes working-dot { 0%,100% { opacity:.35; scale:.85; } 50% { opacity:1; scale:1; } }
+/* Running operation rows keep a soft sweep that fades out at both ends instead of a hard-edged band. */
+:is(.step, .turn-process, .agent-operation-group) > summary { position:relative; isolation:isolate; overflow:hidden; border-radius:var(--radius-control); }
+:is(.step, .turn-process, .agent-operation-group)[data-running="true"] > summary::before {
   content:""; position:absolute; inset:0; z-index:-1; pointer-events:none;
-  background:linear-gradient(100deg, transparent 20%, color-mix(in srgb, var(--chart) 13%, transparent) 50%, transparent 80%);
+  background:linear-gradient(100deg, transparent 25%, color-mix(in srgb, var(--text) 6%, transparent) 50%, transparent 75%);
+  mask-image:linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent);
   animation:thread-running-sweep 2.6s ease-in-out infinite;
 }
 @media (prefers-reduced-motion:reduce) {
-  :is(.step, .turn-process, .agent-operation-group)[data-running="true"] > summary::before, .turn-working::before { animation:none; transform:none; }
+  :root:not([data-reduced-motion="false"]) :is(.step, .turn-process, .agent-operation-group)[data-running="true"] > summary::before { animation:none; transform:none; }
+  :root:not([data-reduced-motion="false"]) .turn-working[data-running="true"] { animation:none; background:none; color:var(--tertiary); }
 }
-:root[data-reduced-motion="true"] :is(.step, .turn-process, .agent-operation-group)[data-running="true"] > summary::before, :root[data-reduced-motion="true"] .turn-working::before { animation:none; transform:none; }
+:root[data-reduced-motion="true"] :is(.step, .turn-process, .agent-operation-group)[data-running="true"] > summary::before { animation:none; transform:none; }
+:root[data-reduced-motion="true"] .turn-working[data-running="true"] { animation:none; background:none; color:var(--tertiary); }
 
 /* Config uses the same restrained typography and rows as the other settings. */
 .config-settings-panel { padding:20px; }
@@ -876,13 +885,16 @@ dialog::backdrop { background: var(--overlay); }
 /* Occasional settings/disclosure motion only. No message/list/scroll animation.
    Existing explicit reduced-motion preferences override all
    transitions, including explicit app preferences and the system preference. */
-:root :is(#settings-general,#settings-storage,#settings-about,#settings-appearance) {
+:root :is(.reasoning-popover,.changes-panel,.inspector) {
   opacity: 1; transform: none;
   transition: opacity var(--motion-panel) var(--ease-out), transform var(--motion-panel) var(--ease-out);
 }
 @starting-style {
-  :root :is(#settings-general,#settings-storage,#settings-about,#settings-appearance):not(.hidden) { opacity: 0; transform: translateY(4px); }
+  :root :is(.reasoning-popover,.changes-panel,.inspector):not(.hidden) { opacity: 0; transform: translateY(4px); }
 }
+/* Like DeepSeekHarness's wide-in, page entry fades only; works in WebViews without @starting-style. */
+:root :is(.stage,.settings-section,.work[role="tabpanel"]):not(.hidden){animation:page-enter 200ms var(--ease-out)}
+@keyframes page-enter{from{opacity:0}to{opacity:1}}
 .storage-settings .storage-categories { display: grid; gap: 12px; margin-top: 16px; }
 .storage-settings .storage-categories .pref-row { flex-wrap: wrap; }
 .storage-settings .storage-categories .pref-row > div { flex: 1 1 240px; }

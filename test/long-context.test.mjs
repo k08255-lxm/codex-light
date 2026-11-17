@@ -136,6 +136,20 @@ test('a streaming answer follows its tail; navigating away holds position until 
   assert.match(answerNode(host).textContent, /NEW_TAIL_B/, 'completion while following stays at the tail');
 });
 
+test('conversation reading intent pauses long-text paging and explicit bottom resumes it without another delta', () => {
+  const document = createDocument(), host = document.createElement('div'), restores = [];
+  const scrollController = { following: true, capture: () => ({ reading: true }), restore: (snapshot, options) => restores.push(options) };
+  const view = mountConversation(host, { scrollController });
+  let text = body(70000, 'LIVE'); view.render(answerTurn(text, false));
+  const initial = host.querySelectorAll('.long-text-segment').map(node => node.dataset.segment);
+  scrollController.following = false; text += '\n\n' + body(60000, 'APPEND'); view.render(answerTurn(text, false), { follow: false });
+  assert.deepEqual(host.querySelectorAll('.long-text-segment').map(node => node.dataset.segment), initial);
+  assert.deepEqual(restores.at(-1), { follow: false });
+  scrollController.following = true; view.render(answerTurn(text, false));
+  assert.notDeepEqual(host.querySelectorAll('.long-text-segment').map(node => node.dataset.segment), initial);
+  assert.match(answerNode(host).textContent, /TAIL_END/);
+});
+
 test('short answers keep the plain structure; switching threads releases all rendered segments', () => {
   const { host, view } = mount();
   view.render(answerTurn('**短** 答复'));

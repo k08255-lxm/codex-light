@@ -22,6 +22,7 @@ function harness(options = {}) {
   const state = { cwd: originalThread.cwd, thread: originalThread, openGeneration: 3, loadingThread: false, sending: false, ...options.state };
   const projectsState = { projects: [], selectedId: null, canPickFolder: true, busy: false, error: '', generation: 0, dialogGeneration: 4, ...options.projectsState };
   const calls = { api: [], navigation: [], renders: [], notices: [], closeSettings: 0, dialogClose: 0, focuses: [] };
+  const recentProjects = new Map();
   const nodes = new Map();
   const $ = id => {
     if (!nodes.has(id)) nodes.set(id, {
@@ -34,7 +35,7 @@ function harness(options = {}) {
   };
   $('project-dialog').open = options.dialogOpen === true;
   const functions = runInNewContext(`${app.slice(start, end)}\n({loadProjects, saveProjectSelection, selectProject, addProject});`, {
-    state, projectsState, $, projectPathKey,
+    state, projectsState, $, projectPathKey, recentProjects,
     api: async (...args) => {
       calls.api.push(args);
       return options.api ? options.api(...args) : savedResult();
@@ -51,7 +52,7 @@ function harness(options = {}) {
     },
     closeSettings() { calls.closeSettings++; },
   }, { filename: 'app-project-functions.js' });
-  return { ...functions, state, projectsState, originalThread, calls, $ };
+  return { ...functions, state, projectsState, originalThread, calls, $, recentProjects };
 }
 
 test('saving a different project creates a fresh page before setting its canonical cwd', async () => {
@@ -63,6 +64,7 @@ test('saving a different project creates a fresh page before setting its canonic
   assert.equal(h.state.thread, null);
   assert.equal(h.originalThread.cwd, '/original-project', 'the prior thread must never be retargeted');
   assert.equal(h.state.cwd, savedProject.path);
+  assert.ok(h.recentProjects.get(projectPathKey(savedProject.path)) > 0);
   assert.equal(h.projectsState.selectedId, savedProject.id);
   assert.deepEqual(h.projectsState.projects, [savedProject]);
   assert.equal(h.calls.dialogClose, 1);
@@ -104,6 +106,7 @@ test('late selection results update the sidebar without navigating after page, s
     change(h);
     const thread = h.state.thread;
     response.resolve(savedResult()); await pending;
+    assert.equal(h.recentProjects.size, 0, 'a stale selection does not change recent project order');
     assert.deepEqual(h.projectsState.projects, [savedProject]);
     assert.equal(h.projectsState.selectedId, savedProject.id);
     assert.equal(h.projectsState.generation, 1);

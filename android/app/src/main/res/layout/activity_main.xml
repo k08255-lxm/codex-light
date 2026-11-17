@@ -100,6 +100,62 @@
         android:overScrollMode="never"
         android:scrollbars="vertical" />
 
+    <LinearLayout
+        android:id="@+id/offlinePanel"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_below="@id/topBarDivider"
+        android:orientation="vertical"
+        android:background="@color/bg_main"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/offlineStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="14dp"
+            android:textColor="@color/text_secondary"
+            android:textSize="12sp"
+            android:lineSpacingExtra="4dp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingStart="14dp"
+            android:paddingEnd="14dp">
+            <Button
+                android:id="@+id/offlineRetry"
+                android:layout_width="0dp"
+                android:layout_height="44dp"
+                android:layout_weight="1"
+                android:layout_marginEnd="8dp"
+                android:text="重新连接"
+                android:textAllCaps="false"
+                android:textSize="13sp"
+                android:textColor="@color/text_on_primary"
+                android:background="@drawable/btn_primary" />
+            <Button
+                android:id="@+id/offlineChangeServer"
+                android:layout_width="0dp"
+                android:layout_height="44dp"
+                android:layout_weight="1"
+                android:text="更换电脑"
+                android:textAllCaps="false"
+                android:textSize="13sp"
+                android:textColor="@color/text_primary"
+                android:background="@drawable/btn_secondary" />
+        </LinearLayout>
+
+        <WebView
+            android:id="@+id/offlineWebView"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:overScrollMode="never"
+            android:scrollbars="vertical" />
+    </LinearLayout>
+
     <!-- Thin Load Progress Hairline right beneath topBar -->
     <ProgressBar
         android:id="@+id/progressBar"

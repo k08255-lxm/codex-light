@@ -32,7 +32,6 @@ docs/legacy-repair-v7-evidence.json
 !/docs/assets/
 /docs/assets/*
 !/docs/assets/conversation-demo.png
-!/docs/assets/file-diff-demo.png
 !/docs/assets/narrow-layout-demo.png
 
 # Generated installers, inspections and previews.
@@ -87,9 +86,3 @@ docs/legacy-repair-v7-evidence.json
 !/docs/LICENSE-AUDIT.md
 !/docs/BRANDING.md
 !/docs/WSL.md
-
-# Approved synthetic desktop README previews.
-!/docs/assets/account-demo.png
-!/docs/assets/appearance-demo.png
-!/docs/assets/update-demo.png
-!/docs/assets/model-demo.png

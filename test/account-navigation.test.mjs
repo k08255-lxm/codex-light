@@ -38,7 +38,7 @@ test('app account navigation does not invalidate account data after a read-only 
   const refreshAccount = () => accountView.refresh();
   const accountLoginPanel = new Function('mountAccountLoginPanel', '$', 'accountApi', 'resetAccountScopedViews', 'refreshAccount', 'currentRoute', loginMount + '\nreturn accountLoginPanel;')(mountAccountLoginPanel, $, accountApi, resetAccountScopedViews, refreshAccount, 'account');
   t.after(() => accountLoginPanel.destroy());
-  onEvent = new Function('accountQuota', 'eventSubscribers', 'resetAccountScopedViews', 'accountLoginPanel', 'accountIdentity', accountEvents + '\nreturn onEvent;')(accountQuota, new Set(), resetAccountScopedViews, accountLoginPanel, accountIdentity);
+  onEvent = new Function('accountQuota', 'eventSubscribers', 'resetAccountScopedViews', 'accountLoginPanel', 'accountIdentity', 'questionNotifications', accountEvents + '\nreturn onEvent;')(accountQuota, new Set(), resetAccountScopedViews, accountLoginPanel, accountIdentity, null);
   accountQuota.start(); await accountQuota.refresh();
   const button = $('account-quota').querySelector('button'); button.focus();
   let avatar;

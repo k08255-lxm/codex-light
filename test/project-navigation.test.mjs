@@ -126,14 +126,14 @@ test('selection moves between project draft and conversation with a single aria-
   assert.equal(view.host.querySelectorAll('[aria-current="page"]').length, 1);
 });
 
-test('running markers track actual running IDs independently from the active conversation', () => {
+test('running feedback has no blue dot; dots only represent explicit unread completions', () => {
   const view = setup();
   view.render({ projects, threads, activeThreadId: 'c', runningThreadIds: new Set(['a1']) });
   const row = find(groups(view.host)[0], 'project-group-thread');
-  const marker = find(row, 'thread-running-indicator');
+  const marker = find(row, 'thread-unread-indicator');
   assert.equal(row.classList.contains('running'), true);
   assert.equal(row.classList.contains('active'), false);
-  assert.equal(marker.hidden, false);
+  assert.equal(marker.hidden, true);
   assert.match(row.getAttribute('aria-label'), /Alpha thread · 运行中/);
   view.render({ projects, threads, activeThreadId: 'a1', runningThreadIds: new Set() });
   assert.equal(find(groups(view.host)[0], 'project-group-thread'), row, 'running updates retain the existing row');
@@ -142,4 +142,9 @@ test('running markers track actual running IDs independently from the active con
   assert.equal(marker.hidden, true);
   assert.equal(row.getAttribute('aria-label'), 'Alpha thread');
   assert.equal(row.title, 'Alpha thread');
+  view.render({ projects, threads, activeThreadId:'c', unreadThreadIds:new Set(['a1']) });
+  assert.equal(marker.hidden,false);assert.match(row.getAttribute('aria-label'),/新一轮已完成，未读/);
+  view.render({ projects, threads, activeThreadId:'c', unreadThreadIds:new Set(['a1']),runningThreadIds:new Set(['a1']) });
+  assert.equal(marker.hidden,true,'even stale unread evidence cannot put a dot on a running turn');
+  assert.match(row.getAttribute('aria-label'),/运行中/);
 });

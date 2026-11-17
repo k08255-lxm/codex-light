@@ -81,10 +81,10 @@ test('all badges declare paired light and dark colors while inheriting the app t
   for(let index=0;index<28;index++) {
     document.documentElement.dataset.theme='dark';
     const svg=createAgentAvatar(document,seedFor(index));document.body.append(svg);
-    const style=svg.getAttribute('style'),palette=/color:light-dark\((#[\da-f]{6}),(#[\da-f]{6})\)/i.exec(style);
+    const style=svg.style.color,palette=/light-dark\((#[\da-f]{6}),(#[\da-f]{6})\)/i.exec(style);
     assert.ok(palette);assert.notEqual(palette[1],palette[2]);assert.doesNotMatch(style,/color-scheme/);
     assert.equal(svg.getAttribute('fill'),'currentColor');assert.match(svg.getAttribute('stroke'),/--agent-outline/);
     document.documentElement.dataset.theme='light';
-    assert.equal(document.body.children.at(-1),svg);assert.equal(svg.getAttribute('style'),style);
+    assert.equal(document.body.children.at(-1),svg);assert.equal(svg.style.color,style);
   }
 });

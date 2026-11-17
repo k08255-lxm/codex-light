@@ -1,5 +1,12 @@
 import { confirmApp } from './app-confirm-dialog.js';
 import { createBackHandler } from './ui/back-navigation.js';
+import { createNavigationHistory } from './ui/navigation-history.js';
+import { createThreadCompletion } from './ui/thread-completion.js';
+import { mountMobileLayout } from './ui/mobile-layout.js';
+import { mountTaskNotifications } from './ui/task-notifications.js';
+import { createQuestionNotifications } from './ui/question-notifications.js';
+import { mountConversationScroll } from './ui/conversation-scroll.js';
+import { mountOfflineSnapshot } from './ui/offline-snapshot.js';
 import { mountDesktopClosePreference } from './ui/desktop-close-preference.js';
 import {mountStorageView} from './ui/storage-view.js';
 import { mountWelcomeGreeting } from './ui/welcome-greeting.js';
@@ -16,6 +23,7 @@ import { mountAbout } from './ui/about-view.js';
 import { mountAccountQuota } from './account-quota.js';
 import { createAccountIdentityController } from './account-identity.js';
 import { mountArtifacts, mountLightbox } from './ui/artifacts.js';
+import { createFilePreview } from './ui/file-preview.js';
 import { pastedFiles, classifyPaste } from './ui/paste.js';
 import { renderApprovals } from './ui/approvals-view.js';
 import { createDshView } from './ui/dsh-view.js';
@@ -81,6 +89,11 @@ const sessionControls=createSessionControls({document,defaults:()=>sessionDefaul
 const queuedPreviews = new Map();
 let runtimePanel=null,pendingReconciler=null,pendingReconcilerSignature='',pendingReconcilerActive=false,pendingReconcileQueued=false;
 const projectsState={projects:[],selectedId:null,canPickFolder:false,busy:false,error:'',generation:0,dialogGeneration:0};
+const recentProjects = new Map();
+const threadCompletion = createThreadCompletion();
+const threadSearchCache = new Map();
+let searchStatus = { text: '', busy: false };
+let threadSearchController=null;
 const pendingReconcileErrors=new Map();
 let pendingReadGeneration=0;
 const mutationContexts=new Map();
@@ -119,10 +132,9 @@ const sidebarController = (() => {
     const button=$('rail-sidebar');button.hidden=false;button.setAttribute('aria-expanded',String(effectiveOpen));const label=effectiveOpen?'收起侧栏':'展开侧栏';button.setAttribute('aria-label',label);button.title=label;
   }
   function set(next,{focus=true}={}){
-    if(!['chat','settings'].includes(mode))return;
     const wasOpen=open;open=!!next;
       if(initialized&&wasOpen!==open)animateToggle();
-    if(!narrow())desktopOpen[mode]=open;
+    if(!narrow()&&Object.hasOwn(desktopOpen,mode))desktopOpen[mode]=open;
     if(open&&!wasOpen&&narrow())returnFocus=document.activeElement;
     sync();
     if(open&&narrow()&&focus)requestAnimationFrame(()=>closeButton()?.focus());
@@ -145,11 +157,12 @@ const sidebarController = (() => {
     close:()=>set(false),
     closeForNavigation:()=>{if(narrow()&&open)set(false,{focus:false});},
     setRoute(next){
-      next=next==='settings'?'settings':'chat';
       if(mode===next){sync();return;}
+      const wasOpen=open;
       if(!narrow()&&Object.hasOwn(desktopOpen,mode))desktopOpen[mode]=open;
       mode=next;returnFocus=null;
       open=!narrow()&&Object.hasOwn(desktopOpen,mode)?desktopOpen[mode]:false;
+      if(wasOpen!==open)animateToggle();
       sidebar.setAttribute('aria-label',mode==='settings'?'设置导航':'项目与对话');sync();
     },
     sync,
@@ -176,12 +189,11 @@ const dshLive = new DshLiveMonitor({
 });
 const toolTypes = new Set(['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'webSearch', 'collabAgentToolCall', 'fileDiff']);
 function el(tag, className, text) { const e = document.createElement(tag); if (className) e.className = className; if (text != null) e.textContent = text; return e; }
-// Local file links never navigate. The bridge has no bounded open/preview API, so the honest action is copying the path.
-async function copyLocalPath(ref, node) {
-  const value = ref.fullPath + (ref.line !== null ? ':' + ref.line : '');
-  try { await navigator.clipboard.writeText(value); node?.setAttribute('data-copied', 'true'); }
-  catch { node?.setAttribute('data-copied', 'false'); notice(`无法访问剪贴板。文件路径：${value}`, true); }
-}
+const filePreview=createFilePreview({document,fetchPreview:async(input,{signal})=>{
+  const response=await fetch('/api/files/preview',{method:'POST',signal,headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify(input)});
+  const result=await response.json();if(!response.ok)throw new Error(typeof result.error==='string'?result.error:result.error?.message||'文件预览失败');return result;
+}});
+function previewLocalFile(ref,node){filePreview.open(ref,{threadId:state.thread?.id},node);}
 // Image previews go only through the authenticated, thread-scoped preview API; the token never enters a URL.
 async function fetchArtifactPreview(path, threadId = state.thread?.id) {
   if (!threadId) throw new Error('需要已保存的对话才能预览');
@@ -199,7 +211,8 @@ async function fetchArtifactPreview(path, threadId = state.thread?.id) {
 }
 const lightbox = mountLightbox(document);
 const artifactView = mountArtifacts({ document, fetchPreview: fetchArtifactPreview, getScope:()=>state.thread?.id||null, onOpen: view => lightbox.open(view), resolveImage: (itemId, slot) => state.store.image(itemId, slot) });
-const conversation = mountConversation($('messages'), { onLocalLink: copyLocalPath, getCwd: () => state.thread?.cwd || state.cwd, getThreadId:()=>state.thread?.id, onAnswerAsync:payload=>answerAsync(payload), artifacts: artifactView, onOpenAgent:(id,kind)=>{showDetails('dsh',true);dshView.openAgent(id,kind);} });
+const conversationScroll=mountConversationScroll($('conversation'));
+const conversation = mountConversation($('messages'), { scrollController:conversationScroll, onLocalLink: previewLocalFile, getCwd: () => state.thread?.cwd || state.cwd, getThreadId:()=>state.thread?.id, onAnswerAsync:payload=>answerAsync(payload), artifacts: artifactView, onOpenAgent:(id,kind)=>{showDetails('dsh',true);dshView.openAgent(id,kind);} });
 setInterval(() => { if (conversation.hasRunningClock() && document.visibilityState === 'visible') conversation.tick(); }, 1000);
 /** Leaves a thread's subscription. Active work is retained by the bridge; that is not an error. */
 function releaseThread(threadId) {
@@ -208,6 +221,7 @@ function releaseThread(threadId) {
 }
 function resetThreadView() {
   historyAutoLoad?.reset(); state.store.clear(); state.ledger.clear(); conversation.clear(); state.nextItems = null; state.nextTurns = null; state.historyFallback = false; state.pager = null;
+  liveChanges.update(pillChanges([]), state.thread?.id || null);
   composer.renderOptimistic();
 }
 const projectNavigation=mountProjectNavigation($('thread-list'),{
@@ -220,12 +234,16 @@ mountPanelResize({document,window});
 const connectionBootstrap=new ConnectionBootstrap(async current=>{const results=await Promise.allSettled([loadModels(current),loadThreads(false,current)]);if(!current())return;for(const result of results)if(result.status==='rejected')notice('连接已建立，但目录加载失败：'+result.reason.message+'。可点击重新检查连接重试读取，不会发送任务。',true);},error=>notice('连接目录加载失败：'+error.message,true));
 const notifications = createNotifications({targets: [$('notice'), $('settings-notice')], activeTarget: () => $('settings-dialog').classList.contains('hidden') ? $('notice') : $('settings-notice')});
 function notice(text, error = false) { notifications.show(text, error); }
+let taskNotifications=null;
+let questionNotifications=null;
+let lastEventAt=0;
+let offlineSnapshot=null;
 function activity(text, running = false) { $('activity').textContent = text; $('activity').classList.toggle('running', running); }
-async function api(path, body, {timeoutMs=90000}={}) {
+async function api(path, body, {timeoutMs=90000,signal}={}) {
   if (!token) { const error = new Error(access.lan ? '缺少访问令牌：请在电脑的“局域网访问”中复制链接，在手机上重新打开。' : '缺少本地访问令牌，请使用启动器重新打开窗口。'); error.outcome = 'notExecuted'; throw error; }
   const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const r = await fetch(path, { method: body === undefined ? 'GET' : 'POST', signal: controller.signal, headers: { Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    const r = await fetch(path, { method: body === undefined ? 'GET' : 'POST', signal: signal?AbortSignal.any([controller.signal,signal]):controller.signal, headers: { Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     const data = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
     const statusDocument = path === '/api/app-update/status' || (body === undefined && (path === '/api/status' || path.startsWith('/api/operations?')));
     if (!r.ok || (data.error && !statusDocument)) { const error = new Error(typeof data.error === 'string' ? data.error : data.error?.message || `HTTP ${r.status}`); error.code = data.code ?? data.error?.code; error.outcome = data.outcome; error.notExecuted = data.notExecuted; error.requestId = data.requestId; throw error; }
@@ -233,7 +251,7 @@ async function api(path, body, {timeoutMs=90000}={}) {
     return data;
   } finally { clearTimeout(timeout); }
 }
-const rpc = (method, params = {}) => api('/api/rpc', { method, params });
+const rpc = (method, params = {},options) => api('/api/rpc', { method, params },options);
 const delegationMonitor=createDelegationMonitor({rpc,api,onChange:()=>scheduleRender(),onError:(error,context)=>{
   if(context.threadId===state.thread?.id)state.dshReadErrors.set(`${context.threadId}:${context.agentId}`,error.message||String(error));
 }});
@@ -423,10 +441,16 @@ const aboutView = mountAbout($('about-root'), { api, onStatus:status=>updateIndi
 const dshConfigView = mountDshConfig($('dsh-config-root'), { api });
 const dshConnectionView = mountDshConnection($('dsh-connection-root'), { api, runtimeTarget:()=>state.runtimeTarget, onChange: () => refreshDsh() });
 function resetUsage(){statsView.reset();accountView.reset();if(currentRoute==='usage')statsView.activate();if(currentRoute==='account')accountView.activate();}
-function resetAccountScopedViews(reason='账户已改变'){accountQuota.reset();if(state.connected)accountQuota.refresh();resetUsage();configPanel.reset();pluginPanel.reset();resetRuntimePanel();remoteReset({statusMessage:reason+'，请重新读取远控状态。',pairMessage:reason+'，本机配对码显示已清除；不会撤销原账户或环境设备。',devicesMessage:reason+'，旧设备显示已清除；不会撤销原账户或环境设备。'});sessionDefaults.clear();state.dshReadGeneration++;state.dshReads.clear();state.dshReadErrors.clear();state.dshOpenDetails.clear();dshTasks.reset(state.thread?.id||null);state.dshConnection=null;renderDshConnection();dshLive.reset();syncDshLiveContext();if(state.connected)syncSessionDefaults();}
+function resetAccountScopedViews(reason='账户已改变'){
+  threadCompletion.reset();
+  taskNotifications?.reset();
+  questionNotifications?.reset();
+  threadSearchCache.clear();threadSearchController?.abort();state.searchGeneration++;searchStatus={text:'',busy:false};renderThreads();
+  accountQuota.reset();if(state.connected)accountQuota.refresh();resetUsage();configPanel.reset();pluginPanel.reset();resetRuntimePanel();remoteReset({statusMessage:reason+'，请重新读取远控状态。',pairMessage:reason+'，本机配对码显示已清除；不会撤销原账户或环境设备。',devicesMessage:reason+'，旧设备显示已清除；不会撤销原账户或环境设备。'});sessionDefaults.clear();state.dshReadGeneration++;state.dshReads.clear();state.dshReadErrors.clear();state.dshOpenDetails.clear();dshTasks.reset(state.thread?.id||null);state.dshConnection=null;renderDshConnection();dshLive.reset();syncDshLiveContext();if(state.connected)syncSessionDefaults();
+}
 const configPanel=mountConfigSettingsPanel($('config-panel'),{read:()=>api('/api/config-settings/read',state.cwd?{cwd:state.cwd}:{}),plan:edits=>{if(scopedPending('config').length)throw new Error('配置状态仍在自动同步');return api('/api/config-settings/plan',{edits});},apply:params=>{if(pendingMutations.storageError||scopedPending('config').length)throw new Error('配置状态仍在自动同步');return performMutation('config/apply',params);}});
 function renderConfigPending(){const host=$('config-pending');if(!host)return;const records=scopedPending('config');host.replaceChildren();for(const marker of records){const row=el('div','pending-inline');row.setAttribute('role','status');const status=el('span','pending-inline-status','正在更新配置状态…');const failure=pendingReconcileErrors.get(marker.requestId);if(failure)status.title=failure;row.append(status);host.append(row);}}
-function setConnected(connected, label) { if(state.connected !== connected){accountIdentity.reset();deactivatePendingReconciler();pluginPanel.reset();configPanel.reset();resetUsage();if(!connected)accountLoginPanel.update({state:'unknown'});state.dshReadGeneration++;state.dshReads.clear();state.dshReadErrors.clear();} state.connected = connected; if(connected)accountQuota.start();else accountQuota.stop(); if(!connected){followUps.pauseAll('连接已断开');renderQueue();try{workbench.connectionLost();}catch(error){notice('终端未能处理连接断开：'+(error?.message||'未知错误')+'。其余断连清理继续。',true);}state.searchGeneration++;resetRuntimePanel();remoteReset({statusMessage:'连接已断开，无法读取远控状态。',pairMessage:'连接已断开，本机配对码显示已清除；不会撤销任何设备。',devicesMessage:'连接已断开，设备列表显示已清除；未撤销旧环境设备。'});}terminalControls();$('connection-dot').className = connected ? 'ok' : 'bad'; $('connection-text').textContent = label || (connected ? '本地 Codex 已连接' : '连接已断开'); $('status-info').textContent = $('connection-text').textContent; updateControls(); renderDshConnection(); remoteControls(); syncSessionDefaults(); syncDshLiveContext(); syncDelegationMonitor(); syncPendingReconciler(); syncRuntimePanelActivity(); connectionBootstrap.update(connected,state.serverInstance); }
+function setConnected(connected, label) { if(!connected)taskNotifications?.disconnected(); if(state.connected !== connected){accountIdentity.reset();deactivatePendingReconciler();pluginPanel.reset();configPanel.reset();resetUsage();if(!connected)accountLoginPanel.update({state:'unknown'});state.dshReadGeneration++;state.dshReads.clear();state.dshReadErrors.clear();} state.connected = connected; if(connected)accountQuota.start();else accountQuota.stop(); if(!connected){followUps.pauseAll('连接已断开');renderQueue();try{workbench.connectionLost();}catch(error){notice('终端未能处理连接断开：'+(error?.message||'未知错误')+'。其余断连清理继续。',true);}state.searchGeneration++;resetRuntimePanel();remoteReset({statusMessage:'连接已断开，无法读取远控状态。',pairMessage:'连接已断开，本机配对码显示已清除；不会撤销任何设备。',devicesMessage:'连接已断开，设备列表显示已清除；未撤销旧环境设备。'});}terminalControls();$('connection-dot').className = connected ? 'ok' : 'bad'; $('connection-text').textContent = label || (connected ? '本地 Codex 已连接' : '连接已断开'); $('status-info').textContent = $('connection-text').textContent; updateControls(); renderDshConnection(); remoteControls(); syncSessionDefaults(); syncDshLiveContext(); syncDelegationMonitor(); syncPendingReconciler(); syncRuntimePanelActivity(); connectionBootstrap.update(connected,state.serverInstance); }
 function syncSessionDefaults(){sessionDefaults.sync({connected:state.connected,serverInstance:state.serverInstance,cwd:state.cwd,enabled:!state.demo});}
 function formatModelDisplayName(value){const text=typeof value==='string'?value.trim():'';if(!text)return '';return text.replace(/^GPT-(\d+(?:\.\d+)?)-([A-Za-z][A-Za-z0-9]*(?:[-.][A-Za-z0-9]+)*)/,'GPT-$1 $2');}
 function effectiveModel(){const id=activeModelId($('model').value,sessionDefaults.snapshot().value);return {id,model:id?state.models.find(entry=>entry.model===id)||null:null};}
@@ -449,12 +473,35 @@ function setCwd(cwd) { if(state.cwd !== (cwd || '')){workbench.cwdChanged();plug
 // ---------- Router: exactly one stage is visible; every page transition goes through here ----------
 const STAGES = { chat: 'chat-page', usage: 'usage-page', account: 'account-page', terminal: 'terminal-page', settings: 'settings-dialog' };
 let currentRoute = 'chat';
-const routeTrail = [];
+const navigationHistory = createNavigationHistory({name:'chat',threadId:null});
+let navigatingHistory=false;
+function recordNavigation(){
+  if(!navigatingHistory){
+    const entry={name:currentRoute,section:currentRoute==='settings'?state.settingsPage:undefined,threadId:currentRoute==='chat'?state.thread?.id||null:undefined,thread:currentRoute==='chat'?state.thread:null};
+    if(entry.threadId&&navigationHistory.current.name==='chat'&&!navigationHistory.current.threadId)navigationHistory.replace(entry);else navigationHistory.push(entry);
+  }
+  $('navigate-back').disabled=!navigationHistory.canBack||navigatingHistory;
+  $('navigate-forward').disabled=!navigationHistory.canForward||navigatingHistory;
+}
+async function travelHistory(delta){
+  if(navigatingHistory||state.sending||state.loadingThread)return false;
+  const target=navigationHistory.move(delta);if(!target)return false;
+  navigatingHistory=true;recordNavigation();
+  try{
+    if(target.name==='chat'&&target.threadId!== (state.thread?.id||null)){
+      if(target.threadId)await openThread(target.thread||{id:target.threadId});else newThread();
+    }else route(target.name,{section:target.section,back:true});
+    return true;
+  }catch(error){navigationHistory.move(-delta);notice('页面未能打开：'+error.message,true);return false;}
+  finally{navigatingHistory=false;recordNavigation();}
+}
+$('navigate-back').addEventListener('click',()=>travelHistory(-1));
+$('navigate-forward').addEventListener('click',()=>travelHistory(1));
+document.addEventListener('keydown',event=>{if(event.altKey&&!event.ctrlKey&&!event.metaKey&&['ArrowLeft','ArrowRight'].includes(event.key)){event.preventDefault();void travelHistory(event.key==='ArrowLeft'?-1:1);}});
+for(const button of document.querySelectorAll('[data-window-command]'))button.addEventListener('click',()=>window.chrome?.webview?.postMessage({type:'windowCommand',command:button.dataset.windowCommand}));
 function route(name, { section, back = false } = {}) {
   if (!Object.hasOwn(STAGES, name)) name = 'chat';
   const previous = currentRoute;
-  if (!back && name === 'chat') routeTrail.length = 0;
-  else if (!back && name !== previous) { routeTrail.push({ name: previous, section: state.settingsPage }); if (routeTrail.length > 32) routeTrail.shift(); }
   currentRoute = name;
   closeWindowMenu(); closeThreadMenu();
   for (const [key, id] of Object.entries(STAGES)) $(id).classList.toggle('hidden', key !== name);
@@ -478,23 +525,27 @@ function route(name, { section, back = false } = {}) {
   else sidebarController.closeForNavigation();
   if (name === 'chat') { if (previous !== 'chat') $('prompt').focus(); }
   else (document.querySelector(`#${STAGES[name]} h1, #${STAGES[name]} .stage-bar button`) || $(STAGES[name]))?.focus?.({ preventScroll: true });
+  if(!back)recordNavigation();
+  renderThreads();
 }
 function openSettings(section = 'general') { route('settings', { section: typeof section === 'string' ? section : 'general' }); }
 function closeSettings() { route('chat'); }
 function showTerminal() { route('terminal'); }
 function newThread() {
   if (state.sending) return;
-  closeSettings(); sidebarController.closeForNavigation();
+  route('chat',{back:true}); sidebarController.closeForNavigation();
   const previous = state.thread?.id || null;
   if (state.busy) notice('原任务继续在后台运行，可从侧栏对话列表返回。');
   // A new chat is only a draft; thread/start happens on first send.
   state.openGeneration++; state.loadingThread = false; state.thread = null; state.reasoning = restoredReasoning(null); populateEfforts(); dshTasks.reset(); state.dshReadErrors.clear(); state.dshOpenDetails.clear(); state.dshConnection = null; renderDshConnection(); syncDshLiveContext(); renderDshTasks(); state.turnId = null; state.busy = false; resetThreadView(); $('tool-list').replaceChildren(el('p', 'muted', '暂无工具活动')); $('thread-title').textContent = '新对话'; $('welcome').classList.remove('hidden'); $('earlier').classList.add('hidden'); activity(''); renderContext(); renderQueue(); updateControls(); renderThreads(); renderRequests(); $('prompt').focus();
   releaseThread(previous);
+  recordNavigation();
 }
 function renderThreads() {
+  threadCompletion.read(viewedThreadId());
   const runningThreadIds=new Set([...state.activeTurns].filter(([,id])=>id&&!state.terminalTurns.has(id)).map(([id])=>id));
   if(state.busy&&state.thread?.id&&state.turnId&&!state.terminalTurns.has(state.turnId))runningThreadIds.add(state.thread.id);
-  projectNavigation.render({projects:projectsState.projects,threads:state.threads,selectedPath:state.cwd,activeThreadId:state.thread?.id||'',runningThreadIds,searching:!!$('search').value.trim(),busy:projectsState.busy||state.sending,error:projectsState.error});
+  projectNavigation.render({projects:projectsState.projects,threads:state.threads,selectedPath:state.cwd,activeThreadId:state.thread?.id||'',runningThreadIds,unreadThreadIds:threadCompletion.unread,recent:Object.fromEntries(recentProjects),searchStatus,searching:!!$('search').value.trim(),busy:projectsState.busy||state.sending,error:projectsState.error});
   $('more-threads').classList.toggle('hidden', !state.nextThreads);
   $('add-project').disabled=projectsState.busy||state.sending;
 }
@@ -535,6 +586,7 @@ async function saveProjectSelection(group,generation,dialogGeneration) {
   if($('project-dialog').open)$('project-dialog').close();
   $('cwd-setup').classList.add('hidden');
   if(state.loadingThread||projectPathKey(selected.path)!==projectPathKey(state.cwd))newThread();
+  recentProjects.set(projectPathKey(selected.path),Date.now());
   setCwd(selected.path);closeSettings();renderThreads();$('prompt').focus();
   return true;
 }
@@ -607,11 +659,14 @@ function rememberThread(thread) {
 }
 async function loadThreads(more = false, current = ()=>true) {
   const generation = ++state.searchGeneration;
+  threadSearchController?.abort();const controller=new AbortController();threadSearchController=controller;
   if (!more) { threadAutoLoad?.reset(); state.nextThreads = null; }
   const params = { limit: 30, sortKey: 'updated_at', sortDirection: 'desc' };
   if (more && state.nextThreads) params.cursor = state.nextThreads;
   if ($('search').value.trim()) params.searchTerm = $('search').value.trim();
-  const result = await rpc('thread/list', params); if (generation !== state.searchGeneration || !current()) return;
+  searchStatus = { text: more ? '正在加载更多对话…' : params.searchTerm ? '正在搜索全部对话…' : '正在读取对话…', busy: true }; renderThreads();
+  try {
+  const result = await rpc('thread/list', params,{signal:controller.signal}); if (generation !== state.searchGeneration || !current()) return;
   const anchor = more ? captureHistoryAnchor($('thread-scroll'), ['.project-group-thread', '[data-project-key]']) : null;
   const listed = result.data || [];
   for (const row of listed) {
@@ -631,15 +686,24 @@ async function loadThreads(more = false, current = ()=>true) {
     state.threads=[...protectedRows.slice(0,300),...(slots?state.threads.filter(row=>!protectedIds.has(row.id)).slice(-slots):[])];
     notice('侧栏仅保留最近加载的 300 个对话，可用搜索查找其他对话。');
   }
-  state.nextThreads = result.nextCursor; renderThreads();
+  state.nextThreads = result.nextCursor;
+  threadSearchCache.set(search, { rows: state.threads.slice(), nextCursor: result.nextCursor });
+  if(threadSearchCache.size>20)threadSearchCache.delete(threadSearchCache.keys().next().value);
+  searchStatus = { text: search ? `找到 ${state.threads.length}${result.nextCursor ? '+' : ''} 个对话` : '', busy: false }; renderThreads();
   if (more) restoreHistoryAnchor($('thread-scroll'), anchor);
+  } catch(error) {
+    if(controller.signal.aborted)return;
+    if(generation===state.searchGeneration&&current()){searchStatus={text:'读取失败：'+error.message,busy:false};renderThreads();}
+    throw error;
+  }finally{if(threadSearchController===controller)threadSearchController=null;}
 }
 const CONVERSATION_ITEMS = 500;
 const historyCaps = historyCapabilities();
 function sessionFor(threadId) { return state.threadSessions.find(row => row.threadId === threadId) || null; }
 async function openThread(thread) {
+  const savedScroll=state.thread?.id===thread.id?conversationScroll.capture():null;
   const wasOverlay = sidebarController.isOverlayOpen();
-  route('chat');
+  route('chat',{back:true});
   const generation = ++state.openGeneration; activity('正在载入对话…'); state.loadingThread = true; updateControls();
   const previous = state.thread?.id || null;
   try {
@@ -647,6 +711,7 @@ async function openThread(thread) {
     const result = await rpc('thread/read', { threadId: thread.id });
     if (generation !== state.openGeneration) return;
     state.thread = result.thread || thread; dshTasks.reset(state.thread.id); state.dshReadErrors.clear(); state.dshOpenDetails.clear(); state.dshConnection = null; renderDshConnection(); syncDshLiveContext(); renderDshTasks(); restoreThreadReasoning({ model: state.thread.model, reasoningEffort: state.thread.reasoningEffort }); resetThreadView(); state.busy = false; state.turnId = null; renderRequests();
+    recentProjects.set(projectPathKey(state.thread.cwd||state.cwd),Date.now());
     if (state.thread.cwd) setCwd(state.thread.cwd); $('thread-title').textContent = state.thread.name || state.thread.preview || '对话'; $('welcome').classList.add('hidden'); renderThreads(); renderContext(); renderQueue();
     let running = null;
     try { running = await loadTurns(false, generation); } catch (e) { if (!/method|not found|unsupported|unknown|32601/i.test(e.message)) notice('无法读取任务状态：' + e.message, true); }
@@ -654,11 +719,12 @@ async function openThread(thread) {
     await loadItems(false, generation);
     if (generation !== state.openGeneration) return;
     if (fileApprovalPending()) renderRequests();
+    if(savedScroll)conversationScroll.restore(savedScroll,{follow:false});else scrollBottom();
     const activeId = state.activeTurns.get(thread.id) || sessionFor(thread.id)?.activeTurnId || running?.id;
     if (activeId && !state.terminalTurns.has(activeId)) { state.busy = true; state.turnId = activeId; state.ledger.activate(activeId); renderMessages(false); watchExternalTurn(); }
-    activity(''); sidebarController.closeForNavigation(); if(wasOverlay)$('conversation').focus();
+    activity(''); sidebarController.closeForNavigation(); if(wasOverlay)$('conversation').focus();recordNavigation();
   } finally {
-    if (generation === state.openGeneration) { state.loadingThread = false; updateControls(); }
+    if (generation === state.openGeneration) { state.loadingThread = false; updateControls(); renderThreads(); offlineSnapshot?.ready(); }
     if (previous && previous !== state.thread?.id) releaseThread(previous);
   }
 }
@@ -723,23 +789,24 @@ async function loadItems(earlier = false, generation = state.openGeneration, cur
   $('earlier').classList.toggle('hidden', !pager.hasMore);
   $('earlier').title = pager.nextNeedsFullRead ? '此 Codex CLI 不支持分页读取：加载更早内容需要再次完整读取对话' : '';
   renderMessages(false);
-  if (earlier) restoreHistoryAnchor($('conversation'), anchor); else scrollBottom();
+  if (earlier) restoreHistoryAnchor($('conversation'), anchor);
 }
-function scrollBottom() { $('conversation').scrollTop = $('conversation').scrollHeight; }
+function scrollBottom() { conversationScroll.toBottom(); }
 function titleFor(item) { return { commandExecution: '运行命令', fileChange: '文件改动', mcpToolCall: 'MCP 工具', dynamicToolCall: '工具调用', webSearch: '网页搜索', reasoning: '思考摘要', plan: '任务计划', collabAgentToolCall: '子代理' }[item.type] || item.type || '活动'; }
 function toolDescription(item) { return boundedText(item.command || (item.server ? `${item.server} / ${item.tool || ''}` : '') || item.tool || item.query || item.changes?.map(c => c.path).join('\n') || titleFor(item), 6000); }
 function renderMessages(follow = true) {
-  const box = $('conversation'); const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 160;
+  if(state.thread?.id)questionNotifications?.hydrateQuiet(state.store.values(),state.thread.id);
+  const scrollSnapshot=conversationScroll.capture();
   const items = state.store.values();
   syncDelegationMonitor();
   const delegatedChanges=[...dshTasks.delegatedChanges({turns:[...state.ledger.turns.values()],activeTurnId:state.busy?state.turnId:null}),...delegationMonitor.changes()];
   const turns = buildTurns(items, state.ledger, { activeTurnId: state.busy ? state.turnId : null, cwd: state.thread?.cwd || state.cwd,delegatedChanges });
-  conversation.render(turns);
+  conversation.render(turns,{follow});
   composer.renderOptimistic();
-  liveChanges.update(pillChanges(turns));scrollToBottom.update();
+  liveChanges.update(pillChanges(turns),state.thread?.id||null);scrollToBottom.update();
   state.store.dirty.clear(); $('welcome').classList.toggle('hidden', !!state.thread || items.length > 0 || Boolean($('optimistic-messages') && !$('optimistic-messages').hidden));
   if (!$('details').classList.contains('hidden')) { if (state.detailsTab === 'dsh') renderDshTasks(); else renderTools(); }
-  if (follow && nearBottom) scrollBottom();
+  conversationScroll.restore(scrollSnapshot,{follow});
 }
 function scheduleRender() { if (state.rendering) return; state.rendering = true; setTimeout(() => requestAnimationFrame(() => { state.rendering = false; renderMessages(); }), 32); }
 function renderTools() {
@@ -747,8 +814,8 @@ function renderTools() {
 }
 const toolActivity=mountToolActivity($('tool-list'),{artifacts:artifactView});
 const liveChanges=mountLiveChanges($('live-changes'),{renderDiff});
-const scrollToBottom=mountScrollToBottom($('conversation'));
-const dshView = createDshView({ document, state, $, dshLive, dshTasks, api, rpc, el, onAnswerAsync:payload=>answerAsync(payload), artifactFactory:({threadId,resolveImage})=>mountArtifacts({document,fetchPreview:fetchArtifactPreview,getScope:()=>threadId,onOpen:view=>lightbox.open(view),resolveImage}) });
+const scrollToBottom=mountScrollToBottom($('conversation'),{onBottom:behavior=>conversationScroll.toBottom({behavior})});
+const dshView = createDshView({ document, state, $, dshLive, dshTasks, api, rpc, el, onAnswerAsync:payload=>answerAsync(payload), onLocalLink:(ref,node,threadId)=>filePreview.open(ref,{threadId},node), artifactFactory:({threadId,resolveImage})=>mountArtifacts({document,fetchPreview:fetchArtifactPreview,getScope:()=>threadId,onOpen:view=>lightbox.open(view),resolveImage}) });
 const { renderDshConnection, refreshDsh, syncDshLiveContext, scheduleDshRender, renderDshTasks, ingestDshSnapshot } = dshView;
 $('dsh-live-refresh').addEventListener('click', () => { dshLive.refresh(); scheduleDshRender(); });
 function removeAttachment(id) {
@@ -893,14 +960,16 @@ const composer = createComposer({ document,
   session: { state, followUps, sessionFor, sessionControls },
   drafts: { attachmentDraft, fileAttachmentDraft, attachmentPreviews, queuedPreviews, clearSubmittedDraft, renderAttachments, autosizePrompt: () => autosizePrompt() },
   ledger: { performMutation, pendingMutations, scopedPending, currentSendAvailability: () => currentSendAvailability(), renderPendingMutations: () => renderPendingMutations() },
-  thread: { restoreThreadReasoning: (...args) => restoreThreadReasoning(...args), loadThreads: (...args) => loadThreads(...args), syncStatus: () => syncStatus(), resetThreadDsh, rememberThread },
+  thread: { restoreThreadReasoning: (...args) => restoreThreadReasoning(...args), loadThreads: (...args) => loadThreads(...args), syncStatus: () => syncStatus(), resetThreadDsh, rememberThread:thread=>{if(thread.cwd)recentProjects.set(projectPathKey(thread.cwd),Date.now());rememberThread(thread);if(currentRoute==='chat'&&state.thread?.id===thread.id)recordNavigation();} },
   view: { $, el, notice, activity, confirm: text => confirm(text), openImage:view=>lightbox.open(view), updateControls: () => updateControls(), renderMessages: (...args) => renderMessages(...args), scheduleRender: () => scheduleRender(), scrollBottom: () => scrollBottom(), renderContext: () => renderContext(), openProjectDialog: () => openProjectDialog(), openInlineCwd: () => openInlineCwd() } });
 const { send, queueDraft, hasDraft, runningInputAvailable, drainAll, drainQueue, renderQueue } = composer;
 const answerAsync=createAsyncAnswerSender({state,sessionFor,performMutation,
+  getCwd:async threadId=>{const known=state.thread?.id===threadId?state.thread:state.threads.find(thread=>thread.id===threadId);return known?.cwd||(await rpc('thread/read',{threadId,includeTurns:false})).thread?.cwd;},
   hasPending:threadId=>!!pendingMutations.storageError||scopedPending('chat',{threadId}).length>0,
   getEchoIds:threadId=>threadId===state.thread?.id?state.store.values().filter(item=>item.type==='userMessage'&&!item._local).map(item=>item.id):[],
   onChange:()=>{renderPendingMutations();updateControls();renderThreads();},
-  onSent:({threadId,text,method,result,beforeIds})=>{
+  onSent:({threadId,itemId,text,method,result,beforeIds})=>{
+    questionNotifications?.answered(threadId,itemId);
     if(method==='turn/start'&&result.turn?.id&&!state.terminalTurns.has(result.turn.id)&&!['completed','failed','interrupted'].includes(result.turn.status))state.activeTurns.set(threadId,result.turn.id);
     if(state.thread?.id!==threadId)return;
     if(method==='turn/steer')state.store.confirmUserEcho({id:`answer:${crypto.randomUUID()}`,turnId:result.turnId,text,beforeIds});
@@ -957,10 +1026,10 @@ function populateEfforts(modelChanged = false) {
 function renderReasoning() {
   sessionControls.render();
   const defaults=sessionDefaults.snapshot(), active=effectiveModel(), view=configuredReasoningView(active.model,state.reasoning,defaults.value,active.id), modelView=defaultModelView(state.models,$('model').value,defaults.value);
-  const name=formatModelDisplayName(modelView.displayName)||'Codex 默认模型', effortText=view.effective?effortLabel(view.effective):'默认 / 未知';
+  const name=formatModelDisplayName(modelView.displayName)||(defaults.loading?'正在读取模型…':'选择模型'), effortText=view.effective?effortLabel(view.effective):'';
   const label=view.effective?effortLabel(view.effective):(defaults.loading?'读取中…':'默认');
-  const defaultLabel='默认模型 · 继承配置';
-  $('model-trigger').replaceChildren(el('span','model-trigger-label',`${name} · ${effortText}`),icon(document,'down',{size:14}));
+  const defaultLabel=defaults.value?.model?`自动 · ${formatModelDisplayName(defaults.value.model)}`:'自动（Codex 配置）';
+  $('model-trigger').replaceChildren(el('span','model-trigger-label',[name,effortText].filter(Boolean).join(' · ')),icon(document,'down',{size:14}));
   $('model-trigger').title=modelView.source==='config'?`Codex 配置默认模型：${boundedText(modelView.id||'未知',512)}${modelView.outsideCatalog?'（不在当前模型目录）':''}`:name; $('reasoning-model-name').title=$('model-trigger').title; $('reasoning-model-name').textContent=name; $('reasoning-label').textContent=label;
   $('reasoning-label').title=view.source==='override'?'显式发送所选思考强度':view.source==='inherited'?'沿用服务端线程设置；不发送强度覆盖':view.configUnsupported?`Codex 配置默认强度 ${effortLabel(view.configured)} 不在当前模型支持范围；不会发送`:view.configSupport==='unknown'?`Codex 配置默认强度 ${effortLabel(view.configured)} 是否被当前模型支持未知；不会发送`:view.source==='config'?'Codex 配置默认强度；发送时不写入覆盖值':defaults.loading?'正在读取 Codex 配置默认值；尚未发送任何设置':defaults.error?'Codex 配置默认值读取失败；发送时不写入覆盖值，可打开模型列表重试':'未读取 Codex 配置默认值；发送时不写入覆盖值';
   const range=$('reasoning-range');range.max=String(Math.max(0,view.choices.length-1));range.value=String(Math.max(0,view.index));range.disabled=!view.choices.length||$('effort').disabled;
@@ -969,7 +1038,7 @@ function renderReasoning() {
   $('reasoning-track').style.setProperty('--effort-fill',`calc(14px + (100% - 28px) * ${ratio})`);$('reasoning-track').classList.toggle('unknown',view.index<0);
   const ticks=document.createDocumentFragment();for(let i=0;i<view.choices.length;i++){const tick=el('i');tick.style.left=`${100*i/Math.max(1,view.choices.length-1)}%`;ticks.append(tick);} $('reasoning-ticks').replaceChildren(ticks);
   const entries=[{model:'',displayName:defaultLabel},...state.models.filter(m=>!m.hidden)];if($('model').value&&!entries.some(entry=>entry.model===$('model').value))entries.push({model:$('model').value,displayName:$('model').value+'（目录外）'});
-  const options=document.createDocumentFragment();for(const entry of entries){const button=el('button','model-option');button.type='button';button.setAttribute('aria-pressed',String(entry.model===$('model').value));button.title=entry.model?`${formatModelDisplayName(entry.displayName||entry.model)} · ${entry.model}`:'继承 Codex 配置中的当前默认模型，不另行固定模型';button.append(el('span','',formatModelDisplayName(entry.displayName||entry.model)),entry.model===$('model').value?icon(document,'check',{size:15}):el('span'));button.addEventListener('click',()=>{$('model').value=entry.model;populateEfforts(true);showReasoningModels(false);$('reasoning-range').disabled?$('model-list-open').focus():$('reasoning-range').focus();});options.append(button);}
+  const options=document.createDocumentFragment();for(const entry of entries){const button=el('button','model-option');button.type='button';button.setAttribute('aria-pressed',String(entry.model===$('model').value));button.title=entry.model?`${formatModelDisplayName(entry.displayName||entry.model)} · ${entry.model}`:'使用 Codex 配置中的当前模型';button.append(el('span','',formatModelDisplayName(entry.displayName||entry.model)),entry.model===$('model').value?icon(document,'check',{size:15}):el('span'));button.addEventListener('click',()=>{$('model').value=entry.model;try{localStorage.setItem('codex-light-model',entry.model);}catch{}populateEfforts(true);showReasoningModels(false);$('reasoning-range').disabled?$('model-list-open').focus():$('reasoning-range').focus();});options.append(button);}
   if(defaults.loading)options.append(el('p','model-option-note','正在读取 Codex 配置默认值…'));
   else if(defaults.error){const retry=el('button','model-option');retry.type='button';retry.append(el('span','','重新读取 Codex 配置默认值'));retry.title='上次读取失败：'+boundedText(defaults.error,300);retry.addEventListener('click',()=>{sessionDefaults.retry();});options.append(retry);}
   $('model-options').replaceChildren(options);
@@ -990,7 +1059,7 @@ document.addEventListener('focusin',event=>{if(!event.target.closest('.model-con
 document.addEventListener('keydown',event=>{if(event.ctrlKey&&event.shiftKey&&event.key.toLowerCase()==='m'){event.preventDefault();openReasoning();}});
 // model-loader:start
 async function loadModels(current=()=>true) {
-  const generation=++state.modelGeneration,selected=$('model').value,rows=[],seenModels=new Set(),seenCursors=new Set();let cursor=null;
+  const generation=++state.modelGeneration,rows=[],seenModels=new Set(),seenCursors=new Set();let cursor=null,selected=$('model').value;
   for(let page=0;page<5;page++){
     const params={limit:100};if(cursor)params.cursor=cursor;
     const result=await rpc('model/list',params);
@@ -1002,11 +1071,15 @@ async function loadModels(current=()=>true) {
     seenCursors.add(next);cursor=next;
   }
   if(!current()||generation!==state.modelGeneration)return;
+  // Restore an explicit, still available choice; old conversations keep their own model.
+  if(!selected&&!state.thread){try{const saved=localStorage.getItem('codex-light-model');if(rows.some(row=>row.model===saved&&!row.hidden))selected=saved;}catch{}}
   state.models=rows;$('model').replaceChildren(new Option('使用 Codex 配置默认模型',''));for(const model of rows.filter(m=>!m.hidden))$('model').append(new Option(formatModelDisplayName(model.displayName||model.model),model.model));if(selected&&!Array.from($('model').options).some(option=>option.value===selected))$('model').append(new Option(selected+'（目录外）',selected));$('model').value=selected;populateEfforts();
 }
 // model-loader:end
-function renderRequests() {
+function renderRequests({notify=false}={}) {
   renderApprovals($('approvals'), { document, requests: state.requests, currentThreadId: state.thread?.id || null, api, notice, el, boundedText, lookupFileChange, rerender: renderRequests });
+  taskNotifications?.refresh();
+  questionNotifications?.sync(state.requests,{notify});
 }
 // Files/diff for a modern fileChange approval come from its correlated item (loaded only for the open conversation).
 function lookupFileChange(threadId, itemId) {
@@ -1028,6 +1101,7 @@ function trackRequest(message) {
 }
 function dropRequests(match) { let changed = false; for (const [key, request] of state.requests) if (match(request)) { state.requests.delete(key); changed = true; } if (changed) renderRequests(); }
 function onEvent(message) {
+  questionNotifications?.observe(message);
   accountQuota.handleEvent(message);
   for(const handler of eventSubscribers){try{handler(message);}catch{notice('工具面板未能处理此事件；不会自动重发请求。',true);}}
   if(message.method==='thread/name/updated'){
@@ -1049,8 +1123,10 @@ function onEvent(message) {
   if (message.method === 'bridge/status') { const connected=!!message.params?.connected;if(!connected)dropRequests(()=>true);setConnected(connected);if(connected&&!state.serverInstance)syncStatus().catch(error=>notice('连接已建立，但本地服务标识读取失败：'+error.message+'。目录尚未加载；可点击重新检查连接。',true)); if (message.params?.error) notice(message.params.error, true); return; }
   if (message.method === 'bridge/warning') { notice(message.params?.message || '本地桥接警告'); return; }
   if (message.method === 'bridge/titleSummary') { titleSettings.reset(); if(message.params?.state==='failed')notice(message.params.error||'标题总结未完成，保留原名称。',true); return; }
-  if (message.id !== undefined && message.method) { if (trackRequest(message)) { renderRequests(); if(preferencesView.current().approvalNotice)notice('有一个请求等待你处理。'); } return; }
+  if (message.id !== undefined && message.method) { if (trackRequest(message)) renderRequests({notify:true}); return; }
   const p = message.params || {};
+  threadCompletion.observe(message,viewedThreadId());
+  taskNotifications?.observe(message);
   if (message.method === 'serverRequest/resolved') { if (validRequestId(p.requestId)) { state.requests.delete(requestKey(p.requestId)); renderRequests(); } return; }
   if (message.method === 'thread/closed' && typeof p.threadId === 'string' && p.threadId) dropRequests(request => requestThread(request) === p.threadId);
   if (message.method === 'error' && (!p.threadId || p.threadId === state.thread?.id)) { notice(p.error?.message || p.message || 'Codex 返回错误', true); return; }
@@ -1059,7 +1135,7 @@ function onEvent(message) {
     if (state.thread?.id === p.threadId) rememberThread(state.thread);
     renderThreads();
   }
-  if (message.method === 'turn/completed') { dropRequests(request => p.threadId && requestThread(request) === p.threadId && (request.params?.turnId ? request.params.turnId === p.turn?.id : request.method !== 'mcpServer/elicitation/request')); state.activeTurns.delete(p.threadId); state.interruptingTurns.delete(p.turn?.id); state.terminalTurns.add(p.turn?.id); if (state.terminalTurns.size > 100) state.terminalTurns.delete(state.terminalTurns.values().next().value);
+  if (message.method === 'turn/completed') { dropRequests(request => p.threadId && requestThread(request) === p.threadId && (request.params?.turnId ? request.params.turnId === p.turn?.id : request.method !== 'mcpServer/elicitation/request')); if(state.activeTurns.get(p.threadId)===p.turn?.id)state.activeTurns.delete(p.threadId); state.interruptingTurns.delete(p.turn?.id); state.terminalTurns.add(p.turn?.id); if (state.terminalTurns.size > 100) state.terminalTurns.delete(state.terminalTurns.values().next().value);
     // The queue only advances after a normal completion; anything else waits for the user.
     if (p.turn?.status !== 'completed') followUps.pause(p.threadId, p.turn?.status === 'interrupted' ? '任务已停止' : '任务未正常完成');
     renderThreads(); loadThreads().catch(error => notice('无法刷新对话列表：' + error.message, true)); setTimeout(() => drainQueue(p.threadId), 0); }
@@ -1088,6 +1164,7 @@ function tagTurn(itemId, turnId) { const item = state.store.items.get(itemId); i
 function applyThreadSessions(params) {
   state.threadSessions = Array.isArray(params?.threads) ? params.threads.filter(row => typeof row?.threadId === 'string') : [];
   for (const row of state.threadSessions) if (row.activeTurnId && !state.terminalTurns.has(row.activeTurnId)) state.activeTurns.set(row.threadId, row.activeTurnId);
+  taskNotifications?.reconcile();
   const failed = state.threadSessions.find(row => row.releaseError); if (failed) notice(failed.releaseError, true);
   updateControls(); renderThreads(); drainAll();
 }
@@ -1103,10 +1180,15 @@ async function events() {
     let reader; const controller = new AbortController(); state.eventController = controller;
     try {
       const response = await fetch('/api/events', { signal: controller.signal, headers: { Authorization: `Bearer ${token}` } }); if (!response.ok) throw new Error(`事件连接失败 (${response.status})`);
+      lastEventAt=Date.now();
       reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = ''; await syncStatus(); delay = 1000;
+      offlineSnapshot?.ready();
       if (reconnected && state.thread) { const current = state.thread; await openThread(current); } reconnected = true;
       while (true) {
-        const { value, done } = await reader.read(); if (done) throw new Error('事件连接已关闭'); buffer += decoder.decode(value, { stream: true });
+        // The server sends a keepalive every 15 seconds. A silent socket must not keep stale task notifications alive.
+        const watchdog=setTimeout(()=>controller.abort(),60000);
+        let chunk;try{chunk=await reader.read();}finally{clearTimeout(watchdog);}
+        const { value, done } = chunk; if (done) throw new Error('事件连接已关闭');lastEventAt=Date.now(); buffer += decoder.decode(value, { stream: true });
         if (buffer.length > 8 * 1024 * 1024) throw new Error('事件超过界面缓冲限制');
         let split; while ((split = buffer.indexOf('\n\n')) >= 0) { const raw = buffer.slice(0, split); buffer = buffer.slice(split + 2); const data = raw.split('\n').filter(l => l.startsWith('data:')).map(l => l.slice(5).trimStart()).join('\n'); if (data) { try { onEvent(JSON.parse(data)); } catch (e) { notice('无法处理事件：' + e.message, true); } } }
       }
@@ -1195,7 +1277,15 @@ $('tab-tools').addEventListener('click', () => showDetails('tools', true)); $('t
 $('close-details').addEventListener('click', () => { $('details').classList.add('hidden'); $('toggle-details').setAttribute('aria-pressed', 'false'); syncDshLiveContext(); });
 $('refresh-dsh').addEventListener('click', refreshDsh); $('refresh-dsh-settings').addEventListener('click', refreshDsh);
 for (const button of document.querySelectorAll('[data-prompt]')) button.addEventListener('click', () => { $('prompt').value = button.dataset.prompt; $('prompt').focus(); updateControls(); });
-let searchTimer; $('search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => loadThreads().catch(e => notice(e.message, true)), 250); });
+let searchTimer; $('search').addEventListener('input', () => {
+  clearTimeout(searchTimer);state.searchGeneration++;threadSearchController?.abort();threadAutoLoad?.reset();
+  const query=$('search').value.trim().toLocaleLowerCase(),cached=threadSearchCache.get(query);
+  const known=new Map([...threadSearchCache.values()].flatMap(value=>value.rows).concat(state.threads).map(row=>[row.id,row]));
+  state.threads=cached?cached.rows.slice():[...known.values()].filter(row=>!query||[row.name,row.preview].some(text=>String(text||'').toLocaleLowerCase().includes(query))).slice(0,300);
+  state.nextThreads=null;
+  searchStatus={text:query?'正在搜索全部对话…':'正在读取对话…',busy:true};renderThreads();
+  searchTimer=setTimeout(()=>loadThreads().catch(()=>{}),150);
+});
 document.addEventListener('keydown', e => { if ($('rename-dialog').open || $('project-dialog').open) { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') e.preventDefault(); return; } if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') { e.preventDefault(); newThread(); } if (e.key === 'Escape') { if (!$('thread-menu').classList.contains('hidden')) { closeThreadMenu(true); return; } if (activeMenu) { closeWindowMenu(); focusAfterWindowMenu();return; } if(sidebarController.isOverlayOpen()){sidebarController.close();return;} if(currentRoute!=='chat'&&!e.defaultPrevented&&!document.activeElement?.closest?.('dialog,.reasoning-popover,#queue'))route('chat'); } });
 // Android asks the SPA before falling back to WebView history or leaving the app.
 // No synthetic browser history entries: browser Back retains its normal contract.
@@ -1209,8 +1299,7 @@ window.CodexLightNavigation = Object.freeze({ back: createBackHandler({ document
     { isOpen: () => !$('details').classList.contains('hidden'), close: () => { $('close-details').click(); $('toggle-details').focus(); } },
   ],
   navigateBack: () => {
-    const previous = routeTrail.pop();
-    if (previous) { route(previous.name, { section: previous.section, back: true }); return true; }
+    if (navigationHistory.canBack) { void travelHistory(-1); return true; }
     if (currentRoute !== 'chat') { route('chat', { back: true }); return true; }
     return false;
   },
@@ -1322,16 +1411,20 @@ function selectSettingsSection(section = 'general') {
   if (page === 'appearance' && !state.lan) titleSettings.activate();
   if (page === 'archived') loadArchived().catch(e => notice(e.message, true));
   if(page==='plugins')pluginPanel.activate();else pluginPanel.deactivate();renderPluginPending();
+  if(page==='configuration')configPanel.activate();
   if(page==='remote'&&!state.lan)lanView.activate();else lanView.deactivate();
   if(page==='about')aboutView.activate();else aboutView.deactivate();
   if(page==='storage'&&!state.lan)storageView.activate();else storageView.deactivate();
   if (page === 'remote'){if(state.connected)refreshRemote();else remoteReset({statusMessage:'尚未连接 Codex，无法读取远控状态。',pairMessage:'尚未连接，本机配对码显示已清除；不会撤销已配对设备。',devicesMessage:'未连接时设备列表不可用；不会撤销旧环境设备。'});}
   syncRuntimePanelActivity();
+  if(currentRoute==='settings')recordNavigation();
 }
 function rowsNode(rows) {
   const list = el('dl', 'status-rows'); for (const [label, value] of rows) list.append(el('dt', '', label), el('dd', '', value)); return list;
 }
-document.addEventListener('visibilitychange',()=>{remoteView.expireIfNeeded();syncDshLiveContext();syncDelegationMonitor();syncPendingReconciler();syncRuntimePanelActivity();});
+function viewedThreadId(){return currentRoute==='chat'&&!state.loadingThread&&document.visibilityState!=='hidden'&&document.hasFocus()?state.thread?.id:null;}
+document.addEventListener('visibilitychange',()=>{renderThreads();remoteView.expireIfNeeded();syncDshLiveContext();syncDelegationMonitor();syncPendingReconciler();syncRuntimePanelActivity();});
+window.addEventListener('focus',()=>renderThreads());
 const workbench = createWorkbench({ document, state, $, el, api, notice, confirm: text => confirm(text), performMutation, scopedPending, pendingMutations, pendingReconcileErrors, eventSubscribers, showTerminal, openSettings });
 const { terminalControls, showWorkspaceTab, renderGitPending } = workbench;
 $('rail-terminal').addEventListener('click',showTerminal);$('terminal-back').addEventListener('click',closeSettings);
@@ -1413,10 +1506,28 @@ document.addEventListener('click',event=>{if(!$('thread-menu').contains(event.ta
 $('thread-menu').addEventListener('keydown',event=>{if(event.key==='ArrowDown'||event.key==='ArrowUp'){event.preventDefault();const buttons=[...$('thread-menu').querySelectorAll('button')],n=buttons.indexOf(document.activeElement);buttons[(n+(event.key==='ArrowDown'?1:-1)+buttons.length)%buttons.length]?.focus();}});
 
 $('refresh-archived').addEventListener('click',()=>loadArchived()); $('more-archived').addEventListener('click',()=>loadArchived(true));
-const preferencesView = createPreferences({ document, window, state, $, el, api, notice, confirm: text => confirm(text) });
+const preferencesView = createPreferences({ document, window, state, $, el, api, notice, confirm: text => confirm(text), onChange:()=>questionNotifications?.sync(state.requests,{notify:false}) });
 const { loadDesktopState } = preferencesView;
 applyAccessMode(access.lan);
 watchKeyboard(window, document.documentElement);
+mountMobileLayout(document,window);
+offlineSnapshot=mountOfflineSnapshot({document,window,readState:()=>({ready:state.connected&&!state.loadingThread&&lastEventAt>0&&Date.now()-lastEventAt<60000,page:currentRoute,title:state.thread?.name||$('thread-title').textContent,project:$('project-name').textContent})});
+questionNotifications=createQuestionNotifications({document,window,host:$('question-alert'),enabled:()=>preferencesView.current().approvalNotice,notice,
+  openThread:async(threadId,request)=>{
+    if(state.sending||state.loadingThread)throw new Error('当前操作结束后请再打开。');
+    if(threadId&&state.thread?.id!==threadId)await openThread(state.threads.find(thread=>thread.id===threadId)||{id:threadId});
+    route('chat');
+    const target=request?.params?.itemId&&request.method==='agentMessage/async'?[...$('messages').querySelectorAll('[data-item-id]')].find(node=>node.dataset.itemId===request.params.itemId):[...$('approvals').querySelectorAll('[data-request-key]')].find(node=>node.dataset.requestKey===requestKey(request.id));
+    if(target){conversationScroll.pause();for(let parent=target.parentElement;parent;parent=parent.parentElement)if(parent.tagName==='DETAILS')parent.open=true;target.scrollIntoView({block:'center',behavior:'instant'});target.querySelector('input,textarea,button')?.focus({preventScroll:true});conversationScroll.pause();}
+    else notice('已打开对应对话；如问题位于更早记录，请加载更早消息。');
+  },
+});
+taskNotifications=mountTaskNotifications({document,window,notice,
+  snapshot:()=>({connected:state.connected&&lastEventAt>0&&Date.now()-lastEventAt<60000,canOpen:state.connected&&!state.loadingThread&&!state.sending,threads:state.threadSessions.filter(row=>!state.terminalTurns.has(row.activeTurnId))}),
+  title:id=>(state.thread?.id===id?state.thread:state.threads.find(thread=>thread.id===id))?.name||'Codex 任务',
+  waiting:(threadId,turnId)=>[...state.requests.values()].some(request=>requestThread(request)===threadId&&(!request.params?.turnId||request.params.turnId===turnId)),
+  openThread:async threadId=>{if(state.sending||state.loadingThread)throw new Error('当前操作结束后请再打开。');await openThread(state.threads.find(thread=>thread.id===threadId)||{id:threadId});if(state.thread?.id!==threadId||state.loadingThread)throw new Error('对话加载被其他导航打断。');},
+});
 // Keep the caret visible when the phone keyboard opens.
 $('prompt').addEventListener('focus', () => { if (matchMedia('(pointer:coarse)').matches) setTimeout(() => $('compose').scrollIntoView({ block: 'end' }), 250); });
 async function init() {

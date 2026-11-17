@@ -19,6 +19,7 @@ internal sealed class MainWindow : CaptionWindow {
  readonly WindowSessionEnd sessionEnd=new();
  readonly CloseBehaviorStore closeBehavior=CloseBehaviorStore.ForCurrentUser();
  readonly string closeBehaviorNonce=Guid.NewGuid().ToString("N");
+ QuestionNotificationBridge? questionNotifications;
  Task? stopTask;
  string startupStage="检测运行环境";
  readonly WindowPlacementController placement;
@@ -103,9 +104,11 @@ internal sealed class MainWindow : CaptionWindow {
     if(e.MenuItems.Count==0)e.Handled=true;
    };
    settings.IsWebMessageEnabled=true;settings.IsStatusBarEnabled=false;settings.IsPasswordAutosaveEnabled=false;settings.IsGeneralAutofillEnabled=false;
-   core.WebMessageReceived+=(_,e)=>{if(LocalPathLinks.TrustedSource(e.Source,origin)&&LocalPathLinks.TrustedSource(core.Source,origin)){if(CloseBehaviorBridge.IsMessage(e.WebMessageAsJson))HandleCloseBehavior(e.WebMessageAsJson);else RevealLocalPath(e.WebMessageAsJson);}};
+   questionNotifications=new QuestionNotificationBridge(this,core,()=>{ShowTray();return tray!;},RestoreFromTray);
+   core.WebMessageReceived+=(_,e)=>{if(LocalPathLinks.TrustedSource(e.Source,origin)&&LocalPathLinks.TrustedSource(core.Source,origin)){if(HandleWindowCommand(e.WebMessageAsJson)||questionNotifications.Handle(e.WebMessageAsJson))return;if(CloseBehaviorBridge.IsMessage(e.WebMessageAsJson))HandleCloseBehavior(e.WebMessageAsJson);else RevealLocalPath(e.WebMessageAsJson);}};
    await core.AddScriptToExecuteOnDocumentCreatedAsync(LocalPathLinks.ClickScript);
    await core.AddScriptToExecuteOnDocumentCreatedAsync(CloseBehaviorBridge.Script(closeBehaviorNonce));
+   await core.AddScriptToExecuteOnDocumentCreatedAsync(questionNotifications.Script);
    core.PermissionRequested+=(_,e)=>{e.State=CoreWebView2PermissionState.Deny;e.Handled=true;};
    core.DownloadStarting+=(_,e)=>{e.Cancel=true;e.Handled=true;};
    core.NewWindowRequested+=(_,e)=>{e.Handled=true;if(e.IsUserInitiated)QueueExternal(e.Uri);};
@@ -118,8 +121,10 @@ internal sealed class MainWindow : CaptionWindow {
    core.ProcessFailed+=(_,_)=>ShowFailure("桌面渲染进程异常。请关闭后重新打开；不会自动重发任务。");
    core.NavigationCompleted+=(_,e)=>{if(e.IsSuccess){if(!failed)loading.Hide();}else ShowFailure("页面加载失败。请关闭并重新打开应用。");};
    if(HasIntegratedCaption){
-    // Host-only style: preserve browser mode while removing the duplicate WebUI bar.
-    await core.AddScriptToExecuteOnDocumentCreatedAsync("document.addEventListener('DOMContentLoaded',()=>{document.documentElement.classList.add('native-caption-integrated','native-caption-brand-menu');});");
+    // The WebView owns the integrated title bar; Windows retains the native frame behavior.
+    settings.IsNonClientRegionSupportEnabled=true;
+    await core.AddScriptToExecuteOnDocumentCreatedAsync("document.addEventListener('DOMContentLoaded',()=>{document.documentElement.classList.add('native-caption-integrated','native-web-caption');});");
+    EnableWebCaption();
    }
    SetStartupStage("载入界面",StartupPhase.Interface);core.Navigate(uri.AbsoluteUri);
    _ = ReadHostMessagesAsync(backend.StandardOutput);
@@ -181,6 +186,19 @@ internal sealed class MainWindow : CaptionWindow {
   }
  }
  ToolStripMenuItem? fileMenu,viewMenu;
+ bool HandleWindowCommand(string json){
+  try{
+   using var parsed=JsonDocument.Parse(json);var message=parsed.RootElement;
+   if(message.ValueKind!=JsonValueKind.Object||!message.TryGetProperty("type",out var type)||type.ValueKind!=JsonValueKind.String||type.GetString()!="windowCommand")return false;
+   if(message.EnumerateObject().Count()!=2||!message.TryGetProperty("command",out var command)||command.ValueKind!=JsonValueKind.String)return true;
+   switch(command.GetString()){
+    case "minimize":WindowState=FormWindowState.Minimized;break;
+    case "maximize":WindowState=WindowState==FormWindowState.Maximized?FormWindowState.Normal:FormWindowState.Maximized;break;
+    case "close":Close();break;
+   }
+   return true;
+  }catch(JsonException){return false;}
+ }
  void BuildCaptionMenu(){
   var file=new ToolStripMenuItem("文件(&F)"){AccessibleName="文件"};
   file.DropDownItems.Add("新聊天",null,async(_,_)=>await ClickWebAsync("new-thread"));
@@ -381,7 +399,7 @@ internal sealed class MainWindow : CaptionWindow {
   if(backend!=null){try{if(!backend.HasExited)backend.Kill(true);}catch{}backend.Dispose();backend=null;}
  }
  protected override void Dispose(bool disposing){
-  if(disposing&&!resourcesDisposed){resourcesDisposed=true;placement?.Save();placement?.Dispose();closing=true;hostMessages.Cancel();ReleaseBackend();DisposeTray();hostMessages.Dispose();hostWrites.Dispose();}
+  if(disposing&&!resourcesDisposed){resourcesDisposed=true;placement?.Save();placement?.Dispose();closing=true;hostMessages.Cancel();ReleaseBackend();questionNotifications?.Dispose();questionNotifications=null;DisposeTray();hostMessages.Dispose();hostWrites.Dispose();}
   base.Dispose(disposing);
  }
  static async Task<string> ReadBoundedLineAsync(StreamReader reader,CancellationToken cancellation,int limit=8192){var line=new System.Text.StringBuilder();var buffer=new char[1];while(line.Length<limit){int count=await reader.ReadAsync(buffer.AsMemory(),cancellation);if(count==0)throw new EndOfStreamException();if(buffer[0]=='\n')return line.ToString();line.Append(buffer[0]);}throw new InvalidDataException("Backend handshake oversized");}

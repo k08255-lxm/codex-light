@@ -9,7 +9,7 @@ async function composerHarness({ mutation } = {}) {
   const document = createDocument(); const nodes = new Map();
   const $ = id => { if (!nodes.has(id)) { const n = document.createElement('div'); n.id = id; n.className = 'hidden'; nodes.set(id, n); } return nodes.get(id); };
   $('prompt').value = '';
-  const host=document.createElement('section');host.append($('messages'));document.body.append(host);const calls = [];
+  const host=document.createElement('section');host.append($('messages'));document.body.append(host);const calls = [], scrollCalls = [];
   const state = { thread: { id: 't', cwd: '/p' }, cwd: '/p', busy: false, turnId: 'turn-1', connected: true, serverInstance: 'a'.repeat(32), sending: false, loadingThread: false, uploadingImages: false, store: new ItemStore(), ledger: { activate() {}, merge() {} }, activeTurns: new Map(), terminalTurns: new Set(), openGeneration: 1, reasoning: {}, models: [], dshReadErrors: new Map(), dshOpenDetails: new Set() };
   const followUps = new FollowUpQueue();
   const empty = { values: () => [], ids: () => [], remove() {} };
@@ -18,8 +18,8 @@ async function composerHarness({ mutation } = {}) {
     drafts: { attachmentDraft: empty, fileAttachmentDraft: empty, attachmentPreviews: new Map(), queuedPreviews: new Map(), clearSubmittedDraft: env => { if (!env.preserveText && $('prompt').value.trim() === env.params.input[0].text) $('prompt').value = ''; }, renderAttachments() {}, autosizePrompt() {} },
     ledger: { performMutation: async (method, params, extras={}) => { extras.onRequest?.({requestId:'r'+calls.length}); calls.push([method, structuredClone(params)]); return mutation ? mutation(method, params) : method === 'turn/steer' ? { turnId: 'turn-1' } : { turn: { id: 'turn-2', status: 'inProgress' } }; }, pendingMutations: { storageError: null }, scopedPending: () => [], currentSendAvailability: () => ({ disabled: false }), renderPendingMutations() {} },
     thread: { restoreThreadReasoning() {}, rememberThread() {}, loadThreads: async () => {}, syncStatus: async () => {}, resetThreadDsh() {} },
-    view: { $, el: (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; }, notice: (...a) => calls.push(['notice', ...a]), activity() {}, confirm: () => true, updateControls() {}, renderMessages() {}, scheduleRender() {}, scrollBottom() {}, renderContext() {}, openProjectDialog() {}, openInlineCwd() {} } });
-  return { composer, state, followUps, calls, $, host };
+    view: { $, el: (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; }, notice: (...a) => calls.push(['notice', ...a]), activity() {}, confirm: () => true, updateControls() {}, renderMessages() {}, scheduleRender() {}, scrollBottom() { scrollCalls.push('bottom'); }, renderContext() {}, openProjectDialog() {}, openInlineCwd() {} } });
+  return { composer, state, followUps, calls, scrollCalls, $, host };
 }
 
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return {promise,resolve,reject}};
@@ -29,6 +29,13 @@ test('send is visible before RPC resolves, double click dispatches once, echo re
  assert.equal(rows(h).length,1);assert.equal(rows(h)[0].dataset.status,'sending');assert.equal(h.$('prompt').value,'');await h.composer.send();assert.equal(h.calls.length,1);
  h.$('prompt').value='new draft';d.resolve({turn:{id:'turn-2',status:'completed'}});await sending;assert.equal(h.$('prompt').value,'new draft');assert.equal(rows(h)[0].dataset.status,'accepted');
  h.state.store.upsert({id:'echo',type:'userMessage',_turnId:'turn-2',content:[{type:'text',text:'hello'}]});h.composer.renderOptimistic();assert.equal(rows(h).length,0);
+});
+test('delayed turn acceptance does not repeat the initial user-initiated scroll to bottom',async()=>{
+ const d=deferred(),h=await composerHarness({mutation:()=>d.promise});h.$('prompt').value='send then read history';
+ const sending=h.composer.send();assert.equal(h.scrollCalls.length,1,'optimistic submission scrolls once immediately');
+ // The reader can move anywhere while the acknowledgement is pending.
+ d.resolve({turn:{id:'turn-2',status:'inProgress'}});await sending;
+ assert.equal(h.scrollCalls.length,1,'late acknowledgement leaves scrolling to the shared follow controller');
 });
 test('certain failure restores text and enables retry; unknown never offers retry',async()=>{
  for(const outcome of ['notExecuted','unknown','failed']){

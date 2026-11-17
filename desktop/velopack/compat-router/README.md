@@ -45,9 +45,8 @@ release-assembly checks; a self-consistent receipt is not enough on its own.
 
 Policy, receipt, extraction, file-lease and assembly regressions use isolated
 fixtures. A successful build or unpack does not prove first installation,
-legacy MSI migration on a new machine, or real mobile/tray behavior. See
-[historical integration evidence](../INTEGRATION_STATUS.md) for version-scoped
-results; rerun applicable tests for each new candidate. Temporary candidate
+legacy MSI migration on a new machine, or real mobile/tray behavior. Rerun
+applicable tests for each new candidate. Temporary candidate
 paths, sizes and hashes from development are not supported download targets.
 
 ## Recovery candidate (not release validated)

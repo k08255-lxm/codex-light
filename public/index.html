@@ -15,12 +15,32 @@
 <link rel="stylesheet" href="/ui/about-view.css">
 <link rel="stylesheet" href="/ui/panel-resize.css">
 <link rel="stylesheet" href="/project-navigation.css">
+<link rel="stylesheet" href="/ui/shell-polish.css">
+<link rel="stylesheet" href="/ui/file-preview.css">
 <link rel="stylesheet" href="/vendor/xterm.css">
 </head>
 <body>
 <!-- Native host bridges (MainWindow.cs clicks these ids); hidden, the host owns its caption menu. -->
 <div class="window-bar hidden" aria-hidden="true"><button id="menu-file" title="本地文件菜单" aria-haspopup="menu" aria-expanded="false">文件</button><button id="menu-view" title="本地视图菜单" aria-haspopup="menu" aria-expanded="false">视图</button><button id="menu-help" title="查看 码舱 CodeCang 功能说明">帮助</button></div>
 <div id="window-menu" class="menu app-menu hidden" role="menu" aria-label="应用菜单"></div>
+<header class="app-titlebar" aria-label="窗口导航">
+  <nav class="history-navigation" aria-label="页面历史">
+    <button id="navigate-back" class="btn icon-only ghost" type="button" aria-label="后退" title="后退 (Alt+Left)" disabled><span data-icon="left"></span></button>
+    <button id="navigate-forward" class="btn icon-only ghost" type="button" aria-label="前进" title="前进 (Alt+Right)" disabled><span data-icon="right"></span></button>
+  </nav>
+  <span class="app-titlebar-name">码舱 CodeCang</span>
+  <div id="mobile-quota-slot" aria-label="剩余额度"></div>
+  <div class="mobile-window-controls">
+    <button id="mobile-refresh" type="button" class="btn icon-only ghost" aria-label="刷新工作台"><span data-icon="refresh"></span></button>
+    <button id="mobile-connection" type="button" class="btn icon-only ghost" aria-label="连接管理"><span data-icon="settings"></span></button>
+  </div>
+  <div class="window-controls">
+    <button type="button" data-window-command="minimize" aria-label="最小化" title="最小化"><span data-icon="minimize"></span></button>
+    <button type="button" data-window-command="maximize" aria-label="最大化或还原" title="最大化或还原"><span data-icon="maximize"></span></button>
+    <button type="button" data-window-command="close" aria-label="关闭窗口" title="关闭窗口"><span data-icon="close"></span></button>
+  </div>
+</header>
+<aside id="question-alert" class="question-alert" hidden></aside>
 
 <div id="app" class="app" data-view="chat">
   <!-- Rail: brand + primary destinations. One persistent control toggles the thread list. -->
@@ -214,7 +234,13 @@
       </section>
       <section id="settings-notifications" class="settings-section hidden">
         <h1>通知</h1>
-        <div class="panel"><label class="pref-row"><div><strong>任务结束提示</strong><small class="fine">应用内提示，不请求系统通知</small></div><input id="preference-completion" type="checkbox" class="switch"></label><label class="pref-row"><div><strong>待审批提示</strong><small class="fine">提示不会自动批准</small></div><input id="preference-approval" type="checkbox" class="switch"></label></div>
+        <div id="mobile-task-notifications" class="panel" hidden>
+          <label class="pref-row" for="mobile-task-enabled"><div><strong>手机任务通知</strong><small class="fine">主动监控运行中的长任务。通知可显示对话标题；点按返回对话，等待回答和任务结果使用普通通知。</small></div><input id="mobile-task-enabled" type="checkbox" class="switch"></label>
+          <p id="mobile-task-status" class="fine" role="status"></p>
+          <p class="fine">状态胶囊由系统决定是否显示。不接入需要厂商审核的服务。应用休眠或断连后，状态会过期，不能保证持续后台更新。</p>
+          <button id="mobile-task-system-settings" type="button" class="btn small">系统通知设置</button>
+        </div>
+        <div class="panel"><label class="pref-row"><div><strong>任务结束提示</strong><small class="fine">应用内提示，不请求系统通知</small></div><input id="preference-completion" type="checkbox" class="switch"></label><label class="pref-row"><div><strong>提问与审批提醒</strong><small class="fine">应用内持续提示；桌面窗口在后台时发送系统提醒，点击返回对话</small></div><input id="preference-approval" type="checkbox" class="switch"></label></div>
       </section>
       <section id="settings-shortcuts" class="settings-section hidden">
         <h1>快捷键</h1>

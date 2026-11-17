@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mountConversation, describeItem, itemState } from '../public/activity-feed.js';
+import { mountConversation, describeItem, itemState, renderActivityRecord } from '../public/activity-feed.js';
 import { TurnLedger, buildTurns } from '../public/state.js';
 import { createDocument, visibleText } from './mini-dom.mjs';
 import { mountToolActivity } from '../public/ui/tool-activity.js';
@@ -10,6 +10,26 @@ const user = (id, turnId, text) => ({ id, type: 'userMessage', content: [{ type:
 const agent = (id, turnId, text, phase = null, complete = true) => ({ id, type: 'agentMessage', text, phase, _turnId: turnId, _complete: complete });
 const cmd = (id, turnId, extra = {}) => ({ id, type: 'commandExecution', command: 'npm test', status: 'completed', exitCode: 0, aggregatedOutput: 'ok', _turnId: turnId, _complete: true, ...extra });
 const change = (id, turnId, path, diff, status = 'completed') => ({ id, type: 'fileChange', status, changes: [{ path, kind: { type: 'update', move_path: null }, diff }], _turnId: turnId, _complete: status !== 'inProgress' });
+
+test('open file-operation diffs survive unrelated progress and preserve both axes when their text changes', () => {
+  const { host, view } = mount(), ledger = new TurnLedger(); ledger.merge({ id: 'diff-running', status: 'inProgress' });
+  const file = change('patch-live', 'diff-running', 'src/file.js', '@@ -1 +1 @@\n-old\n+new', 'inProgress');
+  const render = () => view.render(buildTurns([user('u-live', 'diff-running', 'edit'), file], ledger, { activeTurnId: 'diff-running' }));
+  render(); const process = host.querySelector('.turn-process'); process.open = true; const step = host.querySelector('.step'); step.open = true;
+  const diff = step.querySelector('.diff-view'); diff.scrollTop = 240; diff.scrollLeft = 120;
+  render(); assert.equal(step.querySelector('.diff-view'), diff); assert.equal(diff.scrollTop, 240); assert.equal(diff.scrollLeft, 120);
+  file.changes = [{ ...file.changes[0], diff: file.changes[0].diff + '\n+additional line' }]; render();
+  assert.equal(step.querySelector('.diff-view'), diff); assert.equal(diff.scrollTop, 240); assert.equal(diff.scrollLeft, 120); assert.match(diff.textContent, /additional line/);
+});
+
+test('completed file-summary diff keeps its node and scroll offsets after a corrected diff arrives', () => {
+  const { host, view } = mount(), ledger = new TurnLedger(); ledger.merge({ id: 'diff-finished', status: 'completed' });
+  const file = change('patch-finished', 'diff-finished', 'src/file.js', '@@ -1 +1 @@\n-old\n+new');
+  const render = () => view.render(buildTurns([user('u-finished', 'diff-finished', 'edit'), file, agent('a-finished', 'diff-finished', 'done', 'final_answer')], ledger));
+  render(); host.querySelector('.file-row-head').click(); const diff = host.querySelector('.files-card').querySelector('.diff-view'); diff.scrollTop = 180; diff.scrollLeft = 90;
+  file.changes = [{ ...file.changes[0], diff: file.changes[0].diff + '\n+corrected line' }]; render();
+  assert.equal(host.querySelector('.files-card').querySelector('.diff-view'), diff); assert.equal(diff.scrollTop, 180); assert.equal(diff.scrollLeft, 90); assert.match(diff.textContent, /corrected line/);
+});
 
 function mount() {
   const document = createDocument(); const host = document.createElement('div');
@@ -54,6 +74,21 @@ test('context compaction stays visible in chronology between independently colla
   assert.equal(host.querySelector('.compaction-record'), row); assert.match(row.textContent, /上下文已压缩/);
   view.render(buildTurns(items.map(item => item.id === 'compact' ? { ...item, _complete: true, status:'failed' } : item), ledger));
   assert.match(row.textContent,/上下文压缩失败/);assert.equal(row.closest('details'),null);
+});
+
+test('a collapse is never undone by a render that runs before the queued toggle event',()=>{
+  const ledger=new TurnLedger();ledger.merge({id:'t',status:'completed',durationMs:1000});
+  const items=[user('u','t','任务'),cmd('c1','t'),change('f','t','src/a.js','@@\n-a\n+b'),agent('a','t','完成','final_answer')];
+  const {host,view}=mount();view.render(buildTurns(items,ledger));
+  const group=host.querySelector('.turn-process'),summary=group.querySelector('.turn-process-summary');
+  summary.dispatch('click');group.open=true;assert.equal(group.open,true);
+  const row=group.querySelector('.step[data-item-id="f"]');row.open=true;row.open=false;
+  // Browser order under scroll clamping: click → default action closes → render → toggle event.
+  summary.dispatch('click');group._open=false;
+  view.render(buildTurns(items,ledger));
+  assert.equal(group.open,false,'render must not re-open a group the user just collapsed');
+  for(let i=0;i<3;i++){summary.dispatch('click');group._open=!group._open;view.render(buildTurns(items,ledger));}
+  assert.equal(group.open,true,'later toggles keep following the user');
 });
 
 test('each visible model utterance closes the preceding operation group and keyed open choice survives streaming',()=>{
@@ -195,8 +230,8 @@ test('legacy messages without phase: last agent message of a finished turn is th
   const turns = buildTurns(items, ledger);
   assert.deepEqual(turns[0].segments[0].answers.map(item => item.id), ['a2']);
   assert.deepEqual(turns[0].segments[0].process.map(item => item.id), ['a1', 'c']);
-  ledger.merge({ id: 'l', status: 'inProgress' });
-  assert.deepEqual(buildTurns(items, ledger, { activeTurnId: 'l' })[0].segments[0].answers, []);
+  const runningLedger = new TurnLedger(); runningLedger.merge({ id: 'l', status: 'inProgress' });
+  assert.deepEqual(buildTurns(items, runningLedger, { activeTurnId: 'l' })[0].segments[0].answers, []);
 });
 
 test('steered user messages stay attributed to the running turn and are marked', () => {
@@ -254,6 +289,20 @@ test('live edits remain inspectable without showing a premature terminal file su
   const { host, view } = mount(); view.render(turns);
   assert.equal(q(host,'.files-card').length,0,'running work has no terminal file summary');
   assert.equal(q(host,'.step-verb')[0].textContent,'编辑');
+});
+
+test('collapsed file steps show real added and removed counts in chat and agent activity',()=>{
+ const ledger=new TurnLedger();ledger.merge({id:'stats',status:'inProgress'});
+ const item=change('file','stats','C:/proj/a.js','@@ -1 +1,2 @@\n-old\n+new\n+second\n');
+ const {host,view}=mount();view.render(buildTurns([user('ask','stats','change'),item],ledger,{activeTurnId:'stats',cwd:'C:/proj'}));
+ assert.match(q(host,'.step-change-stats')[0].textContent,/\+2-1/);
+ const record=renderActivityRecord(host.ownerDocument,item);assert.match(record.querySelector('.step-change-stats').textContent,/\+2-1/);
+ item.changes.push({path:'C:/proj/b.js',kind:'update',diff:'@@ -1 +1 @@\n-x\n+y\n'});
+ view.render(buildTurns([user('ask','stats','change'),item],ledger,{activeTurnId:'stats',cwd:'C:/proj'}));
+ assert.match(q(host,'.step-change-stats')[0].textContent,/\+3-2/);
+ item.changes[1].diff=null;
+ view.render(buildTurns([user('ask','stats','change'),item],ledger,{activeTurnId:'stats',cwd:'C:/proj'}));
+ assert.match(q(host,'.step-change-stats')[0].textContent,/已知 \+2-1/);assert.match(q(host,'.step-change-stats')[0].textContent,/1 个文件行数未知/);
 });
 
 test('streaming and completed agent text render the same safe Markdown with local file controls', () => {

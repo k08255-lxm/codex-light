@@ -47,10 +47,64 @@ public class CodexLightBridge {
     public void openServerManager() {
         if (activity == null) return;
         activity.runOnUiThread(() -> {
+            if (activity instanceof MainActivity) {
+                ((MainActivity) activity).openServerManager();
+                return;
+            }
             Intent intent = new Intent(activity, ServerConnectActivity.class);
             activity.startActivity(intent);
             activity.finish();
         });
+    }
+
+    @JavascriptInterface
+    public void setToolbarIntegrated(final boolean integrated) {
+        if (activity instanceof MainActivity) {
+            activity.runOnUiThread(() -> ((MainActivity) activity).setToolbarIntegrated(integrated));
+        }
+    }
+
+    @JavascriptInterface
+    public String getTaskNotificationStatus() {
+        return activity instanceof MainActivity
+            ? ((MainActivity) activity).getTaskNotificationStatus() : "{\"supported\":false}";
+    }
+
+    @JavascriptInterface
+    public void setTaskNotificationsEnabled(final boolean enabled) {
+        if (activity instanceof MainActivity && ((MainActivity) activity).trustedTaskNotificationPage()) {
+            activity.runOnUiThread(() -> ((MainActivity) activity).setTaskNotificationsEnabled(enabled));
+        }
+    }
+
+    @JavascriptInterface
+    public void openTaskNotificationSettings() {
+        if (activity instanceof MainActivity && ((MainActivity) activity).trustedTaskNotificationPage()) {
+            activity.runOnUiThread(() -> ((MainActivity) activity).openTaskNotificationSettings());
+        }
+    }
+
+    @JavascriptInterface
+    public void updateTaskNotification(final String json) {
+        if (activity instanceof MainActivity && ((MainActivity) activity).trustedTaskNotificationPage()
+                && json != null && json.length() <= 4096) {
+            activity.runOnUiThread(() -> ((MainActivity) activity).updateTaskNotification(json));
+        }
+    }
+
+    @JavascriptInterface
+    public void taskNotificationOpened(final String threadId) {
+        if (activity instanceof MainActivity && ((MainActivity) activity).trustedTaskNotificationPage()
+                && TaskNotificationState.validId(threadId)) {
+            activity.runOnUiThread(() -> ((MainActivity) activity).taskNotificationOpened(threadId));
+        }
+    }
+
+    @JavascriptInterface
+    public void offlineSnapshotReady() {
+        if (activity instanceof MainActivity && ((MainActivity) activity).trustedTaskNotificationPage()) {
+            activity.runOnUiThread(() -> ((MainActivity) activity).offlineSnapshotReady());
+        }
     }
 
     @JavascriptInterface
@@ -99,7 +153,7 @@ public class CodexLightBridge {
 
     @JavascriptInterface
     public String getAppVersion() {
-        return "0.4.8";
+        return "0.4.9";
     }
 
     @JavascriptInterface

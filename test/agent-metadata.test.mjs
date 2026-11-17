@@ -5,11 +5,11 @@ import {DshTaskStore,dshSafeStatusResult,dshModelMetadata} from '../public/dsh.j
 
 test('native requested metadata remains explicitly requested until actual evidence exists',()=>{
   const requested=agentDisplayMetadata({native:true,requestedModel:'openai/gpt-6.1',requestedEffort:'high'});
-  assert.deepEqual(requested.parts,['GPT','GPT-6.1','高']);
+  assert.deepEqual(requested.parts,['GPT','GPT-6.1','high']);
   assert.match(requested.title,/请求模型/);
   assert.match(requested.title,/尚无实际模型确认/);
   const actual=agentDisplayMetadata({native:true,requestedModel:'gpt-old',actualModel:'gpt-6.1',actualEffort:'medium'});
-  assert.deepEqual(actual.parts,['GPT','GPT-6.1','中']);
+  assert.deepEqual(actual.parts,['GPT','GPT-6.1','medium']);
   assert.match(actual.title,/实际报告模型/);
   assert.doesNotMatch(actual.title,/gpt-old/);
   assert.deepEqual(agentDisplayMetadata({native:true}).parts,['GPT']);
@@ -24,6 +24,6 @@ test('DSH model metadata is a bounded text projection, not a raw config projecti
   const store=new DshTaskStore();store.reset('parent');
   store.ingestLiveStatus('parent','a',safe.structuredContent);
   const row=store.values()[0];
-  assert.deepEqual(agentDisplayMetadata(row).parts,['DSH · DSH Cloud','DeepSeek-v4','高']);
+  assert.deepEqual(agentDisplayMetadata(row).parts,['DSH · DSH Cloud','DeepSeek-v4','high']);
   assert.equal(row.status,'running');
 });

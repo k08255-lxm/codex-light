@@ -35,7 +35,7 @@ No network feed is modified by these tools. Use a new release version after chan
 
 ### Prerelease policy
 
-Tool and runtime are deliberately synchronized to **1.3.39-g8d2844f (official prerelease)**. The build rejects a mismatching stable or preview CLI/runtime. The prior 1.2.161 Setup forwarding defect is historical; the selected revision contains its source fix, but this does **not** authorize migration execution or establish end-to-end migration acceptance. Review isolated installation/recovery evidence before exposing a newly built wrapper to users. [Historical verification](INTEGRATION_STATUS.md) distinguishes earlier portable tests from the later 0.4.4 migration evidence; neither substitutes for acceptance of a newly built installer.
+Tool and runtime are synchronized to **1.3.39-g8d2844f (official prerelease)**. The build rejects a mismatching CLI/runtime. Run the applicable isolated installation and recovery checks before releasing a newly built wrapper; compilation and earlier release results do not establish acceptance of the new installer.
 
 ### Migration-stage build (not a release)
 

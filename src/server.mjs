@@ -30,6 +30,7 @@ import {PricingService} from './pricing.mjs';
 import {TitleSummaryService} from './title-summary.mjs';
 import {StatisticsService,defaultStatisticsRoot} from './statistics.mjs';
 import {ArtifactPreviewService} from './artifacts.mjs';
+import {FilePreviewService} from './file-preview.mjs';
 import {LanAccess} from './lan-access.mjs';
 import {LanPreferenceStore,windowsNetworkIdentity} from './lan-preferences.mjs';
 import {GitService} from './git.mjs';
@@ -37,6 +38,7 @@ import {TerminalService} from './terminal.mjs';
 import { RpcClient } from './rpc.mjs';
 import {validServerRequestId,findServerRequest} from './server-requests.mjs';
 import {ThreadSessions} from './thread-sessions.mjs';
+import {ThreadListService} from './thread-list.mjs';
 import { DemoClient } from './demo.mjs';
 import { validateRpc, validateResponse } from './security.mjs';
 import { OperationStore, MUTATING_METHODS } from './operations.mjs';
@@ -53,6 +55,13 @@ const publicFiles={'/config-settings-panel.js':'config-settings-panel.js','/pref
 publicFiles['/vendor/qrcode.js']='vendor/qrcode.js';publicFiles['/ui/pairing.js']='ui/pairing.js';publicFiles['/ui/back-navigation.js']='ui/back-navigation.js';publicFiles['/ui/auto-update.js']='ui/auto-update.js';publicFiles['/ui/welcome-greeting.js']='ui/welcome-greeting.js';
 publicFiles['/ui/update-indicator.js']='ui/update-indicator.js';
 publicFiles['/ui/desktop-close-preference.js']='ui/desktop-close-preference.js';
+publicFiles['/ui/navigation-history.js']='ui/navigation-history.js';publicFiles['/ui/shell-polish.css']='ui/shell-polish.css';
+publicFiles['/ui/thread-completion.js']='ui/thread-completion.js';publicFiles['/ui/mobile-layout.js']='ui/mobile-layout.js';
+publicFiles['/ui/task-notifications.js']='ui/task-notifications.js';
+publicFiles['/ui/question-notifications.js']='ui/question-notifications.js';
+publicFiles['/ui/conversation-scroll.js']='ui/conversation-scroll.js';
+publicFiles['/ui/offline-snapshot.js']='ui/offline-snapshot.js';
+publicFiles['/ui/file-preview.js']='ui/file-preview.js';publicFiles['/ui/file-preview.css']='ui/file-preview.css';
 const types={'.mjs':'text/javascript; charset=utf-8','.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml'};
 publicFiles['/session-controls.js']='session-controls.js';publicFiles['/session-controls.css']='session-controls.css';
 publicFiles['/ui/agent-inspector.js']='ui/agent-inspector.js';
@@ -118,7 +127,9 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
  const rpc=client || (demo?new DemoClient():new RpcClient(wslLaunch?{...wslLaunch,mapRequest:params=>mapWslRequest(params,value=>wslRuntime.toLinux(value,wslCandidate)),mapResponse:value=>mapWslResponse(value,wslCandidate.distribution)}:{command,cwd:cwd||os.homedir()}));
  if(runtimeStartupError){rpc.connected=false;rpc.start=async()=>{throw runtimeStartupError;};}
  const sessions=new ThreadSessions(rpc,{onEvent:message=>broadcast(message),onThreadLoaded:result=>statistics.thread(result?.thread,result)});
+ const threadList=new ThreadListService(rpc);
  const artifacts=new ArtifactPreviewService({projects,...(wslCandidate?{wslDistribution:wslCandidate.distribution,rolloutRoots:['sessions','archived_sessions'].map(part=>wslPathToHost(wslCandidate.codexHome+'/'+part,wslCandidate.distribution))}:{})});
+ const files=new FilePreviewService({projects,...(wslCandidate?{wslDistribution:wslCandidate.distribution}:{})});
  const git=new GitService(wslCandidate?{run:(directory,args)=>wslRuntime.gitRead(directory,args,wslCandidate),validateDirectory:async directory=>{await wslRuntime.toLinux(directory,wslCandidate);await projects.directory(directory);}}:{});
  const gitActions=new GitCommandActions();
  const metadataRoot=statisticsRoot??(!demo&&!client?defaultStatisticsRoot():null);
@@ -349,6 +360,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
       if(accountLogin.snapshot().state!=='waiting')scrub();else{const timer=setTimeout(()=>{scrub();loginTimers.delete(timer);},600000);timer.unref();loginTimers.add(timer);}
      }json(res,200,result);return;
     }
+    if(url.pathname==='/api/files/preview'){json(res,200,await files.preview(input));return;}
     if(url.pathname==='/api/artifacts/preview'){
      const image=await artifacts.preview(input);
      if(res.destroyed||res.writableEnded)return;
@@ -475,7 +487,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
       if(input.method==='remoteControl/pairing/start')clearPairing();
       if(['turn/start','review/start','thread/compact/start'].includes(input.method))await readStatisticsAccount();
       await titleSummary.beforeRpc(input.method,titleInput?{...params,input:titleInput}:params);
-      const output=await sessions.call(input.method,params);statistics.acknowledge(input.method,params,output);if(output?.thread)artifacts.bindThread(output.thread);
+      const output=input.method==='thread/list'?await threadList.http(req,res,params):MUTATING_METHODS.has(input.method)?await threadList.mutate(()=>sessions.call(input.method,params)):await sessions.call(input.method,params);statistics.acknowledge(input.method,params,output);if(output?.thread){artifacts.bindThread(output.thread);files.bindThread(output.thread);}
       titleSummary.acknowledge(input.method,params,output);
       if(['turn/start','turn/steer'].includes(input.method))artifacts.observe(params.threadId,{type:'userMessage',content:params.input});
       observeRemote(input.method,params,output);return output;
@@ -549,7 +561,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
   if(message.method==='account/updated'||(message.method==='bridge/status'&&message.params?.connected===false))clearStatisticsAccount();
   const threadId=message.params?.threadId||message.params?.thread?.id;
   if(threadId&&dsh.isReaderThread(threadId))return;
-  statistics.observe(message);sessions.observe(message);
+  statistics.observe(message);sessions.observe(message);threadList.observe(message);
   if(message.method==='bridge/status'&&message.params?.connected===true)void dshWakeup?.refreshAccount();
   if(message.method==='account/updated'||message.method==='account/login/completed'){void dshWakeup?.refreshAccount({changed:true});}
   if(['item/started','item/completed'].includes(message.method)){try{dshWakeup?.observe(threadId,message.params?.item);}catch{dshWakeup?.close();dshWakeupError='Callback binding persistence failed; automatic wakeup disabled.';}}
@@ -575,7 +587,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
   for(const timer of loginTimers)clearTimeout(timer);loginTimers.clear();usageScan?.abort();clearPairing();
   const stopEngine=(async()=>{try{await Promise.all([sessions.close(),dsh.close(),titleSummary.close()]);}finally{await rpc.close();engineStopped=true;}})();
   serviceShutdown=Promise.all([lan.close(),terminal.close(),accountLogin.close(),Promise.resolve(runtime.close?.()),Promise.resolve(appUpdates.close?.()),stopEngine]).then(async()=>{
-   await Promise.all([uploads.close(),fileUploads.close(),statistics.close(),pricing.close(),artifacts.close()]);
+   await Promise.all([uploads.close(),fileUploads.close(),statistics.close(),pricing.close(),artifacts.close(),files.close()]);
    await desktopState?.queue;await projects.queue;
    if(temporaryState)await rm(temporaryState,{recursive:true,force:true});
    if(temporaryProjects)await rm(temporaryProjects,{recursive:true,force:true});

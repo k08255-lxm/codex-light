@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {createDocument} from './mini-dom.mjs';
+import {createNavigationHistory} from '../public/ui/navigation-history.js';
 
 const app=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
 const router=app.slice(app.indexOf('const STAGES ='),app.indexOf('function openSettings('));
@@ -20,7 +21,7 @@ function setup(){
   const view=name=>({activate(){calls.push([name,'activate']);},deactivate(){calls.push([name,'deactivate']);},setActive(){},reset(){}});
   const noop=()=>{};
   const state={cwd:'/project',lan:false,connected:false};
-  const dependencies={document,$,state,closeWindowMenu:noop,closeThreadMenu:noop,
+  const dependencies={document,$,state,createNavigationHistory,renderThreads:noop,configPanel:view('config'),closeWindowMenu:noop,closeThreadMenu:noop,
     sidebarController:{setRoute:value=>calls.push(['sidebar',value]),open:()=>calls.push(['sidebar','open']),closeForNavigation:noop},
     statsView:view('stats'),accountView:view('account'),accountLoginPanel:view('login'),pluginPanel:view('plugins'),aboutView:view('about'),storageView:view('storage'),
     runtimePanel:null,wslRuntimePanel:view('wsl'),prReviewPanel:null,dshConnectionView:view('dsh'),dshConfigView:view('dsh-config'),lanView:view('lan'),
