@@ -16,6 +16,26 @@ function harness(responses, opts = {}) {
   return { host, view, calls, byText, changes: () => changes, paths: () => calls.map(([path]) => path) };
 }
 
+test('the optional default model editor saves, confirms, clears and stays available without an installed DSH',async()=>{
+  const selected={model:'vendor/fast',provider:'custom'};
+  let saves=0;
+  const h=harness([
+    status({dsh:{installed:false},modelDefaults:{available:true,selection:null}}),
+    {available:true,selection:selected},{available:true,selection:null}
+  ],{onModelSaved:()=>saves++});
+  h.view.activate();await settle();
+  const panel=h.host.querySelector('.dsh-default-model'),form=panel.querySelector('form');
+  const [model,provider]=form.querySelectorAll('input');
+  model.value='  vendor/fast ';provider.value=' custom ';
+  form.dispatch('submit');await settle();
+  assert.deepEqual(h.calls[1],['/api/dsh/connection/saveModel',{selection:selected}]);
+  assert.match(panel.textContent,/已保存/);assert.equal(saves,1);
+  h.byText('恢复 DSH 默认值').click();await settle();
+  assert.equal(model.value,'');assert.equal(provider.value,'');
+  assert.deepEqual(h.calls[2],['/api/dsh/connection/saveModel',{selection:null}]);
+  assert.equal(h.byText('恢复 DSH 默认值').disabled,true);
+});
+
 test('one click runs plan then connect once; registered and queued are not shown as connected', async () => {
   const h = harness([status(), { planId: 'p1', serverName: 'dsh_subagent', scope: 'user', preservesExisting: true, dsh: { executablePath: 'x' } },
     { registered: true, registration: { state: 'bundled', serverName: 'dsh_subagent' }, reload: { queued: true, error: null }, runtime: { state: null }, warning: null },

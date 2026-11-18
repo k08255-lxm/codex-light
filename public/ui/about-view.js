@@ -1,4 +1,5 @@
 import {el,localTime} from './format.js';
+import {renderMarkdown} from '../markdown.js';
 
 const RELEASES='https://github.com/k08255-lxm/codex-light/releases';
 const PHASE={idle:'随时检查新版本',checking:'正在检查更新…',available:'有新版本可用',upToDate:'当前已是最新版本',downloading:'正在下载安装包…',ready:'安装包已下载并通过校验',launching:'正在打开安装程序…',launched:'安装程序已打开',launchUnknown:'安装程序启动结果待确认',failed:'应用更新未完成'};
@@ -48,8 +49,7 @@ export function mountAbout(host,{api,mutate,onStatus=()=>{}}){
   const latest=status?.latest;
   if(latest?.notes){
    const notes=el(document,'details','about-release-notes');notes.open=true;notes.append(el(document,'summary','',`v${latest.version} 发布说明`));
-   const excerpt=latest.notes.split(/\r?\n/).map(line=>line.replace(/^#{1,6}\s+/,''));
-   const text=excerpt.join('\n').trim();notes.append(el(document,'p','',text.length>1400?text.slice(0,1400)+'…':text));update.append(notes);
+   notes.append(renderMarkdown(document,latest.notes));update.append(notes);
   }
   const footer=el(document,'div','about-links');const releases=el(document,'a','','GitHub 发布页面');releases.href=RELEASES;releases.target='_blank';releases.rel='noopener noreferrer';footer.append(releases);
   if(status?.checkedAt)footer.append(el(document,'span','',`上次检查 ${localTime(status.checkedAt)}`));

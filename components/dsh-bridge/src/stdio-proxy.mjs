@@ -3,6 +3,7 @@ import {existsSync} from 'node:fs';
 import {join} from 'node:path';
 import {locations,installation} from './platform.mjs';
 import {connectBridge} from './ipc.mjs';
+import {applyModelDefaults} from './model-defaults.mjs';
 
 export async function stdioProxy({desktop = false} = {}) {
   const state=locations().state;
@@ -20,7 +21,11 @@ export async function stdioProxy({desktop = false} = {}) {
       const input=createInterface({input:process.stdin});
       input.on('line',line=>{
         try {
-          const message=JSON.parse(line);
+          let message=JSON.parse(line);
+          if(desktop&&process.env.CODEX_LIGHT_DSH_BRIDGE==='1'){
+            try {message=applyModelDefaults(message,locations().config);}
+            catch(error){process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:message.id,error:{code:-32603,message:error.message}})+'\n');return;}
+          }
           if(desktop&&process.env.DSH_CODEX_QUEUE&&message.method==='initialize')initializeId=message.id;
           if(desktop&&process.env.DSH_CODEX_QUEUE&&message.method==='tools/call'&&!queueVerified)throw Error('GUI callback service not verified');
           if(desktop && message.method==='initialize') message.params = {...message.params, _meta: {...message.params?._meta, dshClientProfile: process.env.DSH_CODEX_QUEUE?'desktop-queue':'desktop'}};

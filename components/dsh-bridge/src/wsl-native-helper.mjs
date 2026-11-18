@@ -3,22 +3,23 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import {ProviderSources} from './provider-sources.mjs';
+import {modelSelection,readModelDefaults,saveModelDefaults} from './model-defaults.mjs';
 import {createRequire} from 'node:module';
 import {fileURLToPath} from 'node:url';
 const root=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const fail=(code,message)=>{throw Object.assign(new Error(message),{code});};
 const fileIdentity=file=>{const s=fs.statSync(file);if(!s.isFile())fail('DSH_PATH_INVALID','Expected a regular Linux runtime file');return {size:s.size,mtimeMs:s.mtimeMs};};
 const readJson=file=>JSON.parse(fs.readFileSync(file,'utf8'));
-export function nativeProviders({home,cli,env,stateRoot,exists=fs.existsSync,Source=ProviderSources}){
+export function nativeProviders({home,cli,env,stateRoot,selection,exists=fs.existsSync,Source=ProviderSources}){
  const explicit=env.DSH_NATIVE_PROVIDER_CONFIG;
  const files=explicit?[explicit]:['desktop','sdk'].map(p=>path.join(home,'profiles',p,'cordis.patch.yml')).filter(exists);
  const sources=new Source({configDir:path.join(stateRoot,'config'),stateDir:path.join(stateRoot,'state'),home,cli});
  const valid=[];
  for(const file of files){const row=sources.readSource({id:'native',path:file});if(!row.valid)fail('DSH_PROVIDER_INVALID','Linux provider source invalid; inspect it in DSH');if(Object.keys(row._providers||{}).length)valid.push({file,providers:row._providers,hash:row.hash});}
  if(valid.length>1)fail('DSH_PROVIDER_AMBIGUOUS','Multiple Linux provider sources; set DSH_NATIVE_PROVIDER_CONFIG explicitly');
- if(valid.length){const source=valid[0];let provider=env.DSH_DEFAULT_PROVIDER;if(!provider){const names=Object.keys(source.providers);if(names.length!==1)fail('DSH_PROVIDER_AMBIGUOUS','Set Linux DSH_DEFAULT_PROVIDER and DSH_DEFAULT_MODEL');provider=names[0];}const entry=source.providers[provider];if(!entry)fail('DSH_PROVIDER_INVALID','Selected provider is absent in the Linux source');
+ if(valid.length){const source=valid[0];let provider=env.DSH_DEFAULT_PROVIDER;if(!provider){const names=Object.keys(source.providers);provider=names.length===1?names[0]:selection?.provider;if(!provider)fail('DSH_PROVIDER_AMBIGUOUS','请在子代理默认模型设置中指定 Linux DSH 提供商。');}const entry=source.providers[provider];if(!entry)fail('DSH_PROVIDER_INVALID','Selected provider is absent in the Linux source');
   if(entry.apiKeyEnv&&!env[entry.apiKeyEnv])fail('DSH_CREDENTIAL_UNAVAILABLE','Linux provider credential environment variable is unavailable; configure it in the selected Linux login environment');
-  const model=env.DSH_DEFAULT_MODEL||(entry.models?.length===1?entry.models[0].id:null);if(!model)fail('DSH_MODEL_REQUIRED','Set Linux DSH_DEFAULT_MODEL explicitly');return {providerSource:source.file,providerSourceHash:source.hash,defaultProvider:provider,defaultModel:model};
+  const model=env.DSH_DEFAULT_MODEL||(entry.models?.length===1?entry.models[0].id:null)||((!selection?.provider||selection.provider===provider)&&selection?.model);if(!model)fail('DSH_MODEL_REQUIRED','请在子代理默认模型设置中指定 Linux DSH 模型。');return {providerSource:source.file,providerSourceHash:source.hash,defaultProvider:provider,defaultModel:model};
  }
  if(!env.DEEPSEEK_API_KEY)fail('DSH_CREDENTIAL_UNAVAILABLE','No usable Linux provider source or DEEPSEEK_API_KEY found; configure Linux DSH first');
  return {providerSource:null,defaultProvider:'deepseek-official',defaultModel:env.DSH_DEFAULT_MODEL||'deepseek-flash'};
@@ -40,7 +41,8 @@ export function nativeProbe({cli='',home=os.homedir(),env=process.env,platform=p
  const major=Number(process.versions.node.split('.')[0]);if(major<22)fail('DSH_RUNTIME_UNSUPPORTED','Linux Node 22 or newer with node:sqlite required');
  if(env.DSH_HOME&&(!path.isAbsolute(env.DSH_HOME)||/^\/mnt\/[a-z]\//i.test(env.DSH_HOME)))fail('DSH_PATH_INVALID','DSH_HOME must be a native Linux directory');
  const stateRoot=path.join(home,'.local/share/codecang/dsh-native');
- const providers=nativeProviders({home:env.DSH_HOME||path.join(home,'.dsh'),cli,env,stateRoot});
+ const selected=readModelDefaults(path.join(stateRoot,'config')).selection;
+ const providers=nativeProviders({home:env.DSH_HOME||path.join(home,'.dsh'),cli,env,selection:selected,stateRoot});
  verifyNativeProviderDependency(providers,req);
  return {...providers,ok:true,root,node,executablePath:cli,version:pkg.version,identity:{cli:fileIdentity(cli),node:fileIdentity(node)},stateRoot,configDir:path.join(stateRoot,'config'),stateDir:path.join(stateRoot,'state'),dshHome:env.DSH_HOME||path.join(home,'.dsh')};
 }
@@ -61,6 +63,21 @@ export function prepareNative(p,expected){
  writeNew(file,JSON.stringify({version:1,owner:'codecang-wsl',root:p.root,node:p.node,nodeArgs:[],backend:'background',dsh:p.executablePath,state:p.stateDir,env},null,2));
 }
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
- try{const action=process.argv[2];if(!['probe','prepare'].includes(action))fail('INVALID_INPUT','Invalid action');const sqlite=await import('node:sqlite');if(!sqlite.DatabaseSync)fail('DSH_RUNTIME_UNSUPPORTED','node:sqlite unavailable');const p=nativeProbe({cli:process.argv[3]});if(action==='prepare')prepareNative(p,JSON.parse(process.argv[4]));process.stdout.write(JSON.stringify(p)+'\n');}
+ try{
+  const action=process.argv[2];let result;
+  if(action==='model-status'||action==='model-save'){
+   const stateRoot=path.join(os.homedir(),'.local/share/codecang/dsh-native'),dir=path.join(stateRoot,'config');
+   if(action==='model-save'){
+    const selection=modelSelection(JSON.parse(process.argv[4]).selection);
+    ownedDirectory(stateRoot);ownedDirectory(dir);result=saveModelDefaults(dir,selection);
+   }else result=readModelDefaults(dir);
+   result={ok:true,settings:result};
+  }else{
+   if(!['probe','prepare'].includes(action))fail('INVALID_INPUT','Invalid action');
+   const sqlite=await import('node:sqlite');if(!sqlite.DatabaseSync)fail('DSH_RUNTIME_UNSUPPORTED','node:sqlite unavailable');
+   result=nativeProbe({cli:process.argv[3]});if(action==='prepare')prepareNative(result,JSON.parse(process.argv[4]));
+  }
+  process.stdout.write(JSON.stringify(result)+'\n');
+ }
  catch(error){process.stdout.write(JSON.stringify({ok:false,code:error.code||'DSH_RUNTIME_UNSUPPORTED',message:error.code?error.message:'Linux DSH runtime dependencies unavailable'})+'\n');process.exitCode=1;}
 }

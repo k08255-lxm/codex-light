@@ -39,7 +39,7 @@ test('low-frequency settings motion is scoped; conversation scrolling remains im
  assert.match(css,/:root :is\(\.stage,\.settings-section,\.work\[role="tabpanel"\]\):not\(\.hidden\)\{animation:page-enter 200ms var\(--ease-out\)\}/);
  assert.match(css,/@keyframes page-enter\{from\{opacity:0\}to\{opacity:1\}\}/);
  const approved=new Map([
-  [':root :is(.reasoning-popover,.changes-panel,.inspector):not(.hidden)',/transform:\s*translateY\(4px\)/],
+  [':root :is(.reasoning-popover,.changes-panel):not(.hidden)',/transform:\s*translateY\(4px\)/],
   [':root .update-indicator:active:not(:focus-visible) .update-indicator-badge',/transform:\s*scale\(\.96\)/],
   [':root .sidebar',/transform:\s*translateX\(-100%\)/],
   ['.update-indicator:not([hidden])',/transform:\s*translateY\(-3px\)/],

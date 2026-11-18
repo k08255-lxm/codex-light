@@ -5,6 +5,8 @@ export const INTEROP_SCRIPT='export ELECTRON_RUN_AS_NODE=1; WSLENV=ELECTRON_RUN_
 export class WslWindowsDshBridge {
  constructor({candidate,wsl,queueDescriptor,bundle=new BundledDshBridge()}={}) {Object.assign(this,{candidate,wsl,bundle,queueDescriptor});this.mode='windows';this.root=bundle.root;}
  bundled(){return this.bundle.bundled();}
+ modelStatus(){return this.bundle.modelStatus();}
+ saveModel(value){return this.bundle.saveModel(value);}
  detect(){return {...this.bundle.detect(),mode:this.mode,workspaceSupport:'windows-drives-only',completionMode:this.queueDescriptor?'local-queue':'dsh_wait',automaticWakeup:!!this.queueDescriptor};}
  async probe(value){
   const bundled=this.bundle.bundled();if(!bundled.available||!bundled.dependenciesReady)throw fail('Bundled bridge verification failed','DSH_COMPONENT_UNAVAILABLE');

@@ -38,6 +38,39 @@ function mount() {
 }
 const q = (host, selector) => host.querySelectorAll(selector);
 
+test('live agent events, attributed results, partial replies and questions fold in order with the completed turn', () => {
+  const {host,view}=mount(),ledger=new TurnLedger();
+  ledger.merge({id:'t',status:'inProgress'});
+  const event=(id,kind)=>({id,type:'subAgentActivity',agentThreadId:'child',agentPath:'/root/reviewer',kind,_turnId:'t'});
+  const waited={id:'wait',type:'collabAgentToolCall',tool:'wait',status:'completed',receiverThreadIds:['child'],agentsStates:{child:{status:'completed',message:'**检查完毕**'}},_turnId:'t'};
+  const question={...agent('question','t','说明','final_answer'),delivery:'async',questions:[{title:'是否继续？'}]};
+  const items=[user('ask','t','审阅'),event('start','started'),agent('partial','t','进展','partial_answer'),question,
+    user('steer','t','继续'),waited,{...waited,id:'poll'},event('end','completed'),agent('final','t','最终结论','final_answer')];
+  view.render(buildTurns(items,ledger,{activeTurnId:'t'}));
+  assert.equal(host.querySelectorAll('.agent-reply').length,1);assert.match(host.querySelector('.agent-reply').textContent,/reviewer 的回答.*检查完毕/);
+  const turn=host.querySelector('.turn'),reply=host.querySelector('.agent-reply');assert.ok(turn.children.includes(reply));
+  ledger.merge({id:'t',status:'completed'});view.render(buildTurns(items,ledger));
+  const work=host.querySelector('.turn-work'),body=host.querySelector('.turn-work-body');
+  assert.equal(work.open,false);
+  assert.deepEqual(body.children.filter(child=>child.dataset.itemId).map(child=>child===reply?'agent result':child.dataset.itemId),['start','partial','question','steer','agent result','end']);
+  assert.deepEqual(turn.children.filter(child=>child.dataset.itemId).map(child=>child.dataset.itemId),['ask','final']);
+  assert.ok(body.contains(host.querySelector('.async-input-card')));
+});
+
+test('repeated DSH status reads show one reply per task and keep it on the reporting turn', () => {
+  const {host,view}=mount(),ledger=new TurnLedger();ledger.merge({id:'t',status:'completed'});
+  const call=(id,tool,status,answer)=>({id,type:'mcpToolCall',server:'dsh_subagent',tool,status:'completed',_turnId:'t',
+    arguments:{agent_id:'child'},result:{structuredContent:{agent_id:'child',name:'helper',status,answer}}});
+  const started=call('start','dsh_start','running');
+  const end=call('end','dsh_wait','completed','本次任务已检查');
+  const next=call('continue','dsh_followup','running');
+  const wrong={...end,id:'wrong',arguments:{agent_id:'other'}};
+  view.render(buildTurns([user('u','t','检查'),started,end,{...end,id:'polled'},next,wrong,{...end,id:'end2'},agent('a','t','整理完毕','final_answer')],ledger));
+  const work=host.querySelector('.turn-work-body');
+  assert.equal(work.querySelectorAll('.agent-reply').length,2);assert.equal(work.querySelectorAll('.agent-lifecycle-event').length,4);
+  assert.deepEqual(work.querySelectorAll('.agent-reply').map(node=>node.dataset.itemId),['reply:["end","child"]','reply:["end2","child"]']);
+});
+
 test('whole-turn feedback spans waiting, thinking and streaming and stops on terminal states', () => {
   const ledger = new TurnLedger(); ledger.merge({ id: 't', status: 'inProgress' }, { observedStartMs: 1000 });
   const { host, view } = mount();

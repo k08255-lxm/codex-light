@@ -8,9 +8,13 @@ const strict=(input,allowed)=>{if(!plain(input)||Object.keys(input).some(key=>!a
 const json=file=>{const stat=fs.statSync(file);if(!stat.isFile()||stat.size>128*1024)throw error('INVALID_INSTALLATION','组件配置文件无效');return JSON.parse(fs.readFileSync(file,'utf8'));};
 const managed=new Set(['mdm','system','enterpriseManaged','legacyManagedConfigTomlFromFile','legacyManagedConfigTomlFromMdm']);
 const SERVER='dsh_subagent',PROFILE='codex-light-bridge';
+const modelSettings=()=>import('../components/dsh-bridge/src/model-defaults.mjs').catch(()=>{throw error('DSH_COMPONENT_UNAVAILABLE','随包 DSH 桥缺少模型设置组件',503);});
 
 /** File-only discovery is cheap and optional. Probe/prepare run only after an explicit connection action. */
 export class BundledDshBridge {
+ async modelStatus(){return (await modelSettings()).readModelDefaults(this.configDir);}
+ async saveModel(value){return (await modelSettings()).saveModelDefaults(this.configDir,value);}
+ async dismissModelReminder(){return (await modelSettings()).dismissModelReminder(this.configDir);}
  constructor({componentRoot=fileURLToPath(new URL('../components/dsh-bridge/',import.meta.url)),env=process.env,home=os.homedir(),stateRoot,spawnSyncFn=spawnSync}={}){this.root=path.resolve(componentRoot);this.env=env;this.home=home;this.dshHome=env.DSH_HOME&&path.isAbsolute(env.DSH_HOME)?env.DSH_HOME:path.join(home,'.dsh');this.stateRoot=stateRoot||(process.platform==='win32'?path.join(env.LOCALAPPDATA||path.join(home,'AppData','Local'),'CodexLight','dsh'):path.join(env.XDG_DATA_HOME||path.join(home,'.local','share'),'codex-light','dsh'));this.configDir=path.join(this.stateRoot,'config');this.stateDir=path.join(this.stateRoot,'state');this.spawnSync=spawnSyncFn;}
  bundled(){
   try {
@@ -42,6 +46,27 @@ export class BundledDshBridge {
 }
 
 export class DshConnectionService {
+ async modelStatus(input={}) {
+  strict(input,['mode']);
+  if(this.demo)return {available:false};
+  return {available:true,...await this.selectBundle(input.mode).modelStatus()};
+ }
+ async saveModel(input={}) {
+  strict(input,['mode','selection']);
+  if(this.demo)throw error('DSH_DEMO_DISABLED','演示模式无法保存模型设置');
+  const selection=(await modelSettings()).modelSelection(input.selection);
+  const bundle=this.selectBundle(input.mode);
+  const saved=await bundle.saveModel(selection);
+  if(input.mode==='native-wsl')await this.modelReminder({dismiss:true});
+  return {available:true,...saved};
+ }
+ async modelReminder(input={}) {
+  strict(input,['dismiss']);
+  if(input.dismiss!==undefined&&input.dismiss!==true)throw error('INVALID_INPUT','提醒选项无效');
+  if(this.demo)return {needed:false};
+  if(input.dismiss){await this.bundle.dismissModelReminder();return {needed:false};}
+  return {needed:!(await this.bundle.modelStatus()).acknowledged};
+ }
  constructor({rpc,bundle=new BundledDshBridge(),bundles=null,callbackStatus=()=>null,clock=()=>Date.now(),demo=false}={}){this.rpc=rpc;this.bundle=bundle;this.bundles=bundles;this.callbackStatus=callbackStatus;this.clock=clock;this.demo=demo;this.plans=new Map();this.pending=false;}
  selectBundle(mode){if(!this.bundles){if(mode!==undefined)throw error('INVALID_INPUT','Bridge mode is only available with WSL');return this.bundle;}if(typeof mode!=='string'||!Object.hasOwn(this.bundles,mode))throw error('DSH_MODE_REQUIRED','Select the Windows or WSL DSH bridge explicitly');return this.bundles[mode];}
  async read(){let result;try{result=await this.rpc.call('config/read',{includeLayers:true});}catch{throw error('CODEX_CONFIG_UNAVAILABLE','无法读取 Codex MCP 配置',503);}if(!plain(result?.config))throw error('CODEX_CONFIG_UNAVAILABLE','无法读取 Codex MCP 配置',503);const user=result.layers?.find(layer=>layer?.name?.type==='user'),table=result.config.mcp_servers,exists=plain(table)&&Object.hasOwn(table,SERVER),value=exists?table[SERVER]:null,origin=result.origins?.['mcp_servers.'+SERVER]?.name?.type;return {exists,value,version:user?.version,writable:typeof user?.version==='string'&&user.version.length>0&&user.disabledReason==null&&!managed.has(origin)};}

@@ -154,6 +154,28 @@ try {
     });
     await page.locator('.project-group-thread').click();
     await page.waitForFunction(()=>!document.querySelector('#thread-menu-button').disabled);
+    await check('a separate browser session restores the saved approval choice and uses it on the next turn',async()=>{
+      await page.locator('#permissions-info').click();
+      await Promise.all([
+        page.waitForResponse(response=>response.url().endsWith('/api/session/permission')&&response.request().postDataJSON()?.mode==='request'&&response.ok()),
+        page.locator('#permission-menu [data-value="request"]').click(),
+      ]);
+      pendingThreadId=null;
+      const other=await browser.newPage({viewport:{width:1440,height:900}});
+      try{
+        await other.goto(app.url);
+        await other.locator('.project-group-thread').click();
+        await other.locator('#permissions-info .label').filter({hasText:'请求批准'}).waitFor();
+        await other.locator('#prompt').fill('验证此对话的审批方式');
+        await other.locator('#send').click();
+        await other.locator('#stop:not(.hidden)').waitFor();
+        const sent=calls.filter(row=>row.method==='turn/start').at(-1).params;
+        assert.equal(sent.threadId,runningId);assert.equal(sent.approvalsReviewer,'user');assert.equal(sent.approvalPolicy,'on-request');assert.deepEqual(sent.sandboxPolicy,{type:'workspaceWrite'});
+        const next=client.turns.get(runningId).at(-1);next.status='completed';
+        client.emit('event',{method:'turn/completed',params:{threadId:runningId,turn:next}});
+        await other.locator('#stop').waitFor({state:'hidden'});
+      }finally{await other.close();pendingThreadId=null;}
+    });
     await page.locator('#thread-menu-button').click();
     await page.locator('#archive-thread').click();
     await page.getByRole('dialog').getByRole('button', { name: '确认', exact: true }).click();

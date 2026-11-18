@@ -18,7 +18,7 @@ Codex 桌面与远程客户端（原 Codex Light）。英文名称为 **CodeCang
 
 ![电脑端：顶部导航、项目侧栏、对话与文件变更](docs/assets/conversation-demo.png)
 
-**手机端 · 393 × 850**
+**手机端 · 393 × 900**
 
 <img src="docs/assets/narrow-layout-demo.png" alt="手机端：顶部额度、完整对话、文件变更与底部输入操作" width="393">
 

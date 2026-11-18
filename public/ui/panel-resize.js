@@ -5,7 +5,7 @@ export function mountPanelResize({document, window, app = document.getElementByI
   let preferred = {sidebar:272, details:340};
   try { const saved=JSON.parse(window.localStorage.getItem(storageKey)); for(const key of Object.keys(preferred))if(Number.isFinite(saved?.[key]))preferred[key]=Math.max(200,Math.min(640,saved[key])); } catch { /* Geometry preferences are optional. */ }
   const controls=[];
-  function visible(node) { return node && window.getComputedStyle(node).display!=='none' && window.getComputedStyle(node).visibility!=='hidden'; }
+  function visible(node) { return node && !node.inert && window.getComputedStyle(node).display!=='none' && window.getComputedStyle(node).visibility!=='hidden'; }
   function limits(key) {
     const width=app.clientWidth;
     const other=key==='sidebar'?document.getElementById('details'):document.getElementById('sidebar');

@@ -5,13 +5,13 @@ import {createDocument} from './mini-dom.mjs';
 
 const configured={model:'configured-model',approvalPolicy:'never',approvalsReviewer:'user',sandbox:'danger-full-access',sandboxPolicy:{type:'dangerFullAccess'},serviceTier:'fast'};
 const autoPermission={approvalPolicy:'on-request',approvalsReviewer:'auto_review',sandbox:'workspace-write',sandboxPolicy:{type:'workspaceWrite'}};
-function fixture({id=null,config=structuredClone(configured)}={}){
+function fixture({id=null,config=structuredClone(configured),permissionStore}={}){
  const document=createDocument(),host=document.createElement('div');document.body.append(host);
  const chip=document.createElement('button');chip.id='permissions-info';const oldIcon=document.createElement('span');oldIcon.className='ui-icon';
  const label=document.createElement('span');label.className='label';chip.append(oldIcon,label);host.append(chip);
  const query=chip.querySelector.bind(chip);chip.querySelector=selector=>selector.startsWith(':scope')?oldIcon:query(selector);
  const fast=document.createElement('button');fast.id='fast-toggle';host.append(fast);document.defaultView.innerHeight=900;
- const notices=[];const controller=createSessionControls({document,defaults:()=>config,threadId:()=>id,notice:(...args)=>notices.push(args)});
+ const notices=[];const controller=createSessionControls({document,defaults:()=>config,threadId:()=>id,permissionStore,notice:(...args)=>notices.push(args)});
  const choose=mode=>document.getElementById('permission-menu').querySelector(`[data-value="${mode}"]`).click();
  return {controller,notices,label,fast,choose,get config(){return config;},setConfig(value){config=value;},setId(value){id=value;controller.restore();}};
 }
@@ -60,4 +60,18 @@ test('restoring custom from the default auto mode needs complete configuration a
  assert.equal(snapshot.serviceTier,null);
  h.setConfig({...h.config,sandboxPolicy:null});
  assert.throws(()=>h.controller.params(h.controller.snapshot(),'turn'),/沙箱策略.*草稿已保留/);
+});
+
+test('reopening a thread in a fresh client restores its own choice before issuing any overrides',async()=>{
+ const saved=new Map(),store=async({threadId,mode})=>{if(mode)saved.set(threadId,mode);return {scope:'current-account',mode:saved.get(threadId)||null};};
+ const first=fixture({id:'one',permissionStore:store});
+ await first.controller.load('one'); first.choose('full');first.choose('request');
+ await first.controller.load('one');
+ const second=fixture({id:'one',permissionStore:store});
+ assert.throws(()=>second.controller.snapshot(),/正在读取/);
+ await second.controller.load('one');
+ assert.equal(second.label.textContent,'请求批准');
+ assert.deepEqual(second.controller.params(second.controller.snapshot(),'turn'),{approvalPolicy:'on-request',approvalsReviewer:'user',sandboxPolicy:{type:'workspaceWrite'}});
+ second.setId('two');await second.controller.load('two');assert.deepEqual(second.controller.params(second.controller.snapshot(),'turn'),{});
+ second.setId(null);assert.equal(second.label.textContent,'帮我批准');
 });

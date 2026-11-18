@@ -48,6 +48,8 @@ import {DshConfigSourcesService} from './dsh-config-sources.mjs';
 import {DshConnectionService} from './dsh-connection.mjs';
 import {PrReviewService} from './pr-review.mjs';
 import {SessionDefaultsService} from './session-defaults.mjs';
+import {SessionPermissions,validPermissionMode} from './session-permissions.mjs';
+import {accountIdentityKey} from '../public/account-identity.js';
 import {REMOTE_METHODS,validateRemote} from './remote.mjs';
 import { createReopener } from './reopen.mjs';
 const publicDir=fileURLToPath(new URL('../public/',import.meta.url));
@@ -133,11 +135,19 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
  const git=new GitService(wslCandidate?{run:(directory,args)=>wslRuntime.gitRead(directory,args,wslCandidate),validateDirectory:async directory=>{await wslRuntime.toLinux(directory,wslCandidate);await projects.directory(directory);}}:{});
  const gitActions=new GitCommandActions();
  const metadataRoot=statisticsRoot??(!demo&&!client?defaultStatisticsRoot():null);
+ const sessionPermissions=new SessionPermissions(metadataRoot,runtimeProfile||['native',process.env.CODEX_HOME||os.homedir()]);
+ let observedPermissionIdentity;
+ async function permissionIdentity(){
+  if(demo)return 'demo';
+  if(!rpc.connected)throw new Error('Codex 尚未连接，无法读取对话批准方式。');
+  if(observedPermissionIdentity!==undefined)return observedPermissionIdentity;
+  return accountIdentityKey(await rpc.call('account/read',{refreshToken:false}));
+ }
  const pricing=new PricingService({root:metadataRoot});await pricing.load();
  const statistics=new StatisticsService({pricing,root:metadataRoot});await statistics.load();
  const titleSummary=new TitleSummaryService(rpc,{root:metadataRoot,demo,onEvent:message=>broadcast(message)});await titleSummary.load();
  let accountIdentityGeneration=0,accountIdentityPending=null;
- function clearStatisticsAccount(){accountIdentityGeneration++;statistics.setAccount(null);accountIdentityPending=null;}
+ function clearStatisticsAccount(){accountIdentityGeneration++;statistics.setAccount(null);accountIdentityPending=null;observedPermissionIdentity=undefined;sessionPermissions.resetAnonymous();}
  async function readStatisticsAccount(){
   if(demo||!rpc.connected)return;
   if(accountIdentityPending)return accountIdentityPending;
@@ -225,10 +235,15 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
     if(url.pathname==='/api/desktop/receipts'&&req.method==='GET'){if(!desktopState)throw new Error('仅桌面模式支持本机状态');json(res,200,{receipts:await desktopState.list(),persistenceWarning:operations.persistenceWarning||desktopState.persistenceWarning});return;}
     if(req.method!=='POST'){json(res,405,{error:'不支持的操作'});return;}
     if(url.pathname.startsWith('/api/dsh/connection/')){
-     if(wslActive&&!wslCandidate)throw Object.assign(new Error('The selected WSL runtime is unavailable; reconnect it before configuring DSH.'),{code:'WSL_RUNTIME_UNAVAILABLE',status:409,outcome:'notExecuted'});
      const action=url.pathname.slice('/api/dsh/connection/'.length),input=await body(req);
-     if(!['status','plan','connect'].includes(action))throw Object.assign(new Error('未知 DSH 连接操作'),{code:'INVALID_INPUT',status:400});
-     json(res,200,await dshConnection[action](input));return;
+     if(action!=='modelReminder'&&wslActive&&!wslCandidate)throw Object.assign(new Error('The selected WSL runtime is unavailable; reconnect it before configuring DSH.'),{code:'WSL_RUNTIME_UNAVAILABLE',status:409,outcome:'notExecuted'});
+     if(!['status','plan','connect','modelStatus','saveModel','modelReminder'].includes(action))throw Object.assign(new Error('未知 DSH 连接操作'),{code:'INVALID_INPUT',status:400});
+     const result=await dshConnection[action](input);
+     if(action==='status'&&!demo&&!result.selectionRequired&&dshConnection.modelStatus){
+      try{result.modelDefaults=await dshConnection.modelStatus(input);}
+      catch(error){result.modelDefaults={available:false,error:error.message};}
+     }
+     json(res,200,result);return;
     }
     if(url.pathname.startsWith('/api/dsh/config-sources/')){
      const action=url.pathname.slice('/api/dsh/config-sources/'.length),input=await body(req);
@@ -312,6 +327,12 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
     }
     if(url.pathname==='/api/session/defaults'){
      json(res,200,await sessionDefaults.read(input));return;
+    }
+    if(url.pathname==='/api/session/permission'){
+     const keys=Object.keys(input||{}).sort().join(',');
+     if(!['threadId','mode,scope,threadId'].includes(keys))throw new Error('对话批准方式参数无效');
+     const identity=await permissionIdentity();
+     json(res,200,await sessionPermissions.access(identity,input.threadId,keys==='threadId'?null:input));return;
     }
     if(url.pathname.startsWith('/api/pr/')){
      if(demo)throw new Error('演示模式不读取真实 GitHub 数据，也不调用 GitHub CLI');
@@ -462,7 +483,8 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
     }
     if(url.pathname==='/api/rpc'){
      if(stopping)throw Object.assign(new Error('Light 正在关闭，此请求未发送'),{code:'CLIENT_CLOSING',outcome:'notExecuted',status:409});
-     if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['method','params','requestId','attachmentIds','fileAttachmentIds','confirmedFileAttachmentIds','confirmed'].includes(key)))throw new Error('RPC 请求格式无效');
+     if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['method','params','requestId','attachmentIds','fileAttachmentIds','confirmedFileAttachmentIds','confirmed','permissionMode'].includes(key)))throw new Error('RPC 请求格式无效');
+     if(input.permissionMode!==undefined&&(input.method!=='thread/start'||!validPermissionMode(input.permissionMode)))throw new Error('对话批准方式无效');
      if(MUTATING_METHODS.has(input.method))operations.validate(input.requestId);
      let params,titleInput;
      try {
@@ -487,14 +509,21 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
       if(input.method==='remoteControl/pairing/start')clearPairing();
       if(['turn/start','review/start','thread/compact/start'].includes(input.method))await readStatisticsAccount();
       await titleSummary.beforeRpc(input.method,titleInput?{...params,input:titleInput}:params);
+      const identity=input.permissionMode?await permissionIdentity():null;
       const output=input.method==='thread/list'?await threadList.http(req,res,params):MUTATING_METHODS.has(input.method)?await threadList.mutate(()=>sessions.call(input.method,params)):await sessions.call(input.method,params);statistics.acknowledge(input.method,params,output);if(output?.thread){artifacts.bindThread(output.thread);files.bindThread(output.thread);}
+      if(input.method==='account/read')observedPermissionIdentity=accountIdentityKey(output);
+      if(input.permissionMode&&output?.thread?.id){
+       const choice={scope:sessionPermissions.scope(identity),mode:input.permissionMode};
+       try{output.sessionPermission=await sessionPermissions.access(identity,output.thread.id,choice);}
+       catch{output.sessionPermission={...choice,warning:'对话已创建，但批准方式未能保存。'};}
+      }
       titleSummary.acknowledge(input.method,params,output);
       if(['turn/start','turn/steer'].includes(input.method))artifacts.observe(params.threadId,{type:'userMessage',content:params.input});
       observeRemote(input.method,params,output);return output;
      };
      const dshGeneration=dsh.generation;
      const result = MUTATING_METHODS.has(input.method)
-       ? await operations.execute(input.requestId,input.method,params,run)
+       ? await operations.execute(input.requestId,input.method,input.permissionMode?{...params,permissionMode:input.permissionMode}:params,run)
        : await run();
      if(input.method==='plugin/list')result.actionHandles=pluginActions.observeCatalog(params,result);
      if(dshGeneration===dsh.generation && input.method.startsWith('thread/'))dsh.bindThread(result?.thread);

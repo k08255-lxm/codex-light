@@ -5,7 +5,7 @@ import {boundedText,ItemStore} from '../store.js';
 import {icon} from '../icons.js';
 import {renderActivityRecord,renderCompactionRecord,describeItem,itemState} from '../activity-feed.js';
 import {readAgentThread} from '../agent-history.js';
-import {asyncInputDefinition,asyncInputBodyText,createAsyncInputCard} from './async-input.js';
+import {asyncInputDefinition,asyncInputBodyText,createAsyncInputCard,asyncAnswerHistory} from './async-input.js';
 
 // One list, one detail view, one scrolling parent. Reads happen only on opening or refreshing.
 export function createAgentInspector({document,state,host,dshTasks,dshLive,rpc,readDshTask,el,onAnswerAsync,artifactFactory,onLocalLink}){
@@ -111,7 +111,7 @@ export function createAgentInspector({document,state,host,dshTasks,dshLive,rpc,r
   nextRefresh=Date.now()+5000;
   for(const row of rows())queueRead(row);
  }
- function appendSequence(body,items,key,cwd,running,threadId=null,artifacts=null){
+ function appendSequence(body,items,key,cwd,running,threadId=null,artifacts=null,history=null){
   let operations=[];
   const flush=tail=>{
    if(!operations.length)return;
@@ -129,6 +129,7 @@ export function createAgentInspector({document,state,host,dshTasks,dshLive,rpc,r
    group.append(list);body.append(group);
   };
   for(const item of items){
+   if(history?.echoes.has(item.id))continue;
    if(item.type==='contextCompaction'){flush(false);body.append(renderCompactionRecord(document,item));continue;}
    if(!['agentMessage','userMessage'].includes(item.type)){operations.push(item);continue;}
    flush(false);
@@ -136,8 +137,9 @@ export function createAgentInspector({document,state,host,dshTasks,dshLive,rpc,r
    if(text){const content=markdown(text,cwd,threadId||state.thread?.id);if(item.type==='userMessage')content.classList.add('agent-user-input');body.append(content);}
    if(asyncInputDefinition(item)){
     const inputKey=JSON.stringify([threadId,item.id]);let input=asyncInputs.get(inputKey);
-    if(!input){input=createAsyncInputCard(document,item,{threadId,onAnswerAsync});asyncInputs.set(inputKey,input);}
-    else input.update(item,{threadId,onAnswerAsync});
+    const options={threadId,onAnswerAsync,confirmedAnswers:history?.answered.get(item.id)};
+    if(!input){input=createAsyncInputCard(document,item,options);asyncInputs.set(inputKey,input);}
+    else input.update(item,options);
     body.append(input.node);
    }
   }
@@ -154,6 +156,12 @@ export function createAgentInspector({document,state,host,dshTasks,dshLive,rpc,r
   }
   const turns=saved.thread.turns,items=turns.flatMap(turn=>turn.items||[]);
   let omitted=Math.max(0,items.length-100);
+  // Questions outside the retained window must keep their visible replies in the transcript.
+  let hidden=omitted;
+  const history=asyncAnswerHistory(turns.map(turn=>{
+   const skip=Math.min(hidden,turn.items.length);hidden-=skip;
+   return {id:turn.id,items:turn.items.slice(skip)};
+  }),row.id);
   if(omitted)body.append(el('p','muted','显示最近 100 条记录，按任务分组'));
   for(const [index,turn]of turns.entries()){
    const skip=Math.min(omitted,(turn.items||[]).length);omitted-=skip;
@@ -161,7 +169,7 @@ export function createAgentInspector({document,state,host,dshTasks,dshLive,rpc,r
    const group=el('section','agent-run');group.dataset.turnId=turn.id;
    const head=el('header','agent-run-heading');head.append(el('strong','',`任务 ${index+1}`),el('span','',({inProgress:'进行中',completed:'已完成',failed:'失败',interrupted:'已停止'})[turn.status]||''));
    const started=stamp(turn.startedAt);if(started!==null){const time=el('time','',new Date(started).toLocaleString());time.dateTime=new Date(started).toISOString();head.append(time);}
-   group.append(head);appendSequence(group,visible,`${row.id}:${turn.id}`,saved.thread.cwd,turn.status==='inProgress',row.id,saved.artifacts);body.append(group);
+   group.append(head);appendSequence(group,visible,`${row.id}:${turn.id}`,saved.thread.cwd,turn.status==='inProgress',row.id,saved.artifacts,history);body.append(group);
   }
  }
  function renderDshDetail(row,body){

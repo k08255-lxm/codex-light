@@ -91,7 +91,9 @@ try {
     await dialog.getByRole('button', {name: '关闭文件预览'}).click();
   });
   await check('native child links use that child thread and working directory', async () => {
-    await page.locator('.agent-lifecycle-event[data-item-id="child-event"]').click();
+    const event = page.locator('.agent-lifecycle-event[data-item-id="child-event"]');
+    await page.locator('.turn-work').filter({has:event}).locator(':scope > summary').click();
+    await event.click();
     const childLink = page.locator('.agent-detail-content .md-file-link'); await childLink.waitFor();
     const response = page.waitForResponse(value => value.url().endsWith('/api/files/preview'));
     await childLink.click(); const preview = await response;

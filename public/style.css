@@ -199,6 +199,12 @@ main.stage { display: flex; flex: 1; flex-direction: column; min-width: 0; min-h
 .notice.error { color: var(--error); background: var(--error-bg); border-color: var(--error-border); }
 .notice .btn { width: 24px; height: 24px; flex: none; }
 .settings-content > .notice { width: 100%; }
+.dsh-model-reminder { display:flex; flex-wrap:wrap; align-items:center; gap:6px; width:min(calc(100% - 32px), var(--content-width)); margin:0 auto 6px; padding:6px 10px; box-sizing:border-box; border-radius:var(--r-md); background:var(--surface); color:var(--secondary); font-size:.8125rem; }
+.dsh-model-reminder[hidden] { display:none; }
+.dsh-model-reminder span { flex:1 1 12rem; }
+.dsh-default-fields { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(13rem,100%),1fr)); gap:10px; }
+.dsh-default-fields .actions { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:6px; }
+.dsh-default-model > [role=status]:empty { display:none; }
 
 /* ---------- Menus & dialogs ---------- */
 .menu, .window-menu { position: fixed; z-index: 60; min-width: 200px; max-width: min(300px, calc(100vw - 16px)); padding: 4px; background: var(--raised); border-radius: var(--r-lg); box-shadow: var(--shadow-popover); }
@@ -885,12 +891,12 @@ dialog::backdrop { background: var(--overlay); }
 /* Occasional settings/disclosure motion only. No message/list/scroll animation.
    Existing explicit reduced-motion preferences override all
    transitions, including explicit app preferences and the system preference. */
-:root :is(.reasoning-popover,.changes-panel,.inspector) {
+:root :is(.reasoning-popover,.changes-panel) {
   opacity: 1; transform: none;
   transition: opacity var(--motion-panel) var(--ease-out), transform var(--motion-panel) var(--ease-out);
 }
 @starting-style {
-  :root :is(.reasoning-popover,.changes-panel,.inspector):not(.hidden) { opacity: 0; transform: translateY(4px); }
+  :root :is(.reasoning-popover,.changes-panel):not(.hidden) { opacity: 0; transform: translateY(4px); }
 }
 /* Like DeepSeekHarness's wide-in, page entry fades only; works in WebViews without @starting-style. */
 :root :is(.stage,.settings-section,.work[role="tabpanel"]):not(.hidden){animation:page-enter 200ms var(--ease-out)}

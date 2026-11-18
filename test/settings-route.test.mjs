@@ -28,7 +28,8 @@ function setup(){
     renderDshConnection:noop,workbench:{label:()=>'/project'},terminalControls:noop,syncDshLiveContext:noop,syncDelegationMonitor:noop,syncRuntimePanelActivity:noop,
     loadArchived:async()=>{},notice:noop,renderPluginPending:noop,refreshRemote:noop,remoteReset:noop};
   const names=Object.keys(dependencies);
-  const create=new Function(...names,router+'\n'+sections+'\nreturn {route,selectSettingsSection};');
+  const panelVisibility=app.slice(app.indexOf('function setDetailsVisible('),app.indexOf("$('toggle-details').addEventListener"));
+  const create=new Function(...names,router+'\n'+panelVisibility+'\n'+sections+'\nreturn {route,selectSettingsSection};');
   return {...create(...names.map(key=>dependencies[key])),state,calls,$};
 }
 

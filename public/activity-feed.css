@@ -176,6 +176,12 @@ div.step-detail.step-files { max-height: none; overflow: visible; padding: 0; ba
 .turn-work > summary::-webkit-details-marker { display:none; }
 .turn-work > summary:focus-visible { outline:2px solid var(--accent); outline-offset:3px; border-radius:4px; }
 .turn-work[open] > summary > .ui-icon { transform:rotate(90deg); }
+.turn-work[open] > summary { position:sticky; top:0; z-index:2; background:var(--canvas); }
+.turn-work-close-label { margin-left:auto; }
+.turn-work:not([open]) .turn-work-close-label { display:none; }
+.turn-work-close { display:inline-flex; align-items:center; gap:5px; padding:6px 8px; min-height:32px; border-radius:6px; font:inherit; color:var(--secondary); }
+.agent-reply { min-width:0; color:var(--text); font-size:1rem; }
+.agent-reply-author { display:inline-flex; align-items:center; min-height:28px; border-radius:5px; font-size:.8125rem; color:var(--secondary); }
 .turn-work:not([open]) > .turn-work-body { display:none; }
 .turn-work-body { display:flex; flex-direction:column; gap:8px; padding:4px 0 12px; }
 .turn-work[data-kind="failed"] > summary { color:var(--error); }

@@ -21,7 +21,10 @@
 .about-confirm-actions { justify-content: flex-end; }
 .about-release-notes { margin-top: 20px; border-top: 1px solid var(--border); padding-top: 8px; }
 .about-release-notes summary { min-height: 40px; align-content: center; cursor: pointer; font-weight: 500; }
-.about-release-notes p { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--secondary); line-height: 1.7; text-wrap: pretty; }
+.about-release-notes :is(p, ul, ol) { margin: 4px 0 0; overflow-wrap: anywhere; color: var(--secondary); line-height: 1.7; text-wrap: pretty; }
+.about-release-notes :is(h2, h3) { margin: 16px 0 4px; font-size: .9375rem; }
+.about-release-notes :is(ul, ol) { padding-inline-start: 1.4em; }
+.about-release-notes li + li { margin-top: 4px; }
 .about-links { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: baseline; margin-top: 16px; font-size: .8125rem; }
 .about-links > span { color: var(--tertiary); font-variant-numeric: tabular-nums; }
 @media (max-width: 600px) { .about-update { padding: 16px; } .about-update-head { align-items: flex-start; flex-direction: column; gap: 16px; } }

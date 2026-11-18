@@ -15,7 +15,7 @@ function metadata(record) {
     ...(record.method?.startsWith('app-update/') && stableVersion(record.appVersion) ? {appVersion:record.appVersion} : {}),
     status: record.status === 'pending' ? 'pending' : record.status === 'inFlight' ? 'inFlight' : 'unknown' };
 }
-export function makeMutation(serverInstance, method, params, { now = Date.now(), uuid = globalThis.crypto.randomUUID(), attachmentIds = [], fileAttachmentIds = [], confirmedFileAttachmentIds = [], confirmed = false } = {}) {
+export function makeMutation(serverInstance, method, params, { now = Date.now(), uuid = globalThis.crypto.randomUUID(), attachmentIds = [], fileAttachmentIds = [], confirmedFileAttachmentIds = [], confirmed = false, permissionMode } = {}) {
   if (!INSTANCE.test(serverInstance || '')) throw new Error('尚未获取本地服务实例，不能安全发送请求。');
   if (!METHODS.has(method)) throw new Error('该操作不属于支持的任务变更。');
   if (!Number.isSafeInteger(now) || now < 0 || !UUID.test(uuid)) throw new Error('无法生成有效的请求标识。');
@@ -25,7 +25,7 @@ export function makeMutation(serverInstance, method, params, { now = Date.now(),
   const clone = JSON.parse(JSON.stringify(params));
   if(method.startsWith('app-update/')&&!stableVersion(clone?.version))throw new Error('应用更新版本无效。');
   const requestId = `${serverInstance}:${now}:${uuid}`;
-  return { envelope: { requestId, method, params: clone, ...(confirmed === true ? {confirmed:true} : {}), ...(attachmentIds.length ? {attachmentIds: [...attachmentIds]} : {}), ...(fileAttachmentIds.length ? {fileAttachmentIds:[...fileAttachmentIds]} : {}), ...(confirmedFileAttachmentIds.length ? {confirmedFileAttachmentIds:[...confirmedFileAttachmentIds]} : {}) }, marker: { requestId, method, serverInstance, createdAt: now,
+  return { envelope: { requestId, method, params: clone, ...(permissionMode ? {permissionMode} : {}), ...(confirmed === true ? {confirmed:true} : {}), ...(attachmentIds.length ? {attachmentIds: [...attachmentIds]} : {}), ...(fileAttachmentIds.length ? {fileAttachmentIds:[...fileAttachmentIds]} : {}), ...(confirmedFileAttachmentIds.length ? {confirmedFileAttachmentIds:[...confirmedFileAttachmentIds]} : {}) }, marker: { requestId, method, serverInstance, createdAt: now,
     threadId: typeof clone.threadId === 'string' ? clone.threadId : null,
     turnId: typeof clone.turnId === 'string' ? clone.turnId : null, ...(method.startsWith('app-update/')?{appVersion:clone.version}:{}), status: 'inFlight' } };
 }
@@ -59,10 +59,10 @@ export class PendingMutations {
     catch { this.storageError = '无法保存待确认请求记录。为避免重复任务，已暂停新的发送。'; throw new Error(this.storageError); }
     this.records = next; this.storageError = null;
   }
-  begin(serverInstance, method, params, {attachmentIds = [], fileAttachmentIds = [], confirmedFileAttachmentIds = [], confirmed = false} = {}) {
+  begin(serverInstance, method, params, {attachmentIds = [], fileAttachmentIds = [], confirmedFileAttachmentIds = [], confirmed = false, permissionMode} = {}) {
     if (this.storageError) throw new Error(this.storageError);
     if (this.records.size >= 20) throw new Error('待确认请求过多，请先确认已有请求。');
-    const operation = makeMutation(serverInstance, method, params, { now: this.now(), uuid: this.uuid(), attachmentIds, fileAttachmentIds, confirmedFileAttachmentIds, confirmed });
+    const operation = makeMutation(serverInstance, method, params, { now: this.now(), uuid: this.uuid(), attachmentIds, fileAttachmentIds, confirmedFileAttachmentIds, confirmed, permissionMode });
     if (this.records.has(operation.marker.requestId)) throw new Error('请求标识重复，未发送。');
     const next = new Map(this.records); next.set(operation.marker.requestId, operation.marker); this.commit(next);
     this.envelopes.set(operation.marker.requestId, operation.envelope); return structuredClone(operation.envelope);

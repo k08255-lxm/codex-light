@@ -15,7 +15,7 @@ let browser;const errors=[],checks=[];
 try{
  browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||'C:/Program Files/Google/Chrome/Application/chrome.exe'});
  const page=await browser.newPage({viewport:{width:393,height:850},isMobile:true,hasTouch:true});page.setDefaultTimeout(7000);
- const updateStatus={supported:true,demo:false,currentVersion:'0.4.9',phase:'available',latest:{available:true,version:'0.5.0',notes:'Synthetic layout fixture'}};
+ const updateStatus={supported:true,demo:false,currentVersion:'0.4.9',phase:'available',latest:{available:true,version:'0.5.0',notes:'## 对话与任务\n\n- 保留阅读位置'}};
  await page.route(/\/api\/app-update\/(status|check)$/,route=>route.fulfill({json:updateStatus}));
  await page.addInitScript(()=>{window.nativeCalls=[];window.taskCalls=[];let enabled=false;window.CodexLightNative={isNativeApp:()=>true,setToolbarIntegrated:flag=>window.nativeCalls.push(['toolbar',flag]),openServerManager:()=>window.nativeCalls.push(['connection']),getTaskNotificationStatus:()=>JSON.stringify({supported:true,enabled,permissionGranted:true,promotedCandidate:true,reason:enabled?'ready':'disabled'}),setTaskNotificationsEnabled:value=>{enabled=value;window.nativeCalls.push(['notifications',value]);window.dispatchEvent(new Event('codexlight-task-notification-status'));},updateTaskNotification:data=>window.taskCalls.push(JSON.parse(data)),openTaskNotificationSettings:()=>window.nativeCalls.push(['notification-settings'])};});
  page.on('pageerror',error=>errors.push(error.message));await page.goto(app.url);
@@ -29,6 +29,8 @@ try{
  await page.locator('#app-update-indicator').click();
  assert.equal(await page.locator('#settings-about').isVisible(),true);
  await page.locator('.about-update-controls button').filter({hasText:'下载更新'}).waitFor();
+ assert.equal(await page.locator('.about-release-notes h2').textContent(),'对话与任务');
+ assert.equal(await page.locator('.about-release-notes li').textContent(),'保留阅读位置');
  await page.locator('#rail-home').click();
  checks.push('the same actionable update button sits between title and quotas, opens About, and leaves five mobile navigation entries');
  await page.locator('#mobile-connection').click();assert.deepEqual(await page.evaluate(()=>window.nativeCalls),[['toolbar',true],['connection']]);
@@ -50,6 +52,7 @@ try{
    return {overflow:document.documentElement.scrollWidth>innerWidth,footer:['cwd-button','permissions-info','context-meter'].map(rect),toolbar:['add-attachment','add-file','model-trigger','queue-send','stop','send'].map(rect),titlebar:['app-update-indicator','mobile-quota-slot','mobile-refresh','mobile-connection'].map(rect),projectOffset:rect('cwd-button').x-foot.x,modelEndGap:model.right-chevron.right};
   });
   assert.equal(geometry.overflow,false,`overflow at ${width}`);
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth),width,`viewport at ${width}`);
   assert.ok(geometry.projectOffset<1,`project entry aligns left at ${width}`);
   assert.ok(geometry.modelEndGap<7,`model content aligns with send controls at ${width}`);
   for(const id of ['cwd-button','model-trigger','app-update-indicator']){const r=[...geometry.footer,...geometry.toolbar,...geometry.titlebar].find(r=>r.id===id);assert.ok(r.width>=44&&r.height>=44,`${id} retains a 44px target at ${width}`);}
@@ -101,5 +104,32 @@ try{
  assert.equal(await page.locator('.rail > #app-update-indicator').count(),1);assert.equal(await page.evaluate(()=>document.querySelector('#app-update-indicator')===window.originalUpdateButton&&window.originalUpdateButton.nextElementSibling.id==='account-quota'),true);
  await page.locator('#app-update-indicator').click();assert.equal(await page.locator('#settings-about').isVisible(),true);
  checks.push('desktop restores the same update button before quotas and preserves its action');
+ await page.locator('#rail-home').click();
+ for(const width of [1440,393]){
+  await page.setViewportSize({width,height:850});
+  const result=await page.evaluate(async()=>{
+   const panel=document.querySelector('#details'),toggle=document.querySelector('#toggle-details'),close=document.querySelector('#close-details');
+   document.documentElement.dataset.reducedMotion='false';
+   const style=()=>getComputedStyle(panel);
+   const transition=()=>{void style().opacity;return panel.getAnimations().map(a=>a.transitionProperty);};
+   const settle=()=>Promise.all(panel.getAnimations().map(a=>a.finished));
+   toggle.click();const opening=transition();await settle();
+   close.click();const closing=transition(),inertOnClose=panel.inert;
+   const focusRestored=document.activeElement===toggle;
+   // Reverse an in-flight close to exercise quick successive clicks.
+   for(const animation of panel.getAnimations())animation.currentTime=60;
+   void style().opacity;toggle.click();transition();await settle();
+   const reopened=style().visibility==='visible'&&!panel.inert;
+   close.click();transition();await settle();const hidden=style().visibility==='hidden';
+   document.documentElement.dataset.reducedMotion='true';
+   toggle.click();const reduced=transition();close.click();
+   return {opening,closing,inertOnClose,focusRestored,reopened,hidden,reduced};
+  });
+  const movement=width>1200?'margin-right':'transform';
+  for(const direction of ['opening','closing'])assert.ok(result[direction].includes('opacity')&&result[direction].includes(movement),width+' '+direction+' '+result[direction]);
+  assert.ok(result.inertOnClose&&result.focusRestored&&result.reopened&&result.hidden);
+  assert.deepEqual(result.reduced,[]);
+ }
+ checks.push('activity panel animates in both directions, reverses on repeat clicks, and respects reduced motion on desktop and mobile');
  assert.deepEqual(errors,[]);console.log(JSON.stringify({checks,pageErrors:errors},null,2));
 }finally{await browser?.close();await app.close();await rm(temporary,{recursive:true,force:true});}

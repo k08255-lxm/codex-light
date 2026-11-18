@@ -20,6 +20,8 @@ export class WslNativeDshBridge {
  }
  capabilities(){return {mode:'native-wsl',transport:'stdio',sharedWorkspace:true,requires:'Linux Node with node:sqlite and DSH CLI 0.2.2 in the selected distribution',providerScope:'Linux user only; Windows provider credentials are never imported',verifiedOnWsl:false,completionMode:this.queueDescriptor?'gui-queue':'dsh_wait',automaticWakeup:!!this.queueDescriptor};}
  bundled(){return this.bundle.bundled();}
+ async modelStatus(){return (await this.invoke('model-status')).settings;}
+ async saveModel(selection){return (await this.invoke('model-save','',{selection})).settings;}
  async invoke(action,executablePath='',expected=null){
   if(executablePath&&!linuxPath(executablePath))throw fail('DSH CLI must be an absolute Linux path','DSH_PATH_INVALID');
   const root=await this.runtime.toLinux(this.root,this.candidate);

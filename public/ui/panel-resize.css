@@ -9,3 +9,25 @@
 @media(min-width:1201px) { .inspector { position:relative;width:var(--details-width,340px); } }
 @media(min-width:761px) and (max-width:1200px) { .inspector { width:var(--details-width,340px); } }
 @media(max-width:760px) { .sidebar { position:fixed; } }
+
+/* Keep the right panel mounted so a second click can reverse either transition. */
+#details {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 180ms var(--ease-out), transform 200ms var(--ease-out), margin-right 200ms var(--ease-out), visibility 0s;
+}
+#details.hidden {
+  display: flex !important;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition-delay: 0s, 0s, 0s, 200ms;
+}
+@media (min-width:1201px) {
+  #details.hidden { margin-right: calc(-1 * var(--details-width, 340px)); }
+}
+@media (max-width:1200px) {
+  .app { position: relative; }
+  #details.hidden { transform: translateX(32px); }
+}
+.panel-resizing #details { transition: none; }

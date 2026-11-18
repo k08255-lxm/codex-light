@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDocument, visibleText } from './mini-dom.mjs';
-import { asyncInputDefinition, asyncInputBodyText, createAsyncInputCard } from '../public/ui/async-input.js';
+import { asyncInputDefinition, asyncInputBodyText, createAsyncInputCard, asyncAnswerHistory } from '../public/ui/async-input.js';
 import { mountConversation } from '../public/activity-feed.js';
 import { createAgentInspector } from '../public/ui/agent-inspector.js';
 import { TurnLedger, buildTurns } from '../public/state.js';
@@ -61,7 +61,32 @@ test('recommended options start unchecked and only an explicit submit sends sele
   assert.equal(view.posted[0].threadId, 'main-thread'); assert.equal(view.posted[0].itemId, 'ask-one');
   assert.match(view.posted[0].text, /回答：本地提炼/); assert.match(view.posted[0].text, /回答：未回答/);
   assert.doesNotMatch(view.posted[0].text, /回答：模型总结/);
-  assert.match(visibleText(view.node), /回答已发送/); assert.equal(view.submit.disabled, true);
+  assert.equal(view.node.dataset.outcome,'sent'); assert.equal(view.node.firstElementChild.textContent,'已回答');
+  assert.doesNotMatch(visibleText(view.node), /回答已发送/); assert.equal(view.submit.disabled, true);
+});
+
+test('only the matching structured reply joins the question across refresh and turns', async () => {
+  const formView=form(), input=formView.node.querySelector('.approval-other');
+  input.value='我的选择\n分两行';input.dispatch('input');await click(formView.submit);
+  const {text}=formView.posted[0];assert.ok(!text.includes(question.id));
+  const message=(id,body)=>({id,type:'userMessage',content:[{type:'text',text:body}]});
+  const earlier=message('earlier',text), plain=message('plain','我的选择\n分两行');
+  const reply=message('echo',text), repeated=message('deliberately-repeated',text);
+  let history=asyncAnswerHistory([{items:[earlier,question,plain]},{items:[reply,repeated]}]);
+  assert.deepEqual([...history.echoes],['echo']);assert.deepEqual(history.answered.get(question.id),['我的选择\n分两行','未回答']);
+  const doc=createDocument(),host=doc.createElement('div'), ledger=new TurnLedger();ledger.merge({id:'turn-one',status:'completed'});
+  const view=mountConversation(host,{getThreadId:()=> 'thread'});
+  view.render(buildTurns([question,{...reply,_turnId:'turn-one'},{...repeated,_turnId:'turn-one'}],ledger));
+  assert.equal(host.querySelector('.async-input-card').dataset.outcome,'sent');
+  assert.equal(host.querySelector('.answer-value').textContent,'我的选择\n分两行');assert.deepEqual(host.querySelectorAll('.userMessage').map(n=>n.dataset.itemId),['deliberately-repeated']);
+  const other={...question,id:'another'};history=asyncAnswerHistory([{items:[question,other,reply]}]);
+  assert.deepEqual([...history.echoes],[],'identical outstanding forms require a known question id');
+  history=asyncAnswerHistory([{items:[question,other,{...reply,_echoClaim:'answer:'+other.id}]}]);assert.deepEqual([...history.answered.keys()],[other.id]);
+  const legacy=message('legacy',text.slice(text.indexOf('1. ')));
+  assert.deepEqual([...asyncAnswerHistory([{items:[question,legacy]}]).echoes],['legacy']);
+  assert.deepEqual([...asyncAnswerHistory([{items:[question,plain,legacy]}]).echoes],[]);
+  assert.deepEqual([...asyncAnswerHistory([{items:[question,{...reply,_echoClaim:'composer-message-id'}]}]).echoes],[]);
+  assert.deepEqual([...asyncAnswerHistory([{items:[question,{...reply,content:[...reply.content,{type:'image'}]}]}]).echoes],[]);
 });
 
 test('typing Other is explicit and a pending submit preserves drafts through identical history updates', async () => {

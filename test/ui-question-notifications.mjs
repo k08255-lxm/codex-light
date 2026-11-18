@@ -38,7 +38,9 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(app.url); await page.locator('#connection-text').filter({ hasText: '演示模式' }).waitFor();
   await page.locator('.project-group-thread').filter({ hasText: first.name }).click();
-  await page.locator('.async-input-card').waitFor();
+  const oldCard=page.locator(`[data-item-id="${old.id}"] .async-input-card`);
+  await oldCard.waitFor({state:'attached'});
+  assert.equal(await oldCard.isVisible(),false);
   assert.equal(await page.locator('#question-alert').isVisible(), false);
   assert.equal(await page.evaluate(() => window.nativeQuestionCalls.filter(call => call.name === 'show').length), 0);
   checks.push('loading old async questions is quiet');
@@ -72,6 +74,8 @@ try {
   await page.waitForFunction(() => window.nativeQuestionCalls.filter(call => call.name === 'show').length === 2);
   await page.evaluate(() => { window.testForeground = true; }); await page.locator('.question-alert-open').click();
   await page.waitForFunction(id => document.querySelector(`[data-item-id="${id}"]`)?.contains(document.activeElement), live.id);
+  const liveWork=page.locator('.turn-work').filter({has:page.locator(`[data-item-id="${live.id}"]`)});
+  assert.equal(await liveWork.getAttribute('open'),'');
   checks.push('async started/completed deduplicate and banner locates the async question');
 
   await page.locator('#rail-settings').click(); await page.locator('[data-settings-section="notifications"]').click();
@@ -89,9 +93,16 @@ try {
   assert.equal(answerStarted, true); releaseAnswer();
   await page.locator('#question-alert').waitFor({ state: 'hidden' });
   client.emit('event', event('item/completed'));
-  await page.waitForTimeout(150);
+  await liveCard.locator('.answer-value').filter({hasText:'Confirmed browser answer'}).waitFor();
+  await liveWork.getByRole('button',{name:'收起本轮过程'}).click();
+  assert.equal(await liveCard.isVisible(),false);
+  await page.reload();await page.locator('.project-group-thread').filter({hasText:first.name}).click();
+  await liveCard.waitFor({state:'attached'});assert.equal(await liveCard.isVisible(),false);
+  await liveWork.locator(':scope > summary').click();
+  await liveCard.locator('.answer-value').filter({hasText:'Confirmed browser answer'}).waitFor();
+  assert.equal(await page.locator('.userMessage').filter({hasText:'Confirmed browser answer'}).count(),0);
   assert.equal(await page.locator('#question-alert').isVisible(), false);
-  assert.equal(await page.evaluate(() => window.nativeQuestionCalls.filter(call => call.name === 'show').length), 2);
+  assert.equal(await page.evaluate(() => window.nativeQuestionCalls.filter(call => call.name === 'show').length), 0);
   checks.push('async reminder remains during send and only clears after confirmed success; late replay stays cleared');
   assert.deepEqual(errors, []); console.log(JSON.stringify({ checks, pageErrors: errors }, null, 2));
 } catch (error) {

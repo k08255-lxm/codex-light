@@ -40,7 +40,7 @@ export function describeConnection(status, result = null) {
   return { tone: 'idle', label: '未连接', detail: status.dsh?.diagnostic?.message ? String(status.dsh.diagnostic.message).slice(0,1000) : status.dsh?.installed ? '已检测到 DSH，可一键连接。' : '未检测到 DSH 本体。DSH 是可选组件，未安装不影响普通聊天；已安装在其他位置可填写其路径。', action: status.dsh?.installed ? 'connect' : 'connectWithPath' };
 }
 
-export function mountDshConnection(host, { api, wait = ms => new Promise(resolve => setTimeout(resolve, ms)), followUps = 5, followUpMs = 2000, onChange = () => {}, runtimeTarget = () => 'native' }) {
+export function mountDshConnection(host, { api, wait = ms => new Promise(resolve => setTimeout(resolve, ms)), followUps = 5, followUpMs = 2000, onChange = () => {}, onModelSaved = () => {}, runtimeTarget = () => 'native' }) {
   const document = host.ownerDocument;
   let status = null, result = null, busy = false, connecting = false, generation = 0, pathDraft = '', message = { text: '', error: false };
   let mode = null, context = runtimeTarget();
@@ -136,6 +136,52 @@ export function mountDshConnection(host, { api, wait = ms => new Promise(resolve
     row.append(button); panel.append(row);
     return panel;
   }
+  function modelSettings() {
+    const panel = el(document, 'section', 'panel dsh-default-model');
+    panel.append(el(document, 'h3', 'section-title', '子代理默认模型'));
+    const defaults = status.modelDefaults;
+    if (!defaults.available) {
+      panel.append(el(document, 'p', 'inline-error', defaults.error || '暂时无法读取模型设置。'));
+      return panel;
+    }
+    if (status.registration?.state === 'external') {
+      panel.append(el(document, 'p', 'fine', '当前使用外部 MCP 桥，请在该桥的模型设置中修改。下面的选择用于码舱随包桥。'));
+    } else {
+      panel.append(el(document, 'p', 'fine', '通过 DeepSeek Harness 新建子代理时使用。单次任务指定的模型优先。'));
+    }
+    const form = el(document, 'form', 'dsh-default-fields');
+    function field(title, placeholder, value, maxLength) {
+      const label = el(document, 'label', 'field', title);
+      const input = el(document, 'input');
+      Object.assign(input, {value:value || '', placeholder, maxLength, autocomplete:'off', spellcheck:false});
+      label.append(input); form.append(label); return input;
+    }
+    const model = field('模型 ID', '例如 deepseek-flash', defaults.selection?.model, 255);
+    const provider = field('提供商 ID（可选）', '使用 DSH 的默认提供商', defaults.selection?.provider, 100);
+    model.required = true;
+    const row = el(document, 'div', 'actions');
+    const submit = el(document, 'button', 'btn primary', '保存默认模型'); submit.type = 'submit';
+    const reset = el(document, 'button', 'btn ghost', '恢复 DSH 默认值'); reset.type = 'button';
+    reset.disabled = !defaults.selection;
+    const feedback = el(document, 'p', 'fine'); feedback.setAttribute('role', 'status');
+    let saving = false;
+    async function save(selection) {
+      if (saving) return;
+      saving = true; submit.disabled = true; reset.disabled = true;
+      const target = status, currentMode = mode;
+      try {
+        const next = await api('/api/dsh/connection/saveModel', {...(currentMode ? {mode:currentMode} : {}), selection});
+        target.modelDefaults = next;
+        model.value = next.selection?.model || ''; provider.value = next.selection?.provider || '';
+        feedback.className = 'fine'; feedback.textContent = next.selection ? '已保存，下次新建子代理时生效。' : '已恢复 DSH 默认值。';
+        onModelSaved();
+      } catch (error) { feedback.className = 'inline-error'; feedback.textContent = error.message; }
+      finally { saving = false; submit.disabled = false; reset.disabled = !target.modelDefaults.selection; }
+    }
+    form.addEventListener('submit', event => { event.preventDefault(); save({model:model.value.trim(), ...(provider.value.trim() ? {provider:provider.value.trim()} : {})}); });
+    reset.addEventListener('click', () => save(null));
+    row.append(submit, reset); form.append(row); panel.append(form,feedback); return panel;
+  }
   function render() {
     root.replaceChildren(header());
     if(context==='wsl'||status?.selectionRequired||mode)root.append(modePicker());
@@ -143,6 +189,7 @@ export function mountDshConnection(host, { api, wait = ms => new Promise(resolve
     if (!status) { root.append(el(document, 'p', 'empty-line', busy ? '正在检查…' : '尚未检查')); appendMessage(); return; }
     if(status.selectionRequired){root.append(el(document,'p','fine',describeConnection(status).detail));appendMessage();return;}
     const view = describeConnection(status, result);
+    if (status.modelDefaults) root.append(modelSettings());
     const box = el(document, 'div', 'dshcfg-activation'); box.dataset.tone = view.tone; box.setAttribute('role', 'status');
     const line = el(document, 'div', 'dshcfg-activation-line'); line.append(el(document, 'span', 'agent-state', view.label));
     box.append(line, el(document, 'p', '', view.detail), facts(view));

@@ -57,27 +57,55 @@ try{
   assert.equal(await group.getAttribute('open'),null);await page.evaluate(()=>window.repair.render());assert.equal(await group.getAttribute('open'),null);
  }
  checks.push('nested file disclosure collapse survives rerender and other groups');
- await page.evaluate(()=>{const r=window.repair;r.items.push({id:'agent-start',type:'subAgentActivity',agentThreadId:'child',agentPath:'/root/check',kind:'started',_turnId:'two'});r.ledger.merge({id:'two',status:'completed'});r.render();});
+ await page.evaluate(()=>{const r=window.repair;r.items.push({id:'agent-start',type:'subAgentActivity',agentThreadId:'child',agentPath:'/root/check',kind:'started',_turnId:'two'});r.render();});
  assert.equal(await page.locator('.turn > .agent-lifecycle-event .agent-avatar').count(),1);
- checks.push('subagent lifecycle with avatar stays outside completed work');
+ await page.evaluate(()=>{const r=window.repair;r.ledger.merge({id:'two',status:'completed'});r.render();});
+ const finished=page.locator('.turn-work').filter({has:page.locator('.agent-lifecycle-event')});
+ for(const width of [1280,393]){
+  await page.setViewportSize({width,height:900});
+  assert.equal(await finished.locator('.agent-avatar').isVisible(),false);
+  const summary=finished.locator(':scope > summary');await summary.click();
+  assert.equal(await finished.locator('.agent-avatar').isVisible(),true);
+  await finished.getByRole('button',{name:'收起本轮过程'}).click();
+  assert.equal(await finished.getAttribute('open'),null);assert.ok(await summary.evaluate(node=>document.activeElement===node));
+ }
+ await page.setViewportSize({width:1280,height:900});
+ checks.push('live agent events fold with their completed turn and can collapse from the bottom');
  await groups.first().locator(':scope > summary').click();await groups.first().locator('.step > summary').click();
  await page.screenshot({path:path.join(output,'files-dark.png')});
  await page.evaluate(()=>document.documentElement.dataset.theme='light');await page.screenshot({path:path.join(output,'files-light.png')});
  await page.setViewportSize({width:700,height:740});
- assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:path.join(output,'files-narrow.png')});
+ const viewport=await page.evaluate(()=>({width:innerWidth,content:document.documentElement.scrollWidth,overflow:[...document.body.children,...document.querySelectorAll('#app > *,#details')].filter(node=>node.getBoundingClientRect().right>innerWidth).map(node=>({id:node.id,right:node.getBoundingClientRect().right}))}));
+ assert.ok(viewport.content<=viewport.width,JSON.stringify(viewport));await page.screenshot({path:path.join(output,'files-narrow.png')});
  await page.setViewportSize({width:1280,height:900});
  await page.evaluate(async()=>{
-  const {createAsyncInputCard}=await import('/ui/async-input.js');
+  const {mountConversation}=await import('/activity-feed.js'),{buildTurns,TurnLedger}=await import('/state.js');
   const host=document.querySelector('#messages');window.repair.view.clear();host.replaceChildren();
-  const card=createAsyncInputCard(document,{id:'question',type:'agentMessage',delivery:'async',questions:[{title:'如何处理已经完成的修改？',options:['保留并继续检查','暂时保留']},{title:'还有哪些要求？'}]},{threadId:'fixture',onAnswerAsync:async payload=>{window.repair.answer=payload;return {status:'sent'};}});
-  host.append(card.node);
+  const turn='_answerFixture',ledger=new TurnLedger();ledger.merge({id:turn,status:'inProgress'});
+  const items=[{id:'question',_turnId:turn,type:'agentMessage',delivery:'async',questions:[{title:'如何处理已经完成的修改？',options:['保留并继续检查','暂时保留']},{title:'还有哪些要求？'}]}];
+  const mount=()=>mountConversation(host,{getThreadId:()=> 'fixture',onAnswerAsync:async payload=>{
+   window.repair.answer=payload;items.push({id:'native-answer',_turnId:turn,type:'userMessage',content:[{type:'text',text:payload.text}]});
+   render();return {status:'sent'};
+  }});
+  let view=mount();const render=()=>view.render(buildTurns(items,ledger,{activeTurnId:turn}));
+  window.repair.replayAnswers=()=>{view.clear();view=mount();render();};
+  render();
  });
  await page.locator('.approval-choice').filter({hasText:'保留并继续检查'}).click();await page.locator('.approval-question textarea').last().fill('继续完成界面和交互检查。');
  assert.match(await page.locator('.answer-progress').textContent(),/2 \/ 2/);await page.screenshot({path:path.join(output,'answer-ready.png')});
  await page.locator('.answer-submit').click();await page.locator('.async-input-card[data-outcome="sent"]').waitFor();
  assert.equal(await page.locator('.async-input-card h3').textContent(),'已回答');assert.equal(await page.locator('.approval-choice:visible').count(),0);assert.equal(await page.locator('.answer-value:visible').count(),2);
  assert.equal(await page.evaluate(()=>window.repair.answer.answers[0].answer),'保留并继续检查');await page.screenshot({path:path.join(output,'answer-sent.png')});
- checks.push('answer progress, explicit submission and compact sent summary');
+ for(const width of [1280,393]){
+  await page.setViewportSize({width,height:900});await page.evaluate(()=>window.repair.replayAnswers());
+  assert.equal(await page.locator('.async-input-card h3').textContent(),'已回答');
+  assert.equal(await page.locator('.userMessage').count(),0);
+  assert.deepEqual(await page.locator('.answer-value:visible').allTextContents(),['保留并继续检查','继续完成界面和交互检查。']);
+  assert.ok(!(await page.locator('#messages').innerText()).includes('回答已发送'));
+  if(width===393)await page.locator('.async-input-card').screenshot({path:path.join(output,'answer-sent-mobile.png')});
+ }
+ await page.setViewportSize({width:1280,height:900});
+ checks.push('submitted answers appear once on the correct card after desktop and mobile history replay');
  await page.evaluate(async()=>{
   const {createAgentInspector}=await import('/ui/agent-inspector.js');
   const host=document.querySelector('#messages');host.replaceChildren();
@@ -106,7 +134,7 @@ try{
   assert.deepEqual(await page.locator('#diff-check .diff-view').evaluate(node=>[node.scrollTop,node.scrollLeft]),before);
   await page.evaluate(()=>{const d=window.diffCheck;d.view.update({...d.summary,rows:[{...d.summary.rows[0],diffs:[d.summary.rows[0].diffs[0]+'\n+later update']}]},'fixture');});
   assert.deepEqual(await page.locator('#diff-check .diff-view').evaluate(node=>[node.scrollTop,node.scrollLeft]),before);
-  await page.locator('#diff-check .diff-view').click({position:{x:10,y:30}});assert.equal(await page.locator('#diff-check .changes-pill').getAttribute('aria-expanded'),'true');
+  await page.locator('#diff-check .diff-view').click();assert.equal(await page.locator('#diff-check .changes-pill').getAttribute('aria-expanded'),'true');
   await page.locator('#rail-home').click();assert.equal(await page.locator('#diff-check .changes-pill').getAttribute('aria-expanded'),'false');
   await page.evaluate(()=>window.diffCheck.host.remove());
  }

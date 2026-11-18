@@ -104,7 +104,7 @@ export function createComposer({ document, session, drafts, ledger, thread, view
         // The draft becomes a real thread only now, immediately before its first turn.
         const params = { cwd: submission.cwd }; if (submission.model) params.model = submission.model;
         Object.assign(params,sessionControls.params(submission.controls,'thread'));
-        const result = await performMutation('thread/start', params,{onRequest:envelope=>optimistic.patch(optimisticRow.id,{requestId:envelope.requestId,method:'thread/start'})}); optimistic.patch(optimisticRow.id,{threadId:result.thread.id});if (generation !== state.openGeneration) { optimistic.patch(optimisticRow.id,{status:'notExecuted',error:'已切换对话，消息未发送。'});renderOptimistic();notice('新对话已创建；你已切换页面，因此消息未继续发送。'); return; }
+        const result = await performMutation('thread/start', params,{permissionMode:sessionControls.mode(),onRequest:envelope=>optimistic.patch(optimisticRow.id,{requestId:envelope.requestId,method:'thread/start'})}); optimistic.patch(optimisticRow.id,{threadId:result.thread.id});if (generation !== state.openGeneration) { optimistic.patch(optimisticRow.id,{status:'notExecuted',error:'已切换对话，消息未发送。'});renderOptimistic();notice('新对话已创建；你已切换页面，因此消息未继续发送。'); return; }
         sessionControls.adopt(result.thread.id);
         state.thread = result.thread; restoreThreadReasoning(result, submission.effort); resetThreadDsh(state.thread.id); $('thread-title').textContent = submission.text.slice(0, 55) || '附件对话'; $('welcome').classList.add('hidden'); renderContext();
       }

@@ -6,9 +6,9 @@ import { icon } from './icons.js';
 import { renderMarkdown } from './markdown.js';
 import { formatDuration, fileSummary } from './state.js';
 import { reasoningTimeLabel } from './reasoning-timing.js';
-import { dshToolResultAgentId, dshLifecycleEvent } from './dsh.js';
+import { dshToolResultAgentId, dshLifecycleEvent, dshStatusSnapshot } from './dsh.js';
 import { artifactCandidates, markdownImageRefs } from './ui/artifacts.js';
-import { asyncInputDefinition, asyncInputBodyText, createAsyncInputCard } from './ui/async-input.js';
+import { asyncInputDefinition, asyncInputBodyText, createAsyncInputCard, asyncAnswerHistory } from './ui/async-input.js';
 import { changeEvidence } from './change-stats.js';
 import { createAgentAvatar } from './ui/agent-avatar.js';
 
@@ -439,7 +439,7 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     node.append(body);
     return { node, body, item: null, steer: null, text: null, complete: null, content: null, kept: null, long: null };
   }
-  function updateMessage(view, item, { steer = false } = {}) {
+  function updateMessage(view, item, { steer = false, confirmedAnswers } = {}) {
     if (item.type === 'userMessage') {
       const content = JSON.stringify((item.content || []).map(part => part?.type === 'text' ? { type: 'text', size: part.text?.length } : part));
       const text = (item.content || []).filter(part => part?.type === 'text').map(part => part.text).join('\n');
@@ -472,8 +472,9 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     if (definition) {
       const threadId = getThreadId(), key = JSON.stringify([threadId, item.id]);
       let input = asyncInputs.get(key);
-      if (!input) { input = createAsyncInputCard(document, item, { threadId, onAnswerAsync }); asyncInputs.set(key, input); }
-      else input.update(item, { threadId, onAnswerAsync });
+      const options = { threadId, onAnswerAsync, confirmedAnswers };
+      if (!input) { input = createAsyncInputCard(document, item, options); asyncInputs.set(key, input); }
+      else input.update(item, options);
       if (view.asyncInput !== input) { view.asyncInput?.node.remove(); view.asyncInput = input; view.node.append(input.node); }
     } else { view.asyncInput?.node.remove(); view.asyncInput = null; }
     // Full body: equal-length corrections repaint because the strings differ.
@@ -697,9 +698,42 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     const work = el(document, 'details', 'turn-work');
     const summary = el(document, 'summary', 'turn-work-summary');
     const workLabel = el(document, 'span', 'turn-work-label');
-    summary.append(workLabel, icon(document, 'right', { size: 14 }));
+    summary.append(workLabel, icon(document, 'right', { size: 14 }), el(document, 'span', 'turn-work-close-label', '收起本轮过程'));
     const workBody = el(document, 'div', 'turn-work-body'); work.append(summary, workBody);
-    return { node, footer, work, workLabel, workBody, segments: new Map(), messages: new Map(), compactions: new Map(), events: new Map(), files: null, agents: null, agentsSig: null, art: null, artSig: null };
+    const closeWork = el(document, 'button', 'turn-work-close', '收起本轮过程');
+    closeWork.type = 'button'; closeWork.append(icon(document, 'up', {size: 14}));
+    work.append(closeWork);
+    summary.addEventListener('click', () => scrollController?.pause());
+    closeWork.addEventListener('click', () => {
+      work.open = false;
+      summary.focus({preventScroll: true});
+      summary.scrollIntoView({block: 'nearest'});
+      scrollController?.pause();
+    });
+    return { node, footer, work, workLabel, workBody, segments: new Map(), messages: new Map(), compactions: new Map(), events: new Map(), agentReplies: new Map(), files: null, agents: null, agentsSig: null, art: null, artSig: null };
+  }
+
+  function replyNode(view, item, {agentId, name, source, text, cwd = ''}) {
+    const key = JSON.stringify([item.id, agentId]);
+    let reply = view.agentReplies.get(key);
+    if (!reply) {
+      const node = el(document, 'article', 'agent-reply');
+      node.dataset.itemId = 'reply:' + key;
+      const sender = el(document, 'button', 'agent-reply-author');
+      sender.type = 'button';
+      sender.addEventListener('click', () => onOpenAgent?.(agentId, source));
+      const body = el(document, 'div', 'message-text markdown-body');
+      node.append(sender, body);
+      reply = {node, sender, body}; view.agentReplies.set(key, reply);
+    }
+    setText(reply.sender, name + ' 的回答');
+    if (text !== reply.text || cwd !== reply.cwd) {
+      const threadId = source === 'native' ? agentId : getThreadId();
+      reply.body.replaceChildren(renderMarkdown(document, text, {cwd, complete: true, onCopy,
+        onLocalLink: onLocalLink && ((ref, node) => onLocalLink(ref, node, threadId))}));
+      reply.text = text; reply.cwd = cwd;
+    }
+    return reply.node;
   }
   function releaseSegment(view){for(const row of view.rows.values())row.images?.release?.();}
   function releaseTurn(view){view.art?.release?.();for(const segment of view.segments.values())releaseSegment(segment);for(const message of view.messages.values()){if(message.long)longPositions.set(message.node.dataset.itemId,{start:message.long.window.start,follow:message.long.window.follow});message.media?.release?.();}}
@@ -711,7 +745,7 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     return turn.processCount ? `已处理 ${turn.processCount} 步` : '';
   }
 
-  function render(list, { now = Date.now(), follow = true } = {}) {
+  function render(list, { now = Date.now(), follow = true, revealTurnId = null } = {}) {
     if (rendering) return;
     rendering = true;
     try {
@@ -733,9 +767,10 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     }
     const layout = scroller ? historyViewport(list, heights, scrollerTop-host.getBoundingClientRect().top, scroller.clientHeight) : null;
     const keep = new Set(); const nodes = []; runningClocks = [];
+    const {answered, echoes} = asyncAnswerHistory(list,getThreadId());
     for (const [index, turn] of list.entries()) {
       const focused = turns.get(turn.id)?.node.contains(document.activeElement);
-      if (layout && !layout[index].visible && !focused && turn.id !== anchorId) {
+      if (layout && !layout[index].visible && !focused && turn.id !== anchorId && turn.id !== revealTurnId) {
         let spacer = placeholders.get(turn.id);
         if (!spacer) { spacer=el(document,'div','history-turn-placeholder');spacer.dataset.virtualTurnId=turn.id;spacer.setAttribute('aria-hidden','true');placeholders.set(turn.id,spacer); }
         spacer.style.height=layout[index].size+'px'; nodes.push(spacer); continue;
@@ -758,7 +793,14 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
         updateProcess(process,items,{running,first:false});children.push(process.node);
         if(running&&items.some(item=>item.type==='reasoning'&&itemState(item)==='running'&&Number.isFinite(item._startedAtMs)))runningClocks.push({process,items});
       };
-      const lifecycleSeen=new Set();
+      const lifecycleSeen=new Set(), latestReply = new Map(), agentNames = new Map();
+      function showReply(item, reply) {
+        const key = reply.source + ':' + reply.agentId;
+        if (!reply.text || latestReply.get(key) === reply.text) return;
+        latestReply.set(key, reply.text);
+        flushOperations(false);
+        children.push(replyNode(view, item, reply));
+      }
       for(const item of chronological){
         const nativeEvent=item.type==='subAgentActivity'&&['started','completed','interrupted'].includes(item.kind)&&item.agentThreadId;
         const dshEvent=dshLifecycleEvent(item);
@@ -766,13 +808,38 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
           flushOperations(false);
           const agentId=nativeEvent?item.agentThreadId:dshEvent.id,kind=nativeEvent?item.kind:dshEvent.kind,source=nativeEvent?'native':'dsh';
           const identity=`${source}:${agentId}:${kind}`;
-          if(kind==='started')for(const key of lifecycleSeen)if(key.startsWith(`${source}:${agentId}:`)&&!key.endsWith(':started'))lifecycleSeen.delete(key);
-          if(lifecycleSeen.has(identity)&&kind!=='started')continue;lifecycleSeen.add(identity);
-          let event=view.events.get(item.id);
-          if(!event){event=el(document,'button','agent-lifecycle-event');event.type='button';event.dataset.itemId=item.id;event.addEventListener('click',()=>onOpenAgent?.(agentId,source));view.events.set(item.id,event);}
-          const name=nativeEvent?item.agentPath?.split('/').filter(Boolean).at(-1)||agentId.slice(0,12):dshEvent.name;
-          event.replaceChildren(createAgentAvatar(document,agentId),el(document,'strong','',name),el(document,'span','',nativeEvent?({started:'已启动',completed:'已完成',interrupted:'已中断'})[item.kind]:dshEvent.label),icon(document,'right',{size:14}));
-          children.push(event);continue;
+          const knownName=agentNames.get(source + ':' + agentId);
+          const name=nativeEvent?item.agentPath?.split('/').filter(Boolean).at(-1)||knownName||agentId.slice(0,12)
+            :dshEvent.name===agentId.slice(0,12)&&knownName?knownName:dshEvent.name;
+          agentNames.set(source + ':' + agentId, name);
+          if(kind==='started'){
+            latestReply.delete(source + ':' + agentId);
+            for(const key of lifecycleSeen)if(key.startsWith(`${source}:${agentId}:`)&&!key.endsWith(':started'))lifecycleSeen.delete(key);
+          }
+          if(!lifecycleSeen.has(identity)||kind==='started'){
+            lifecycleSeen.add(identity);
+            let event=view.events.get(item.id);
+            if(!event){event=el(document,'button','agent-lifecycle-event');event.type='button';event.dataset.itemId=item.id;event.addEventListener('click',()=>onOpenAgent?.(agentId,source));view.events.set(item.id,event);}
+            event.replaceChildren(createAgentAvatar(document,agentId),el(document,'strong','',name),el(document,'span','',nativeEvent?({started:'已启动',completed:'已完成',interrupted:'已中断'})[item.kind]:dshEvent.label),icon(document,'right',{size:14}));
+            children.push(event);
+          }
+          if(dshEvent?.kind==='completed'){
+            const result=dshStatusSnapshot(item.result);
+            if(result.available && (!result.agent_id || result.agent_id === agentId)) showReply(item,{source,agentId,name,text:result.answer,cwd:result.cwd});
+          }
+          continue;
+        }
+        if(item.type==='collabAgentToolCall'){
+          operations.push(item);
+          for(const agentId of item.receiverThreadIds || []){
+            if(typeof agentId!=='string'||!agentId)continue;
+            if(item.tool==='followupTask' && item.status==='completed'){latestReply.delete('native:'+agentId);continue;}
+            const report = item.agentsStates?.[agentId];
+            if(report?.status === 'completed' && typeof report.message === 'string'){
+              showReply(item,{source:'native',agentId,name:agentNames.get('native:'+agentId)||agentId.slice(0,12),text:report.message});
+            }
+          }
+          continue;
         }
         if(item.type==='contextCompaction'){
           flushOperations(false);
@@ -781,10 +848,11 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
           updateCompactionRecord(compaction,item);children.push(compaction);continue;
         }
         if(item.type!=='userMessage'&&item.type!=='agentMessage'){operations.push(item);continue;}
+        if(echoes.has(item.id))continue;
         flushOperations(false);
         let message=view.messages.get(item.id);
         if(!message){message=messageView(item);view.messages.set(item.id,message);}
-        messageIds.add(item.id);updateMessage(message,item,{steer:steerIds.has(item.id)});children.push(message.node);
+        messageIds.add(item.id);updateMessage(message,item,{steer:steerIds.has(item.id),confirmedAnswers:answered.get(item.id)});children.push(message.node);
       }
       flushOperations(true);
       for (const key of view.segments.keys()) if (!segmentKeys.has(key)) {releaseSegment(view.segments.get(key));view.segments.delete(key);}
@@ -815,9 +883,12 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
       if (turn.finished) {
         // Keep the prompt and final answer outside; completed intermediate work is one disclosure
         // above the answer. Its DOM survives re-renders, preserving an explicit expansion.
-        const answerIds = new Set(turn.segments.flatMap(segment => segment.answers.map(answer => answer.id)));
-        const firstUser = children.find(child => child.classList.contains('userMessage'));
-        const intermediates = children.filter(child => child !== firstUser && !answerIds.has(child.dataset.itemId) && child !== view.files?.node && child !== view.art && !child.classList.contains('agent-lifecycle-event'));
+        // A mid-turn partial answer or question stays where it occurred, beside its reply.
+        const finalAnswer = turn.segments.flatMap(segment => segment.answers)
+          .filter(answer => answer.phase !== 'partial_answer' && !asyncInputDefinition(answer)).at(-1);
+        const firstUser = view.messages.get(turn.segments[0]?.user?.id)?.node;
+        const finalNode = finalAnswer && view.messages.get(finalAnswer.id)?.node;
+        const intermediates = children.filter(child => child !== firstUser && child !== finalNode && child !== view.files?.node && child !== view.art);
         const rest = children.filter(child => !intermediates.includes(child));
         const insertion = firstUser ? rest.indexOf(firstUser) + 1 : 0;
         if (intermediates.length) {
@@ -861,5 +932,12 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     const info=describeItem(items.at(-1),now);setText(process.latest,`${info.verb}${!info.code&&info.target?' · '+info.target.slice(0,90):''}`);
   } }
   function clear() { longPositions.clear(); lastList=[];heights.clear();placeholders.clear(); for(const view of turns.values())releaseTurn(view);turns.clear(); longPositions.clear(); userOpen.clear(); agentExpanded.clear(); agentDetails.clear(); fileState.clear(); imageRefs.clear(); runningClocks = []; host.replaceChildren(); artifacts?.clear(); }
-  return { render, tick, clear, hasRunningClock: () => runningClocks.length > 0 };
+  function revealItem(itemId) {
+    const turn = lastList.find(row => row.items?.some(item => item.id === itemId));
+    if (!turn) return null;
+    scrollController?.pause();
+    if (!turns.has(turn.id)) render(lastList, {follow:false, revealTurnId:turn.id});
+    return turns.get(turn.id)?.messages.get(itemId)?.node ?? null;
+  }
+  return { render, tick, clear, revealItem, hasRunningClock: () => runningClocks.length > 0 };
 }

@@ -5,6 +5,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {readQueueDescriptor} from './callback-queue.mjs';
 import {parseWindowsLaunch,mapWindowsRequest,assertQueueCapability} from './wsl-windows-paths.mjs';
+import {applyModelDefaults} from './model-defaults.mjs';
 try {
  if(process.platform!=='win32'||process.argv.length!==3)throw Error('Windows interop entry only');
  const launch=parseWindowsLaunch(process.argv[2]);
@@ -36,6 +37,7 @@ try {
    if(message.method==='initialize'){initializeId=message.id;message.params={...message.params,_meta:{...message.params?._meta,dshClientProfile:launch.queueDescriptor?'desktop-queue':'desktop'}};}
    if(message.method==='tools/call'){if(launch.queueDescriptor&&!queueReady)throw Error('Callback queue handshake has not completed');message.params={...message.params,_meta:{...message.params?._meta,dshQueue:launch.queueDescriptor}};}
    message=mapWindowsRequest(message,launch.distribution,{user:launch.user});
+   message=applyModelDefaults(message,launch.config);
    socket.write(JSON.stringify(message)+'\n');
   }catch(error){
    if(message?.id!==undefined)process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:message.id,error:{code:-32602,message:error.message}})+'\n');

@@ -106,6 +106,7 @@
       <div id="thread-menu" class="menu hidden" role="menu" aria-label="对话操作"><button id="rename-thread" role="menuitem">重命名</button><button id="fork-thread" role="menuitem">创建分支</button><button id="archive-thread" role="menuitem">归档</button></div>
     </header>
     <div id="notice" class="notice hidden" role="status"><span></span><button id="dismiss-notice" class="btn icon-only ghost" aria-label="关闭提示"><span data-icon="close"></span></button></div>
+    <aside id="dsh-model-reminder" class="dsh-model-reminder local-only" aria-label="DeepSeek Harness 模型设置" hidden><span>为 DeepSeek Harness 子代理选择默认模型。</span><button type="button" class="btn small" id="configure-dsh-model">去设置</button><button type="button" class="btn ghost small" id="dismiss-dsh-model">稍后</button></aside>
     <section id="conversation" class="conversation" aria-label="对话内容" tabindex="0">
       <button id="earlier" type="button" class="btn ghost small earlier hidden">加载更早的内容</button>
       <p id="history-load-status" class="history-load-status" role="status" aria-live="polite"></p>
@@ -264,7 +265,7 @@
   </main>
 
   <!-- ===== Inspector: tool activity and DSH ===== -->
-  <aside id="details" class="inspector hidden" aria-label="活动">
+  <aside id="details" class="inspector hidden" aria-label="活动" inert>
     <div class="inspector-head"><div class="segmented" role="tablist"><button id="tab-tools" class="active" aria-pressed="true">工具活动</button><button id="tab-dsh" aria-pressed="false">子代理</button></div><strong id="details-title" class="sr-only">工具活动</strong><button id="close-details" class="btn icon-only ghost" aria-label="关闭"><span data-icon="close"></span></button></div>
     <div id="tools-panel" class="inspector-body"><div id="tool-list"><p class="muted">暂无工具活动</p></div></div>
     <div id="dsh-panel" class="inspector-body hidden">

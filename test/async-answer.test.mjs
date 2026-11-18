@@ -14,6 +14,12 @@ test('idle question replies inherit their own thread model, settings and cwd',as
  await send({threadId:'child',itemId:'question',text:'answer'});
  assert.deepEqual(calls,[['turn/start',{threadId:'child',input:[{type:'text',text:'answer'}],cwd:'C:\\child'}]]);
 });
+test('an idle question uses its own saved approval override even while viewing its parent',async()=>{
+ const calls=[],permission={approvalPolicy:'on-request',approvalsReviewer:'user',sandboxPolicy:{type:'workspaceWrite'}};
+ const send=createAsyncAnswerSender({state:base(),sessionFor:()=>null,getPermission:async(id,cwd)=>{assert.equal(id,'child');assert.equal(cwd,'C:\\child');return permission;},performMutation:async(...args)=>{calls.push(args);return {turn:{id:'new'}};}});
+ await send({threadId:'child',itemId:'question',text:'answer'});
+ assert.deepEqual(calls,[['turn/start',{threadId:'child',input:[{type:'text',text:'answer'}],cwd:'C:\\child',...permission}]]);
+});
 test('unknown acknowledgement never reports a confirmed answer or retries',async()=>{
  let calls=0;const state=base(),send=createAsyncAnswerSender({state,sessionFor:()=>null,performMutation:async()=>{calls++;throw Object.assign(new Error('timeout'),{outcome:'unknown'});}});
  assert.equal((await send({threadId:'child',itemId:'question',text:'answer'})).status,'unknown');assert.equal(calls,1);assert.equal(state.sending,false);

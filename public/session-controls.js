@@ -1,9 +1,14 @@
 // Per-conversation overrides; never written to config.toml or browser storage.
 import { icon } from './icons.js';
-export function createSessionControls({document, defaults, threadId, notice}) {
+export function createSessionControls({document, defaults, threadId, notice, permissionStore}) {
  const sessions=new Map();
  // New drafts start with automatic review; existing threads retain configuration inheritance.
- const current=()=>{const id=threadId()||'draft';if(!sessions.has(id))sessions.set(id,{permission:id==='draft'?'auto':null,fast:null,restore:false});return sessions.get(id);};
+ const draftKey=Symbol('draft');
+ function session(id=threadId()||draftKey){
+  if(!sessions.has(id))sessions.set(id,{permission:id===draftKey?'auto':null,fast:null,restore:false,scope:null,pending:null,revision:0,read:0});
+  return sessions.get(id);
+ }
+ const current=()=>session();
  const chip=document.getElementById('permissions-info'), fast=document.getElementById('fast-toggle');
  document.querySelector('.reasoning-heading')?.firstElementChild?.replaceWith(fast);
  const menu=document.createElement('div');menu.className='permission-menu hidden';menu.id='permission-menu';menu.setAttribute('role','menu');
@@ -25,14 +30,42 @@ export function createSessionControls({document, defaults, threadId, notice}) {
   menu.style.top=`${Math.max(top+8,Math.min(rect.top-menu.offsetHeight-10,top+height-menu.offsetHeight-8))}px`;
  }
  function close(focus=false){menu.classList.add('hidden');chip.setAttribute('aria-expanded','false');if(focus)chip.focus();}
- function render(){const value=current(),config=defaults(),displayMode=value.permission||configuredMode(config);const choice=choices.find(([id])=>id===displayMode);const label=displayMode==='custom'?'自定义':choice[1];chip.querySelector('.label').textContent=label;chipIcon.replaceChildren(icon(document,choice[3],{size:15}));chip.title=value.permission?`${label} · 下一条消息生效`:`${label} · 继承 config.toml · ${config?.approvalPolicy||'配置尚未完整读取'}`;chip.dataset.warning=String(displayMode==='full');fast.setAttribute('aria-pressed',String(value.fast===null?config?.serviceTier==='fast':value.fast));fast.title=`Fast · ${value.fast===null?'继承配置':value.fast?'已开启':'已关闭，标准速度'} · 下一条消息生效`;for(const button of menu.querySelectorAll('button'))button.setAttribute('aria-checked',String(button.dataset.value===displayMode));if(!menu.classList.contains('hidden'))positionMenu();}
- for(const [id,label,description,glyph] of choices){const button=document.createElement('button');button.type='button';button.dataset.value=id;button.setAttribute('role','menuitemradio');const content=document.createElement('span');content.className='permission-choice-copy';const title=document.createElement('span');title.className='permission-choice-title';title.textContent=label;const detail=document.createElement('small');detail.textContent=description;content.append(title,detail);const check=icon(document,'check',{size:18});check.classList.add('permission-choice-check');button.append(icon(document,glyph,{size:20}),content,check);if(id==='full')button.className='permission-danger';button.addEventListener('click',()=>{const value=current();if(id==='custom'&&value.permission&&value.permission!=='custom'){const config=defaults();if(!config?.approvalPolicy||!config?.sandbox){notice('配置权限尚未完整读取，暂不能恢复自定义。请重新读取配置后再试。',true);return;}value.restore=true;}value.permission=id;render();close(true);});menu.append(button);}
+ function render(){
+  const value=current(), config=defaults(), unavailable=threadId()&&permissionStore&&!value.scope;
+  const displayMode=value.permission||configuredMode(config), choice=choices.find(([id])=>id===displayMode);
+  const label=unavailable?'读取批准方式':displayMode==='custom'?'自定义':choice[1];
+  chip.querySelector('.label').textContent=label;
+  chipIcon.replaceChildren(icon(document,unavailable?'shield':choice[3],{size:15}));
+  chip.title=unavailable?'正在确认此对话保存的批准方式':value.permission?label+' · 下一条消息生效':label+' · 继承 config.toml · '+(config?.approvalPolicy||'配置尚未完整读取');
+  chip.dataset.warning=String(!unavailable&&displayMode==='full');
+  fast.setAttribute('aria-pressed',String(value.fast===null?config?.serviceTier==='fast':value.fast));
+  fast.title='Fast · '+(value.fast===null?'继承配置':value.fast?'已开启':'已关闭，标准速度')+' · 下一条消息生效';
+  for(const button of menu.querySelectorAll('button'))button.setAttribute('aria-checked',String(!unavailable&&button.dataset.value===displayMode));
+  if(!menu.classList.contains('hidden'))positionMenu();
+ }
+ function choose(mode){
+  const id=threadId(), value=current();
+  if(id && permissionStore && !value.scope){load(id).then(()=>{if(threadId()===id)notice('已读取此对话的批准方式，请重新选择。');}).catch(error=>notice('未能读取对话批准方式：'+error.message,true));return;}
+  if(mode==='custom' && (!defaults()?.approvalPolicy||!defaults()?.sandbox)){
+   notice('配置权限尚未完整读取，暂不能恢复自定义。请重新读取配置后再试。',true);return;
+  }
+  value.permission=mode;value.restore=mode==='custom';value.revision++;
+  if(id && permissionStore){
+   const scope=value.scope;
+   const task=Promise.resolve(value.pending).then(()=>permissionStore({threadId:id,scope,mode})).catch(error=>{
+    notice('未能保存对话批准方式：'+error.message,true);
+   });
+   value.pending=task;task.finally(()=>{if(value.pending===task)value.pending=null;});
+  }
+  render();close(true);
+ }
+ for(const [id,label,description,glyph] of choices){const button=document.createElement('button');button.type='button';button.dataset.value=id;button.setAttribute('role','menuitemradio');const content=document.createElement('span');content.className='permission-choice-copy';const title=document.createElement('span');title.className='permission-choice-title';title.textContent=label;const detail=document.createElement('small');detail.textContent=description;content.append(title,detail);const check=icon(document,'check',{size:18});check.classList.add('permission-choice-check');button.append(icon(document,glyph,{size:20}),content,check);if(id==='full')button.className='permission-danger';button.addEventListener('click',()=>choose(id));menu.append(button);}
  chip.addEventListener('click',()=>{const open=menu.classList.contains('hidden');menu.classList.toggle('hidden',!open);chip.setAttribute('aria-expanded',String(open));if(open){positionMenu();menu.querySelector('[aria-checked="true"]')?.focus();}});
  document.defaultView.addEventListener('resize',()=>close());document.defaultView.visualViewport?.addEventListener('resize',()=>close());
  menu.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();close(true);}if(['ArrowDown','ArrowUp','Home','End'].includes(event.key)){event.preventDefault();const buttons=[...menu.querySelectorAll('button')];const index=buttons.indexOf(document.activeElement);buttons[event.key==='Home'?0:event.key==='End'?buttons.length-1:(index+(event.key==='ArrowDown'?1:-1)+buttons.length)%buttons.length].focus();}});
  document.addEventListener('pointerdown',event=>{if(!menu.contains(event.target)&&!chip.contains(event.target))close();});menu.addEventListener('focusout',event=>{if(!menu.contains(event.relatedTarget)&&event.relatedTarget!==chip)close();});
  fast.addEventListener('click',()=>{const value=current();value.fast=!(value.fast===null?defaults()?.serviceTier==='fast':value.fast);render();});
- function snapshot(){const value=current(),config=defaults();let permission=null;if(value.permission==='request'||value.permission==='auto')permission={approvalPolicy:'on-request',approvalsReviewer:value.permission==='auto'?'auto_review':'user',sandbox:'workspace-write',sandboxPolicy:{type:'workspaceWrite'}};if(value.permission==='full')permission={approvalPolicy:'never',approvalsReviewer:'user',sandbox:'danger-full-access',sandboxPolicy:{type:'dangerFullAccess'}};if(value.permission==='custom'&&value.restore){if(!config?.approvalPolicy||!config?.sandbox)throw new Error('无法还原配置权限；配置尚未完整读取。');permission={approvalPolicy:config.approvalPolicy,approvalsReviewer:config.approvalsReviewer||'user',sandbox:config.sandbox,sandboxPolicy:config.sandboxPolicy};}return structuredClone({permission,serviceTier:value.fast===null?null:value.fast?'fast':'default'});}
+ function snapshot(id=threadId(),config=defaults()){const value=id?session(id):session(draftKey);if(id&&permissionStore&&!value.scope)throw new Error('正在读取对话批准方式，请稍后再试。');let permission=null;if(value.permission==='request'||value.permission==='auto')permission={approvalPolicy:'on-request',approvalsReviewer:value.permission==='auto'?'auto_review':'user',sandbox:'workspace-write',sandboxPolicy:{type:'workspaceWrite'}};if(value.permission==='full')permission={approvalPolicy:'never',approvalsReviewer:'user',sandbox:'danger-full-access',sandboxPolicy:{type:'dangerFullAccess'}};if(value.permission==='custom'&&value.restore){if(!config?.approvalPolicy||!config?.sandbox)throw new Error('无法还原配置权限；配置尚未完整读取。');permission={approvalPolicy:config.approvalPolicy,approvalsReviewer:config.approvalsReviewer||'user',sandbox:config.sandbox,sandboxPolicy:config.sandboxPolicy};}return structuredClone({permission,serviceTier:value.fast===null?null:value.fast?'fast':'default'});}
  function params(snapshot,kind){
   const result={};
   if(snapshot?.permission){
@@ -43,7 +76,26 @@ export function createSessionControls({document, defaults, threadId, notice}) {
   if(snapshot?.serviceTier)result.serviceTier=snapshot.serviceTier;
   return result;
  }
- function adopt(id){const draft=sessions.get('draft');if(draft)sessions.set(id,structuredClone(draft));sessions.delete('draft');render();}
- function restore(){close();render();}
- render();return {snapshot,params,adopt,restore,render};
+ function hydrate(value,stored){
+  if(typeof stored?.scope!=='string'||(stored.mode!==null&&!choices.some(([mode])=>mode===stored.mode)))throw new Error('无法读取对话批准方式。');
+  value.scope=stored.scope;value.permission=stored.mode;value.restore=stored.mode==='custom';
+  if(stored.warning)notice(stored.warning,true);
+ }
+ async function load(id){
+  if(!permissionStore)return;
+  const value=session(id), revision=value.revision, read=++value.read;
+  await value.pending;
+  const latest=()=>sessions.get(id)===value&&value.revision===revision&&value.read===read;
+  try{
+   const stored=await permissionStore({threadId:id});
+   if(latest()){hydrate(value,stored);if(id===threadId())render();}
+  }catch(error){
+   if(latest()){value.scope=null;value.permission=null;value.restore=false;if(id===threadId())render();}
+   throw error;
+  }
+ }
+ function adopt(id){const draft=sessions.get(draftKey);if(draft)sessions.set(id,{...draft});sessions.delete(draftKey);render();}
+ function restore(stored){if(stored)hydrate(current(),stored);close();render();}
+ function reset(){sessions.clear();close();render();}
+ render();return {snapshot,params,adopt,restore,render,load,reset,mode:(id)=>session(id).permission};
 }
