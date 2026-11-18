@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 namespace CodexLight.Desktop;
 
-// Bootstrap only. A dedicated native message loop keeps progress visible while
+// A dedicated native message loop keeps progress visible while
 // the worker waits for parent exit and Update.exe. No additional UI runtime.
 internal sealed class BootstrapProgress : IDisposable {
  const uint RefreshMessage=0x8001,StopMessage=0x8002;

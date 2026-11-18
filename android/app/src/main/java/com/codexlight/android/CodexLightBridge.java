@@ -4,7 +4,6 @@ import android.app.Activity;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
-import android.content.Intent;
 import android.os.Build;
 import android.os.Looper;
 import android.os.VibrationEffect;
@@ -45,16 +44,16 @@ public class CodexLightBridge {
 
     @JavascriptInterface
     public void openServerManager() {
-        if (activity == null) return;
-        activity.runOnUiThread(() -> {
-            if (activity instanceof MainActivity) {
-                ((MainActivity) activity).openServerManager();
-                return;
-            }
-            Intent intent = new Intent(activity, ServerConnectActivity.class);
-            activity.startActivity(intent);
-            activity.finish();
-        });
+        if (activity instanceof MainActivity) {
+            activity.runOnUiThread(() -> ((MainActivity) activity).openWorkbenchServerManager());
+        }
+    }
+
+    @JavascriptInterface
+    public void openApplicationSettings() {
+        if (activity instanceof MainActivity) {
+            activity.runOnUiThread(() -> ((MainActivity) activity).openApplicationSettings());
+        }
     }
 
     @JavascriptInterface
@@ -85,6 +84,21 @@ public class CodexLightBridge {
     }
 
     @JavascriptInterface
+    public void openLiveUpdateSettings() {
+        if (activity instanceof MainActivity) activity.runOnUiThread(() -> ((MainActivity) activity).openLiveUpdateSettings());
+    }
+
+    @JavascriptInterface
+    public void setBackgroundNotifications(boolean enabled, boolean questionsEnabled) {
+        if (activity instanceof MainActivity) activity.runOnUiThread(() -> ((MainActivity) activity).setBackgroundNotifications(enabled,questionsEnabled));
+    }
+
+    @JavascriptInterface
+    public void setBackgroundQuestionAlerts(boolean enabled) {
+        if (activity instanceof MainActivity) activity.runOnUiThread(() -> ((MainActivity) activity).setBackgroundQuestionAlerts(enabled));
+    }
+
+    @JavascriptInterface
     public void updateTaskNotification(final String json) {
         if (activity instanceof MainActivity && ((MainActivity) activity).trustedTaskNotificationPage()
                 && json != null && json.length() <= 4096) {
@@ -97,6 +111,27 @@ public class CodexLightBridge {
         if (activity instanceof MainActivity && ((MainActivity) activity).trustedTaskNotificationPage()
                 && TaskNotificationState.validId(threadId)) {
             activity.runOnUiThread(() -> ((MainActivity) activity).taskNotificationOpened(threadId));
+        }
+    }
+
+    @JavascriptInterface
+    public String getQuestionNotificationStatus() {
+        return activity instanceof MainActivity
+            ? ((MainActivity) activity).getQuestionNotificationStatus() : "unsupported";
+    }
+
+    @JavascriptInterface
+    public void requestQuestionNotificationPermission() {
+        if (activity instanceof MainActivity && ((MainActivity) activity).trustedTaskNotificationPage()) {
+            activity.runOnUiThread(() -> ((MainActivity) activity).requestQuestionNotificationPermission());
+        }
+    }
+
+    @JavascriptInterface
+    public void updateQuestionNotification(final String json) {
+        if (activity instanceof MainActivity && ((MainActivity) activity).trustedTaskNotificationPage()
+                && json != null && json.length() <= 4096) {
+            activity.runOnUiThread(() -> ((MainActivity) activity).updateQuestionNotification(json));
         }
     }
 
@@ -152,8 +187,33 @@ public class CodexLightBridge {
     }
 
     @JavascriptInterface
+    public void checkForUpdates() {
+        if (activity instanceof MainActivity) {
+            MainActivity window = (MainActivity) activity;
+            window.runOnUiThread(() -> {
+                if (window.trustedTaskNotificationPage()) AppUpdateChecker.checkNow(window);
+            });
+        }
+    }
+
+    @JavascriptInterface
+    public String getAppUpdateStatus() {
+        return activity instanceof MainActivity && ((MainActivity) activity).trustedTaskNotificationPage()
+            ? AppUpdateChecker.webStatus() : "{\"phase\":\"idle\"}";
+    }
+
+    @JavascriptInterface
+    public void openAppUpdate() {
+        if (!(activity instanceof MainActivity)) return;
+        MainActivity window = (MainActivity) activity;
+        window.runOnUiThread(() -> {
+            if (window.trustedTaskNotificationPage() && window.hasWindowFocus()) AppUpdateChecker.showCurrent(window);
+        });
+    }
+
+    @JavascriptInterface
     public String getAppVersion() {
-        return "0.4.9";
+        return "0.4.10";
     }
 
     @JavascriptInterface

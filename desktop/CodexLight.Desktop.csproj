@@ -1,15 +1,17 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="TaskbarFont.props" />
   <PropertyGroup>
-    <OutputType>WinExe</OutputType><TargetFramework>net10.0-windows</TargetFramework>
+    <OutputType>WinExe</OutputType><TargetFramework>net10.0-windows10.0.19041.0</TargetFramework><SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
     <UseWindowsForms>true</UseWindowsForms><EnableWindowsTargeting>true</EnableWindowsTargeting>
     <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
     <AssemblyName>CodexLight</AssemblyName><ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>0.4.9</Version>
+    <Version>0.4.10</Version>
     <ApplicationIcon>app.ico</ApplicationIcon>
     <Product>码舱 CodeCang</Product><Title>码舱 CodeCang</Title>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)' == 'Release'"><DebugType>none</DebugType><DebugSymbols>false</DebugSymbols></PropertyGroup>
   <ItemGroup><PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" /></ItemGroup>
+  <ItemGroup><PackageReference Include="Microsoft.Toolkit.Uwp.Notifications" Version="7.1.3" /></ItemGroup>
   <!-- Experimental packaging opt-in: -p:EnableVelopackPrototype=true.
        The default MSI build has no Velopack dependency or startup hook.
        This does not migrate MSI installs or enable the production updater. -->

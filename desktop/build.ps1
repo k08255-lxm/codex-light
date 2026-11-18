@@ -63,9 +63,17 @@ if ($SelfContained) {
 $webLibraries = @($assets.libraries.PSObject.Properties.Name | Where-Object { $_ -match '^Microsoft\.Web\.WebView2/' })
 if ($webLibraries.Count -ne 1) { throw 'Resolved WebView2 package version is missing/ambiguous' }
 $webVersion = $webLibraries[0].Split('/')[1]
+$notificationLibraries = @($assets.libraries.PSObject.Properties.Name | Where-Object { $_ -match '^Microsoft\.Toolkit\.Uwp\.Notifications/' })
+if ($notificationLibraries.Count -ne 1) { throw 'Resolved Windows notification package version is missing/ambiguous' }
+$notificationVersion = $notificationLibraries[0].Split('/')[1]
+$sdkReferences = @($assets.project.frameworks.PSObject.Properties.Value.downloadDependencies | Where-Object { $_.name -eq 'Microsoft.Windows.SDK.NET.Ref' })
+if ($sdkReferences.Count -ne 1 -or $sdkReferences[0].version -notmatch '^\[(\d+\.\d+\.\d+\.\d+), \1\]$') { throw 'Resolved Windows SDK projection version is missing/ambiguous' }
+$windowsProjectionVersion = $Matches[1]
 $licenseSources = @(
     @{ Source = (Find-PackageFile 'microsoft.web.webview2' $webVersion 'LICENSE.txt'); Name = 'WebView2-LICENSE.txt' },
     @{ Source = (Find-PackageFile 'microsoft.web.webview2' $webVersion 'NOTICE.txt'); Name = 'WebView2-NOTICE.txt' },
+    @{ Source = (Find-PackageFile 'microsoft.toolkit.uwp.notifications' $notificationVersion 'License.md'); Name = 'WindowsNotifications-LICENSE.md' },
+    @{ Source = (Join-Path $root 'licenses/windows-notifications/WindowsSDK-NOTICE.txt'); Name = 'WindowsSDK-NOTICE.txt' },
     @{ Source = (Join-Path $root 'LICENSE'); Name = 'CodexLight-LICENSE.txt' }
 )
 if ($SelfContained) {
@@ -136,6 +144,7 @@ foreach ($entry in $licenseSources) {
     Copy-Item -LiteralPath $entry.Source -Destination (Join-Path $licenses $entry.Name)
 }
 $versions = @("xterm.js 6.0.0", "@xterm/addon-fit 0.11.0", "Microsoft.Web.WebView2 $webVersion", "Runtime $Runtime", "SelfContained $selfContainedValue")
+$versions += @("Microsoft.Toolkit.Uwp.Notifications $notificationVersion", "Microsoft.Windows.SDK.NET.Ref $windowsProjectionVersion")
 if ($SelfContained) { $versions += @("Microsoft.NETCore.App $coreVersion", "Microsoft.WindowsDesktop.App $desktopVersion") }
 else { $versions += @("Microsoft.NETCore.App.Host.$Runtime $hostVersion", ".NET SDK $sdkVersion") }
 $versions | Set-Content (Join-Path $licenses 'VERSIONS.txt') -Encoding UTF8

@@ -132,6 +132,8 @@ test('path helpers normalize Windows drive and UNC paths while keeping POSIX cas
   assert.equal(projectPathKey('C:\\'), 'c:/');
   assert.equal(projectPathKey('\\\\Server\\Share\\Project\\'), '//server/share/project');
   assert.equal(projectPathKey('//SERVER/share/Project/'), '//server/share/project');
+  assert.equal(projectPathKey('\\\\?\\C:\\Work\\A'), projectPathKey('C:\\Work\\A'));
+  assert.equal(projectPathKey('\\\\?\\UNC\\Server\\Share\\Project'), projectPathKey('\\\\Server\\Share\\Project'));
   assert.equal(projectPathKey('/Work/Project/'), '/Work/Project');
   assert.notEqual(projectPathKey('/Work/Project'), projectPathKey('/work/project'));
   assert.equal(projectPathKey('/'), '/');
@@ -159,7 +161,7 @@ test('thread groups merge saved and historical directories without mutating inpu
 
 test('project order preserves pins then promotes recently used projects without prioritizing running chats',()=>{
  const projects=[{id:'a',path:'/a'},{id:'b',path:'/b'},{id:'c',path:'/c'},{id:'pin',path:'/pin',pinned:true}];
- const threads=[{id:'a1',cwd:'/a',updatedAt:100},{id:'a2',cwd:'/a',updatedAt:90},{id:'b',cwd:'/b',updatedAt:200},{id:'c',cwd:'/c',updatedAt:300}];
+ const threads=[{id:'a1',cwd:'/a',createdAt:100},{id:'a2',cwd:'/a',createdAt:90,updatedAt:1000},{id:'b',cwd:'/b',createdAt:200},{id:'c',cwd:'/c',createdAt:300}];
  assert.deepEqual(projectThreadGroups(projects,threads).map(row=>row.path),['/pin','/c','/b','/a']);
  const groups=projectThreadGroups(projects,threads,{runningThreadIds:new Set(['a2']),recent:{'/b':400}});
  assert.deepEqual(groups.map(row=>row.path),['/pin','/b','/c','/a']);
@@ -183,8 +185,19 @@ test('local project use takes precedence over newer background timestamps while 
 
 test('project history fallback normalizes seconds and milliseconds and ignores invalid local timestamps',()=>{
  const projects=[{id:'a',path:'/a'},{id:'b',path:'/b'}];
- const threads=[{id:'a',cwd:'/a',updatedAt:1700000000},{id:'b',cwd:'/b',updatedAt:1700000001000}];
+ const threads=[{id:'a',cwd:'/a',createdAt:1700000000,updatedAt:1800000000000},{id:'b',cwd:'/b',createdAt:1700000001000}];
  const groups=projectThreadGroups(projects,threads,{recent:{'/a':'invalid','/b':-1}});
  assert.deepEqual(groups.map(row=>row.path),['/b','/a']);
  assert.deepEqual(groups.map(row=>row.lastActivity),[1700000001000,1700000000000]);
+});
+
+test('confirmed sends reorder conversations and their group; isolated workdirs stay in one projectless group',()=>{
+ const projects=[{id:'a',path:'/a'},{id:'pin',path:'/pin',pinned:true},{id:'new',path:'/new',addedAt:30}];
+ const threads=[{id:'older',cwd:'/a',createdAt:1,submittedAt:20},{id:'newer',cwd:'/a',createdAt:7,updatedAt:50},
+  {id:'p1',cwd:'/independent/1',createdAt:10,projectless:true},{id:'p2',cwd:'/independent/2',createdAt:3,submittedAt:40,projectless:true}];
+ const groups=projectThreadGroups(projects,threads);
+ assert.deepEqual(groups.map(group=>group.key),['/pin','@projectless','/new','/a']);
+ assert.equal(groups[1].name,'无项目');assert.equal(groups[1].path,'');
+ assert.deepEqual(groups[1].threads.map(thread=>thread.id),['p2','p1']);
+ assert.deepEqual(groups[3].threads.map(thread=>thread.id),['older','newer']);
 });

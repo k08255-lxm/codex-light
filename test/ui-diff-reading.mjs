@@ -10,6 +10,14 @@ const root = process.cwd(), out = path.join(root, '.tmp', 'diff-reading'); await
 const temporary = await mkdtemp(path.join(out, 'session-')), client = new DemoClient(), original = client.call.bind(client);
 const thread = (await original('thread/start', { cwd: root })).thread; thread.name = 'Diff reading fixture';
 const sendThread = (await original('thread/start', { cwd: root })).thread; sendThread.name = 'Delayed acknowledgement fixture';
+const evidenceThread = (await original('thread/start', { cwd: root })).thread; evidenceThread.name = 'Diff evidence fixture';
+const evidencePath = 'test_hxxai_worker.py', update = {path:evidencePath,kind:{type:'update'}};
+const completedPatch = '@@ -0,0 +1,24 @@\n' + Array.from({length:24},(_,i)=>'+fixture '+i).join('\n');
+const empty = {id:'empty-patch',type:'fileChange',status:'inProgress',changes:[{...update,diff:''}]};
+const exact = {id:'exact-patch',type:'fileChange',status:'completed',changes:[{...update,diff:completedPatch}]};
+const evidenceTurn = {id:'evidence-turn',status:'inProgress',items:[empty,exact]};
+client.turns.get(evidenceThread.id).push(evidenceTurn);
+client.items.get(evidenceThread.id).push(...evidenceTurn.items.map(item=>({turnId:evidenceTurn.id,item})));
 const source = '@@ -1 +1,120 @@\n-old\n' + Array.from({ length: 120 }, (_, i) => `+line ${i} ` + 'wide source '.repeat(15)).join('\n');
 const file = { id: 'live-file', type: 'fileChange', status: 'inProgress', changes: [{ path: 'src/fixture.js', kind: { type: 'update' }, diff: source }] };
 const turn = { id: 'diff-turn', status: 'inProgress', items: [file] };
@@ -29,7 +37,7 @@ try {
   const width = Number(process.env.SCROLL_VIEWPORT_WIDTH) || 1280, mobile = width < 760;
   page = await browser.newPage({ viewport: { width, height: 850 }, isMobile: mobile, hasTouch: mobile }); page.setDefaultTimeout(8000); page.on('pageerror', error => errors.push(error.message));
   if (mobile) await page.addInitScript(() => { window.CodexLightNative = { isNativeApp: () => true, setToolbarIntegrated() {} }; });
-  const openThread = async name => { if (mobile) await page.locator('#rail-sidebar').click(); await page.locator('.project-group-thread').filter({ hasText: name }).click(); };
+  const openThread = async name => { const sidebar=page.locator('#rail-sidebar');if(mobile&&await sidebar.getAttribute('aria-expanded')!=='true')await sidebar.click();await page.locator('.project-group-thread').filter({hasText:name}).click(); };
   await page.goto(app.url); await openThread(thread.name);
   await page.locator('.turn-process > summary').click(); await page.locator('[data-item-id="live-file"] > summary').click();
   const running = page.locator('[data-item-id="live-file"] .diff-view'); await running.waitFor();
@@ -52,6 +60,30 @@ try {
   const completedSaved = await mark(completed); file.changes = [{ ...file.changes[0], diff: file.changes[0].diff + '\n+corrected final diff' }]; emit('item/completed', { item: file });
   await page.waitForTimeout(220); await check(completed, completedSaved, 'corrected completed diff'); assert.ok((await completed.textContent()).includes('corrected final diff'), 'final correction is rendered');
   checks.push('completed file-summary diff retains node and both scroll axes after correction');
+
+  await openThread(evidenceThread.name);
+  const evidenceRow=page.locator('.changes-file').filter({hasText:evidencePath});
+  const evidenceEvent=(method,params)=>client.emit('event',{method,params:{threadId:evidenceThread.id,turnId:evidenceTurn.id,...params}});
+  await page.locator('.changes-pill').click();
+  await evidenceRow.filter({hasText:'缺少差异数据'}).waitFor();
+  await evidenceRow.click();
+  await page.locator('#changes-panel .diff-view').filter({hasText:'+fixture 23'}).waitFor();
+  empty.status='completed';evidenceTurn.status='completed';
+  evidenceEvent('item/completed',{item:empty});evidenceEvent('turn/completed',{turn:evidenceTurn});
+  await page.waitForFunction(()=>{const text=document.querySelector('.changes-file')?.textContent;return text?.includes('+24-0')&&!text.includes('未知');});
+  await page.reload();await openThread(evidenceThread.name);
+  await page.locator('.changes-pill').click();
+  assert.match(await evidenceRow.textContent(),/\+24-0/);
+  assert.doesNotMatch(await evidenceRow.textContent(),/未知/);
+
+  const missing={id:'missing-patch',type:'fileChange',status:'completed',changes:[update]};
+  evidenceEvent('item/completed',{item:missing});
+  await evidenceRow.filter({hasText:'缺少差异数据'}).waitFor();
+  const additional={id:'another-patch',type:'fileChange',status:'completed',changes:[{...update,diff:'@@ -0,0 +1 @@\n+another line'}]};
+  evidenceEvent('item/completed',{item:additional});
+  await evidenceRow.filter({hasText:'已知 +25-0'}).waitFor();
+  assert.match(await evidenceRow.textContent(),/缺少差异数据/);
+  checks.push('complete empty operations are zero in live and reloaded history while genuinely missing edits still qualify a live subtotal');
 
   await openThread(sendThread.name); await page.locator('[data-item-id="old-answer"]').waitFor();
   await page.locator('#prompt').fill('Delayed acknowledgement regression'); await page.locator('#send').click();

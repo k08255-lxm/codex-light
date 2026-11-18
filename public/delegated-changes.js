@@ -1,7 +1,7 @@
 // Structured successful edit evidence only. Assistant prose and whole-workspace diffs are not evidence.
 import {changeEvidence,summarizeFileRows} from './change-stats.js';
 import {projectPathKey} from './projects.js';
-export function projectDelegatedEdit(event) {
+export function projectDelegatedEdit(event, nativeItem) {
   if (!event || typeof event !== 'object') return null;
   const changes = [];
   let diffBudget=262144;
@@ -11,7 +11,7 @@ export function projectDelegatedEdit(event) {
     const kind = typeof change.kind === 'string' ? change.kind : change.kind?.type;
     const row = { path: change.path };
     if (['add', 'update', 'delete'].includes(kind)) row.kind = { type: kind };
-    const stats=changeEvidence(change);
+    const stats=changeEvidence(change,nativeItem);
     if(stats.added!==null)row.lineStats={added:stats.added,removed:stats.removed};else row.statsReason=stats.reason;
     if(['unified','fragment'].includes(change.diffFormat))row.diffFormat=change.diffFormat;
     if(change.diffTruncated===true)row.diffTruncated=true;
@@ -74,7 +74,7 @@ export function delegatedItemsForTurn(records, turnId, cwd) {
       changes.push({...change,path:fullPath});
     }
     // Repeated snapshots replace the same operation; separate successful operations retain all patches.
-    items.set(identity??Symbol(),{id:`delegated:${turnId}:${identity??items.size}`,type:'fileChange',status:'completed',changes});
+    items.set(identity??Symbol(),{id:`delegated:${turnId}:${identity??items.size}`,type:'fileChange',status:'completed',_fileChangeSource:'delegated',changes});
   }
   return [...items.values()];
 }

@@ -1,4 +1,11 @@
 /** Consume exactly one UI layer. Modal cancel guards remain authoritative. */
+export function dismissBackLayer(layers) {
+  for (const layer of layers) {
+    if (layer.isOpen()) { layer.close(); return true; }
+  }
+  return false;
+}
+
 export function createBackHandler({ document, layers = [], navigateBack = () => false }) {
   return () => {
     const dialogs = [...document.querySelectorAll('dialog[open]')];
@@ -8,9 +15,6 @@ export function createBackHandler({ document, layers = [], navigateBack = () => 
       if (dialog.dispatchEvent(new EventClass('cancel', { cancelable: true }))) dialog.close();
       return true;
     }
-    for (const layer of layers) {
-      if (layer.isOpen()) { layer.close(); return true; }
-    }
-    return navigateBack() === true;
+    return dismissBackLayer(layers) || navigateBack() === true;
   };
 }

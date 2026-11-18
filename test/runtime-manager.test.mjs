@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {RuntimeManager} from '../src/runtime-manager.mjs';
+import {RuntimeManager,windowsRuntimeOccupied} from '../src/runtime-manager.mjs';
 
 const NOW=1700000000000;
 const response=(version,{ok=true,status=200,body,headers={}}={})=>({
@@ -89,10 +89,10 @@ function installerHarness(){
  return {spawnFn,calls,behavior,set(values){Object.assign(behavior,values);}};
 }
 
-function transactionManager(t,fixture,{installer=installerHarness(),fsOps,versionOf,stageTimeoutMs=1000,currentPath}={}){
+function transactionManager(t,fixture,{installer=installerHarness(),fsOps,versionOf,stageTimeoutMs=1000,currentPath,currentSource='desktop',occupancy}={}){
  const rpc=new EventEmitter();rpc.requests=new Map();
  const manager=new RuntimeManager({
-  currentPath:currentPath||fixture.desktopPath,currentSource:'desktop',platform:'win32',arch:'x64',env:{APPDATA:fixture.appData},
+  currentPath:currentPath||fixture.desktopPath,currentSource,occupancy,platform:'win32',arch:'x64',env:{APPDATA:fixture.appData},
   exists:existsSync,discoverDesktop:()=>null,versionOf:versionOf||readVersion,packageRoot:fixture.packageRoot,npmCliPath:fixture.npmCliPath,node:fixture.nodePath,
   spawnFn:installer.spawnFn,fetchFn:fetchVersion('0.167.1'),operations:{entries:new Map()},rpc,now:()=>NOW,stageTimeoutMs,fs:fsOps,
  });
@@ -115,6 +115,29 @@ function legacySetup({versions={npm:'0.157.1',desktop:'0.167.0-alpha.3.2'},curre
  });
  return {manager,rpc,operations,probes};
 }
+
+test('occupied Windows engines are detected only within the verified npm package root',()=>{
+ const root='C:\\Users\\u\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex';
+ const detect=(paths,status=0)=>windowsRuntimeOccupied(root,{run:()=>({status,stdout:JSON.stringify(paths)})});
+ assert.equal(detect([root+'\\vendor\\codex.exe']),true);assert.equal(detect([]),false);
+ assert.equal(detect(['C:\\Program Files\\WindowsApps\\OpenAI.Codex\\codex.exe']),false);
+ assert.equal(detect(['']),null);assert.equal(detect([],1),null);
+});
+
+test('startup updates the selected npm fixture before process start and never replaces an occupied package',async t=>{
+ const first=filesystemFixture(t,{oldLayout:'legacy'}),idle=transactionManager(t,first,{currentPath:first.npmPath,currentSource:'npm',occupancy:()=>false});
+ await idle.manager.check();
+ await assert.rejects(idle.manager.upgrade({version:'0.167.1',confirmed:true}),{code:'RUNTIME_IN_USE'});
+ const result=await idle.manager.upgrade({version:'0.167.1',confirmed:true},{beforeEngineStart:true});
+ assert.equal(result.installedVersion,'0.167.1');assert.equal((await idle.manager.status()).npm.path,x64Exe(first.packageRoot));
+ const other=filesystemFixture(t);let checks=0;
+ const locked=transactionManager(t,other,{currentPath:other.npmPath,currentSource:'npm',occupancy:()=>++checks>1});
+ await locked.manager.check();
+ await assert.rejects(locked.manager.upgrade({version:'0.167.1',confirmed:true},{beforeEngineStart:true}),{code:'RUNTIME_EXTERNAL_IN_USE'});
+ assert.deepEqual(snapshot(other.packageRoot),other.before);assert.equal(locked.installer.calls.length,1);assert.equal(checks,2);
+ locked.manager.rpc.started=true;
+ await assert.rejects(locked.manager.upgrade({version:'0.167.1',confirmed:true},{beforeEngineStart:true}),{code:'RUNTIME_BUSY'});
+});
 async function checkedLegacy(options={}){const context=legacySetup(options);await context.manager.check();return context;}
 
 test('status is read-only, cached, reports candidates, and never calls fetch',async t=>{

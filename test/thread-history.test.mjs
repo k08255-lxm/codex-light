@@ -3,14 +3,14 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
-const source = app.slice(app.indexOf('function rememberThread('), app.indexOf('const CONVERSATION_ITEMS ='));
+const source = app.slice(app.indexOf('function withSubmittedActivity('), app.indexOf('const CONVERSATION_ITEMS ='));
 const thread = { id: 'new', cwd: '/project', preview: '首条消息', turns: [{ id: 'turn', items: [] }] };
 function harness() {
   const state = { threads: [], activeTurns: new Map(), searchGeneration: 0, nextThreads: null };
-  const unindexedThreads = new Map(), search = { value: '' };
+  const unindexedThreads = new Map(), recentThreads = new Map(), search = { value: '' };
   let list = { data: [], nextCursor: null };
   const ports = { state, unindexedThreads, threadSearchCache:new Map(),searchStatus:{}, $: () => search, threadAutoLoad: {reset() {}}, captureHistoryAnchor: () => null, restoreHistoryAnchor() {}, sessionFor: () => null, renderThreads() {}, notice() {}, rpc: async () => list };
-  return { state, search, unindexedThreads, setList(value) { list = value; }, ...new Function(...Object.keys(ports), 'let threadSearchController=null;'+source + ';return {rememberThread,loadThreads};')(...Object.values(ports)) };
+  return { state, search, unindexedThreads, setList(value) { list = value; }, ...new Function('recentThreads',...Object.keys(ports), 'let threadSearchController=null;'+source + ';return {rememberThread,loadThreads};')(recentThreads,...Object.values(ports)) };
 }
 
 test('confirmed new threads appear immediately and survive repeated incomplete list refreshes', async () => {

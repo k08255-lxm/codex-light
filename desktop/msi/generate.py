@@ -85,7 +85,8 @@ manifest = []
 directory_map = {'': install}
 cleanup_directories = set()
 allowed_roots = {'CodexLight.exe','CodexLight.dll','CodexLight.deps.json','CodexLight.runtimeconfig.json',
-                 'Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.WinForms.dll','WebView2Loader.dll'}
+                 'Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.WinForms.dll','WebView2Loader.dll',
+                 'Microsoft.Toolkit.Uwp.Notifications.dll','Microsoft.Windows.SDK.NET.dll','WinRT.Runtime.dll'}
 for file in sorted(a.payload.resolve().rglob('*')):
     if not file.is_file():
         continue
@@ -125,7 +126,7 @@ required_payload = allowed_roots | {
     'app/public/index.html', 'app/public/app.js', 'app/public/style.css',
     'licenses/CodexLight-LICENSE.txt', 'licenses/DotNet-AppHost-LICENSE.txt',
     'licenses/DotNet-AppHost-THIRD-PARTY-NOTICES.txt', 'licenses/WebView2-LICENSE.txt',
-    'licenses/WebView2-NOTICE.txt', 'licenses/VERSIONS.txt',
+    'licenses/WebView2-NOTICE.txt', 'licenses/WindowsNotifications-LICENSE.md', 'licenses/WindowsSDK-NOTICE.txt', 'licenses/VERSIONS.txt',
     'licenses/xterm/LICENSE', 'licenses/xterm/addon-fit-LICENSE',
     'licenses/THIRD-PARTY-NOTICES.md',
     'app/components/dsh-bridge/manifest.json',

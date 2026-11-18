@@ -22,7 +22,7 @@ function setup(){
   const noop=()=>{};
   const state={cwd:'/project',lan:false,connected:false};
   const dependencies={document,$,state,createNavigationHistory,renderThreads:noop,configPanel:view('config'),closeWindowMenu:noop,closeThreadMenu:noop,
-    sidebarController:{setRoute:value=>calls.push(['sidebar',value]),open:()=>calls.push(['sidebar','open']),closeForNavigation:noop},
+    contextDetails:{close:noop},sidebarController:{setRoute:value=>calls.push(['sidebar',value]),open:()=>calls.push(['sidebar','open']),closeForNavigation:noop},
     statsView:view('stats'),accountView:view('account'),accountLoginPanel:view('login'),pluginPanel:view('plugins'),aboutView:view('about'),storageView:view('storage'),
     runtimePanel:null,wslRuntimePanel:view('wsl'),prReviewPanel:null,dshConnectionView:view('dsh'),dshConfigView:view('dsh-config'),lanView:view('lan'),
     renderDshConnection:noop,workbench:{label:()=>'/project'},terminalControls:noop,syncDshLiveContext:noop,syncDelegationMonitor:noop,syncRuntimePanelActivity:noop,

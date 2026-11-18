@@ -39,21 +39,71 @@ body .app{height:calc(100dvh - 38px)}
 .agent-run-heading{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--secondary);margin:0 0 12px}
 .agent-run-heading strong{font-weight:600;color:var(--text)}
 .agent-run-heading time{margin-left:auto;font-variant-numeric:tabular-nums}
+.agent-history-controls{display:grid;justify-items:start;gap:6px;margin-bottom:8px}
+.agent-history-status:empty{display:none}
 .agent-lifecycle-event{display:flex;align-items:center;gap:7px;width:100%;min-height:30px;padding:3px 4px;margin:0;text-align:left;font-size:13px;color:var(--secondary)}
 .agent-lifecycle-event .agent-avatar{width:22px;height:22px;flex:none}
 @media(pointer:coarse){.agent-lifecycle-event{min-height:36px}}
 .agent-lifecycle-event strong{font-weight:500;color:var(--text)}
 .agent-lifecycle-event .ui-icon:last-child{margin-left:auto}
 
+/* Settings keep names and controls on the same row, with supporting text attached to its setting. */
+#settings-dialog .settings-section{min-width:0}
+#settings-dialog .section-title,#settings-dialog .runtime-panel>h2{font-size:1rem;line-height:1.35;letter-spacing:normal;color:var(--text);margin:24px 0 10px}
+#settings-dialog .config-settings-panel>.section-title{margin-top:0}
+#settings-dialog :is(.fine,.field small,.runtime-intro){font-size:.8125rem;line-height:1.55;font-weight:400;color:var(--secondary);overflow-wrap:anywhere;text-wrap:pretty}
+#settings-dialog :is(.pref-row>div:first-child,.setting-copy){display:flex;flex-direction:column;gap:4px;min-width:0}
+#settings-dialog :is(.pref-row strong,.setting-copy strong,.field>span){font-size:.875rem;font-weight:550;color:var(--text);line-height:1.45}
+#settings-dialog .pref-row small,#settings-dialog .runtime-intro{max-width:68ch}
+#settings-dialog p:empty{display:none}
+#settings-dialog .connection-details{padding:12px 0;border-top:1px solid var(--border)}
+#settings-dialog .connection-details summary{width:fit-content;cursor:pointer;font-size:.8125rem;color:var(--secondary)}
+#settings-dialog .connection-details .fine{margin:8px 0 0}
+#settings-dialog .config-settings-field :is(select,input){width:min(16rem,48%);min-width:0}
+#settings-dialog .config-settings-controls{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:8px}
+#settings-dialog .config-settings-diff p{margin:.35rem 0}
+#settings-dialog .pref-row{flex-wrap:nowrap}
+#settings-dialog .pref-row>select{min-width:0;max-width:55%}
+#settings-dialog .pref-row input[type=checkbox]{flex:none}
+#settings-dialog .pref-row>button{flex:none}
+#settings-dialog .panel+.panel{margin-top:12px}
+#settings-dialog :is(.config-settings-status,#title-settings-root [role=status]){color:var(--secondary);margin:10px 0}
+@media(max-width:600px){
+ #settings-dialog .settings-content{padding:16px 14px 36px}
+ #settings-dialog .section-title,#settings-dialog .runtime-panel>h2{margin-top:22px}
+ #settings-dialog .pref-row:has(.style-cards),#settings-dialog .pref-row:has(select[aria-label="标题总结模型"]){align-items:stretch;flex-direction:column;gap:8px}
+ #settings-dialog .pref-row select[aria-label="标题总结模型"]{width:100%;max-width:100%}
+ #settings-dialog .setting-row-path{min-width:0;flex-basis:36%}
+ #settings-dialog .config-settings-field label{gap:8px;align-items:stretch;flex-direction:column}
+ #settings-dialog .config-settings-field :is(select,input){width:100%;max-width:100%;font-size:1rem}
+ #settings-dialog .work-row.end{flex-wrap:wrap}
+}
 #mobile-quota-slot,.mobile-window-controls{display:none}
-.question-alert{position:fixed;z-index:180;top:50px;left:50%;transform:translateX(-50%);width:min(480px,calc(100vw - 32px));display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--accent);border-radius:12px;background:var(--surface);box-shadow:0 8px 28px #0003;animation:page-enter 200ms var(--ease-out)}
+:root[data-mobile-toolbar="integrated"] .mobile-window-controls{display:flex;flex:none}
+:root[data-mobile-toolbar="integrated"] .app-titlebar{height:48px}
+:root[data-mobile-toolbar="integrated"] .app-titlebar-name{padding-right:0}
+:root[data-mobile-toolbar="integrated"] .app{height:calc(100dvh - 48px)}
+:root[data-mobile-toolbar="integrated"] #chat-sidebar #settings{display:none}
+.mobile-window-controls button{min-width:44px;width:44px;min-height:44px;padding:8px}
+#mobile-connection-settings{margin-bottom:12px}
+#mobile-connection-settings .pref-row{gap:12px;flex-wrap:nowrap}
+#mobile-connection-settings .pref-row button{flex:none;min-height:44px}
+#mobile-connection-settings .pref-row[hidden]{display:none}
+.question-alert{position:fixed;z-index:180;top:50px;inset-inline-end:16px;width:min(352px,calc(100% - 32px));display:flex;align-items:center;gap:4px;padding:6px;border:1px solid var(--border-strong);border-radius:14px;background:var(--surface);box-shadow:0 8px 28px #0003;animation:question-alert-enter 180ms var(--ease-out)}
+@keyframes question-alert-enter{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
 .question-alert[hidden]{display:none}
-.question-alert-open{display:flex;flex:1;min-width:0;flex-direction:column;align-items:flex-start;gap:4px;text-align:left;min-height:44px;padding:0}
-.question-alert-open strong{font-size:14px;color:var(--text)}
-.question-alert-open span{font-size:12px;color:var(--secondary)}
-.question-alert-dismiss{min-height:44px;padding:6px 8px;color:var(--secondary);font-size:12px;flex:none}
+.question-alert-open{display:flex;flex:1;min-width:0;align-items:center;gap:10px;text-align:start;min-height:48px;padding:6px;border-radius:9px}
+.question-alert-symbol{display:grid;place-items:center;flex:none;width:36px;height:36px;border-radius:9px;color:var(--accent);background:color-mix(in srgb,var(--accent) 13%,var(--surface))}
+.question-alert[data-kind="approval"] .question-alert-symbol{color:var(--warning,var(--accent));background:color-mix(in srgb,var(--warning,var(--accent)) 13%,var(--surface))}
+.question-alert-copy{display:flex;flex:1;min-width:0;flex-direction:column;gap:2px;line-height:1.4}
+.question-alert-copy strong{font-size:14px;color:var(--text)}
+.question-alert-copy span{font-size:12px;color:var(--secondary)}
+.question-alert-open>.ui-icon,.question-alert-dismiss{color:var(--secondary);flex:none}
+.question-alert-dismiss{display:grid;place-items:center;width:44px;min-height:44px;padding:0;border-radius:9px}
+@media (hover:hover){.question-alert button:hover{background:var(--selected)}}
+.question-alert button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 @media(max-width:760px){
-  .question-alert{top:60px;width:calc(100vw - 24px)}
+  .question-alert{top:60px;inset-inline-end:12px;width:min(352px,calc(100% - 24px))}
   #menu-app{display:none!important}
   .app-titlebar{height:48px;gap:4px;padding-inline:6px}
   body .app{height:calc(100dvh - 48px)}
@@ -66,8 +116,6 @@ body .app{height:calc(100dvh - 38px)}
   #mobile-quota-slot .account-quota-ring{width:38px;height:38px}
   .app-titlebar #app-update-indicator{flex:none;width:44px;min-width:44px;height:44px;min-height:44px;padding:0;display:grid;place-items:center}
   .app-titlebar #app-update-indicator[hidden]{display:none}
-  :root[data-mobile-toolbar="integrated"] .mobile-window-controls{display:flex;flex:none}
-  .mobile-window-controls .btn{min-width:36px;width:36px;height:44px;padding:8px}
   .composer-row{gap:4px;margin-left:0}
   .composer-tools{flex:none;margin-right:0;gap:0}
   .composer-tools .tool{padding:0;justify-content:center;min-width:40px}

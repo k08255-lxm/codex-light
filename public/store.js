@@ -147,6 +147,7 @@ export class ItemStore {
    * Returns the set of accepted slots.
    */
   keepImages(id, images) {
+    const previous = this.images.get(id);
     this.dropImages(id);
     const accepted = new Map();
     for (const image of images) {
@@ -156,7 +157,8 @@ export class ItemStore {
         this.dropImages(oldest);
       }
       if (this.imageChars + image.data.length > IMAGE_LIMITS.totalBase64) continue;
-      accepted.set(image.slot, { mime: image.mime, data: image.data, revision: ++imageRevision });
+      const existing = previous?.get(image.slot);
+      accepted.set(image.slot, existing && existing.mime === image.mime && existing.data === image.data ? existing : { mime: image.mime, data: image.data, revision: ++imageRevision });
       this.imageChars += image.data.length;
     }
     if (accepted.size) this.images.set(id, accepted);

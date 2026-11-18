@@ -9,6 +9,7 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,2));
 test('HTTP settings default off and future first-turn summaries exclude injected attachment metadata',async t=>{
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'title-http-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));const client=new DemoClient(),base=client.call.bind(client),calls=[];let summaryInput=null;
  client.call=async(method,params)=>{calls.push({method,params:structuredClone(params)});
+  if(method==='config/read')return {config:{}};
   if(method==='thread/start'&&params.ephemeral)return {thread:{id:'title-reader',cwd:params.cwd,ephemeral:true},approvalPolicy:'never',sandbox:{type:'readOnly',networkAccess:false},instructionSources:[]};
   if(method==='thread/start'){const result=await base(method,params);result.thread.name=null;return result;}
   if(method==='turn/start'&&params.threadId==='title-reader'){summaryInput=params.input;setTimeout(()=>{client.emit('event',{method:'turn/started',params:{threadId:'title-reader',turn:{id:'summary-turn'}}});client.emit('event',{method:'item/completed',params:{threadId:'title-reader',item:{type:'agentMessage',text:'{"title":"附件问题"}'}}});client.emit('event',{method:'turn/completed',params:{threadId:'title-reader',turn:{id:'summary-turn',status:'completed'}}});},0);return {turn:{id:'summary-turn'}};}
@@ -32,6 +33,7 @@ test('HTTP leaving an active first response and continuing after it preserves on
  const client=new DemoClient(),base=client.call.bind(client),calls=[];let firstId,summaryInput=null,turnCount=0;
  client.call=async(method,params)=>{
   calls.push({method,params:structuredClone(params)});
+  if(method==='config/read')return {config:{}};
   if(method==='thread/start'&&params.ephemeral)return {thread:{id:'title-reader',cwd:params.cwd,ephemeral:true},approvalPolicy:'never',sandbox:{type:'readOnly',networkAccess:false},instructionSources:[]};
   if(method==='thread/start'){const result=await base(method,params);result.thread.name=null;firstId=result.thread.id;return result;}
   if(method==='turn/start'&&params.threadId==='title-reader'){summaryInput=params.input;client.emit('event',{method:'turn/started',params:{threadId:'title-reader',turn:{id:'summary-turn'}}});return {turn:{id:'summary-turn',status:'inProgress'}};}

@@ -3,7 +3,7 @@ import {isAbsoluteWorkingDirectory} from './security.mjs';
 import {DshReaderSession} from './dsh-reader-session.mjs';
 import {DshChangeReader} from './dsh-changes.mjs';
 
-const READ_TOOLS={status:'dsh_status',events:'dsh_events',changes:'dsh_events'};
+const READ_TOOLS={status:'dsh_status',events:'dsh_events',history:'dsh_events',changes:'dsh_events'};
 const MAX_PENDING=16;
 const MAX_ID=200;
 const MAX_CWD=4096;
@@ -149,15 +149,18 @@ export class DshReadService {
   this.pending.set(key,operation);return operation;
  }
  async read(input){
-  strictKeys(input,['threadId','agentId','kind','after']);
+  strictKeys(input,['threadId','agentId','kind','after','before','taskHistory']);
   const threadId=requireId(input.threadId,'对话标识');
   const agentId=requireId(input.agentId,'任务标识');
   const kind=input.kind;
-  const tool=typeof kind==='string'?READ_TOOLS[kind]:null;
+  const tool=typeof kind==='string'&&Object.hasOwn(READ_TOOLS,kind)?READ_TOOLS[kind]:null;
   if(!tool)throw new Error('仅允许读取 DSH 状态或事件');
   const hasAfter=input.after!==undefined;
   if(hasAfter&&kind!=='events')throw new Error('仅事件读取支持分页游标');
   const after=hasAfter?validateCursor(input.after):undefined;
+  const before=input.before;
+  if(before!==undefined&&(kind!=='history'||!Number.isSafeInteger(before)||before<=0))throw new Error('历史游标须为正整数');
+  if(input.taskHistory!==undefined&&(kind!=='events'||input.taskHistory!==true))throw new Error('仅正向事件读取支持任务轮次');
   this._connected();
   if(!this.observed.get(threadId)?.has(agentId))throw new Error('此对话尚未观察到该 DSH 任务，请先加载对应任务历史');
   const bindingCwd=this.bindings.get(threadId);
@@ -165,8 +168,9 @@ export class DshReadService {
   const generation=this.generation;
   const argumentsValue=kind==='status'
    ?{agent_id:agentId,legacy:true}
-   :{agent_id:agentId,include_progress:true,include_tool_events:true,include_descendants:true,limit:100,max_chars:12000,...(hasAfter?{after}:{})};
-  const key=JSON.stringify(['read',threadId,agentId,kind,hasAfter?after:null]);
+   :kind==='history'?{agent_id:agentId,direction:'backward',limit:80,max_chars:48000,...(before!==undefined?{before}:{})}
+   :{agent_id:agentId,include_progress:true,include_tool_events:true,include_descendants:true,limit:100,max_chars:12000,...(hasAfter?{after}:{}),...(input.taskHistory?{include_task_history:true}:{})};
+  const key=JSON.stringify(['read',threadId,agentId,kind,after??null,before??null,!!input.taskHistory]);
   if(this.pending.has(key))return this.pending.get(key);
   if(this.pending.size>=MAX_PENDING)throw new Error('同时查询过多，请等待已有查询结束');
   const cachedProof=this.provenance.get(agentId),proof=cachedProof?.cwd===bindingCwd?cachedProof:null;
@@ -189,7 +193,11 @@ export class DshReadService {
     if(!safe)throw new Error('DSH 状态返回格式无法识别');
     result=safe;
    }
-   if(kind!=='changes')this._settle(threadId,generation,tool,argumentsValue,result,{expectedAgentId:agentId});
+   if(kind==='history'){
+    const toolError=dshResultError(result);if(toolError)throw new Error(toolError);
+    const parent=dshToolResultParentThreadId(result),returned=dshToolResultAgentId(result);
+    if(parent&&parent!==threadId||returned&&returned!==agentId)throw new Error('DSH 返回了其他对话或任务的历史，已丢弃');
+   }else if(kind!=='changes')this._settle(threadId,generation,tool,argumentsValue,result,{expectedAgentId:agentId});
    return {threadId,agentId,tool,result,checkedAt:new Date().toISOString()};
   }).finally(()=>{if(this.pending.get(key)===operation)this.pending.delete(key);});
   this.pending.set(key,operation);return operation;

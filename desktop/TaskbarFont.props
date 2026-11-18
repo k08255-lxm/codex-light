@@ -1,0 +1,6 @@
+<Project>
+  <ItemGroup>
+    <EmbeddedResource Include="$(MSBuildThisFileDirectory)assets/taskbar-counts.bin" LogicalName="CodeCang.Taskbar.Counters" />
+    <EmbeddedResource Include="$(MSBuildThisFileDirectory)../licenses/taskbar-font/LICENSE.txt" LogicalName="CodeCang.Taskbar.OpenSans.LICENSE.txt" />
+  </ItemGroup>
+</Project>

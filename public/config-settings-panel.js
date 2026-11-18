@@ -1,22 +1,117 @@
-const KEYS=['model','model_reasoning_effort','web_search','approval_policy','sandbox_mode'];
-const LABELS={model:'默认模型',model_reasoning_effort:'思考强度',web_search:'网页搜索',approval_policy:'批准策略',sandbox_mode:'沙盒模式'};
-const text=value=>typeof value==='string'?value.slice(0,2000):value==null?'默认 / 未提供':String(value);
+const THREAD_LIMIT='agents.max_concurrent_threads_per_session';
+const labels={model:'默认模型',model_reasoning_effort:'思考强度',web_search:'网页搜索',approval_policy:'批准策略',sandbox_mode:'沙盒模式',[THREAD_LIMIT]:'并发线程上限'};
+const text=value=>value==null?'引擎默认':String(value).slice(0,2000);
+
 export function mountConfigSettingsPanel(container,{read,plan,apply,clock=()=>Date.now()}={}){
- if([read,plan,apply].some(f=>typeof f!=='function'))throw new TypeError('read/plan/apply callbacks required');
- const doc=container.ownerDocument;let snapshot=null,prepared=null,busy=false,disposed=false,generation=0,unknown=false;const inputs=new Map();
- const el=(tag,value)=>{const n=doc.createElement(tag);if(value!==undefined)n.textContent=value;return n;};
- const header=el('h2','Codex 用户默认配置'),note=el('p','更改影响共用配置和未来任务，已有会话保持原设置。每次打开此页会自动读取当前配置。'),status=el('p','正在等待读取配置…');status.setAttribute('role','status');header.className='section-title';note.className='fine';status.className='fine config-settings-status';
- const fields=el('div');fields.className='config-settings-fields';const diff=el('div');diff.className='config-settings-diff';
- const refresh=el('button','读取当前配置'),prepare=el('button','检查修改'),confirm=el('button','确认写入'),cancel=el('button','取消修改');for(const b of [refresh,prepare,confirm,cancel]){b.type='button';b.className='btn';}confirm.className='btn primary';
- const consent=el('label'),checkbox=el('input');checkbox.type='checkbox';consent.className='config-settings-consent';consent.append(checkbox,el('span','我已核对每项差异及安全、联网影响，同意写入用户配置。'));
- const controls=el('div');controls.className='config-settings-controls';controls.append(refresh,prepare,confirm,cancel);container.replaceChildren(header,note,status,fields,diff,consent,controls);container.classList.add('config-settings-panel');
- function state(){consent.hidden=!prepared;confirm.hidden=!prepared;prepare.hidden=!snapshot;cancel.hidden=!snapshot&&!unknown;fields.hidden=!snapshot;diff.hidden=!prepared;refresh.disabled=busy;prepare.disabled=busy||!snapshot||unknown;confirm.disabled=busy||!prepared||!checkbox.checked||unknown||prepared.expiresAt<=clock();cancel.disabled=busy;checkbox.disabled=busy||!prepared;for(const [key,input]of inputs)input.disabled=busy||snapshot?.fields?.[key]?.readonly!==false;container.setAttribute('aria-busy',String(busy));}
- function clearPlan(){prepared=null;checkbox.checked=false;diff.replaceChildren();state();}
- function effortOptions(){const input=inputs.get('model_reasoning_effort'),model=inputs.get('model')?.value;if(!input||!snapshot)return;const previous=input.value,options=snapshot.models?.find(m=>m.model===model)?.efforts??[];input.replaceChildren();const selected=el('option',previous||'默认 / 未提供');selected.value=previous||'';input.append(selected);for(const value of options){if(value===previous)continue;const option=el('option',text(value));option.value=value;input.append(option);}input.value=previous;}
- function render(){fields.replaceChildren();inputs.clear();for(const key of KEYS){const f=snapshot.fields[key],label=el('label',LABELS[key]),select=el('select');select.setAttribute('aria-label',LABELS[key]);const current=el('option',text(f.label));current.value=f.value??'';select.append(current);for(const value of f.options??[]){if(value===f.value)continue;const option=el('option',text(value));option.value=value;select.append(option);}select.value=f.value??'';label.append(select);const wrapper=el('div');wrapper.className='config-settings-field';wrapper.append(label,el('p',`来源：${text(f.source)}${f.readonly?'；只读：'+text(f.reason):''}`));fields.append(wrapper);inputs.set(key,select);select.addEventListener('change',()=>{clearPlan();if(key==='model')effortOptions();});}state();}
- async function load(){if(busy||disposed)return;const version=++generation;busy=true;snapshot=null;clearPlan();fields.replaceChildren();status.textContent='正在读取有效配置、管理约束和模型目录…';try{const value=await read();if(disposed||version!==generation)return;if(!value?.fields||KEYS.some(k=>!value.fields[k]))throw Error('Invalid projection');snapshot=value;unknown=false;render();status.textContent='已读取当前配置。未知或受约束字段保持只读。';}catch{if(!disposed&&version===generation)status.textContent='配置读取失败，未作更改；不能据此解除管理限制。';}finally{if(!disposed&&version===generation){busy=false;state();}}}
- async function prepareChanges(){if(busy||!snapshot||unknown||disposed)return;const edits=[];for(const key of KEYS){const value=inputs.get(key)?.value;if(value!==''&&value!==snapshot.fields[key].value)edits.push({key,value});}if(!edits.length){status.textContent='没有待提交的修改；不支持通过空值删除配置。';return;}const version=++generation;busy=true;clearPlan();status.textContent='正在准备精确修改计划…';try{const p=await plan(edits);if(disposed||version!==generation)return;if(typeof p?.planId!=='string'||!Array.isArray(p.diff)||!Number.isFinite(p.expiresAt))throw Error('Invalid plan');prepared=p;const dl=el('dl');for(const change of p.diff){dl.append(el('dt',LABELS[change.key]??'未知字段'),el('dd',`${text(change.from)} → ${text(change.to)}（${text(change.source)}）`));}diff.append(dl);for(const warning of p.warnings??[])diff.append(el('p',text(warning)));status.textContent='请阅读全部差异和风险，再勾选确认。计划两分钟内有效。';checkbox.focus();}catch{if(!disposed&&version===generation)status.textContent='无法创建计划。可能存在只读字段、不受支持的模型档位或管理限制；未写入。';}finally{if(!disposed&&version===generation){busy=false;state();}}}
- async function execute(){if(disposed||busy||unknown||!prepared||!checkbox.checked)return;if(prepared.expiresAt<=clock()){clearPlan();status.textContent='确认已过期，请重新检查修改。';return;}const p=prepared,version=++generation;prepared=null;checkbox.checked=false;busy=true;unknown=true;state();status.textContent='正在复核并提交已确认修改…';try{const result=await apply({planId:p.planId,confirmed:true});if(disposed||version!==generation)return;if(result?.outcome==='succeeded'){unknown=false;snapshot=null;status.textContent=result.status==='okOverridden'?'已写入，但被更高优先级配置覆盖，不能视为生效。请重新读取；已有会话未热重载。':'写入已返回成功，请重新读取核对。已有会话未热重载。';}else if(result?.outcome==='not-executed'){unknown=false;snapshot=null;status.textContent='版本、约束或预检发生变化，未写入。请重新读取并确认；不会自动重试。';}else{status.textContent='写入结果未知，禁止重试。请先读取当前配置核对实际状态。';}}catch{if(!disposed&&version===generation)status.textContent='写入结果未知，禁止重试。请先读取当前配置核对实际状态。';}finally{if(!disposed&&version===generation){busy=false;state();}}}
- refresh.addEventListener('click',load);prepare.addEventListener('click',prepareChanges);confirm.addEventListener('click',execute);checkbox.addEventListener('change',state);cancel.addEventListener('click',()=>{if(busy)return;clearPlan();if(snapshot)render();status.textContent=unknown?'修改结果仍未知，请读取核对。':'已取消未提交的修改。';refresh.focus();});state();
- return {activate(){const dirty=snapshot&&KEYS.some(key=>inputs.get(key)?.value!==(snapshot.fields[key].value??''));if(dirty||prepared){status.textContent='保留尚未提交的修改。取消修改后可重新读取配置。';return;}return load();},reset(){generation++;snapshot=null;prepared=null;busy=false;checkbox.checked=false;fields.replaceChildren();diff.replaceChildren();status.textContent=unknown?'此前写入可能仍在进行，请读取核对；不会自动重试。':'请重新读取配置。';state();},destroy(){generation++;disposed=true;container.replaceChildren();}};
+ if([read,plan,apply].some(fn=>typeof fn!=='function'))throw new TypeError('read/plan/apply callbacks required');
+ const doc=container.ownerDocument,inputs=new Map();
+ const node=(tag,label,cls)=>{const n=doc.createElement(tag);if(label!==undefined)n.textContent=label;if(cls)n.className=cls;return n;};
+ const button=(label,cls='btn')=>{const b=node('button',label,cls);b.type='button';return b;};
+ const heading=node('h2','Codex 用户默认配置','section-title');
+ const note=node('p','保存后用于新会话。','fine');
+ const status=node('p','','fine config-settings-status');status.setAttribute('role','status');
+ const fields=node('div',undefined,'config-settings-fields'),diff=node('div',undefined,'config-settings-diff');
+ const refresh=button('重新读取'),save=button('保存更改','btn primary'),confirm=button('确认更改','btn primary'),cancel=button('取消修改');
+ const controls=node('div',undefined,'config-settings-controls');controls.append(refresh,cancel,save,confirm);
+ container.replaceChildren(heading,note,fields,diff,status,controls);container.classList.add('config-settings-panel');
+ let snapshot=null,prepared=null,busy=false,unknown=false,generation=0,disposed=false;
+ const current=v=>!disposed&&generation===v;
+ function changes(){
+  if(!snapshot)return [];
+  const updates=[];
+  for(const [key,control] of inputs){
+   const value=control.value;
+   if(String(value)!==String(snapshot.fields[key].value??''))updates.push({key,value:key===THREAD_LIMIT?Number(value):value});
+  }
+  return updates;
+ }
+ function sync(){
+  const dirty=changes().length>0;
+  fields.hidden=!snapshot;diff.hidden=!prepared;save.hidden=!dirty||!!prepared;confirm.hidden=!prepared;cancel.hidden=!dirty&&!prepared;
+  refresh.disabled=busy;save.disabled=busy||unknown;confirm.disabled=busy||unknown;cancel.disabled=busy;
+  for(const control of inputs.values())control.disabled=busy||unknown;
+  container.setAttribute('aria-busy',String(busy));
+ }
+ function clearPlan(){prepared=null;diff.replaceChildren();}
+ function options(control,values,selected,label){
+  control.replaceChildren();
+  for(const value of new Set([selected,...values])){
+   const opt=node('option',value===selected?label:text(value));opt.value=String(value??'');control.append(opt);
+  }
+  control.value=String(selected??'');
+ }
+ function renderFields(){
+  fields.replaceChildren();inputs.clear();
+  for(const [key,label] of Object.entries(labels)){
+   const f=snapshot.fields[key];if(!f||f.readonly!==false)continue;
+   if(key!==THREAD_LIMIT&&!(f.options||[]).some(value=>value!==f.value))continue;
+   const wrapper=node('div',undefined,'config-settings-field'),row=node('label');
+   const copy=node('span',undefined,'setting-copy');copy.append(node('strong',label));
+   let control;
+   if(key===THREAD_LIMIT){
+    control=node('input');control.type='number';control.min='1';control.step='1';control.inputMode='numeric';control.placeholder='引擎默认';control.value=String(f.value??'');
+    copy.append(node('small','包含主线程，调整后在新会话生效。','fine'));
+   }else{
+    control=node('select');options(control,f.options,f.value,f.label);
+   }
+   control.setAttribute('aria-label',label);row.append(copy,control);wrapper.append(row);fields.append(wrapper);inputs.set(key,control);
+   const change=()=>{
+    clearPlan();
+    if(key==='model'){
+     const effort=inputs.get('model_reasoning_effort');
+     if(effort){const value=effort.value;options(effort,snapshot.models?.find(m=>m.model===control.value)?.efforts||[],value,text(value));}
+    }
+    status.textContent='';sync();
+   };
+   control.addEventListener('change',change);if(key===THREAD_LIMIT)control.addEventListener('input',change);
+  }
+ }
+ async function load(message=''){
+  if(busy||disposed)return;
+  const version=++generation;busy=true;clearPlan();inputs.clear();snapshot=null;fields.replaceChildren();sync();
+  status.textContent='正在读取配置…';
+  try{
+   const data=await read();if(!current(version))return;
+   if(!data?.fields||typeof data.fields!=='object')throw Error();
+   snapshot=data;unknown=false;renderFields();
+   status.textContent=message||(inputs.size?'已读取当前配置。':'已读取当前配置，当前环境没有可修改的选项。');
+  }catch{if(current(version))status.textContent='配置读取失败，可重新读取。';}
+  finally{if(current(version)){busy=false;sync();}}
+ }
+ async function commit(plan){
+  if(plan.expiresAt<=clock()){clearPlan();status.textContent='确认已过期，请重新保存。';sync();return;}
+  const version=++generation;busy=true;unknown=true;clearPlan();sync();status.textContent='正在保存…';
+  let message;
+  try{
+   const result=await apply({planId:plan.planId,confirmed:true});if(!current(version))return;
+   if(result?.outcome==='succeeded'){unknown=false;message=result.status==='okOverridden'?'已写入，更高优先级的配置仍然生效。':'已保存，对新会话生效。';}
+   else if(result?.outcome==='not-executed'){unknown=false;message='配置已发生变化，本次未写入。已重新读取。';}
+   else throw Error();
+  }catch{if(current(version))status.textContent='写入结果未知，请重新读取后再修改。';}
+  finally{if(current(version)){busy=false;sync();}}
+  if(message&&current(version))await load(message);
+ }
+ async function saveChanges(){
+  if(busy||unknown||disposed||!snapshot)return;
+  const edits=changes();if(!edits.length)return;
+  if(edits.some(e=>e.key===THREAD_LIMIT&&!(Number.isSafeInteger(e.value)&&e.value>0))){status.textContent='并发线程上限须为正整数。';inputs.get(THREAD_LIMIT)?.focus();return;}
+  const version=++generation;busy=true;clearPlan();sync();status.textContent='正在核对更改…';
+  let p;
+  try{
+   p=await plan(edits);if(!current(version))return;
+   if(!p?.planId||!Array.isArray(p.diff)||!Number.isFinite(p.expiresAt))throw Error();
+  }catch{if(current(version))status.textContent='无法保存，请检查所选值或重新读取配置。';return;}
+  finally{if(current(version)){busy=false;sync();}}
+  if(!current(version))return;
+  if(!p.warnings?.length){await commit(p);return;}
+  prepared=p;
+  for(const warning of p.warnings)diff.append(node('p',text(warning)));
+  status.textContent='请确认权限变更。';sync();confirm.focus();
+ }
+ refresh.addEventListener('click',()=>load());save.addEventListener('click',saveChanges);
+ confirm.addEventListener('click',()=>{if(prepared&&!busy&&!unknown)return commit(prepared);});
+ cancel.addEventListener('click',()=>{if(busy||unknown||!snapshot)return;clearPlan();renderFields();status.textContent='已取消修改。';sync();});
+ function reset(){generation++;snapshot=null;busy=false;inputs.clear();fields.replaceChildren();clearPlan();status.textContent='';sync();}
+ sync();
+ return {activate(){if(changes().length||prepared){status.textContent='保留尚未提交的修改。';return;}return load();},reset,destroy(){reset();disposed=true;container.replaceChildren();}};
 }

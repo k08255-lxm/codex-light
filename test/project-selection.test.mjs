@@ -22,7 +22,6 @@ function harness(options = {}) {
   const state = { cwd: originalThread.cwd, thread: originalThread, openGeneration: 3, loadingThread: false, sending: false, ...options.state };
   const projectsState = { projects: [], selectedId: null, canPickFolder: true, busy: false, error: '', generation: 0, dialogGeneration: 4, ...options.projectsState };
   const calls = { api: [], navigation: [], renders: [], notices: [], closeSettings: 0, dialogClose: 0, focuses: [] };
-  const recentProjects = new Map();
   const nodes = new Map();
   const $ = id => {
     if (!nodes.has(id)) nodes.set(id, {
@@ -35,16 +34,16 @@ function harness(options = {}) {
   };
   $('project-dialog').open = options.dialogOpen === true;
   const functions = runInNewContext(`${app.slice(start, end)}\n({loadProjects, saveProjectSelection, selectProject, addProject});`, {
-    state, projectsState, $, projectPathKey, recentProjects,
+    state, projectsState, $, projectPathKey,
     api: async (...args) => {
       calls.api.push(args);
       return options.api ? options.api(...args) : savedResult();
     },
     renderThreads() { calls.renders.push({ busy: projectsState.busy, projects: projectsState.projects, error: projectsState.error }); },
     notice: (...args) => calls.notices.push(args),
-    newThread() {
-      calls.navigation.push(['newThread']);
-      state.openGeneration++; state.thread = null; state.loadingThread = false;
+    newThread(path) {
+      calls.navigation.push(['newThread', path]);
+      state.openGeneration++; state.thread = null; state.loadingThread = false; state.cwd=path;
     },
     setCwd(path) {
       calls.navigation.push(['setCwd', path, state.thread?.id || null, state.loadingThread]);
@@ -52,7 +51,7 @@ function harness(options = {}) {
     },
     closeSettings() { calls.closeSettings++; },
   }, { filename: 'app-project-functions.js' });
-  return { ...functions, state, projectsState, originalThread, calls, $, recentProjects };
+  return { ...functions, state, projectsState, originalThread, calls, $ };
 }
 
 test('saving a different project creates a fresh page before setting its canonical cwd', async () => {
@@ -60,11 +59,10 @@ test('saving a different project creates a fresh page before setting its canonic
   await h.saveProjectSelection({ path: '/requested-project' }, h.state.openGeneration, h.projectsState.dialogGeneration);
   assert.equal(h.calls.api[0][0], '/api/projects/add');
   assert.equal(h.calls.api[0][1].path, '/requested-project');
-  assert.deepEqual(h.calls.navigation, [['newThread'], ['setCwd', savedProject.path, null, false]]);
+  assert.deepEqual(h.calls.navigation, [['newThread', savedProject.path]]);
   assert.equal(h.state.thread, null);
   assert.equal(h.originalThread.cwd, '/original-project', 'the prior thread must never be retargeted');
   assert.equal(h.state.cwd, savedProject.path);
-  assert.ok(h.recentProjects.get(projectPathKey(savedProject.path)) > 0);
   assert.equal(h.projectsState.selectedId, savedProject.id);
   assert.deepEqual(h.projectsState.projects, [savedProject]);
   assert.equal(h.calls.dialogClose, 1);
@@ -79,7 +77,7 @@ test('selecting the same normalized cwd preserves an existing thread but cancels
     assert.equal(h.calls.api[0][0], '/api/projects/select');
     assert.equal(h.calls.api[0][1].id, 'same');
     if (loadingThread) {
-      assert.deepEqual(h.calls.navigation, [['newThread'], ['setCwd', canonical.projects[0].path, null, false]]);
+      assert.deepEqual(h.calls.navigation, [['newThread', canonical.projects[0].path]]);
       assert.equal(h.state.thread, null);
       assert.equal(h.state.openGeneration, 4, 'newThread invalidates the outstanding resume response');
     } else {
@@ -106,7 +104,6 @@ test('late selection results update the sidebar without navigating after page, s
     change(h);
     const thread = h.state.thread;
     response.resolve(savedResult()); await pending;
-    assert.equal(h.recentProjects.size, 0, 'a stale selection does not change recent project order');
     assert.deepEqual(h.projectsState.projects, [savedProject]);
     assert.equal(h.projectsState.selectedId, savedProject.id);
     assert.equal(h.projectsState.generation, 1);
@@ -115,10 +112,20 @@ test('late selection results update the sidebar without navigating after page, s
     assert.deepEqual(h.calls.navigation, []);
     assert.equal(h.calls.dialogClose, 0);
     assert.equal(h.calls.focuses.length, 0);
-    assert.match(h.calls.notices[0][0], /项目已保存到侧栏/);
+    assert.match(h.calls.notices[0][0], /项目选择已保存/);
     assert.equal(h.calls.renders.at(-1).projects, h.projectsState.projects);
     assert.equal(h.projectsState.busy, false);
   });
+});
+
+test('choosing no project clears saved selection and opens a new draft without retargeting the prior conversation',async()=>{
+  const h=harness({dialogOpen:true,api:async()=>({projects:[savedProject],selectedId:null})});
+  await h.selectProject({projectless:true});
+  assert.equal(h.calls.api[0][0],'/api/projects/select');
+  assert.equal(h.calls.api[0][1].id,null);
+  assert.deepEqual(h.calls.navigation,[['newThread','']]);
+  assert.equal(h.originalThread.cwd,'/original-project');
+  assert.equal(h.projectsState.selectedId,null);
 });
 
 test('cancelling the native picker saves nothing, creates no thread and releases busy controls', async () => {

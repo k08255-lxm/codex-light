@@ -30,7 +30,11 @@ test('WSL legacy inline image roundtrip uses Linux label and selected UNC rollou
  await fs.writeFile(actual,[{type:'session_meta',payload:{id:'t1'}},{type:'response_item',payload:{type:'message',role:'user',content:[{type:'input_text',text:'<image name=[Image #1] path="/home/lee/old/A.png">'},{type:'input_image',image_url:'data:image/png;base64,'+png.toString('base64')}]}}].map(JSON.stringify).join('\n')+'\n');
  const roots=[scope.host('/home/lee/.codex/sessions')],rollout=scope.host('/home/lee/.codex/sessions/rollout-t1.jsonl');
  const lstat=fs.lstat.bind(fs),realpath=fs.realpath.bind(fs),open=fs.open.bind(fs);
- t.mock.method(fs,'lstat',async p=>String(p).startsWith(scope.root)?{isSymbolicLink:()=>false}:lstat(p));
+ t.mock.method(fs,'lstat',async p=>{
+  if(p===rollout)return lstat(actual);
+  if(String(p).startsWith(scope.root))return lstat(tmp);
+  return lstat(p);
+ });
  t.mock.method(fs,'realpath',async p=>String(p).startsWith(scope.root)?p:realpath(p));
  t.mock.method(fs,'open',async(p,...args)=>open(p===rollout?actual:p,...args));
  const a=new ArtifactPreviewService({wslDistribution:'Ubuntu',rolloutRoots:roots});t.after(()=>a.close());a.bindThread({id:'t1',cwd:scope.host('/home/lee/project'),path:rollout});a.observe('t1',{type:'userMessage',content:[{type:'localImage',path:scope.host('/home/lee/old/A.png')}]});

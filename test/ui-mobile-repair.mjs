@@ -1,5 +1,6 @@
 // Android WebView layout contract in real Chromium; all account/task data are isolated fixtures.
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import {createRequire} from 'node:module';
 import {mkdir,mkdtemp,rm} from 'node:fs/promises';
 import path from 'node:path';
@@ -10,30 +11,56 @@ const root=process.cwd(),out=path.join(root,'.tmp','mobile-repair');await mkdir(
 const temporary=await mkdtemp(path.join(out,'session-'));
 const client=new DemoClient(),original=client.call.bind(client);
 client.call=(method,params)=>method==='account/rateLimits/read'?Promise.resolve({rateLimits:{limitId:'codex',primary:{usedPercent:24,windowDurationMins:300},secondary:{usedPercent:61,windowDurationMins:10080}}}):original(method,params);
-const app=await createServer({client,demo:true,cwd:root,projectsRoot:path.join(temporary,'projects'),desktopStateRoot:path.join(temporary,'desktop'),fileAttachmentRoot:path.join(temporary,'attachments')});await app.started;
-let browser;const errors=[],checks=[];
+const address='192.168.78.19',browserHost='phone.codecang.test';
+const app=await createServer({client,demo:true,cwd:root,projectsRoot:path.join(temporary,'projects'),desktopStateRoot:path.join(temporary,'desktop'),fileAttachmentRoot:path.join(temporary,'attachments'),lanOptions:{
+ networkInterfaces:()=>({Synthetic:[{address,family:'IPv4',internal:false}]}),serverFactory:handler=>{
+  const server=http.createServer((req,res)=>{
+   const port=server.address().port;
+   if(req.headers.host===`${browserHost}:${port}`)req.headers.host=`${address}:${port}`;
+   if(req.headers.origin===`http://${browserHost}:${port}`)req.headers.origin=`http://${address}:${port}`;
+   handler(req,res);
+  }),listen=server.listen.bind(server);
+  server.listen=options=>listen({...options,host:'127.0.0.1'});
+  return server;
+ },
+}});await app.started;
+let browser;const errors=[],checks=[],desktopUpdateReads=[];
 try{
- browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||'C:/Program Files/Google/Chrome/Application/chrome.exe'});
+ const lan=await app.lan.enable({address});const phoneUrl=new URL(lan.url);phoneUrl.hostname=browserHost;
+ browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||'C:/Program Files/Google/Chrome/Application/chrome.exe',args:[`--host-resolver-rules=MAP ${browserHost} 127.0.0.1`,'--no-proxy-server']});
  const page=await browser.newPage({viewport:{width:393,height:850},isMobile:true,hasTouch:true});page.setDefaultTimeout(7000);
- const updateStatus={supported:true,demo:false,currentVersion:'0.4.9',phase:'available',latest:{available:true,version:'0.5.0',notes:'## 对话与任务\n\n- 保留阅读位置'}};
- await page.route(/\/api\/app-update\/(status|check)$/,route=>route.fulfill({json:updateStatus}));
- await page.addInitScript(()=>{window.nativeCalls=[];window.taskCalls=[];let enabled=false;window.CodexLightNative={isNativeApp:()=>true,setToolbarIntegrated:flag=>window.nativeCalls.push(['toolbar',flag]),openServerManager:()=>window.nativeCalls.push(['connection']),getTaskNotificationStatus:()=>JSON.stringify({supported:true,enabled,permissionGranted:true,promotedCandidate:true,reason:enabled?'ready':'disabled'}),setTaskNotificationsEnabled:value=>{enabled=value;window.nativeCalls.push(['notifications',value]);window.dispatchEvent(new Event('codexlight-task-notification-status'));},updateTaskNotification:data=>window.taskCalls.push(JSON.parse(data)),openTaskNotificationSettings:()=>window.nativeCalls.push(['notification-settings'])};});
- page.on('pageerror',error=>errors.push(error.message));await page.goto(app.url);
+ page.on('request',request=>{if(new URL(request.url()).pathname.startsWith('/api/app-update/'))desktopUpdateReads.push(request.method());});
+ await page.addInitScript(()=>{window.nativeCalls=[];window.taskCalls=[];window.androidUpdateStatus={phase:'idle'};let enabled=false;window.CodexLightNative={isNativeApp:()=>true,setToolbarIntegrated:flag=>window.nativeCalls.push(['toolbar',flag]),openServerManager:()=>window.nativeCalls.push(['connection']),openApplicationSettings:()=>window.nativeCalls.push(['permissions']),checkForUpdates:()=>window.nativeCalls.push(['android-update']),getAppUpdateStatus:()=>JSON.stringify(window.androidUpdateStatus),openAppUpdate:()=>window.nativeCalls.push(['android-update-open']),getTaskNotificationStatus:()=>JSON.stringify({supported:true,enabled,permissionGranted:true,promotedCandidate:true,reason:enabled?'ready':'disabled'}),setTaskNotificationsEnabled:value=>{enabled=value;window.nativeCalls.push(['notifications',value]);window.dispatchEvent(new Event('codexlight-task-notification-status'));},updateTaskNotification:data=>window.taskCalls.push(JSON.parse(data)),openTaskNotificationSettings:()=>window.nativeCalls.push(['notification-settings'])};});
+ page.on('pageerror',error=>errors.push(error.message));await page.goto(phoneUrl.href);
  await page.locator('#connection-text').filter({hasText:'演示模式'}).waitFor({state:'attached'});await page.locator('#mobile-quota-slot .account-quota-row').nth(1).waitFor();
+ assert.equal(await page.locator('html').getAttribute('data-access'),'lan');
  assert.deepEqual(await page.locator('.account-quota-value').allTextContents(),['76%','39%']);assert.equal(await page.locator('#menu-app').isVisible(),false);
+ assert.equal(await page.locator('#app-update-indicator').isVisible(),false);
+ const updateNative=phase=>page.evaluate(value=>{window.androidUpdateStatus=value;window.dispatchEvent(new Event('codexlight-android-update-status'));},phase);
+ await updateNative({phase:'available',version:'0.5.0'});
  await page.locator('#app-update-indicator').waitFor();
  await page.evaluate(()=>{window.originalUpdateButton=document.querySelector('#app-update-indicator');});
  assert.equal(await page.locator('.app-titlebar > #app-update-indicator').count(),1);
  assert.equal(await page.locator('.rail .update-indicator').count(),0);
  assert.equal(await page.locator('.rail .rail-btn:visible').count(),5);
  await page.locator('#app-update-indicator').click();
- assert.equal(await page.locator('#settings-about').isVisible(),true);
- await page.locator('.about-update-controls button').filter({hasText:'下载更新'}).waitFor();
- assert.equal(await page.locator('.about-release-notes h2').textContent(),'对话与任务');
- assert.equal(await page.locator('.about-release-notes li').textContent(),'保留阅读位置');
- await page.locator('#rail-home').click();
- checks.push('the same actionable update button sits between title and quotas, opens About, and leaves five mobile navigation entries');
- await page.locator('#mobile-connection').click();assert.deepEqual(await page.evaluate(()=>window.nativeCalls),[['toolbar',true],['connection']]);
+ assert.equal(await page.locator('#settings-about').isVisible(),false);
+ assert.deepEqual(await page.evaluate(()=>window.nativeCalls.at(-1)),['android-update-open']);
+ await updateNative({phase:'downloading',version:'0.5.0'});
+ assert.equal(await page.locator('#app-update-indicator').getAttribute('aria-label'),'正在下载更新，版本 0.5.0，查看更新');
+ await updateNative({phase:'up_to_date'});assert.equal(await page.locator('#app-update-indicator').isVisible(),false);
+ await updateNative({phase:'available',version:'0.5.0'});
+ checks.push('the APK update button sits between the phone title and quotas, opens the Android updater, and tracks the native state');
+ await page.locator('#rail-settings').click();assert.equal(await page.locator('#sidebar-overlay').isVisible(),false);
+ await page.locator('#mobile-connection').click();await page.locator('#mobile-app-permissions').click();await page.locator('#mobile-app-update').click();
+ assert.deepEqual(await page.evaluate(()=>window.nativeCalls),[['toolbar',true],['android-update-open'],['connection'],['permissions'],['android-update']]);
+ assert.equal(await page.evaluate(()=>window.CodexLightNavigation.back()),true);assert.equal(await page.locator('#app').getAttribute('data-view'),'chat');
+ await page.setViewportSize({width:700,height:500});await page.locator('.app-titlebar #rail-settings').waitFor();
+ await page.locator('#rail-settings').click();await page.locator('#mobile-connection-settings').waitFor();
+ await page.setViewportSize({width:1000,height:850});await page.locator('.rail #rail-settings').waitFor();
+ assert.equal(await page.locator('#chat-sidebar #settings').isVisible(),false);
+ await page.setViewportSize({width:393,height:850});await page.locator('#rail-home').click();
+ checks.push('one Settings entry opens Android connection, permissions and update actions on phones, compact screens and tablets');
  await page.locator('#mobile-quota-slot button').click();assert.equal(await page.locator('#app').getAttribute('data-view'),'account');await page.locator('#rail-home').click();
  checks.push('one shared quota view, working account link, integrated toolbar and no mobile menu');
  await page.evaluate(()=>{
@@ -49,7 +76,7 @@ try{
   const geometry=await page.evaluate(()=>{
    const rect=id=>{const r=document.getElementById(id).getBoundingClientRect();return {id,x:r.x,y:r.y,right:r.right,bottom:r.bottom,width:r.width,height:r.height};};
    const foot=document.querySelector('.composer-foot').getBoundingClientRect(),model=document.querySelector('#model-trigger').getBoundingClientRect(),chevron=document.querySelector('#model-trigger > .ui-icon').getBoundingClientRect();
-   return {overflow:document.documentElement.scrollWidth>innerWidth,footer:['cwd-button','permissions-info','context-meter'].map(rect),toolbar:['add-attachment','add-file','model-trigger','queue-send','stop','send'].map(rect),titlebar:['app-update-indicator','mobile-quota-slot','mobile-refresh','mobile-connection'].map(rect),projectOffset:rect('cwd-button').x-foot.x,modelEndGap:model.right-chevron.right};
+   return {overflow:document.documentElement.scrollWidth>innerWidth,footer:['cwd-button','permissions-info','context-meter'].map(rect),toolbar:['add-attachment','add-file','model-trigger','queue-send','stop','send'].map(rect),titlebar:['app-update-indicator','mobile-quota-slot','mobile-refresh'].map(rect),projectOffset:rect('cwd-button').x-foot.x,modelEndGap:model.right-chevron.right};
   });
   assert.equal(geometry.overflow,false,`overflow at ${width}`);
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth),width,`viewport at ${width}`);
@@ -102,9 +129,9 @@ try{
  checks.push('all five pages and settings sections animate, reduced-motion remains respected');
  await page.setViewportSize({width:1280,height:900});assert.equal(await page.locator('.rail > #account-quota').count(),1);assert.equal(await page.locator('.composer-tools > #permissions-info').count(),1);assert.equal(await page.locator('.composer-row > #context-meter').count(),1);
  assert.equal(await page.locator('.rail > #app-update-indicator').count(),1);assert.equal(await page.evaluate(()=>document.querySelector('#app-update-indicator')===window.originalUpdateButton&&window.originalUpdateButton.nextElementSibling.id==='account-quota'),true);
- await page.locator('#app-update-indicator').click();assert.equal(await page.locator('#settings-about').isVisible(),true);
- checks.push('desktop restores the same update button before quotas and preserves its action');
- await page.locator('#rail-home').click();
+ await page.locator('#app-update-indicator').click();assert.equal(await page.locator('#settings-about').isVisible(),false);
+ assert.deepEqual(await page.evaluate(()=>window.nativeCalls.at(-1)),['android-update-open']);
+ checks.push('the wider Android layout reuses the APK update button and still opens the Android updater');
  for(const width of [1440,393]){
   await page.setViewportSize({width,height:850});
   const result=await page.evaluate(async()=>{
@@ -131,5 +158,5 @@ try{
   assert.deepEqual(result.reduced,[]);
  }
  checks.push('activity panel animates in both directions, reverses on repeat clicks, and respects reduced motion on desktop and mobile');
- assert.deepEqual(errors,[]);console.log(JSON.stringify({checks,pageErrors:errors},null,2));
+ assert.deepEqual(desktopUpdateReads,[]);assert.deepEqual(errors,[]);console.log(JSON.stringify({checks,pageErrors:errors},null,2));
 }finally{await browser?.close();await app.close();await rm(temporary,{recursive:true,force:true});}

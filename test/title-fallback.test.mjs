@@ -11,13 +11,17 @@ function fixture({output='{"title":"模型标题"}',fail=false,hold=false,timeou
   if(method==='model/list')return {data:[{model:'synthetic'}]};
   if(method==='thread/read')return {thread:{id:params.threadId,name:names.get(params.threadId)||null}};
   if(method==='thread/name/set'){names.set(params.threadId,params.name);service.observe({method:'thread/name/updated',params:{threadId:params.threadId,threadName:params.name}});return {};}
-  if(method==='mcpServerStatus/list'){if(fail)throw new Error('标题 PRIVATE_API_KEY raw response');return {data:[]};}
-  if(method==='thread/start')return {thread:{id:'reader',ephemeral:true},approvalPolicy:'never',sandbox:{type:'readOnly',networkAccess:false},instructionSources:[]};
+  if(method==='config/read')return {config:{}};
+  if(method==='thread/start')return {thread:{id:'reader',cwd:params.cwd,ephemeral:true},approvalPolicy:'never',sandbox:{type:'readOnly',networkAccess:false},instructionSources:[]};
   if(method==='turn/start'){service.observe({method:'turn/started',params:{threadId:'reader',turn:{id:'summary'}}});if(!hold)setTimeout(finish,0);return {turn:{id:'summary'}};}
   return {};
  }};
  service=new TitleSummaryService(rpc,{timeoutMs,onEvent:event=>events.push(event)});
- function finish(){service.observe({method:'item/completed',params:{threadId:'reader',item:{type:'agentMessage',text:output}}});service.observe({method:'turn/completed',params:{threadId:'reader',turn:{id:'summary',status:'completed'}}});}
+ function finish(){
+  if(!fail)service.observe({method:'item/completed',params:{threadId:'reader',item:{type:'agentMessage',text:output}}});
+  service.observe({method:'turn/completed',params:{threadId:'reader',turn:{id:'summary',status:fail?'failed':'completed',
+   ...(fail?{error:{message:'标题 PRIVATE_API_KEY raw response'}}:{})}}});
+ }
  async function first(text='**本地标题**。后续内容',complete=true){service.acknowledge('thread/start',{}, {thread:{id:'original',name:null}});await service.beforeRpc('turn/start',{threadId:'original',input:[{type:'text',text}]});service.observe({method:'turn/started',params:{threadId:'original',turn:{id:'first'}}});if(complete)service.observe({method:'turn/completed',params:{threadId:'original',turn:{id:'first',status:'completed'}}});}
  return {service,rpc,calls,events,names,first,finish};
 }
@@ -62,8 +66,14 @@ test('empty and invalid model responses preserve fallback',async()=>{
  }
 });
 
-test('timeout retains fallback and late model success cannot revive the retired job',async()=>{
- const h=fixture({hold:true,timeoutMs:20});await h.service.configure({enabled:true,model:'synthetic'});await h.first();await h.service.queue;h.finish();await tick();assert.equal(h.names.get('original'),'本地标题');assert.match(h.service.lastError,/超时/);assert.equal(h.calls.filter(row=>row.method==='thread/name/set').length,1);await h.service.close();
+test('timeout retains fallback and late model success cannot revive the retired job',async t=>{
+ const h=fixture({hold:true,timeoutMs:20});await h.service.configure({enabled:true,model:'synthetic'});
+ const started=Promise.withResolvers(),call=h.rpc.call;
+ h.rpc.call=async(method,params)=>{const result=await call(method,params);if(method==='turn/start')started.resolve();return result;};
+ t.mock.timers.enable({apis:['setTimeout']});await h.first();await started.promise;t.mock.timers.tick(20);
+ await h.service.queue;h.finish();
+ assert.equal(h.names.get('original'),'本地标题');assert.match(h.service.lastError,/超时/);
+ assert.equal(h.calls.filter(row=>row.method==='thread/name/set').length,1);await h.service.close();
 });
 
 test('successful model title replaces provisional local title through the same write path',async()=>{

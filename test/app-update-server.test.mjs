@@ -13,17 +13,53 @@ import {makeMutation,restoreMarkers,serializeMarkers,lookupDecision,pendingForSc
 const setup=Buffer.from('update route fixture, not executable');
 const sum=createHash('sha256').update(setup).digest('hex')+'  CodexLight-Setup.exe\n';
 const base='https://github.com/k08255-lxm/codex-light/releases/download/v0.4.0/';
-async function fixture(t,{demo=false,unknown=false,lan=false,veloGuard=false}={}){
+async function fixture(t,{demo=false,unknown=false,lan=false,desktop=false,checkGate,veloGuard=false}={}){
  const directory=await mkdtemp(path.join(os.tmpdir(),'app-update-route-'));let launches=0,fetches=0;
  const release={tag_name:'v0.4.0',html_url:'https://github.com/k08255-lxm/codex-light/releases/tag/v0.4.0',body:'Test notes',assets:[{name:'CodexLight-Setup.exe',size:setup.length,browser_download_url:base+'CodexLight-Setup.exe'},{name:'SHA256SUMS.txt',size:Buffer.byteLength(sum),browser_download_url:base+'SHA256SUMS.txt'}]};
- const service=new AppUpdateService({currentVersion:'0.3.0',platform:'win32',arch:'x64',cacheRoot:directory,fetchFn:async url=>{fetches++;return new Response(url===APP_RELEASES_API?JSON.stringify(release):url.endsWith('SHA256SUMS.txt')?sum:setup);},launchFn:async()=>{launches++;if(unknown)throw new Error('native acknowledgement timeout');}});
- const app=await createServer({client:new DemoClient(),demo,desktopUpdateTransport:veloGuard?'velopack':'msi',appUpdateService:service,...(lan?{lanOptions:{networkInterfaces:()=>({Synthetic:[{address:'192.168.75.20',family:'IPv4',internal:false}]}),serverFactory:handler=>{const server=http.createServer(handler),listen=server.listen.bind(server);server.listen=options=>listen({...options,host:'127.0.0.1'});return server;}}}:{})});
+ const service=new AppUpdateService({currentVersion:'0.3.0',platform:'win32',arch:'x64',cacheRoot:directory,fetchFn:async url=>{fetches++;if(url===APP_RELEASES_API&&checkGate)await checkGate();return new Response(url===APP_RELEASES_API?JSON.stringify(release):url.endsWith('SHA256SUMS.txt')?sum:setup);},launchFn:async()=>{launches++;if(unknown)throw new Error('native acknowledgement timeout');}});
+ const app=await createServer({client:new DemoClient(),demo,desktop,desktopStateRoot:directory,desktopUpdateTransport:veloGuard?'velopack':'msi',appUpdateService:service,...(lan?{lanOptions:{networkInterfaces:()=>({Synthetic:[{address:'192.168.75.20',family:'IPv4',internal:false}]}),serverFactory:handler=>{const server=http.createServer(handler),listen=server.listen.bind(server);server.listen=options=>listen({...options,host:'127.0.0.1'});return server;}}}:{})});
  await app.started;t.after(async()=>{await app.close();await rm(directory,{recursive:true,force:true,maxRetries:3});});
  return {app,service,get launches(){return launches;},get fetches(){return fetches;}};
 }
 function post(app,action,value={}){return fetch(app.origin+'/api/app-update/'+action,{method:'POST',headers:{Authorization:'Bearer '+app.token,'Content-Type':'application/json'},body:JSON.stringify(value)});}
 function id(app,suffix){return `${app.operations.serverInstance}:${Date.now()}:app_update_${suffix}`;}
 async function prepare(app){assert.equal((await post(app,'check')).status,200);assert.equal((await post(app,'download',{version:'0.4.0',requestId:id(app,'download')})).status,200);}
+
+test('desktop startup reuses one nonblocking update check across manual and local event consumers',async t=>{
+ let releaseCheck,markStarted;
+ const gate=new Promise(resolve=>releaseCheck=resolve), started=new Promise(resolve=>markStarted=resolve);
+ const f=await fixture(t,{desktop:true,checkGate:()=>{markStarted();return gate;}});
+ const auth={Authorization:'Bearer '+f.app.token};
+ const controller=new AbortController();t.after(()=>{releaseCheck();controller.abort();});
+ const listen=async()=>{
+  const response=await fetch(f.app.origin+'/api/events',{headers:auth,signal:controller.signal});
+  assert.equal(response.status,200);
+  return response.body.getReader();
+ };
+ const readStatus=async reader=>{
+  const decoder=new TextDecoder();let text='';
+  while(!text.includes('"method":"bridge/appUpdate"')){
+   const {value,done}=await reader.read();
+   assert.equal(done,false);text+=decoder.decode(value,{stream:true});
+  }
+  const update=text.split('\n').map(line=>line.startsWith('data: ')?JSON.parse(line.slice(6)):null).find(message=>message?.method==='bridge/appUpdate');
+  return update.params;
+ };
+ const [first,second]=await Promise.all([listen(),listen()]);
+ assert.equal(f.fetches,0,'page startup and listeners do not start separate upstream requests');
+ await started;
+ const status=await (await fetch(f.app.origin+'/api/status',{headers:auth})).json();
+ assert.equal(status.appUpdate.phase,'checking');assert.equal(f.fetches,1);
+ const manual=post(f.app,'check');
+ assert.equal((await post(f.app,'network-restored')).status,200);
+ releaseCheck();
+ const [left,right,manualResponse]=await Promise.all([readStatus(first),readStatus(second),manual]);
+ assert.equal(manualResponse.status,200);assert.deepEqual(await manualResponse.json(),left);
+ assert.deepEqual(left,right);assert.equal(left.latest.version,'0.4.0');assert.equal(left.phase,'available');
+ assert.equal(f.fetches,2,'the release metadata and its checksum were fetched only once');
+ assert.equal(f.launches,0);assert.equal(f.app.operations.entries.size,0);
+ controller.abort();
+});
 
 test('application update routes authenticate, reject injected fields and do not touch the Codex engine',async t=>{
  const f=await fixture(t);const {app}=f;

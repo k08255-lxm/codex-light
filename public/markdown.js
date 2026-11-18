@@ -1,4 +1,5 @@
-/** A bounded, safe Markdown subset. No HTML parsing, network fetches, or highlighting. */
+/** A bounded, safe Markdown subset. No HTML parsing or network fetches. */
+import {syntaxParts} from './code-format.js';
 export const MARKDOWN_LIMITS = Object.freeze({ chars: 65536, blocks: 400, inlineTokens: 4000, nodes: 12000, depth: 3, tableRows: 100, tableColumns: 24 });
 const TRUNCATED = '…〔Markdown 显示已截断〕';
 const safeText = value => typeof value === 'string' ? value : String(value ?? '');
@@ -273,7 +274,15 @@ function renderAst(document, ast, { onCopy, onLocalLink }) {
           catch { copy.textContent = '复制失败，请手动选择'; }
           finally { copy.disabled = false; }
         });
-        header.append(label, copy); appendText(code, block.text); pre.append(code); node.append(header, pre);
+        const parts=syntaxParts(block.text,block.language);
+        if(parts&&parts.length*2<remaining){
+          for(const part of parts){
+            if(!part.kind)appendText(code,part.text);
+            else{const token=create('span',`syntax-${part.kind}`);appendText(token,part.text);code.append(token);}
+          }
+        }else appendText(code,block.text);
+        pre.tabIndex=0;
+        header.append(label, copy); pre.append(code); node.append(header, pre);
       } else if (block.type === 'table') {
         node = create('div', 'md-table-wrap'); const table = create('table'); const head = create('thead'); const body = create('tbody'); if (!node || !table || !head || !body) break;
         const addRow = (target, values, heading = false) => { const tr = create('tr'); if (!tr) return; values.forEach((tokens, i) => { const cell = create(heading ? 'th' : 'td', `md-align-${block.align[i] || 'left'}`); if (!cell) return; if (heading) cell.setAttribute('scope', 'col'); appendInline(cell, tokens); tr.append(cell); }); target.append(tr); };

@@ -135,7 +135,7 @@ function validateExplicit(value,{platform,paths,exists}){
  return value;
 }
 
-export function resolveCodexRuntime({platform=process.platform,arch=process.arch,env=process.env,home=os.homedir(),exists=existsSync,discoverDesktop,versionOf,spawnSyncFn=spawnSync}={}){
+export function resolveCodexRuntime({platform=process.platform,arch=process.arch,env=process.env,home=os.homedir(),exists=existsSync,discoverDesktop,versionOf,spawnSyncFn=spawnSync,preferredSource='auto'}={}){
  const paths=platform==='win32'?path.win32:path.posix;
  if(env.CODEX_LIGHT_CODEX){
   return {path:validateExplicit(env.CODEX_LIGHT_CODEX,{platform,paths,exists}),source:'env',npm:{available:false,path:null,version:null},desktop:{available:false,path:null,version:null},diagnostics:[]};
@@ -150,6 +150,11 @@ export function resolveCodexRuntime({platform=process.platform,arch=process.arch
  }
  const candidates=discoverRuntimeCandidates({platform,arch,env,home,exists,discoverDesktop,versionOf,spawnSyncFn});
  const {npm,desktop}=candidates; // Reuse runnable system candidates first. App-private CLI is an explicit-install fallback.
+ if(['npm','desktop'].includes(preferredSource)){
+  const selected=candidates[preferredSource];
+  if(!selected.path||!selected.version)throw Object.assign(new Error(preferredSource==='npm'?'已选全局 npm CLI，但未找到可验证的安装。可在设置中更改下次启动来源。':'已选官方桌面内建引擎，但未找到可验证的安装。可在设置中更改下次启动来源。'),{code:'CODEX_SELECTED_SOURCE_UNAVAILABLE'});
+  return {...candidates,path:selected.path,source:preferredSource};
+ }
  if(!npm.version&&!desktop.version){
   try{const privateCli=discoverPrivateCodex({platform,arch,env,home});
    if(privateCli&&probeCodexVersion(privateCli.path,{spawnSyncFn})===privateCli.version)return {...candidates,path:privateCli.path,source:'private',version:privateCli.version};

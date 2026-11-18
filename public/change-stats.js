@@ -2,7 +2,7 @@
 const count = value => Number.isSafeInteger(value) && value >= 0;
 const unknown = reason => ({ added: null, removed: null, reason });
 
-export function changeEvidence(change) {
+export function changeEvidence(change, item) {
   const source = typeof change?.diff === 'string' ? change.diff : null;
   if (change?.statsReason === 'binary' || change?.binary === true || source !== null && /^(?:Binary files .* differ|GIT binary patch)/m.test(source)) return unknown('binary');
   const stats = change?.lineStats;
@@ -16,7 +16,15 @@ export function changeEvidence(change) {
     const lines = diff ? diff.replace(/\n$/, '').split('\n').length : 0;
     return { added: kind === 'add' ? lines : 0, removed: kind === 'delete' ? lines : 0, reason: null };
   }
-  if (!diff) return unknown('missing');
+  if (!diff) {
+    // Native FileChange updates carry the actual unified diff even when the
+    // completed operation produced no text changes. A missing field stays unknown.
+    if (kind === 'update' && item?.type === 'fileChange' && item.status === 'completed'
+        && item._complete !== false && item._fileChangeSource !== 'delegated') {
+      return { added: 0, removed: 0, reason: null };
+    }
+    return unknown('missing');
+  }
   let added = 0, removed = 0, oldLeft = 0, newLeft = 0, hunks = 0;
   for (const line of diff.split('\n')) {
     const hunk = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/.exec(line);

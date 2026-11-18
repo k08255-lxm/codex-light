@@ -168,6 +168,11 @@ test('statistics query anchors time, and cost coverage is honest', () => {
   const q = statisticsQuery({ scope: 'local', range: '24h', anchor: Date.parse('2026-11-12T00:00:00Z'), model: 'm', cursor: 'x' });
   assert.deepEqual(q, { scope: 'local', bucket: 'hour', limit: 30, from: '2026-11-11T00:00:00.000Z', to: '2026-11-12T00:01:00.000Z', model: 'm', cursor: 'x' });
   assert.equal(statisticsQuery({ range: 'all' }).from, undefined);
+  const midnight = new Date(2026, 2, 8), nextMidnight = new Date(2026, 2, 9);
+  for (const anchor of [+midnight, +nextMidnight - 1]) {
+    const today = statisticsQuery({range:'today',anchor,scope:'local'});
+    assert.deepEqual([today.from,today.to,today.bucket], [midnight.toISOString(),nextMidnight.toISOString(),'hour']);
+  }
   assert.equal(costCoverage({ pricedRows: 3, totalRows: 3, complete: true }), '已计价 3 · 未计价 0'); assert.equal(costCoverage(null), '价格覆盖未知');
 });
 test('chart draws null as a gap, never fabricates zero bars, and lays out at real pixel width', () => {
@@ -323,6 +328,8 @@ test('image pool: replacement releases bytes, per-item budget holds, history pre
   const r = new ItemStore(); r.upsert(img('z', 'QUJDRA==')); const first = artifactCandidates(r.items.get('z'))[0].key;
   r.upsert(img('z', 'RUZHSA==')); const second = artifactCandidates(r.items.get('z'))[0].key;
   assert.notEqual(first, second); assert.equal(r.image('z', 0).data, 'RUZHSA==');
+  r.replaceWindow([img('z', 'RUZHSA==')]);
+  assert.equal(artifactCandidates(r.items.get('z'))[0].key,second,'unchanged snapshot bytes keep the preview revision');
   // loadItems(earlier) path: values() → merge older → replaceWindow keeps loaded image bytes.
   const h = new ItemStore(); h.upsert(img('loaded'));
   const merged = [{ id: 'older', type: 'agentMessage', text: 'older' }, ...h.values()];

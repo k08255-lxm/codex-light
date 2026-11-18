@@ -4,6 +4,7 @@
 import {absolutePath,delegatedItemsForTurn,mergeDelegatedFileSummary} from './delegated-changes.js';
 import {changeEvidence,summarizeFileRows} from './change-stats.js';
 export {changeStats} from './change-stats.js';
+export {contextSnapshot,contextView} from './context-usage.js';
 
 const PROCESS_TYPES = new Set(['reasoning', 'commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'webSearch',
   'collabAgentToolCall', 'subAgentActivity', 'imageView', 'imageGeneration', 'plan', 'contextCompaction', 'hookPrompt',
@@ -248,7 +249,7 @@ export function fileSummary(items, turnDiff, { cwd = '', running = false } = {})
     if (item.type !== 'fileChange' || ['declined', 'failed','rejected','cancelled','canceled'].includes(item.status)) continue;
     for (const change of Array.isArray(item.changes) ? item.changes : []) {
       if (typeof change?.path !== 'string' || !change.path) continue;
-      const key = absolutePath(change.path,cwd); const stats = changeEvidence(change);
+      const key = absolutePath(change.path,cwd); const stats = changeEvidence(change,item);
       const row = files.get(key) || { path: displayPath(change.path, cwd), fullPath: change.path, kind: change.kind?.type || null, added: 0, removed: 0, knownAdded:0,knownRemoved:0,knownEdits:0,statsReasons:[],statsBasis:'edits',known: true, diffs: [], live: false };
       if (stats.added === null || stats.removed === null) {row.known = false;if(!row.statsReasons.includes(stats.reason))row.statsReasons.push(stats.reason);}
       else { row.added += stats.added; row.removed += stats.removed;row.knownAdded+=stats.added;row.knownRemoved+=stats.removed;row.knownEdits++; }
@@ -278,29 +279,6 @@ export function fileSummary(items, turnDiff, { cwd = '', running = false } = {})
 
 function summarize(rows, running) {
   return summarizeFileRows(rows,running);
-}
-
-// ---------- Context window ----------
-
-/** Uses the latest request snapshot (`last`) and the real model window; never the cumulative total. */
-export function contextSnapshot(params) {
-  if (typeof params?.threadId !== 'string' || !params.threadId) return null;
-  const usage = params.tokenUsage || {};
-  const used = usage.last?.totalTokens;
-  const window = usage.modelContextWindow;
-  return { threadId: params.threadId, turnId: typeof params.turnId === 'string' ? params.turnId : null,
-    used: Number.isSafeInteger(used) && used >= 0 ? used : null,
-    window: Number.isSafeInteger(window) && window > 0 ? window : null };
-}
-
-export function contextView(snapshot) {
-  if (!snapshot || snapshot.used === null || snapshot.window === null) {
-    return { known: false, label: '上下文未知', detail: snapshot?.used != null ? `最近一次请求 ${snapshot.used.toLocaleString('zh-CN')} tokens；模型未提供上下文窗口` : '本对话尚未收到上下文用量' };
-  }
-  const ratio = Math.min(1, snapshot.used / snapshot.window);
-  const used = Math.round(ratio * 100);
-  return { known: true, percentUsed: used, percentLeft: 100 - used, ratio, label: `${used}%`,
-    detail: `上下文已使用约 ${used}% · ${snapshot.used.toLocaleString('zh-CN')} / ${snapshot.window.toLocaleString('zh-CN')} tokens` };
 }
 
 // ---------- Running input ----------
@@ -444,9 +422,10 @@ export class HistoryPager {
   async call(method, params) { this.requests.push(method); return this.rpc(method, params); }
   async next({ max = HISTORY_PAGE.items } = {}) {
     const turns = []; let activeTurnId = null; let fetches = 0; this.didRead = false;
-    const take = rows => { for (const turn of rows) { turns.push(turn); if (turn?.status === 'inProgress') activeTurnId ??= turn.id; } };
     while (this.buffer.length < max && (!this.started || this.cursor !== null) && fetches < HISTORY_PAGE.fetchesPerPage) {
-      take(await this.fetch(Math.min(HISTORY_PAGE.itemsPerRequest, max - this.buffer.length))); fetches++; this.started = true;
+      const rows=await this.fetch(Math.min(HISTORY_PAGE.itemsPerRequest, max - this.buffer.length));
+      if(!this.started && rows.at(-1)?.status==='inProgress')activeTurnId=rows.at(-1).id;
+      turns.push(...rows);fetches++;this.started=true;
       // A display page can span bounded API pages; read stays one full transfer per explicit request.
       if (this.mode === 'read') break;
     }

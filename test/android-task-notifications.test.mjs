@@ -48,7 +48,7 @@ test('Native notification toggles confirm persistence and clicks wait for a trus
   const activity = read('MainActivity.java');
   const bridge = read('CodexLightBridge.java');
   const enable = activity.slice(activity.indexOf('public void setTaskNotificationsEnabled('), activity.indexOf('public void openTaskNotificationSettings('));
-  assert.match(enable, /taskNotifications\.setEnabled\(enabled\);\s*notifyTaskNotificationStatus\(\)/);
+  assert.match(enable, /taskNotifications\.setEnabled\(enabled,this\);\s*notifyTaskNotificationStatus\(\)/);
   const delivery = activity.slice(activity.indexOf('public void deliverTaskNotificationIntent('), activity.indexOf('public void taskNotificationOpened('));
   assert.match(delivery, /JSONObject\.quote\(thread\)/);
   assert.doesNotMatch(delivery, /pendingNotificationThread\s*=(?!=)|result\s*->/);
@@ -60,4 +60,20 @@ test('Native notification toggles confirm persistence and clicks wait for a trus
   assert.match(bridgeAcknowledgement, /trustedTaskNotificationPage\(\)/);
   assert.match(bridgeAcknowledgement, /TaskNotificationState\.validId\(threadId\)/);
   assert.match(bridgeAcknowledgement, /runOnUiThread/);
+});
+
+test('background notifications use a user-started, private dataSync service and a bounded, authenticated LAN feed', () => {
+  const activity = read('MainActivity.java');
+  const service = read('MobileNotificationService.java');
+  const manifest = readFileSync('android/app/src/main/AndroidManifest.xml', 'utf8');
+  assert.match(manifest,/MobileNotificationService" android:exported="false" android:foregroundServiceType="dataSync"/);
+  assert.match(activity,/setBackgroundNotifications\(boolean enabled, boolean questionsEnabled\)[\s\S]*?if \(!canOpenWorkbenchSettings\(\) \|\| !hasWindowFocus\(\)\) return/);
+  assert.match(service,/ReconnectPolicy\.eligible\(host,port,token\)/);
+  assert.match(service,/\/api\/mobile\/notification-state/);
+  assert.match(service,/connection\.setInstanceFollowRedirects\(false\)/);
+  assert.match(service,/"Authorization","Bearer " \+ config\.getToken\(\)/);
+  assert.match(service,/data\.getJSONArray\("pending"\)\.length\(\) > 128/);
+  assert.match(service,/FOREGROUND_SERVICE_TYPE_DATA_SYNC/);
+  assert.match(service,/"停止同步"/);
+  assert.match(read('AndroidLiveUpdates.java'),/canPostPromotedNotifications|hasPromotableCharacteristics/);
 });

@@ -47,8 +47,8 @@ public class ServerConnectActivity extends Activity {
         Button scan=new Button(this);scan.setText("扫描电脑二维码");
         ((LinearLayout)findViewById(R.id.btnQuickPaste).getParent()).addView(scan);
         scan.setOnClickListener(v->startActivityForResult(new Intent(this,QrScanActivity.class),42));
-        Button updates=new Button(this);updates.setText("查看 APK 发布与更新");((LinearLayout)findViewById(R.id.btnQuickPaste).getParent()).addView(updates);
-        updates.setOnClickListener(v->startActivity(new Intent(Intent.ACTION_VIEW,android.net.Uri.parse("https://github.com/k08255-lxm/codex-light/releases"))));
+        Button updates=new Button(this);updates.setText("检查更新");((LinearLayout)findViewById(R.id.btnQuickPaste).getParent()).addView(updates);
+        updates.setOnClickListener(v->AppUpdateChecker.checkNow(this));
         // Quick Paste action
         findViewById(R.id.btnQuickPaste).setOnClickListener(v -> pasteFromClipboard());
 
@@ -153,7 +153,7 @@ public class ServerConnectActivity extends Activity {
     }
 
     private void launchConnection(ServerConfig cfg, boolean automatic) {
-        Intent intent = new Intent(this, MainActivity.class);
+        Intent intent = workbenchIntent();
         intent.putExtra("automatic", automatic);
         intent.putExtra("host", cfg.getHost());
         intent.putExtra("port", cfg.getPort());
@@ -164,10 +164,18 @@ public class ServerConnectActivity extends Activity {
     }
 
     private void launchDemoMode() {
-        Intent intent = new Intent(this, MainActivity.class);
+        Intent intent = workbenchIntent();
         intent.putExtra("demo", true);
         startActivity(intent);
         finish();
+    }
+
+    private Intent workbenchIntent() {
+        Intent intent = new Intent(this, MainActivity.class);
+        if (getIntent().getBooleanExtra("manual", false) && getIntent().getBooleanExtra("returnToWorkbench", false)) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        }
+        return intent;
     }
 
     private void refreshHistoryUI() {

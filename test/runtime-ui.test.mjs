@@ -18,9 +18,9 @@ test('runtime mounting wires only fixed local, registry and mutation adapters',a
 });
 
 test('runtime activity follows connection, settings page, dialog visibility and document visibility',()=>{
- const source=between('function runtimePanelShouldBeActive()','function pendingLedgerSignature()');const state={connected:true,settingsPage:'general',desktop:true},document={visibilityState:'visible'};let hidden=false;const active=[];
+ const source=between('function runtimePanelShouldBeActive()','function pendingLedgerSignature()');const state={connected:false,serverInstance:'fixture',settingsPage:'general',desktop:true},document={visibilityState:'visible'};let hidden=false;const active=[];
  const sync=new Function('state','document','$','runtimePanel','wslRuntimePanel',`${source};return syncRuntimePanelActivity;`)(state,document,()=>({classList:{contains:()=>hidden}}),{setActive:value=>active.push(value)},{setActive:()=>{}});
- sync();state.connected=false;sync();state.connected=true;state.settingsPage='account';sync();state.settingsPage='general';hidden=true;sync();hidden=false;document.visibilityState='hidden';sync();document.visibilityState='visible';sync();assert.deepEqual(active,[true,false,false,false,false,true]);
+ sync();state.serverInstance=null;sync();state.serverInstance='fixture';state.settingsPage='account';sync();state.settingsPage='general';hidden=true;sync();hidden=false;document.visibilityState='hidden';sync();document.visibilityState='visible';sync();assert.deepEqual(active,[true,false,false,false,false,true]);
  assert.match(app,/visibilitychange[\s\S]*syncRuntimePanelActivity\(\)/);
 });
 

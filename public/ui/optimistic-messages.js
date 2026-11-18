@@ -1,8 +1,8 @@
 // Ephemeral display state only. The durable mutation ledger remains the authority for retries.
 export class OptimisticMessages {
  constructor(){this.rows=new Map();this.claimed=new Set();}
- begin({threadId=null,generation,text,images=[],files=[],beforeIds=[],method='turn/start'}){
-  const row={id:globalThis.crypto.randomUUID(),threadId,generation,text,images:images.map(x=>({id:x.id,name:x.name})),files:files.map(x=>({id:x.id,name:x.name})),beforeIds:[...beforeIds],method,status:'sending',requestId:null,turnId:null,error:''};
+ begin({threadId=null,generation,text,images=[],files=[],beforeIds=[],afterItemId=null,method='turn/start'}){
+  const row={id:globalThis.crypto.randomUUID(),threadId,generation,text,images:images.map(x=>({id:x.id,name:x.name})),files:files.map(x=>({id:x.id,name:x.name})),beforeIds:[...beforeIds],afterItemId,method,status:'sending',requestId:null,turnId:null,error:''};
   this.rows.set(row.id,row);return row;
  }
  patch(id,values){const row=this.rows.get(id);if(row)Object.assign(row,values);return row;}
@@ -14,6 +14,23 @@ export class OptimisticMessages {
   }else this.patch(row.id,{status:decision==='notExecuted'?'notExecuted':decision==='failed'?'failed':'unknown',error});
  }
  visible(threadId,generation){return [...this.rows.values()].filter(x=>x.threadId?x.threadId===threadId:!threadId&&x.generation===generation);}
+ timeline(threadId,items){
+  this.reconcile(threadId,items);
+  const pending=[...this.rows.values()].filter(row=>row.threadId===threadId&&row.status==='accepted'&&row.turnId);
+  if(!pending.length)return items;
+  const result=[...items],tails=new Map();
+  for(const row of pending){
+   const first=result.findIndex(item=>item._turnId===row.turnId);
+   const anchor=tails.get(row.afterItemId)||row.afterItemId;
+   const after=result.findIndex(item=>item.id===anchor);
+   const index=row.method==='turn/start'&&first>=0?first:after>=0?after+1:row.afterItemId===null?0:first>=0?first:result.length;
+   const id='sent:'+row.id;
+   const content=[{type:'text',text:[row.text,...row.images.concat(row.files).map(file=>'附件 · '+file.name)].filter(Boolean).join('\n')}];
+   result.splice(index,0,{id,type:'userMessage',content,_turnId:row.turnId,_local:true,_complete:true});
+   tails.set(row.afterItemId,id);
+  }
+  return result;
+ }
  reconcile(threadId,items){
   for(const row of this.rows.values()){
    if(row.threadId!==threadId||row.status!=='accepted'||!row.turnId)continue;

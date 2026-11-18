@@ -4,6 +4,7 @@ import { historyViewport } from './history-viewport.js';
 import { boundedText, itemText } from './store.js';
 import { icon } from './icons.js';
 import { renderMarkdown } from './markdown.js';
+import { createConsoleCode, updateConsoleCode } from './code-format.js';
 import { formatDuration, fileSummary } from './state.js';
 import { reasoningTimeLabel } from './reasoning-timing.js';
 import { dshToolResultAgentId, dshLifecycleEvent, dshStatusSnapshot } from './dsh.js';
@@ -109,6 +110,10 @@ function detailText(item) {
   return parts.join('\n\n') || '此步骤没有可显示的详细内容。';
 }
 
+function commandHeading(item) {
+  return [item.command ? '$ ' + item.command : '', typeof item.exitCode === 'number' ? `退出码 ${item.exitCode}${typeof item.durationMs === 'number' ? ' · ' + formatDuration(item.durationMs) : ''}` : ''].filter(Boolean).join('\n');
+}
+
 // Shared compact tool presentation for the conversation and subagent inspector.
 // Description, status and bounded detail formatting use the same canonical helpers.
 function updateCompactionRecord(node, item) {
@@ -138,7 +143,12 @@ export function renderActivityRecord(document,item,{artifacts=null}={}){
   const body=el(document,'div','step-detail');
   const candidates=artifacts?artifactCandidates(item):[];
   if(candidates.length)body.append(artifacts.strip(candidates));
-  if(item.type==='fileChange'){body.classList.add('step-files');body.append(renderFileDiffs(document,item.changes));}
+  if(item.type==='fileChange'){body.classList.add('step-files');body.append(renderFileDiffs(document,item.changes,item));}
+  else if(item.type==='commandExecution'){
+   const heading=commandHeading(item);
+   if(heading)body.append(createConsoleCode(document,'step-output-head',boundedText(heading,DETAIL_LIMIT),'sh'));
+   if(item.aggregatedOutput||!heading)body.append(createConsoleCode(document,'step-output',item.aggregatedOutput?boundedText(item.aggregatedOutput,DETAIL_LIMIT):detailText(item)));
+  } else if(['mcpToolCall','dynamicToolCall','functionCallOutput'].includes(item.type))body.append(createConsoleCode(document,'step-output',detailText(item)));
   else if(item.type!=='imageView')body.append(el(document,'pre','',detailText(item)));
   node.append(body);
  });
@@ -171,18 +181,19 @@ function updateDiff(pre, source) {
 
 const CHANGE_KIND = { add: '新建', delete: '删除', update: '修改' };
 /** One separated block per file (header: path · kind · +/-), so several edited files never run together. */
-export function renderFileDiffs(document, changes) {
+export function renderFileDiffs(document, changes, item) {
   const box = el(document, 'div', 'diff-files');
-  updateFileDiffs(box, changes);
+  updateFileDiffs(box, changes, item);
   return box;
 }
-function updateFileDiffs(box, changes) {
+function updateFileDiffs(box, changes, item) {
   const document = box.ownerDocument, rows = fileDiffRows.get(box) || new Map(), wanted = new Set(), nodes = [], occurrences = new Map();
   fileDiffRows.set(box, rows);
   for (const change of Array.isArray(changes) ? changes : []) {
     const path = typeof change?.path === 'string' ? change.path : '';
     const occurrence = occurrences.get(path) || 0; occurrences.set(path, occurrence + 1);
-    const key = path + '\0' + occurrence, signature = JSON.stringify(change); wanted.add(key);
+    const key = path + '\0' + occurrence;
+    const signature = JSON.stringify([change,item?.type,item?.status,item?._complete,item?._fileChangeSource]); wanted.add(key);
     let row = rows.get(key);
     if (!row) { row = { node: el(document, 'section', 'diff-file'), body: null, signature: null }; rows.set(key, row); }
     nodes.push(row.node); if (row.signature === signature) continue;
@@ -194,7 +205,7 @@ function updateFileDiffs(box, changes) {
     const kind = change?.kind?.type || change?.kind;
     const tag = change?.kind?.move_path ? '重命名' : CHANGE_KIND[kind] || '';
     if (tag) head.append(el(document, 'span', 'diff-file-kind', tag));
-    const evidence = changeEvidence(change);
+    const evidence = changeEvidence(change,item);
     if (evidence.added !== null) { const stats = el(document, 'span', 'diff-stats'); stats.append(el(document, 'span', 'diff-added', `+${evidence.added}`), el(document, 'span', 'diff-removed', `-${evidence.removed}`)); head.append(stats); }
     else if (evidence.reason === 'binary') head.append(el(document, 'span', 'diff-unknown', '二进制'));
     if (typeof change?.diff === 'string' && change.diff) {
@@ -523,9 +534,9 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     if (view.item.type === 'fileChange') {
       if (!view.fileDiffs) {
         const box = el(document, 'div', 'step-detail step-files');
-        view.fileDiffs = renderFileDiffs(document, view.item.changes); box.append(view.fileDiffs);
+        view.fileDiffs = renderFileDiffs(document, view.item.changes, view.item); box.append(view.fileDiffs);
         if (view.pre) view.pre.remove(); view.pre = box; view.node.append(box);
-      } else updateFileDiffs(view.fileDiffs, view.item.changes);
+      } else updateFileDiffs(view.fileDiffs, view.item.changes, view.item);
       return;
     }
     if (view.item.type === 'commandExecution') {
@@ -533,12 +544,12 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
       if (!view.output) {
         view.pre?.remove();
         const box = el(document, 'div', 'step-detail step-command');
-        const head = el(document, 'pre', 'step-output-head');
-        view.output = { box, head, long: longTextView(document, { render: source => el(document, 'pre', 'step-output', source), label: '输出', onCopy }) };
+        const head = createConsoleCode(document, 'step-output-head');
+        view.output = { box, head, long: longTextView(document, { render: source => createConsoleCode(document, 'step-output', source), label: '输出', onCopy }) };
         box.append(head, view.output.long.node); view.pre = box; view.node.append(box);
       }
-      const item = view.item; const meta = [item.command ? '$ ' + item.command : '', typeof item.exitCode === 'number' ? `退出码 ${item.exitCode}${typeof item.durationMs === 'number' ? ' · ' + formatDuration(item.durationMs) : ''}` : ''].filter(Boolean).join('\n');
-      setText(view.output.head, meta); view.output.head.hidden = !meta;
+      const item = view.item; const meta = commandHeading(item);
+      updateConsoleCode(view.output.head, meta, 'sh'); view.output.head.hidden = !meta;
       const output = typeof item.aggregatedOutput === 'string' ? item.aggregatedOutput : '';
       view.output.long.update(output || (meta ? '' : '此步骤没有可显示的详细内容。'), { streaming: itemState(item) === 'running', retention: retentionOf(item, ['aggregatedOutput']), followTail: scrollController?.following !== false });
       if(scrollController?.following)view.output.long.resumeTail();

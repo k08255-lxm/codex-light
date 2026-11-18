@@ -5,6 +5,18 @@ const workMethods=new Set(['turn/start','review/start','thread/compact/start']);
 export class ThreadSessions {
  constructor(rpc,{onEvent=()=>{},onThreadLoaded=()=>{},closeTimeout=1000}={}){Object.assign(this,{rpc,onEvent,onThreadLoaded,closeTimeout});this.entries=new Map();this.queues=new Map();this.closed=false;}
  serial(id,run){const previous=this.queues.get(id)||Promise.resolve();const current=previous.catch(()=>{}).then(run);this.queues.set(id,current);current.finally(()=>{if(this.queues.get(id)===current)this.queues.delete(id);}).catch(()=>{});return current;}
+ runIdle(id,run){return this.serial(id,async()=>{
+  if(this.closed)throw fail('Light 正在关闭，此请求未发送','CLIENT_CLOSING');
+  const check=()=>{const entry=this.entries.get(id);if(entry?.activeTurnId||entry?.unknown)throw fail('对话正在运行或结果待核对，请稍后再试','TURN_ACTIVE');};
+  check();
+  let current;
+  try{current=await this.rpc.call('thread/read',{threadId:id,includeTurns:false});}
+  catch(error){error.outcome='notExecuted';throw error;}
+  if(current?.thread?.id!==id)throw fail('未能确认目标对话，请刷新列表后重试','THREAD_NOT_CONFIRMED');
+  if(current.thread.status?.type==='active')throw fail('对话正在运行，请稍后再试','TURN_ACTIVE');
+  check();
+  return run(current.thread);
+ });}
  changed(){this.onEvent({method:'bridge/threadSessions',params:this.snapshot()});}
  snapshot(){return {threads:[...this.entries].map(([threadId,e])=>({threadId,activeTurnId:e.activeTurnId||null,state:e.unknown?'unknown':e.activeTurnId?'active':'idle',releaseError:e.releaseError||null}))};}
  entry(id){let e=this.entries.get(id);if(!e){e={loaded:false,unpersisted:false,activeTurnId:null,completed:new Set()};this.entries.set(id,e);}return e;}
@@ -73,8 +85,12 @@ export class ThreadSessions {
   const id=message.params?.threadId,e=this.entries.get(id);
   if(message.method==='bridge/status'&&message.params?.connected===false){this.entries.clear();this.changed();return;}
   if(!e)return;
-  if(message.method==='thread/closed'){this.entries.delete(id);this.changed();return;}
-  if(message.method==='turn/started'){e.activeTurnId=message.params?.turn?.id||message.params?.turnId||null;e.unpersisted=false;e.unknown=false;this.changed();}
+  if(['thread/closed','thread/archived','thread/deleted'].includes(message.method)){this.entries.delete(id);this.changed();return;}
+  if(message.method==='turn/started'){
+   const turnId=message.params?.turn?.id||message.params?.turnId;
+   if(!turnId||e.completed.has(turnId))return;
+   e.activeTurnId=turnId;e.unpersisted=false;e.unknown=false;this.changed();
+  }
   if(message.method==='turn/completed'){
    const turnId=message.params?.turn?.id||message.params?.turnId;if(!turnId)return;
    e.unpersisted=false;

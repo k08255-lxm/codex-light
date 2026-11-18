@@ -1,7 +1,6 @@
 /** User-driven upward paging. Never drains history in response to its own DOM/scroll changes. */
-export function mountHistoryAutoLoad({container, button, status, canLoad, load, getKey}) {
+export function mountHistoryAutoLoad({container, button, status, canLoad, load, getKey,label='加载更早的内容',endLabel='已到对话开头'}) {
   let pending = null, failed = false, lastTop = container.scrollTop, touchY = null, epoch = 0;
-  const label = '加载更早的内容';
   // Loading/error text is inside the scroller. Preserve the reading position when
   // it enters/leaves flow, including at scrollTop=0 where native anchoring is off.
   function feedback(change) {
@@ -18,10 +17,10 @@ export function mountHistoryAutoLoad({container, button, status, canLoad, load, 
     try {
       await load();
       if (key !== getKey() || version !== epoch) return;
-      feedback(() => { status.textContent = canLoad() ? '' : '已到对话开头'; button.textContent = label; });
+      feedback(() => { status.textContent = canLoad() ? '' : endLabel; button.textContent = label; });
     } catch (error) {
       if (key !== getKey() || version !== epoch) return;
-      failed = true; feedback(() => { button.textContent = '重试加载更早的内容'; status.textContent = '加载失败：' + (error?.message || '请重试'); });
+      failed = true; feedback(() => { button.textContent = '重试'+label; status.textContent = '加载失败：' + (error?.message || '请重试'); });
     } finally {
       if (pending === ticket) { pending = null; button.disabled = false; lastTop = container.scrollTop; }
     }

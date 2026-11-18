@@ -259,6 +259,7 @@ function normalizeEvent(event) {
   if(edit?.taskTurn)row.taskTurn=edit.taskTurn;
   const reportedTurn=event.taskTurn??event.turn??data?.turn??object(event.summary)?.turn;
   if(Number.isSafeInteger(reportedTurn)&&reportedTurn>0)row.taskTurn=reportedTurn;
+  if(['running','completed','interrupted','context_exhausted','error'].includes(event.taskStatus))row.taskStatus=event.taskStatus;
   if(edit?.callId)row.callId=edit.callId;
   if (eventText) row.text = eventText;
   if (summary) row.summary = summary;
@@ -295,7 +296,7 @@ function mergeChunk(target, incoming) {
   if (next.startsWith(previous) || next.length > previous.length) { current.text = next; current.encoding = incomingChunk.encoding; }
 }
 function mergeEventRow(target, incoming) {
-  for(const key of ['changes','success','taskTurn','callId'])if(incoming[key]!==undefined)target[key]=incoming[key];
+  for(const key of ['changes','success','taskTurn','taskStatus','callId'])if(incoming[key]!==undefined)target[key]=incoming[key];
   mergeText(target, incoming, 'text');
   mergeText(target, incoming, 'summary');
   mergeText(target, incoming, 'details');
@@ -335,7 +336,8 @@ export function mergeDshEvents(previous = [], incoming = [], {limit = MAX_EVENTS
     else if (key) rows.set(key, row);
     else rows.set(Symbol('event'), row);
   }
-  return [...rows.values()].map(finalizeEvent).slice(-Math.min(1000,Math.max(MAX_EVENTS,limit)));
+    const merged=[...rows.values()].map(finalizeEvent);
+    return limit===Infinity?merged:merged.slice(-Math.min(1000,Math.max(MAX_EVENTS,limit)));
 }
 export function dshListSnapshot(result) {
   const payload = resultPayload(result, row => listRows(row) !== null);
@@ -410,6 +412,13 @@ export function dshEventsSnapshot(result, { after = 0, retainChanges = false } =
     final_event_id: final?.event_id ?? null,
     last_event: events.at(-1)?.type || '',
   };
+}
+export function dshHistoryPage(result){
+  const page=resultPayload(result,row=>row.direction==='backward'&&Array.isArray(row.events));
+  if(!page)return null;
+  if(!Number.isSafeInteger(page.tail_cursor)||page.tail_cursor<0||typeof page.has_older!=='boolean'||
+    (page.has_older&&(!Number.isSafeInteger(page.before_cursor)||page.before_cursor<=0||page.before_cursor>page.tail_cursor)))throw new Error('DSH 历史分页返回无效游标');
+  return {agentId:typeof page.agent_id==='string'?page.agent_id:'',events:mergeDshEvents([],page.events,{limit:Infinity}),tail:page.tail_cursor,before:page.before_cursor,hasOlder:page.has_older};
 }
 export function dshStatusSnapshot(result) {
   const payload = resultPayload(result, row => row.status !== undefined && !Array.isArray(row.items) && !Array.isArray(row.events));

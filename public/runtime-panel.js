@@ -1,7 +1,7 @@
 const STABLE_VERSION=/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const CHECK_TTL=20*60*1000;
 const RECOVERY_INTERVAL=10000;
-const SOURCE_LABELS=Object.freeze({configured:'显式配置',npm:'npm CLI',desktop:'官方桌面内置',demo:'演示模式',env:'环境变量指定',path:'显式路径指定'});
+const SOURCE_LABELS=Object.freeze({auto:'自动选择',configured:'显式配置',npm:'npm CLI',desktop:'官方桌面内置',demo:'演示模式',env:'环境变量指定',path:'显式路径指定',private:'码舱自带引擎',wsl:'WSL'});
 const plain=value=>!!value&&typeof value==='object'&&!Array.isArray(value);
 const stableVersion=value=>typeof value==='string'&&value.length<=256&&STABLE_VERSION.test(value);
 const stringOrNull=value=>typeof value==='string'&&value?value:null;
@@ -31,9 +31,9 @@ function normalizeStatus(value){
   if(plain(value.latest)&&validLatest(value.latest))latest={version:value.latest.version,checkedAt:value.latest.checkedAt,stale:value.latest.stale===true};
   else latestInvalid=true;
  }
- return{current:candidate(value.current),npm:candidate(value.npm),desktop:candidate(value.desktop),latest,latestInvalid,canUpgrade:value.canUpgrade===true&&!!latest,blockedReason:typeof value.blockedReason==='string'&&value.blockedReason?value.blockedReason:null,upgrading:value.upgrading===true};
+ return{current:candidate(value.current),npm:candidate(value.npm),desktop:candidate(value.desktop),latest,latestInvalid,canUpgrade:value.canUpgrade===true&&!!latest,blockedReason:typeof value.blockedReason==='string'&&value.blockedReason?value.blockedReason:null,upgrading:value.upgrading===true,automatic:plain(value.automatic)?value.automatic:null,startupError:stringOrNull(value.startupError)};
 }
-export function mountRuntimePanel(container,{read,check,upgrade,queryPending,onRecovered,clock=Date.now,setTimeout: scheduleTimeout=(...args)=>globalThis.setTimeout(...args),clearTimeout: cancelTimeout=(...args)=>globalThis.clearTimeout(...args)}={}){
+export function mountRuntimePanel(container,{read,check,upgrade,configure,queryPending,onRecovered,clock=Date.now,setTimeout: scheduleTimeout=(...args)=>globalThis.setTimeout(...args),clearTimeout: cancelTimeout=(...args)=>globalThis.clearTimeout(...args)}={}){
  if(!container||!container.ownerDocument)throw new TypeError('container required');
  if([read,check,upgrade].some(callback=>typeof callback!=='function'))throw new TypeError('read/check/upgrade callbacks required');
  if(queryPending!==undefined&&typeof queryPending!=='function')throw new TypeError('queryPending must be a function');
@@ -44,14 +44,25 @@ export function mountRuntimePanel(container,{read,check,upgrade,queryPending,onR
  let active=false,pending=false,refreshTimer=null,activityGeneration=0;
  const el=(tag,value,className)=>{const node=doc.createElement(tag);if(value!==undefined)node.textContent=value;if(className)node.className=className;return node;};
  const section=el('section',undefined,'settings-section runtime-panel');
- const title=el('h2','运行引擎与更新');
- const intro=el('p','这里只管理后台 Codex 引擎和 npm CLI，不需要打开或更新官方桌面界面，也不会自动启动官方界面。 “刷新版本”只读取本机状态；“检查更新”仅在你点击时读取官方 npm registry；安装完成后需下次重启 码舱 CodeCang 才生效。','runtime-intro');
- const status=el('p','尚未读取运行引擎状态。进入设置或点击“刷新版本”后读取；不会自动联网。','runtime-status');
+ const title=el('h2','Windows 引擎与更新');
+ const intro=el('p','全局 npm CLI 由 npm 发布。官方桌面内建引擎随官方桌面客户端更新。自动选择会比较已验证的版本。','runtime-intro');
+ const status=el('p','尚未读取运行引擎状态。','runtime-status');
  status.setAttribute('role','status');status.setAttribute('aria-live','polite');status.setAttribute('aria-atomic','true');
  const rows=el('div',undefined,'runtime-setting-rows');
  const actions=el('div',undefined,'runtime-actions');
  const refreshButton=el('button','刷新版本'),checkButton=el('button','检查更新'),upgradeButton=el('button','升级 npm CLI');
  for(const button of [refreshButton,checkButton,upgradeButton]){button.type='button';actions.append(button);}
+ const preferences=el('div',undefined,'runtime-preferences');preferences.hidden=true;
+ const preference=(label,description,control)=>{
+  const line=el('label',undefined,'pref-row'),copy=el('div');copy.append(el('strong',label));if(description)copy.append(el('small',description,'fine'));
+  line.append(copy,control);return line;
+ };
+ const source=el('select'),sourceOptions=new Map();
+ for(const [value,label] of [['auto','自动选择'],['npm','全局 npm CLI'],['desktop','官方客户端内建']]){const option=el('option',label);option.value=value;sourceOptions.set(value,option);source.append(option);}
+ source.setAttribute('aria-label','下次启动的 Windows 引擎来源');
+ const autoCheck=el('input'),autoInstall=el('input');autoCheck.type=autoInstall.type='checkbox';
+ preferences.append(preference('下次启动的来源',null,source),preference('自动检查 npm 更新',null,autoCheck),preference('下次启动前安装 npm 更新','完全退出再打开时安装，托盘模式仍在运行。',autoInstall));
+ const automaticStatus=el('p','','runtime-intro');automaticStatus.setAttribute('role','status');preferences.append(automaticStatus);
  const confirmation=el('section',undefined,'runtime-confirm');confirmation.hidden=true;
  confirmation.setAttribute('role','group');confirmation.setAttribute('aria-live','polite');confirmation.setAttribute('aria-atomic','true');confirmation.setAttribute('aria-labelledby','runtime-confirm-title');confirmation.setAttribute('aria-describedby','runtime-confirm-note');
  const confirmTitle=el('strong',undefined,'确认升级运行引擎');confirmTitle.id='runtime-confirm-title';
@@ -68,7 +79,7 @@ export function mountRuntimePanel(container,{read,check,upgrade,queryPending,onR
  confirmUpgradeButton.type='button';cancelConfirmButton.type='button';
  confirmActions.append(confirmUpgradeButton,cancelConfirmButton);
  confirmation.append(confirmTitle,confirmNote,confirmTargetLine,confirmPathLine,confirmDesktop,confirmActions);
- section.append(title,intro,status,rows,actions,confirmation);container.replaceChildren(section);
+ section.append(title,intro,status,rows,preferences,actions,confirmation);container.replaceChildren(section);
  const now=()=>{try{const value=clock();return Number.isFinite(value)?value:Date.now();}catch{return Date.now();}};
  const latestFresh=latest=>!!latest&&!latest.stale&&validLatest(latest)&&(()=>{const age=now()-Date.parse(latest.checkedAt);return Number.isFinite(age)&&age>=0&&age<=CHECK_TTL;})();
  const canUpgradeNow=()=>!pending&&!upgradeInFlight&&!!snapshot&&!snapshot.upgrading&&!snapshot.blockedReason&&snapshot.canUpgrade===true&&latestFresh(snapshot.latest);
@@ -76,19 +87,41 @@ export function mountRuntimePanel(container,{read,check,upgrade,queryPending,onR
  function row(label,values,path){const wrapper=el('div',undefined,'setting-row'),copy=el('div',undefined,'setting-row-copy');copy.append(el('strong',label));for(const value of values)copy.append(el('p',value));wrapper.append(copy);if(path!==undefined){const details=el('details',undefined,'setting-row-path');details.append(el('summary','安装位置'),el('code',path||'未提供'));wrapper.append(details);}return wrapper;}
  function renderRows(){
   rows.replaceChildren();
+  preferences.hidden=!snapshot?.automatic||typeof configure!=='function';
   if(!snapshot)return;
-  rows.append(row('当前引擎',[`来源：${sourceLabel(snapshot.current.source)}`,`版本：${snapshot.current.version??'未知'}`],snapshot.current.path));
+  rows.append(row('当前引擎',[snapshot.startupError||`来源：${sourceLabel(snapshot.current.source)}`,`版本：${snapshot.current.version??'未知'}`],snapshot.current.path));
   rows.append(row('npm CLI',snapshot.npm.available?[`版本：${snapshot.npm.version??'未知'}`]:['状态：不可用'],snapshot.npm.path));
   rows.append(row('桌面内置引擎',snapshot.desktop.available?[`版本：${snapshot.desktop.version??'未知'}`]:['状态：不可用'],snapshot.desktop.path));
   if(snapshot.latest){const values=[`版本：${snapshot.latest.version}`,`检查时间：${localTimestamp(snapshot.latest.checkedAt)}`];if(!latestFresh(snapshot.latest))values.push('检查结果已过期，请重新检查。');rows.append(row('最新稳定版',values));}
   else rows.append(row('最新稳定版',[snapshot.latestInvalid?'检查结果无效，请重新检查。':'尚未检查更新。点击“检查更新”获取 npm 最新稳定版。']));
   if(snapshot.blockedReason)rows.append(el('p',snapshot.blockedReason,'runtime-blocked'));
+  const automatic=snapshot.automatic;
+  if(!preferences.hidden){
+   source.value=sourceOptions.has(automatic.source)?automatic.source:'auto';
+   for(const key of ['npm','desktop'])sourceOptions.get(key).disabled=!snapshot[key].available||!snapshot[key].version;
+   autoCheck.checked=automatic.checkAutomatically===true;autoInstall.checked=automatic.installOnRestart===true;
+   automaticStatus.textContent=automatic.error||(automatic.explicit?'当前由显式路径指定，使用原安装渠道更新。':
+    automatic.phase==='preflight'?'正在核对下次启动前的 npm 更新。':
+    automatic.phase==='installing'?`正在启动前安装 npm CLI ${automatic.queuedVersion}。`:
+    automatic.phase==='checking'?'正在检查 npm 稳定版。':
+    automatic.result?.outcome==='unknown'?(automatic.result.message||'上次更新未确认完成。'):
+    automatic.queuedVersion?`已安排 npm CLI ${automatic.queuedVersion} 在下次启动前安装。${automatic.result?.outcome==='deferred'?' '+(automatic.result.message||''):''}`:
+    automatic.result?.outcome==='succeeded'?`已验证 npm CLI ${automatic.result.version} 的安装。`:
+    automatic.result?.message||''
+   );
+  }
  }
  function state(){
   refreshButton.disabled=busy;checkButton.disabled=busy;
   upgradeButton.disabled=busy||confirmationOpen||!canUpgradeNow();
   confirmUpgradeButton.disabled=busy||!confirmationOpen;
   cancelConfirmButton.disabled=busy;
+  const automatic=snapshot?.automatic;
+  const locked=busy||!automatic||['preflight','installing'].includes(automatic.phase);
+  source.disabled=locked||automatic.explicit===true;
+  const targetsNpm=automatic?.source==='npm'||(automatic?.source==='auto'&&snapshot?.current.source==='npm');
+  autoCheck.disabled=locked||automatic.explicit===true||!targetsNpm;
+  autoInstall.disabled=locked||automatic.explicit===true||(!targetsNpm&&!autoInstall.checked);
   container.setAttribute('aria-busy',String(busy));
  }
  function clearAutoTimer(){if(refreshTimer!==null)cancelTimeout(refreshTimer);refreshTimer=null;}
@@ -185,6 +218,16 @@ export function mountRuntimePanel(container,{read,check,upgrade,queryPending,onR
    if(!disposed){if(version===generation)busy=false;state();scheduleRefresh(pending?0:RECOVERY_INTERVAL);}
   }
  }
+ async function savePreference(patch){
+  if(busy||disposed||preferences.hidden)return;
+  const started=generation;busy=true;state();say('正在保存运行引擎设置…');
+  try{
+   const result=await configure(patch);
+   if(disposed||started!==generation)return;
+   snapshot=normalizeStatus(result);renderRows();say(Object.hasOwn(patch,'source')?'已保存，完全退出并重新打开码舱后使用所选来源。':'已保存运行引擎设置。');
+  }catch(error){if(!disposed&&started===generation){renderRows();say(errorMessage(error,'保存失败，请重新读取设置。'));}}
+  finally{if(!disposed&&started===generation){busy=false;state();scheduleRefresh();}}
+ }
  function reset({pending:restorePending=false}={}){
   clearAutoTimer();hideConfirmation();generation++;snapshot=null;busy=false;pending=restorePending||upgradeInFlight;
   rows.replaceChildren();state();say(pending?'连接恢复后会自动读取实际 npm 版本。':'已清空运行引擎状态；进入设置后读取本机版本。');
@@ -203,6 +246,9 @@ export function mountRuntimePanel(container,{read,check,upgrade,queryPending,onR
  upgradeButton.addEventListener('click',showConfirmation);
  confirmUpgradeButton.addEventListener('click',startUpgrade);
  cancelConfirmButton.addEventListener('click',cancelConfirmation);
+ source.addEventListener('change',()=>savePreference({source:source.value}));
+ autoCheck.addEventListener('change',()=>savePreference({checkAutomatically:autoCheck.checked}));
+ autoInstall.addEventListener('change',()=>savePreference({installOnRestart:autoInstall.checked}));
  renderRows();state();
- return{refresh(){return load('read');},setActive,reset,destroy};
+ return{refresh(){return load('read');},updateAvailable(){if(active&&!busy&&!confirmationOpen)void load('read',{automatic:true});},setActive,reset,destroy};
 }

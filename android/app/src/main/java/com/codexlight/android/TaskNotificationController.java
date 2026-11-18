@@ -6,6 +6,7 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -23,8 +24,9 @@ import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
+import java.util.Set;
 
-/** Standard Android notifications only. No OEM APIs, foreground service or fabricated progress. */
+/** Posts verified task states using public Android notification APIs. */
 final class TaskNotificationController {
     static final String PREFS = "task_notifications";
     static final String ACTION_OPEN = "com.codexlight.android.OPEN_TASK";
@@ -34,17 +36,23 @@ final class TaskNotificationController {
     private static final String CHANNEL = "monitored_tasks";
     // Documented public extra; string keeps this project compatible with its API 34 build toolchain.
     private static final String REQUEST_PROMOTED = "android.requestPromotedOngoing";
-    private final Activity activity;
+    private static TaskNotificationController instance;
+    private final Context context;
     private final NotificationManager manager;
     private final SharedPreferences prefs;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final TaskNotificationState tasks = new TaskNotificationState();
     private final Runnable expire = this::expireTasks;
 
-    TaskNotificationController(Activity activity) {
-        this.activity = activity;
-        manager = (NotificationManager) activity.getSystemService(Context.NOTIFICATION_SERVICE);
-        prefs = activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    static TaskNotificationController get(Context context) {
+        if (instance == null) instance = new TaskNotificationController(context.getApplicationContext());
+        return instance;
+    }
+
+    private TaskNotificationController(Context context) {
+        this.context = context;
+        manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         if (Build.VERSION.SDK_INT >= 26 && manager != null) {
             NotificationChannel channel = new NotificationChannel(CHANNEL, "任务状态", NotificationManager.IMPORTANCE_DEFAULT);
             channel.setDescription("你主动开启的运行任务监控，以及任务完成、失败和等待回答提醒");
@@ -64,18 +72,19 @@ final class TaskNotificationController {
         try {
             return new JSONObject().put("supported", manager != null).put("enabled", enabled)
                 .put("permissionGranted", permission).put("promotedCandidate", Build.VERSION.SDK_INT >= 36)
+                .put("promotion", promotionStatus()).put("background", MobileNotificationService.status())
                 .put("reason", !enabled ? "disabled" : !permission ? "permission_required"
                     : !channelEnabled ? "channel_blocked" : "ready").toString();
         } catch (JSONException impossible) { return "{\"supported\":false}"; }
     }
 
-    private boolean permissionGranted() {
+    boolean permissionGranted() {
         return manager != null && manager.areNotificationsEnabled()
-            && (Build.VERSION.SDK_INT < 33 || activity.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+            && (Build.VERSION.SDK_INT < 33 || context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
                 == PackageManager.PERMISSION_GRANTED);
     }
 
-    void setEnabled(boolean enabled) {
+    void setEnabled(boolean enabled, Activity activity) {
         prefs.edit().putBoolean("enabled", enabled).apply();
         if (!enabled) { clear(); return; }
         if (Build.VERSION.SDK_INT >= 33 && activity.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
@@ -86,7 +95,7 @@ final class TaskNotificationController {
         }
     }
 
-    void openSettings() {
+    void openSettings(Activity activity) {
         Intent intent;
         if (Build.VERSION.SDK_INT >= 26) {
             intent = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
@@ -95,7 +104,27 @@ final class TaskNotificationController {
             intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                 Uri.parse("package:" + activity.getPackageName()));
         }
-        if (intent.resolveActivity(activity.getPackageManager()) != null) activity.startActivity(intent);
+        try { activity.startActivity(intent); }
+        catch (ActivityNotFoundException | SecurityException unavailable) {
+            Toast.makeText(activity,"无法打开系统通知设置",Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    void openPromotionSettings(Activity activity) {
+        if (Build.VERSION.SDK_INT >= 36 && AndroidLiveUpdates.openSettings(activity)) return;
+        openSettings(activity);
+    }
+
+    private String promotionStatus() {
+        if (manager == null || Build.VERSION.SDK_INT < 36) return "unsupported";
+        if (!AndroidLiveUpdates.isAllowed(manager)) return "blocked";
+        boolean running = false;
+        for (android.service.notification.StatusBarNotification posted : manager.getActiveNotifications()) {
+            if (!TAG.equals(posted.getTag()) || (posted.getNotification().flags & Notification.FLAG_ONGOING_EVENT) == 0) continue;
+            if (AndroidLiveUpdates.isPromoted(posted.getNotification())) return "promoted";
+            running = true;
+        }
+        return running ? "standard" : "ready";
     }
 
     void update(String json) {
@@ -138,23 +167,37 @@ final class TaskNotificationController {
         }
     }
 
+    void updateFromFeed(JSONObject task) {
+        String threadId = task.optString("threadId");
+        String turnId = task.optString("turnId");
+        String state = task.optString("state");
+        if (!TaskNotificationState.validId(threadId) || !TaskNotificationState.validId(turnId)
+                || !TaskNotificationState.validState(state)) return;
+        TaskNotificationState.Entry previous = tasks.entries.get(threadId);
+        String title = previous == null ? "Codex 任务" : previous.title;
+        try {
+            update(new JSONObject().put("threadId",threadId).put("turnId",turnId)
+                .put("state",state).put("title",title).toString());
+        } catch (JSONException impossible) { throw new IllegalStateException(impossible); }
+    }
+
     private void post(TaskNotificationState.Entry entry) {
         if (!permissionGranted() || prefs.getStringSet("dismissed", Collections.emptySet()).contains(entry.key())) return;
         boolean running = "running".equals(entry.state);
         // API 24-25 cannot expire notifications after process death. Never pin live state there.
         if (running && Build.VERSION.SDK_INT < 26) return;
-        Intent open = new Intent(activity, MainActivity.class).setAction(ACTION_OPEN)
+        Intent open = new Intent(context, MainActivity.class).setAction(ACTION_OPEN)
             .setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP)
             .putExtra("threadId", entry.threadId).putExtra("turnId", entry.turnId);
-        Intent dismiss = new Intent(activity, TaskNotificationReceiver.class).setAction(ACTION_DISMISS)
+        Intent dismiss = new Intent(context, TaskNotificationReceiver.class).setAction(ACTION_DISMISS)
             .putExtra("threadId", entry.threadId).putExtra("turnId", entry.turnId)
             .putExtra("notificationId", entry.notificationId);
         int flags = PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE;
-        PendingIntent contentIntent = PendingIntent.getActivity(activity, entry.notificationId, open, flags);
-        PendingIntent deleteIntent = PendingIntent.getBroadcast(activity, entry.notificationId, dismiss, flags);
+        PendingIntent contentIntent = PendingIntent.getActivity(context, entry.notificationId, open, flags);
+        PendingIntent deleteIntent = PendingIntent.getBroadcast(context, entry.notificationId, dismiss, flags);
         String text = message(entry.state);
         Notification.Builder builder = Build.VERSION.SDK_INT >= 26
-            ? new Notification.Builder(activity, CHANNEL) : new Notification.Builder(activity);
+            ? new Notification.Builder(context, CHANNEL) : new Notification.Builder(context);
         builder.setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle(entry.title).setContentText(text)
             .setStyle(new Notification.BigTextStyle().bigText(text))
@@ -163,7 +206,7 @@ final class TaskNotificationController {
             .setOnlyAlertOnce(true).setShowWhen(false).setOngoing(running).setAutoCancel(!running)
             .setContentIntent(contentIntent).setDeleteIntent(deleteIntent);
         if (running) builder.addAction(new Notification.Action.Builder(
-            android.graphics.drawable.Icon.createWithResource(activity, R.drawable.ic_launcher_foreground),
+            android.graphics.drawable.Icon.createWithResource(context, R.drawable.ic_launcher_foreground),
             "取消固定", deleteIntent).build());
         if (Build.VERSION.SDK_INT >= 26) {
             builder.setTimeoutAfter(entry.active() ? TaskNotificationState.STALE_AFTER_MS + 15_000L
@@ -172,9 +215,14 @@ final class TaskNotificationController {
         if (Build.VERSION.SDK_INT >= 36 && running) {
             Bundle extras = new Bundle();
             extras.putBoolean(REQUEST_PROMOTED, true);
+            extras.putCharSequence("android.shortCriticalText", "执行中");
             builder.addExtras(extras);
         }
-        try { manager.notify(TAG, entry.notificationId, builder.build()); }
+        Notification notification = builder.build();
+        if (Build.VERSION.SDK_INT >= 36 && running && !AndroidLiveUpdates.isEligible(notification)) {
+            android.util.Log.d("TaskNotifications", "System did not consider the running notification eligible for promotion");
+        }
+        try { manager.notify(TAG, entry.notificationId, notification); }
         catch (SecurityException denied) {
             android.util.Log.w("TaskNotifications", "Notification permission was revoked");
         }
@@ -202,6 +250,17 @@ final class TaskNotificationController {
         scheduleExpiry();
     }
 
+    void reconcile(Set<String> activeThreads) {
+        for (TaskNotificationState.Entry entry : tasks.entries.values()) {
+            if (entry.active() && !activeThreads.contains(entry.threadId)) {
+                entry.state = "disconnected";
+                entry.updatedAt = SystemClock.elapsedRealtime();
+                post(entry);
+            }
+        }
+        scheduleExpiry();
+    }
+
     private void expireTasks() {
         long now = SystemClock.elapsedRealtime();
         for (TaskNotificationState.Entry entry : new ArrayList<>(tasks.entries.values())) {
@@ -209,7 +268,8 @@ final class TaskNotificationController {
                     || entry.expired(now)) {
                 tasks.entries.remove(entry.threadId);
                 manager.cancel(TAG, entry.notificationId);
-                TaskNotificationReceiver.suppress(activity, entry.threadId, entry.turnId);
+                // A temporary LAN outage may last longer than the notification lifetime.
+                // Only a user dismissal is permanent for this turn.
             } else if (entry.stale(now)) {
                 entry.state = "disconnected";
                 entry.updatedAt = now;
@@ -234,8 +294,4 @@ final class TaskNotificationController {
         tasks.entries.clear();
     }
 
-    void destroy() {
-        disconnected();
-        handler.removeCallbacks(expire);
-    }
 }

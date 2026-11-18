@@ -1,7 +1,7 @@
 // App-owned consent surface. Never substitute acceptance for dismissal or navigation.
 let sequence = 0;
 const active = new WeakSet();
-export function confirmApp(document, message, { signal, opener = document.activeElement, titleText = '请确认操作', acceptText = '确认' } = {}) {
+export function confirmApp(document, message, { signal, opener = document.activeElement, titleText = '请确认操作', acceptText = '确认', danger = false } = {}) {
   if (active.has(document) || signal?.aborted) return Promise.resolve(false);
   active.add(document);
   return new Promise(resolve => {
@@ -20,7 +20,7 @@ export function confirmApp(document, message, { signal, opener = document.active
     }
     const actions = document.createElement('div'); actions.className = 'lan-confirm-actions';
     const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'btn'; cancel.textContent = '取消';
-    const accept = document.createElement('button'); accept.type = 'button'; accept.className = 'btn primary'; accept.textContent = acceptText;
+    const accept = document.createElement('button'); accept.type = 'button'; accept.className = danger ? 'btn danger' : 'btn primary'; accept.textContent = acceptText;
     actions.append(cancel, accept); dialog.append(title, body, actions);
     let settled = false;
     const finish = accepted => {

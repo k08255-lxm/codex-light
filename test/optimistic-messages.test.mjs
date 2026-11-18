@@ -24,10 +24,20 @@ async function composerHarness({ mutation } = {}) {
 
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return {promise,resolve,reject}};
 const rows=h=>h.host.querySelectorAll('.optimistic-message');
+test('a stopped submission without a server echo stays in its own turn when another message is sent',()=>{
+ const s=new OptimisticMessages(),a=s.begin({threadId:'t',generation:1,text:'A',afterItemId:'old'});
+ s.patch(a.id,{status:'accepted',turnId:'stopped'});
+ const item=(id,turn,text)=>({id,type:'userMessage',_turnId:turn,content:[{type:'text',text}]});
+ const history=[item('old','first','old'),item('new','second','B')];
+ assert.deepEqual(s.timeline('t',history).map(x=>x.content[0].text),['old','A','B']);
+ history.splice(1,0,item('ack','stopped','A'));
+ assert.deepEqual(s.timeline('t',history).map(x=>x.id),['old','ack','new']);
+ assert.equal(s.rows.size,0);
+});
 test('send is visible before RPC resolves, double click dispatches once, echo reconciles',async()=>{
  const d=deferred(),h=await composerHarness({mutation:()=>d.promise});h.$('prompt').value='hello';const sending=h.composer.send();
  assert.equal(rows(h).length,1);assert.equal(rows(h)[0].dataset.status,'sending');assert.equal(h.$('prompt').value,'');await h.composer.send();assert.equal(h.calls.length,1);
- h.$('prompt').value='new draft';d.resolve({turn:{id:'turn-2',status:'completed'}});await sending;assert.equal(h.$('prompt').value,'new draft');assert.equal(rows(h)[0].dataset.status,'accepted');
+ h.$('prompt').value='new draft';d.resolve({turn:{id:'turn-2',status:'completed'}});await sending;assert.equal(h.$('prompt').value,'new draft');assert.equal(rows(h).length,0);assert.equal(h.composer.timelineItems(h.state.store.values())[0].content[0].text,'hello');
  h.state.store.upsert({id:'echo',type:'userMessage',_turnId:'turn-2',content:[{type:'text',text:'hello'}]});h.composer.renderOptimistic();assert.equal(rows(h).length,0);
 });
 test('delayed turn acceptance does not repeat the initial user-initiated scroll to bottom',async()=>{
@@ -49,7 +59,7 @@ test('thread changes isolate pending bubbles and late acknowledgement preserves 
  const d=deferred(),h=await composerHarness({mutation:()=>d.promise});h.$('prompt').value='original';const sending=h.composer.send();
  h.state.thread={id:'other'};h.state.openGeneration++;h.$('prompt').value='other draft';h.composer.renderOptimistic();assert.equal(rows(h).length,0);
  d.resolve({turn:{id:'turn-2'}});await sending;assert.equal(h.$('prompt').value,'other draft');assert.equal(rows(h).length,0);
- h.state.thread={id:'t'};h.composer.renderOptimistic();assert.equal(rows(h).length,1);
+ h.state.thread={id:'t'};h.composer.renderOptimistic();assert.equal(rows(h).length,0);assert.equal(h.composer.timelineItems([])[0]._turnId,'turn-2');
 });
 test('empty input sends nothing',async()=>{const h=await composerHarness();await h.composer.send();assert.equal(h.calls.length,0);assert.equal(rows(h).length,0)});
 test('operation resolution uses ID and canonical turn, never similar text from another turn',()=>{

@@ -1,5 +1,6 @@
 import {
   dshEventsSnapshot,
+  dshHistoryPage,
   dshListSnapshot,
   dshResultError,
   dshStatusSnapshot,
@@ -54,6 +55,7 @@ export class DshLiveMonitor {
     eventInterval = DEFAULT_EVENT_INTERVAL,
     maxPages = DEFAULT_MAX_PAGES,
     maxBackoff = DEFAULT_MAX_BACKOFF,
+    historyPaging = false,
   } = {}) {
     if (typeof api !== 'function') throw new Error('DshLiveMonitor 需要 api 函数');
     this.api = api;
@@ -69,6 +71,7 @@ export class DshLiveMonitor {
     this.eventInterval = Math.max(1000, Number(eventInterval) || DEFAULT_EVENT_INTERVAL);
     this.maxPages = Math.max(1, Math.min(10, Number(maxPages) || DEFAULT_MAX_PAGES));
     this.maxBackoff = Math.max(this.listInterval, Number(maxBackoff) || DEFAULT_MAX_BACKOFF);
+    this.historyPaging = historyPaging;
 
     this.disposed = false;
     this.generation = 0;
@@ -95,6 +98,7 @@ export class DshLiveMonitor {
       finalText: '', finalEventId: null,
       present: false, listCheckedAt: null, lastListSeen: 0,
       events: [], nextCursor: 0, hasMore: false, syncingHistory: false,
+      historySupported: null, beforeCursor: null, hasOlder: false, olderInFlight: null, legacyWindow: 80,
       eventError: null, eventStale: false, eventCheckedAt: null, eventFailures: 0, eventNextRetryAt: null,
       eventLoading: false, eventsStopped: false, stalled: false, finalClearedAt: null,
       statusRound: 0, eventEndRound: null,
@@ -152,8 +156,10 @@ export class DshLiveMonitor {
   }
 
   _selectedSnapshot(agent) {
+    const events=this._visibleEvents(agent);
     return {
-      ...this._agentRow(agent), events: agent.events.map(event => ({ ...event })),
+      ...this._agentRow(agent), events: events.map(event => ({ ...event })),
+      ...(this.historyPaging?{has_older:agent.historySupported===false?events.length<agent.events.length:agent.hasOlder,history_supported:agent.historySupported}:{}),
       answer: agent.answer, partial_text: agent.partial_text, wait_outcome: agent.wait_outcome,
       next_cursor: agent.nextCursor, has_more: agent.hasMore,
       syncing_history: agent.syncingHistory, event_loading: agent.eventLoading,
@@ -161,6 +167,43 @@ export class DshLiveMonitor {
       stalled: agent.stalled, final_cleared_at: agent.finalClearedAt,
       status_error: agent.statusError, status_checked_at: agent.statusCheckedAt, status_stale: agent.statusStale,
     };
+  }
+
+  _visibleEvents(agent){
+    if(!this.historyPaging||agent.historySupported!==false)return agent.events;
+    const latest=[...new Set(agent.events.map(event=>event.taskTurn).filter(Boolean))].slice(-3);
+    const first=latest.length?agent.events.findIndex(event=>event.taskTurn===latest[0]):-1;
+    const limit=Math.max(agent.legacyWindow,first<0?0:agent.events.length-first);
+    return agent.events.slice(-limit);
+  }
+
+  async _readHistory(op,before){
+    const data=await this.api('/api/dsh/read',{threadId:op.threadId,agentId:op.agentId,kind:'history',...(before?{before}:{})});
+    if(!this._currentSelection(op))return null;
+    if(data?.threadId&&data.threadId!==op.threadId||data?.agentId&&data.agentId!==op.agentId)throw new Error('DSH 历史返回了其他对话');
+    const failure=dshResultError(data?.result);if(failure)throw new Error(failure);
+    const page=dshHistoryPage(data?.result);
+    if(page?.agentId&&page.agentId!==op.agentId)throw new Error('DSH 历史返回了其他任务');
+    if(before&&page?.hasOlder&&page.before>=before)throw new Error('DSH 历史游标没有前进，可重试');
+    return page;
+  }
+
+  async loadOlder(){
+    if(!this._actionable()||!this.selectedAgentId)return;
+    const agent=this._agent(this.selectedAgentId);
+    if(agent.historySupported===false){agent.legacyWindow=this._visibleEvents(agent).length+80;this._emit('older');return;}
+    if(!agent.hasOlder||!agent.beforeCursor)return;
+    const op={generation:this.generation,selectionGeneration:this.selectionGeneration,agentId:agent.agentId,threadId:this.context.threadId};
+    if(agent.olderInFlight===op.selectionGeneration)return;
+    agent.olderInFlight=op.selectionGeneration;
+    try{
+      const page=await this._readHistory(op,agent.beforeCursor);
+      if(!this._currentSelection(op))return;
+      if(!page)throw new Error('当前 DSH 源不再支持历史分页');
+      agent.events=mergeDshEvents(page.events,agent.events,{limit:Infinity});
+      agent.beforeCursor=page.before;agent.hasOlder=page.hasOlder;
+      this._emit('older');
+    }finally{if(agent.olderInFlight===op.selectionGeneration)agent.olderInFlight=null;}
   }
 
   _recordCallbackError(callbackName, error) {
@@ -574,8 +617,25 @@ export class DshLiveMonitor {
       let cursor = agent.nextCursor ?? 0;
       let hasMore = !!agent.hasMore;
       try {
+        if(this.historyPaging&&agent.historySupported===null){
+          let page;
+          try{page=await this._readHistory(op);}
+          catch(error){if(!/direction|backward|不支持参数|未知参数|unknown (?:argument|field)|invalid arguments/i.test(error.message||''))throw error;}
+          if(!this._currentSelection(op))return false;
+          agent.historySupported=!!page;
+          if(page){
+            agent.events=mergeDshEvents(agent.events,page.events,{limit:Infinity});
+            agent.beforeCursor=page.before;agent.hasOlder=page.hasOlder;agent.nextCursor=page.tail;
+            agent.eventCheckedAt=new Date(this.now()).toISOString();agent.eventStale=false;agent.eventFailures=0;
+            const lastTask=page.events.at(-1)?.taskTurn;
+            const final=[...page.events].reverse().find(event=>event.taskTurn===lastTask&&event.type==='assistant/final'&&event.text);
+            if(final){agent.finalText=final.text;agent.finalEventId=final.event_id;}
+            agent.hasMore=false;hasMore=false;pages=this.maxPages;
+            this._emit('events');
+          }
+        }
         while (pages < this.maxPages) {
-          const data = await this.api('/api/dsh/read', { threadId: op.threadId, agentId, kind: 'events', after: cursor });
+          const data = await this.api('/api/dsh/read', { threadId: op.threadId, agentId, kind: 'events', after: cursor, ...(agent.historySupported?{taskHistory:true}:{}) });
           if (!this._currentSelection(op)) return false;
           if (data?.threadId && data.threadId !== op.threadId) throw new Error('DSH 事件返回了其他对话，已丢弃');
           if (data?.agentId && data.agentId !== agentId) throw new Error('DSH 事件返回了其他 agent，已丢弃');
@@ -586,12 +646,13 @@ export class DshLiveMonitor {
           if (projection.agent_id && projection.agent_id !== agentId) throw new Error('DSH 事件返回了其他 agent，已丢弃');
           const checkedAt = isoAt(data?.checkedAt, new Date(this.now()).toISOString());
           const previousCursor = cursor;
-          const merged = mergeDshEvents(agent.events, projection.events);
+          const merged = mergeDshEvents(agent.events, projection.events,{...(this.historyPaging?{limit:Infinity}:{})});
           agent.events = merged;
           agent.nextCursor = projection.next_cursor;
           agent.hasMore = projection.has_more;
           hasMore = projection.has_more;
-          const finalEvent = [...merged].reverse().find(event => /(?:^|\/)assistant\/(?:final|final_answer)$/i.test(event.type || '') && event.text);
+          const currentTask=agent.historySupported?merged.at(-1)?.taskTurn:null;
+          const finalEvent = [...merged].reverse().find(event => (!currentTask||event.taskTurn===currentTask)&&/(?:^|\/)assistant\/(?:final|final_answer)$/i.test(event.type || '') && event.text);
           if (finalEvent) { agent.finalText = finalEvent.text; agent.finalEventId = finalEvent.event_id ?? null; }
           else if (projection.final_text) { agent.finalText = projection.final_text; agent.finalEventId = projection.final_event_id ?? null; }
           if (String(agent.status).toLowerCase() === 'completed' && agent.finalText && !agent.answer) agent.answer = agent.finalText;

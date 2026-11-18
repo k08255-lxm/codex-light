@@ -20,7 +20,7 @@ export function validSandboxPolicy(value){
  for(const key of ['networkAccess','excludeSlashTmp','excludeTmpdirEnvVar'])if(value[key]!==undefined&&typeof value[key]!=='boolean')return false;
  return value.writableRoots===undefined||(Array.isArray(value.writableRoots)&&value.writableRoots.length<=100&&value.writableRoots.every(root=>isAbsoluteWorkingDirectory(root)));
 }
-const METHODS = new Set(['model/list','thread/list','thread/read','thread/items/list','thread/turns/list','thread/start','thread/resume','thread/unsubscribe','thread/loaded/list','thread/compact/start','skills/list','turn/start','turn/steer','turn/interrupt','mcpServerStatus/list','thread/name/set','thread/archive','thread/unarchive','thread/fork','account/read','account/rateLimits/read','review/start','plugin/list','plugin/read','account/usage/read']);
+const METHODS = new Set(['model/list','thread/list','thread/read','thread/items/list','thread/turns/list','thread/start','thread/resume','thread/unsubscribe','thread/loaded/list','thread/compact/start','skills/list','turn/start','turn/steer','turn/interrupt','mcpServerStatus/list','thread/name/set','thread/archive','thread/unarchive','thread/delete','thread/summary','thread/fork','account/read','account/rateLimits/read','review/start','plugin/list','plugin/read','account/usage/read']);
 METHODS.add('account/rateLimitResetCredit/consume');
 const fields = {
  'account/rateLimitResetCredit/consume':['creditId','idempotencyKey'],
@@ -41,6 +41,8 @@ const fields = {
  'thread/name/set':['threadId','name'],
  'thread/archive':['threadId'],
  'thread/unarchive':['threadId'],
+ 'thread/delete':['threadId'],
+ 'thread/summary':['threadId'],
  'thread/fork':['threadId','excludeTurns'],
  'account/read':['refreshToken'],
  'account/rateLimits/read':['excludeResetCreditDetails'],
@@ -54,7 +56,7 @@ export function validateRpc(method,params,{hasAttachments=false}={}) {
  if(!params || typeof params!=='object' || Array.isArray(params))throw new Error('参数格式错误');
  for(const key of Object.keys(params))if(!fields[method].includes(key))throw new Error(`不支持参数 ${key}`);
  for(const key of ['threadId','turnId','expectedTurnId'])if(params[key]!==undefined && (typeof params[key]!=='string'||!params[key]||params[key].length>256||/[\x00-\x1f]/.test(params[key])))throw new Error('对话标识无效');
- if(method.startsWith('turn/') || ['thread/read','thread/items/list','thread/turns/list','thread/resume','thread/unsubscribe','thread/compact/start','thread/name/set','thread/archive','thread/unarchive','thread/fork','review/start'].includes(method))if(!params.threadId)throw new Error('缺少对话标识');
+ if(method.startsWith('turn/') || ['thread/read','thread/items/list','thread/turns/list','thread/resume','thread/unsubscribe','thread/compact/start','thread/name/set','thread/archive','thread/unarchive','thread/delete','thread/summary','thread/fork','review/start'].includes(method))if(!params.threadId)throw new Error('缺少对话标识');
  if(method==='turn/steer'&&!params.expectedTurnId)throw new Error('立即发送需要明确的 expectedTurnId');
  if(params.cursor!==undefined&&params.cursor!==null&&(typeof params.cursor!=='string'||params.cursor.length>4096||params.cursor.includes('\0')))throw new Error('分页游标无效');
  if(method==='skills/list'){
@@ -86,7 +88,6 @@ export function validateRpc(method,params,{hasAttachments=false}={}) {
  if(params.cwd!==undefined && !isAbsoluteWorkingDirectory(params.cwd))throw new Error('工作目录必须为本机绝对路径');
  if(method==='turn/interrupt'&&!params.turnId)throw new Error('停止任务需要明确的 turnId');
  if(method==='thread/start') {
-   if(!params.cwd)throw new Error('请选择工作目录');
    if(params.sandbox!==undefined&&!['workspace-write','read-only','danger-full-access'].includes(params.sandbox))throw new Error('沙箱模式无效');
  }
  if(['thread/start','turn/start'].includes(method)){

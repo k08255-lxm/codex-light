@@ -17,7 +17,7 @@ async function until(check){for(let attempt=0;attempt<100;attempt++){if(await ch
 async function fixture(t){
  const root=await mkdtemp(path.join(os.tmpdir(),'light-sessions-')),apps=[];
  t.after(async()=>{await Promise.all(apps.map(a=>a.close()));await rm(root,{recursive:true,force:true});});
- async function create(){const rpc=new RpcClient({command:process.execPath,args:[peer,root],cwd:root,timeout:3000,closeTimeout:100});const app=await createServer({client:rpc,fileAttachmentRoot:path.join(root,'attachments')});apps.push(app);await app.started;return app;}
+ async function create(){const rpc=new RpcClient({command:process.execPath,args:[peer,root],cwd:root,timeout:3000,closeTimeout:100});const app=await createServer({client:rpc,fileAttachmentRoot:path.join(root,'attachments'),projectsRoot:path.join(root,'projects')});apps.push(app);await app.started;return app;}
  return {root,create};
 }
 
@@ -47,7 +47,7 @@ test('HTTP steer uses owned attachments, preserves turn, deduplicates, rejects s
  const fileResponse=await fetch(app.origin+'/api/file-uploads',{method:'POST',headers:{Authorization:'Bearer '+app.token,'X-Filename':'fixture.txt','X-File-Mime':'text/plain'},body:'local synthetic attachment'});assert.equal(fileResponse.status,200);const file=await fileResponse.json();
  const params={threadId:'t',expectedTurnId:turnId,input:[{type:'text',text:'立即',text_elements:[{byteRange:{start:0,end:6}}]}]},requestId=id(app);
  const extra={requestId,attachmentIds:[image.id],fileAttachmentIds:[file.id]};
- const [one,two]=await Promise.all([post(app,'turn/steer',params,extra),post(app,'turn/steer',params,extra)]);assert.equal(one.status,200);assert.deepEqual(one,two);assert.deepEqual(one.body,{turnId});
+ const [one,two]=await Promise.all([post(app,'turn/steer',params,extra),post(app,'turn/steer',params,extra)]);assert.equal(one.status,200);assert.deepEqual(one,two);assert.equal(one.body.turnId,turnId);assert.ok(one.body.submittedAt>=started.body.submittedAt);assert.equal(one.body.activityWarning,undefined);
  let calls=(await app.rpc.call('test/stats')).calls.filter(c=>c.method==='turn/steer');assert.equal(calls.length,1);
  const input=calls[0].params.input;assert.equal(input.length,3);assert.deepEqual(input[0].text_elements,[{byteRange:{start:0,end:6}}]);assert.equal(input[1].type,'image');assert.equal(input[1].url,'data:image/png;base64,'+Buffer.from([137,80,78,71,13,10,26,10,1]).toString('base64'));assert.equal(input[1].path,undefined);assert.match(input[2].text,/fixture.txt/);assert.deepEqual(input[2].text_elements,[]);
  const stale=await post(app,'turn/steer',{...params,expectedTurnId:'wrong'});assert.equal(stale.status,409);assert.equal(stale.body.code,'ACTIVE_TURN_MISMATCH');assert.equal(stale.body.notExecuted,true);

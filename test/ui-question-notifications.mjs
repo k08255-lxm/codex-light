@@ -31,9 +31,10 @@ try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe' });
   page = await browser.newPage({ viewport: { width: 1440, height: 920 } }); page.setDefaultTimeout(8000);
   await page.addInitScript(() => {
-    window.nativeQuestionCalls = []; window.testForeground = true;
+    window.nativeQuestionCalls = []; window.nativeBadges = []; window.testForeground = true;
     document.hasFocus = () => window.testForeground;
     window.codexLightQuestionNotifications = Object.fromEntries(['show', 'clear', 'clearAll'].map(name => [name, async value => window.nativeQuestionCalls.push({ name, value })]));
+    window.chrome.webview = { postMessage(message) { if (message.type === 'desktopTaskbarBadge') window.nativeBadges.push(message); } };
   });
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(app.url); await page.locator('#connection-text').filter({ hasText: '演示模式' }).waitFor();
@@ -48,20 +49,26 @@ try {
   const question = { id: 'browser-question', method: 'item/tool/requestUserInput', params: { threadId: second.id,
     questions: [{ id: 'answer', header: '说明', question: 'Browser question', isOther: false, isSecret: false, options: null }] } };
   client.requests.set(question.id, question); client.emit('event', question);
-  await page.locator('#question-alert').waitFor(); await page.locator('.question-alert-open').click();
+  await page.locator('#question-alert').waitFor();
+  await page.waitForFunction(() => window.nativeBadges.at(-1)?.count === 1 && window.nativeBadges.at(-1)?.attention === true);
+  await page.getByRole('button', {name: '暂时收起待处理提醒'}).click();
+  await page.locator('#question-alert').waitFor({state:'hidden'});
+  assert.equal(await page.evaluate(() => window.nativeBadges.at(-1).count), 1);
+  await page.evaluate(() => { const call = window.nativeQuestionCalls.find(value => value.name === 'show'); window.dispatchEvent(new CustomEvent('codex-light-question-open', { detail: call.value })); });
   await page.waitForFunction(name => document.querySelector('#thread-title').textContent === name, second.name);
   assert.equal(await page.locator('#approvals').evaluate(node => node.contains(document.activeElement)), true);
-  assert.equal(await page.evaluate(() => window.nativeQuestionCalls.filter(call => call.name === 'show').length), 0);
+  assert.equal(await page.evaluate(() => window.nativeQuestionCalls.filter(call => call.name === 'show').length), 1);
   await page.locator('#approvals textarea').fill('Explicit answer'); await page.locator('#approvals button').filter({ hasText: '提交回答' }).click();
-  await page.locator('#question-alert').waitFor({ state: 'hidden' });
-  checks.push('foreground request banner navigates and focuses the real approval card');
+  await page.waitForFunction(() => window.nativeBadges.at(-1)?.count === 0);
+  checks.push('a foreground request posts one system reminder and badge; dismissing keeps the count and native click opens the exact request');
 
   await page.evaluate(() => { window.testForeground = false; });
   const approval = { id: 'browser-approval', method: 'item/commandExecution/requestApproval', params: { threadId: second.id, command: 'echo private-command' } };
   client.requests.set(approval.id, approval); client.emit('event', approval); client.emit('event', approval);
-  await page.waitForFunction(() => window.nativeQuestionCalls.filter(call => call.name === 'show').length === 1);
+  await page.waitForFunction(() => window.nativeQuestionCalls.filter(call => call.name === 'show').length === 2);
+  assert.equal(await page.evaluate(() => window.nativeBadges.at(-1).count), 0);
   assert.equal(await page.evaluate(() => JSON.stringify(window.nativeQuestionCalls).includes('private-command')), false);
-  await page.evaluate(() => { window.testForeground = true; const call = window.nativeQuestionCalls.find(value => value.name === 'show'); window.dispatchEvent(new CustomEvent('codex-light-question-open', { detail: call.value })); });
+  await page.evaluate(() => { window.testForeground = true; const call = window.nativeQuestionCalls.filter(value => value.name === 'show').at(-1); window.dispatchEvent(new CustomEvent('codex-light-question-open', { detail: call.value })); });
   await page.waitForFunction(() => document.querySelector('#approvals').contains(document.activeElement));
   client.respond(approval.id); await page.locator('#question-alert').waitFor({ state: 'hidden' });
   checks.push('background approval requests notify once and native click returns to the request');
@@ -71,7 +78,7 @@ try {
   client.turns.get(first.id).push(turn); client.items.get(first.id).push({ turnId: turn.id, item: live });
   const event = method => ({ method, params: { threadId: first.id, turnId: turn.id, item: live } });
   client.emit('event', event('item/started')); client.emit('event', event('item/completed'));
-  await page.waitForFunction(() => window.nativeQuestionCalls.filter(call => call.name === 'show').length === 2);
+  await page.waitForFunction(() => window.nativeQuestionCalls.filter(call => call.name === 'show').length === 3);
   await page.evaluate(() => { window.testForeground = true; }); await page.locator('.question-alert-open').click();
   await page.waitForFunction(id => document.querySelector(`[data-item-id="${id}"]`)?.contains(document.activeElement), live.id);
   const liveWork=page.locator('.turn-work').filter({has:page.locator(`[data-item-id="${live.id}"]`)});
@@ -80,8 +87,9 @@ try {
 
   await page.locator('#rail-settings').click(); await page.locator('[data-settings-section="notifications"]').click();
   await page.locator('#preference-approval').uncheck(); await page.locator('#question-alert').waitFor({ state: 'hidden' });
+  assert.deepEqual(await page.evaluate(() => window.nativeBadges.at(-1)), {type:'desktopTaskbarBadge',count:1,attention:false});
   await page.locator('#preference-approval').check(); await page.locator('#question-alert').waitFor();
-  assert.equal(await page.evaluate(() => window.nativeQuestionCalls.filter(call => call.name === 'show').length), 2);
+  assert.equal(await page.evaluate(() => window.nativeQuestionCalls.filter(call => call.name === 'show').length), 3);
   checks.push('notification preference immediately hides and restores the banner without replaying system alerts');
 
   await page.locator('.question-alert-open').click();
@@ -89,9 +97,16 @@ try {
   await liveCard.locator('textarea').fill('Confirmed browser answer'); await liveCard.locator('button').filter({ hasText: '发送回答' }).click();
   await liveCard.locator('button').filter({ hasText: '正在发送' }).waitFor();
   assert.equal(await page.locator('#question-alert').isVisible(), true, 'pending send keeps reminder');
+  assert.equal(await page.evaluate(() => window.nativeBadges.at(-1).count), 1);
   await page.screenshot({ path: path.join(output, 'pending-answer.png') });
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobileAlert = await page.locator('#question-alert').boundingBox();
+  assert.ok(mobileAlert.x >= 0 && mobileAlert.x + mobileAlert.width <= 390, 'the mobile card fits within the viewport');
+  await page.screenshot({ path: path.join(output, 'pending-answer-mobile.png') });
+  await page.setViewportSize({ width: 1440, height: 920 });
   assert.equal(answerStarted, true); releaseAnswer();
   await page.locator('#question-alert').waitFor({ state: 'hidden' });
+  await page.waitForFunction(() => window.nativeBadges.at(-1)?.count === 0);
   client.emit('event', event('item/completed'));
   await liveCard.locator('.answer-value').filter({hasText:'Confirmed browser answer'}).waitFor();
   await liveWork.getByRole('button',{name:'收起本轮过程'}).click();
@@ -104,6 +119,25 @@ try {
   assert.equal(await page.locator('#question-alert').isVisible(), false);
   assert.equal(await page.evaluate(() => window.nativeQuestionCalls.filter(call => call.name === 'show').length), 0);
   checks.push('async reminder remains during send and only clears after confirmed success; late replay stays cleared');
+
+  const anotherClientQuestion = asyncItem('external-question');
+  const externalEvent = (threadId, item, method = 'item/completed') => ({ method, params: { threadId, turnId: 'external-turn', item } });
+  client.emit('event', externalEvent(second.id, anotherClientQuestion, 'item/started'));
+  await page.waitForFunction(() => window.nativeBadges.at(-1)?.count === 1);
+  const externalEcho = { id: 'external-echo', type: 'userMessage', content: [{ type:'text', text:'对提问的回答\n\n1. Question notification browser fixture\n回答：From another client' }] };
+  client.emit('event', externalEvent(second.id, externalEcho));
+  await page.waitForFunction(() => window.nativeBadges.at(-1)?.count === 0);
+  checks.push('a confirmed answer from another client clears a pending question in an unopened conversation');
+
+  client.emit('event', externalEvent(second.id, asyncItem('archive-question'), 'item/started'));
+  client.emit('event', externalEvent(first.id, asyncItem('kept-question'), 'item/started'));
+  await page.waitForFunction(() => window.nativeBadges.at(-1)?.count === 2);
+  await original('thread/archive', { threadId: second.id });
+  client.emit('event', { method:'thread/archived', params:{ threadId: second.id } });
+  await page.waitForFunction(() => window.nativeBadges.at(-1)?.count === 1);
+  await original('thread/delete', { threadId: first.id });
+  await page.waitForFunction(() => window.nativeBadges.at(-1)?.count === 0);
+  checks.push('confirmed archive and deletion clear the count for only the affected conversation');
   assert.deepEqual(errors, []); console.log(JSON.stringify({ checks, pageErrors: errors }, null, 2));
 } catch (error) {
   if (page) {

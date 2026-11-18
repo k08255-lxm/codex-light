@@ -50,6 +50,23 @@ test('a missing edit retains known contributions for the same file and overall t
  const unknown=summary([missing]);assert.equal(unknown.added,null);assert.equal(unknown.removed,null);assert.equal(unknown.binaryCount,0);
 });
 
+test('native child completion preserves the no-op evidence without dropping unrelated missing fragments',()=>{
+ const path='worker.py',change={path,kind:{type:'update'}};
+ const collector=new NativeAgentChanges('root');
+ collector.observe([{id:'spawn',type:'collabAgentToolCall',tool:'spawnAgent',receiverThreadIds:['child'],_turnId:'parent'}]);
+ collector.ingest('root',{id:'child',cwd:'C:/repo',turns:[{id:'child-turn',status:'completed',items:[
+  {id:'noop',type:'fileChange',status:'completed',changes:[{...change,diff:''}]},
+ ]}]},{complete:true});
+ const primary=fileSummary([{id:'primary',type:'fileChange',status:'completed',changes:[{...change,diff:patch}]}],null,{cwd:'C:/repo'});
+ const records=collector.changes();
+ assert.deepEqual(records[0].changes[0].lineStats,{added:0,removed:0});
+ const merged=mergeDelegatedFileSummary(primary,summary(records),{cwd:'C:/repo'});
+ assert.equal(merged.complete,true);assert.equal(merged.added,1);assert.equal(merged.rows[0].diffs.length,1);
+ const missing={...record('missing',path),changes:[{...change,diff:''}]};
+ const unknown=mergeDelegatedFileSummary(primary,summary([...records,missing]),{cwd:'C:/repo'});
+ assert.equal(unknown.complete,false);assert.equal(unknown.added,1);assert.deepEqual(unknown.rows[0].statsReasons,['missing']);
+});
+
 test('native net diffs override child edits while ordinary parent and child patches accumulate',()=>{
  const primary=fileSummary([{type:'fileChange',status:'completed',changes:[{path:'C:/repo/Program.cs',kind:{type:'update'},diff:patch}]}],null,{cwd:'C:/repo'}),delegated=summary([record('child','Program.cs')]);
  assert.equal(mergeDelegatedFileSummary(primary,delegated,{cwd:'C:/repo'}).added,2);
@@ -72,6 +89,20 @@ test('live floating pill and its file panel retain known totals alongside honest
  host.querySelector('.changes-pill').dispatch('click');assert.equal(view.isOpen(),true);
  const rows=host.querySelectorAll('.changes-file');assert.match(rows[0].textContent,/\+1-1/);assert.match(rows[1].textContent,/缺少差异数据，行数未知/);assert.match(rows[2].textContent,/二进制/);
  assert.match(host.querySelector('.diff-stats').title,/累计/);
+});
+
+test('an open file panel updates its known subtotal while a separate patch is still missing',()=>{
+ const path='same.js',document=createDocument(),host=document.createElement('div');
+ const view=mountLiveChanges(host,{renderDiff});
+ const missing={...record('missing',path),changes:[{path}]};
+ const update=(...edits)=>view.update(pillChanges([{id:'parent',status:'running',files:summary([missing,...edits])}]));
+ update(record('one',path));
+ host.querySelector('.changes-pill').dispatch('click');
+ const row=host.querySelector('.changes-file');
+ assert.match(row.textContent,/已知 \+1-1/);
+ update(record('one',path),record('two',path));
+ assert.equal(host.querySelector('.changes-file'),row);
+ assert.match(row.textContent,/已知 \+2-2.*缺少差异数据/);
 });
 
 test('preview budgets never remove later file paths or their counts',()=>{

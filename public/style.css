@@ -312,6 +312,16 @@ dialog::backdrop { background: var(--overlay); }
 .md-code-header { display: flex; justify-content: space-between; align-items: center; min-height: 32px; padding: 2px 6px 2px 12px; background: var(--code-header); border-bottom: 1px solid var(--border); color: var(--tertiary); font-size: .75rem; }
 .md-code-copy { font-size: .75rem; padding: 3px 8px; color: var(--tertiary); }
 .md-code-block pre { margin: 0; padding: 12px 14px; overflow: auto; white-space: pre; font-size: .8125rem; line-height: 1.6; }
+.md-code-block pre:focus-visible, .console-output:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+:root { --syntax-keyword:#c9aef2; --syntax-string:#afd197; --syntax-number:#edc58c; --syntax-comment:#a0a4ad; }
+:root[data-theme="light"] { --syntax-keyword:#6944a0; --syntax-string:#356724; --syntax-number:#865417; --syntax-comment:#57626d; }
+.syntax-keyword { color: var(--syntax-keyword); }
+.syntax-string { color: var(--syntax-string); }
+.syntax-number { color: var(--syntax-number); }
+.syntax-comment { color: var(--syntax-comment); }
+.syntax-error { color: var(--error); }
+.syntax-warning { color: var(--warning); }
+.syntax-success { color: var(--success); }
 .md-table-wrap { overflow-x: auto; max-width: 100%; margin: 12px 0; overscroll-behavior-x: contain; }
 .md-table-wrap table { border-collapse: collapse; min-width: 100%; font-size: .8125rem; }
 .md-table-wrap th, .md-table-wrap td { border-bottom: 1px solid var(--border); padding: 7px 12px 7px 0; text-align: left; vertical-align: top; }
@@ -359,7 +369,8 @@ dialog::backdrop { background: var(--overlay); }
 .pending-inline-error { border-color: var(--error-border); background: var(--error-bg); color: var(--error); }
 .attachment-tray { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 2px 8px; }
 .composer-overlays { position:absolute;left:24px;right:24px;bottom:100%;display:flex;flex-direction:column;gap:8px;padding-bottom:10px;background:transparent;pointer-events:none;z-index:24; }
-.composer-overlays .live-changes { position:relative;left:auto;bottom:auto;transform:none;align-self:center; }
+.composer-overlays .live-changes { position:relative;left:auto;bottom:auto;transform:none;align-self:center;width:100%;max-width:none; }
+.composer-overlays .changes-panel { max-width:100%; }
 .composer-overlays .attachment-tray { padding:0;background:transparent;max-height:170px;overflow-y:auto;pointer-events:none; }
 .composer-overlays .attachment-chip,.composer-overlays .attachment-uploading { pointer-events:auto; }
 .attachment-chip.attachment-image { position:relative;display:block;width:76px;height:76px;padding:0;flex:none;border-radius:12px; }
@@ -824,27 +835,30 @@ dialog::backdrop { background: var(--overlay); }
 .reasoning-track.unknown #reasoning-range::-webkit-slider-thumb { opacity:0; }
 .reasoning-track.unknown #reasoning-range::-moz-range-thumb { opacity:0; }
 
-/* Whole-turn feedback also covers model-only thinking and streaming between tools. */
-/* "正在工作" is quiet text that shimmers in place: no tinted box, no rule below it, no hard edges. */
-.turn-footer.turn-working { display:inline-flex; align-items:center; gap:8px; width:fit-content; padding:2px 0; border-bottom:0; color:var(--tertiary); }
-.turn-working[data-running="true"]::before { content:""; flex:none; width:6px; height:6px; border-radius:50%; background:var(--tertiary); animation:working-dot 1.6s ease-in-out infinite; }
-.turn-working[data-running="true"] { background:linear-gradient(90deg, var(--tertiary) 0%, var(--tertiary) 40%, var(--text) 50%, var(--tertiary) 60%, var(--tertiary) 100%) 0 0 / 250% 100% no-repeat text; -webkit-background-clip:text; color:transparent; animation:working-shimmer 2.4s linear infinite; }
-@keyframes working-shimmer { from { background-position:100% 0; } to { background-position:0 0; } }
-@keyframes working-dot { 0%,100% { opacity:.35; scale:.85; } 50% { opacity:1; scale:1; } }
-/* Running operation rows keep a soft sweep that fades out at both ends instead of a hard-edged band. */
-:is(.step, .turn-process, .agent-operation-group) > summary { position:relative; isolation:isolate; overflow:hidden; border-radius:var(--radius-control); }
-:is(.step, .turn-process, .agent-operation-group)[data-running="true"] > summary::before {
-  content:""; position:absolute; inset:0; z-index:-1; pointer-events:none;
-  background:linear-gradient(100deg, transparent 25%, color-mix(in srgb, var(--text) 6%, transparent) 50%, transparent 75%);
-  mask-image:linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent);
-  animation:thread-running-sweep 2.6s ease-in-out infinite;
+.turn-footer.turn-working { width:fit-content; padding:2px 0; border-bottom:0; color:var(--tertiary); }
+/* Apply the highlight to text-bearing nodes so disclosure arrows, counters and surfaces stay still. */
+@supports (background-clip:text) or (-webkit-background-clip:text) {
+  @media (forced-colors:none) {
+    :root:not([data-reduced-motion="true"]) :is(
+      .project-group-thread.running .thread-name,
+      .turn-working[data-running="true"],
+      .turn-process[data-running="true"] > summary .turn-process-label,
+      .step[data-running="true"] > summary .step-verb,
+      .agent-operation-group[data-running="true"] > summary > span:first-child
+    ) {
+      background-image:var(--running-highlight,linear-gradient(100deg,var(--secondary) 38%,var(--text) 50%,var(--secondary) 62%));
+      background-size:230% 100%;
+      background-clip:text;
+      -webkit-background-clip:text;
+      -webkit-text-fill-color:var(--running-text-fill,transparent);
+      animation:var(--running-animation,working-shimmer 2.6s ease-in-out infinite);
+    }
+  }
 }
+@keyframes working-shimmer { 0% { background-position:100% 0; } 80%,100% { background-position:0 0; } }
 @media (prefers-reduced-motion:reduce) {
-  :root:not([data-reduced-motion="false"]) :is(.step, .turn-process, .agent-operation-group)[data-running="true"] > summary::before { animation:none; transform:none; }
-  :root:not([data-reduced-motion="false"]) .turn-working[data-running="true"] { animation:none; background:none; color:var(--tertiary); }
+  :root:not([data-reduced-motion="false"]) { --running-highlight:none; --running-text-fill:currentColor; --running-animation:none; }
 }
-:root[data-reduced-motion="true"] :is(.step, .turn-process, .agent-operation-group)[data-running="true"] > summary::before { animation:none; transform:none; }
-:root[data-reduced-motion="true"] .turn-working[data-running="true"] { animation:none; background:none; color:var(--tertiary); }
 
 /* Config uses the same restrained typography and rows as the other settings. */
 .config-settings-panel { padding:20px; }

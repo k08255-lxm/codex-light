@@ -75,3 +75,38 @@ test('reopening a thread in a fresh client restores its own choice before issuin
  second.setId('two');await second.controller.load('two');assert.deepEqual(second.controller.params(second.controller.snapshot(),'turn'),{});
  second.setId(null);assert.equal(second.label.textContent,'帮我批准');
 });
+
+test('a save receipt cannot unlock a pending cross-device read that saw a newer mode',async()=>{
+ let saveFinish,readFinish,waitForRead;
+ const saving=new Promise(resolve=>saveFinish=resolve);
+ const reading=new Promise(resolve=>readFinish=resolve);
+ const readStarted=new Promise(resolve=>waitForRead=resolve);
+ let loadCount=0;
+ const h=fixture({id:'one',permissionStore:async({mode})=>{
+  if(mode)return saving;
+  if(++loadCount===1)return {scope:'previous',mode:'request'};
+  waitForRead();return reading;
+ }});
+ await h.controller.load('one');
+ h.choose('auto');
+ const sync=h.controller.changed({threadId:'one',scope:'current'});
+ assert.throws(()=>h.controller.snapshot(),/正在保存/);
+ saveFinish({scope:'previous',mode:'auto'});
+ await readStarted;
+ assert.throws(()=>h.controller.snapshot(),/正在同步/);
+ readFinish({scope:'current',mode:'request'});await sync;
+ assert.equal(h.label.textContent,'请求批准');
+ assert.equal(h.controller.snapshot().permission.approvalsReviewer,'user');
+});
+
+test('disconnect invalidates pending reads and requires a fresh confirmed permission',async()=>{
+ let finish;
+ const held=new Promise(resolve=>finish=resolve);
+ let calls=0;
+ const h=fixture({id:'one',permissionStore:async()=>++calls===1?held:{scope:'current',mode:'request'}});
+ const old=h.controller.load('one');h.controller.invalidate();
+ finish({scope:'stale',mode:'auto'});await old;
+ assert.throws(()=>h.controller.snapshot(),/正在同步/);
+ await h.controller.load('one');
+ assert.equal(h.controller.snapshot().permission.approvalsReviewer,'user');
+});

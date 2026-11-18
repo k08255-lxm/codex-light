@@ -10,7 +10,7 @@ const METRICS = {
   turns: { label: '回合', value: row => row.turnCount, format: integer },
   cost: { label: '估算成本', value: row => row.estimatedCost?.usd ?? null, format: usd },
 };
-const RANGES = [['24h', '24 小时', 24 * 3600e3, 'hour'], ['7d', '7 天', 7 * 86400e3, 'day'], ['30d', '30 天', 30 * 86400e3, 'day'], ['all', '全部', null, 'day']];
+const RANGES = [['today', '今天', null, 'hour'], ['24h', '24 小时', 24 * 3600e3, 'hour'], ['7d', '7 天', 7 * 86400e3, 'day'], ['30d', '30 天', 30 * 86400e3, 'day'], ['all', '全部', null, 'day']];
 const STATUS = { completed: '完成', failed: '失败', interrupted: '已停止', inProgress: '进行中', unknown: '未知' };
 
 /**
@@ -19,9 +19,16 @@ const STATUS = { completed: '完成', failed: '失败', interrupted: '已停止'
  * are bound to the exact filters: every page of one query must send identical from/to.
  */
 export function statisticsQuery(ui, now = ui.anchor ?? Date.now()) {
-  const range = RANGES.find(row => row[0] === ui.range) || RANGES[2];
+  const range = RANGES.find(row => row[0] === ui.range) || RANGES.find(row => row[0] === '30d');
   const body = { scope: ui.scope === 'local' ? 'local' : 'light', bucket: range[3], limit: 30 };
-  if (range[2]) { body.from = new Date(now - range[2]).toISOString(); body.to = new Date(now + 60e3).toISOString(); }
+  if (range[0] === 'today') {
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 1);
+    body.from = start.toISOString();
+    body.to = end.toISOString();
+  } else if (range[2]) { body.from = new Date(now - range[2]).toISOString(); body.to = new Date(now + 60e3).toISOString(); }
   if (ui.model) body.model = ui.model;
   if (ui.provider) body.provider = ui.provider;
   if (ui.account) body.account = ui.account;

@@ -4,7 +4,7 @@
 
 ```powershell
 dotnet build test/native-tray/Test.csproj -c Release
-dotnet test/native-tray/bin/Release/net10.0-windows/Test.dll
+dotnet test/native-tray/bin/Release/net10.0-windows10.0.19041.0/Test.dll
 ```
 
 测试直接编译桌面宿主源码，使用透明、禁用且不显示任务栏项的测试窗口。它移除 `Shown` 的后台启动委托，并隔离窗口状态文件；不启动 Node 或 WebView，不查找或关闭用户的应用进程。测试期间会短暂创建实际托盘图标，完成后释放。

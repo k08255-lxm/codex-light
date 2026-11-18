@@ -6,10 +6,13 @@ import path from 'node:path';
 import {randomBytes} from 'node:crypto';
 import {projectName} from '../public/projects.js';
 
-const MAX_BYTES = 128 * 1024;
+const MAX_BYTES = 384 * 1024;
 const MAX_PROJECTS = 50;
+const MAX_SUBMISSIONS = 1000;
 const stateError = () => new Error('项目列表无法安全读取或保存；原有列表未被替换。');
 const keysAre = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join(',') === keys;
+const activityAt = value => Number.isSafeInteger(value) && value > 0;
+const validThread = value => typeof value === 'string' && /^[\w.:-]{1,128}$/.test(value);
 
 async function noLinks(file) {
   for (let current = path.resolve(file);; current = path.dirname(current)) {
@@ -45,11 +48,12 @@ export class ProjectStore {
   }
 
   validate(value) {
-    if (!keysAre(value, 'projects,selectedId,version') || value.version !== 1 || !Array.isArray(value.projects) || value.projects.length > MAX_PROJECTS) throw stateError();
+    if ((!keysAre(value, 'projects,selectedId,version') && !keysAre(value, 'projects,selectedId,submissions,version')) || value.version !== 1 || !Array.isArray(value.projects) || value.projects.length > MAX_PROJECTS) throw stateError();
+    if (value.submissions !== undefined && (!value.submissions || typeof value.submissions !== 'object' || Array.isArray(value.submissions) || Object.keys(value.submissions).length > MAX_SUBMISSIONS || Object.entries(value.submissions).some(([id, at]) => !validThread(id) || !activityAt(at)))) throw stateError();
     const ids = new Set(), paths = new Set();
     for (const project of value.projects) {
       const validName = typeof project.name === 'string' && (project.name === projectName(project.path) || (project.name.trim().length > 0 && project.name.length <= 120 && !/[\u0000-\u001f\u007f]/.test(project.name)));
-      if ((!keysAre(project, 'id,name,path') && !keysAre(project, 'id,name,path,pinned')) || (project.pinned !== undefined && typeof project.pinned !== 'boolean') || typeof project.id !== 'string' || !/^[a-f0-9]{32}$/.test(project.id) || !this.validPath(project.path) || !validName || ids.has(project.id) || paths.has(this.key(project.path))) throw stateError();
+      if (Object.keys(project).some(key => !['id','name','path','pinned','addedAt'].includes(key)) || (project.addedAt !== undefined && !activityAt(project.addedAt)) || (project.pinned !== undefined && typeof project.pinned !== 'boolean') || typeof project.id !== 'string' || !/^[a-f0-9]{32}$/.test(project.id) || !this.validPath(project.path) || !validName || ids.has(project.id) || paths.has(this.key(project.path))) throw stateError();
       ids.add(project.id);
       paths.add(this.key(project.path));
     }
@@ -118,15 +122,16 @@ export class ProjectStore {
     return job;
   }
 
-  async list() { await this.queue; return this.read(); }
+  async list() { await this.queue; const {submissions, ...snapshot} = await this.read(); return snapshot; }
+  async submitted() { await this.queue; return (await this.read()).submissions || {}; }
 
-  add(value) {
+  add(value, recent = true) {
     return this.update(async snapshot => {
       const canonical = await this.directory(value);
       let project = snapshot.projects.find(item => this.key(item.path) === this.key(canonical));
       if (!project) {
         if (snapshot.projects.length >= MAX_PROJECTS) throw new Error('最多保存 50 个项目，请先移除不再使用的项目。');
-        project = {id: randomBytes(16).toString('hex'), path: canonical, name: projectName(canonical)};
+        project = {id: randomBytes(16).toString('hex'), path: canonical, name: projectName(canonical), ...(recent ? {addedAt: Date.now()} : {})};
         snapshot.projects.push(project);
       }
       snapshot.selectedId = project.id;
@@ -135,11 +140,30 @@ export class ProjectStore {
 
   select(id) {
     return this.update(async snapshot => {
+      if (id === null) { snapshot.selectedId = null; return; }
       const project = snapshot.projects.find(item => item.id === id);
       if (!project) throw new Error('找不到该项目，请刷新项目列表。');
       await this.directory(project.path);
       snapshot.selectedId = project.id;
     });
+  }
+
+  recordSubmission(id, at) {
+    if (!validThread(id) || !activityAt(at)) throw stateError();
+    return this.update(snapshot => {
+      const previous = Object.entries(snapshot.submissions || {}).filter(([threadId]) => threadId !== id);
+      const sameThread = Object.hasOwn(snapshot.submissions || {}, id) ? snapshot.submissions[id] : 0;
+      snapshot.submissions = Object.fromEntries([[id, Math.max(at, sameThread)], ...previous.slice(0, MAX_SUBMISSIONS - 1)]);
+    });
+  }
+
+  async createProjectlessDirectory(id) {
+    if (!/^[a-f0-9]{32}$/.test(id)) throw stateError();
+    const directory = path.join(this.root, 'projectless-threads', id);
+    await noLinks(directory);
+    await mkdir(directory, {recursive: true, mode: 0o700});
+    await noLinks(directory);
+    return directory;
   }
 
   remove(id) {

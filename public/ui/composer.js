@@ -18,13 +18,14 @@ export function createComposer({ document, session, drafts, ledger, thread, view
   const { state, followUps, sessionFor, sessionControls } = session;
   const { attachmentDraft, fileAttachmentDraft, attachmentPreviews, queuedPreviews, clearSubmittedDraft, renderAttachments, autosizePrompt } = drafts;
   const { performMutation, pendingMutations, scopedPending, currentSendAvailability, renderPendingMutations } = ledger;
-  const { restoreThreadReasoning, loadThreads, syncStatus, resetThreadDsh, rememberThread } = thread;
-  const { $, el, notice, activity, confirm, openImage, updateControls, renderMessages, scheduleRender, scrollBottom, renderContext, openProjectDialog, openInlineCwd } = view;
+  const { restoreThreadReasoning, loadThreads, syncStatus, resetThreadDsh, rememberThread, recordSubmission } = thread;
+  const { $, el, notice, activity, confirm, openImage, updateControls, renderMessages, scheduleRender, scrollBottom, renderContext, openInlineCwd } = view;
   const optimistic=new OptimisticMessages();
   const optimisticHost=document.createElement('div');optimisticHost.id='optimistic-messages';optimisticHost.className='optimistic-messages';optimisticHost.hidden=true;
   const messages=$('messages');if(messages?.parentElement)messages.parentElement.append(optimisticHost);
   function beginOptimistic(draft,method='turn/start',retryId=null){
-    const row=optimistic.begin({threadId:state.thread?.id||null,generation:state.openGeneration,...draft,method,beforeIds:state.store.values().filter(x=>x.type==='userMessage'&&!x._local).map(x=>x.id)});
+    const items=state.store.values();
+    const row=optimistic.begin({threadId:state.thread?.id||null,generation:state.openGeneration,...draft,method,afterItemId:items.at(-1)?.id??null,beforeIds:items.filter(x=>x.type==='userMessage'&&!x._local).map(x=>x.id)});
     if(retryId)optimistic.remove(retryId);
     $('prompt').value='';autosizePrompt();renderOptimistic();scrollBottom();return row;
   }
@@ -35,6 +36,7 @@ export function createComposer({ document, session, drafts, ledger, thread, view
     optimistic.resolve(marker.requestId,decision,response?.result,response?.error||'');
     for(const row of optimistic.rows.values())if(row.requestId===marker.requestId)restoreUnsentText(row);
     renderOptimistic();
+    if(decision==='succeeded')scheduleRender();
   }
   function retryOptimistic(row){
     if(row.status!=='notExecuted'||state.sending||state.loadingThread||!state.connected)return;
@@ -45,7 +47,7 @@ export function createComposer({ document, session, drafts, ledger, thread, view
   }
   function renderOptimistic(){
     optimistic.reconcile(state.thread?.id||null,state.store.values());
-    const rows=optimistic.visible(state.thread?.id||null,state.openGeneration);const fragment=document.createDocumentFragment();
+    const rows=optimistic.visible(state.thread?.id||null,state.openGeneration).filter(row=>row.status!=='accepted'||!row.turnId);const fragment=document.createDocumentFragment();
     for(const row of rows){
       const article=el('article','message userMessage optimistic-message');article.dataset.submission=row.id;article.dataset.status=row.status;
       const body=el('div','message-text');if(row.text)body.append(el('div','message-bubble',row.text));
@@ -92,9 +94,8 @@ export function createComposer({ document, session, drafts, ledger, thread, view
     const availability=currentSendAvailability();if(availability.disabled){notice(availability.reason);if(availability.action==='cwd')openInlineCwd();else if(availability.action==='pending')$('pending-submissions').scrollIntoView({block:'nearest'});return;}
     const draft = draftSnapshot(); if (!draft.text && !draft.images.length && !draft.files.length) return;
     const capability = imageCapabilityError(draft.images); if (capability) { notice(capability, true); return; }
-    if (!state.cwd) { openProjectDialog(); return; }
-    const consentThread=state.thread?.id, consentTurn=state.turnId, consentServer=state.serverInstance;
-    const confirmed = draft.files.some(file=>file.riskWarning) ? await confirmRiskyFiles(draft.files) : []; if (confirmed === null || state.thread?.id!==consentThread || state.turnId!==consentTurn || state.serverInstance!==consentServer || state.sending || JSON.stringify(draftSnapshot())!==JSON.stringify(draft)) return;
+    const consentThread=state.thread?.id, consentTurn=state.turnId, consentServer=state.serverInstance, consentGeneration=state.openGeneration;
+    const confirmed = draft.files.some(file=>file.riskWarning) ? await confirmRiskyFiles(draft.files) : []; if (confirmed === null || state.thread?.id!==consentThread || state.turnId!==consentTurn || state.serverInstance!==consentServer || state.openGeneration!==consentGeneration || state.sending || JSON.stringify(draftSnapshot())!==JSON.stringify(draft)) return;
     // One immutable logical submission: navigation/model/cwd edits cannot retarget its second stage.
     const submission = { cwd: state.cwd, model: $('model').value, effort: reasoningParameter(state.reasoning), text: draft.text, attachmentIds: attachmentDraft.ids(), fileAttachmentIds:fileAttachmentDraft.ids(), confirmedFileAttachmentIds:confirmed };
     try { submission.controls=sessionControls.snapshot(); } catch(error){notice(error.message,true);return;}
@@ -102,17 +103,18 @@ export function createComposer({ document, session, drafts, ledger, thread, view
     try {
       if (!state.thread) {
         // The draft becomes a real thread only now, immediately before its first turn.
-        const params = { cwd: submission.cwd }; if (submission.model) params.model = submission.model;
+        const params = submission.cwd ? {cwd:submission.cwd} : {}; if (submission.model) params.model = submission.model;
         Object.assign(params,sessionControls.params(submission.controls,'thread'));
         const result = await performMutation('thread/start', params,{permissionMode:sessionControls.mode(),onRequest:envelope=>optimistic.patch(optimisticRow.id,{requestId:envelope.requestId,method:'thread/start'})}); optimistic.patch(optimisticRow.id,{threadId:result.thread.id});if (generation !== state.openGeneration) { optimistic.patch(optimisticRow.id,{status:'notExecuted',error:'已切换对话，消息未发送。'});renderOptimistic();notice('新对话已创建；你已切换页面，因此消息未继续发送。'); return; }
         sessionControls.adopt(result.thread.id);
         state.thread = result.thread; restoreThreadReasoning(result, submission.effort); resetThreadDsh(state.thread.id); $('thread-title').textContent = submission.text.slice(0, 55) || '附件对话'; $('welcome').classList.add('hidden'); renderContext();
       }
       const submittedThread = state.thread;
-      const params = { threadId: submittedThread.id, cwd: submission.cwd, input: [{ type: 'text', text: submission.text }] }; if (submission.model) params.model = submission.model; if (submission.effort) params.effort = submission.effort;
+      const params = { threadId: submittedThread.id, cwd: submission.cwd || submittedThread.cwd, input: [{ type: 'text', text: submission.text }] }; if (submission.model) params.model = submission.model; if (submission.effort) params.effort = submission.effort;
       Object.assign(params,sessionControls.params(submission.controls,'turn'));
       const result = await performMutation('turn/start', params, { attachmentIds: submission.attachmentIds, fileAttachmentIds:submission.fileAttachmentIds, confirmedFileAttachmentIds:submission.confirmedFileAttachmentIds,onRequest:envelope=>optimistic.patch(optimisticRow.id,{requestId:envelope.requestId,method:'turn/start'}) });
-      rememberThread({ ...submittedThread, preview: submission.text.slice(0, 55) || submittedThread.preview });
+      rememberThread({ ...submittedThread, preview: submission.text.slice(0, 55) || submittedThread.preview }, result.submittedAt);
+      if(result.activityWarning)notice(result.activityWarning,true);
       optimistic.patch(optimisticRow.id,{status:'accepted',turnId:result.turn?.id});renderOptimistic();
       clearSubmittedDraft({ preserveText:true, method: 'turn/start', params, attachmentIds: submission.attachmentIds, fileAttachmentIds:submission.fileAttachmentIds });
       if (generation !== state.openGeneration) { notice('消息已发送到原对话，未发送到当前页面。'); return; }
@@ -151,6 +153,7 @@ export function createComposer({ document, session, drafts, ledger, thread, view
         state.sending = true; const optimisticRow=beginOptimistic(draft,'turn/steer',retryId);optimistic.patch(optimisticRow.id,{turnId});updateControls(); activity('正在补充到当前任务…');
     try {
       const result = await performMutation('turn/steer', params, {...extras,onRequest:envelope=>optimistic.patch(optimisticRow.id,{requestId:envelope.requestId})});
+      recordSubmission?.(threadId,result.submittedAt,result.activityWarning);
       optimistic.patch(optimisticRow.id,{status:'accepted',turnId:result.turnId||turnId});renderOptimistic();
       clearSubmittedDraft({ preserveText:true, method: 'turn/steer', params, ...extras });
       scheduleRender();
@@ -193,6 +196,7 @@ export function createComposer({ document, session, drafts, ledger, thread, view
     try {
       Object.assign(params,sessionControls.params(item.controls,'turn'));
       const result = await performMutation('turn/start', params, { attachmentIds: item.images.map(image => image.id), fileAttachmentIds: item.files.map(file => file.id), confirmedFileAttachmentIds: item.confirmedFileAttachmentIds });
+      recordSubmission?.(threadId,result.submittedAt,result.activityWarning);
       followUps.update(threadId, item.id, { status: 'sent' }); followUps.remove(threadId, item.id); releaseQueuedPreviews(item);
       acceptStartedTurn(threadId, result.turn);
     } catch (e) {
@@ -256,5 +260,5 @@ export function createComposer({ document, session, drafts, ledger, thread, view
   }
 
 
-  return { renderOptimistic,resolveOptimistic, send, steerDraft, queueDraft, hasDraft, runningInputAvailable, drainAll, drainQueue, renderQueue, acceptStartedTurn };
+  return { timelineItems:items=>optimistic.timeline(state.thread?.id,items),renderOptimistic,resolveOptimistic, send, steerDraft, queueDraft, hasDraft, runningInputAvailable, drainAll, drainQueue, renderQueue, acceptStartedTurn };
 }

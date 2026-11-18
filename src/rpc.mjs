@@ -24,6 +24,7 @@ export class RpcClient extends EventEmitter {
       child.stdin.on('error', error => this.fail(error));
       const result = await this.call('initialize', { clientInfo:{name:'codex_light_local',title:'码舱 CodeCang (unofficial)',version:appVersion}, capabilities:{experimentalApi:true,requestAttestation:false,requiredHumanApproval:true} });
       this.write({method:'initialized',params:{}}); this.connected = true; this.version = result?.userAgent || null;
+      this.codexHome = typeof result?.codexHome==='string'?result.codexHome:null;
       this.emit('event',{method:'bridge/status',params:{connected:true}}); return result;
     } catch (error) { this.fail(error); await this.terminate(); throw error; }
   }

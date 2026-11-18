@@ -3,8 +3,8 @@
   "bridgeVersion": "0.8.0",
   "files": {
     "config.mjs": "83b5da0758a2f11dddd10638a819881c13deee0f22a5caf7d6bc1b609a31c80e",
-    "manager.mjs": "17215d43bf7f5ca64684801d5ce5002bb4df725c233a0459309ff6eff4703ada",
-    "server.mjs": "322839deaf6c397dcfeaab9769ff8a2826632254840e56b5541d7f8b6eaba452",
+    "manager.mjs": "05fd00ba2751456ea7a5faf8e7c1bc6e0e19e98e0859b6788e959f9ebfa0a625",
+    "server.mjs": "3166bf27f40817315d6a335b8ce50de05f4467e409fde3c1691903f5b87bd747",
     "provider-sources.mjs": "c6408d36c0621404c7ceadc4c36af6c4c48ae6a95b9bd68cbb73c2c3083b7029"
   }
 }

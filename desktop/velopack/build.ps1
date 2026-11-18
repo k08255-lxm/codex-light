@@ -55,6 +55,10 @@ foreach($name in @('CodexLight.exe','CodexLight.dll','CodexLight.deps.json','Cod
  $source=Join-Path $hostDir $name;Assert-Plain $source
  Copy-Item -LiteralPath $source -Destination (Join-Path $stage $name) -Force
 }
+foreach($name in @('Microsoft.Toolkit.Uwp.Notifications.dll','Microsoft.Windows.SDK.NET.dll','WinRT.Runtime.dll')){
+ $source=Join-Path $hostDir $name;Assert-Plain $source
+ if((Get-FileHash -LiteralPath $source).Hash -ne (Get-FileHash -LiteralPath (Join-Path $stage $name)).Hash){throw "Notification dependency differs from the licensed payload: $name"}
+}
 # The external preflight wrapper must run this before the vendor Setup; bare Setup is not the supported entrypoint.
 $prerequisiteBuild=Join-Path $work 'prerequisite-build'
 dotnet build (Join-Path $PSScriptRoot 'prerequisites/NodePrerequisite.csproj') -c Release -p:Version=$version -p:DebugSymbols=false -p:DebugType=none -o $prerequisiteBuild --source https://api.nuget.org/v3/index.json --nologo

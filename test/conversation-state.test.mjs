@@ -34,7 +34,8 @@ test('pause blocks draining for one thread or all threads until resumed', () => 
 
 test('context uses the latest request snapshot and the real window, not cumulative totals', () => {
   const snapshot = contextSnapshot({ threadId: 't', turnId: 'u', tokenUsage: { total: { totalTokens: 900000 }, last: { totalTokens: 64000 }, modelContextWindow: 256000 } });
-  assert.deepEqual(snapshot, { threadId: 't', turnId: 'u', used: 64000, window: 256000 });
+  assert.equal(snapshot.threadId,'t');assert.equal(snapshot.turnId,'u');assert.equal(snapshot.used,64000);assert.equal(snapshot.window,256000);
+  assert.equal(snapshot.last.totalTokens,64000);assert.equal(snapshot.total.totalTokens,900000);assert.equal(snapshot.last.cacheWriteInputTokens,null);
   const view = contextView(snapshot); assert.equal(view.known, true); assert.equal(view.percentLeft, 75); assert.equal(view.label, '25%'); assert.equal(view.percentUsed,25);
   const unknownWindow = contextView(contextSnapshot({ threadId: 't', tokenUsage: { last: { totalTokens: 10 }, total: { totalTokens: 10 }, modelContextWindow: null } }));
   assert.equal(unknownWindow.known, false); assert.doesNotMatch(unknownWindow.label, /%/);
@@ -89,6 +90,30 @@ test('file summary deduplicates the same file across items by normalized path an
     { type: 'fileChange', status: 'declined', changes: [{ path: 'C:/p/z.js', kind: { type: 'add' }, diff: 'z\n' }] },
   ], undefined, { cwd: 'C:\\p' });
   assert.equal(s.count, 1); assert.equal(s.rows[0].path, 'A.js'); assert.equal(s.added, 2); assert.equal(s.removed, 2);
+});
+
+test('completed native empty updates are known zero while independent missing or in-progress updates remain unknown', () => {
+  const part = { path:'test_hxxai_worker.py', kind:{type:'update'} };
+  const operation = (id, change, status = 'completed') => ({ id, type:'fileChange', status, changes:[change] });
+  const actual = operation('known', { ...part,diff:'@@ -0,0 +1,24 @@\n' + Array.from({length:24},(_,i)=>`+test line ${i}`).join('\n') });
+  const noop = operation('no-op',{...part,diff:''});
+  const result = fileSummary([noop,actual],null);
+  assert.equal(result.count,1);
+  assert.equal(result.complete,true);
+  assert.equal(result.added,24);
+  assert.equal(result.removed,0);
+  assert.equal(result.rows[0].diffs.length,1);
+  for(const other of [
+    operation('missing',part),
+    operation('pending',{...part,diff:''},'inProgress'),
+    {...noop,_complete:false},
+    operation('truncated',{...part,diff:'',diffTruncated:true}),
+  ]){
+    const merged=fileSummary([actual,other],null);
+    assert.equal(merged.complete,false);
+    assert.equal(merged.added,24);
+    assert.equal(merged.unknownCount,1);
+  }
 });
 
 test('durations are formatted, unknown durations are not zero', () => {

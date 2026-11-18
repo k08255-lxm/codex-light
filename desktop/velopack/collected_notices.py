@@ -15,7 +15,7 @@ PROJECT='LICENSE'
 THIRD='THIRD-PARTY-NOTICES.txt'
 ORIGINAL_PROJECT='CodexLight-LICENSE.txt'
 REQUIRED={'Velopack-LICENSE.txt','Velopack-VENDOR-NOTICES.md','WebView2-LICENSE.txt',
- 'WebView2-NOTICE.txt','DotNet-AppHost-LICENSE.txt','DotNet-AppHost-THIRD-PARTY-NOTICES.txt',
+ 'WebView2-NOTICE.txt','WindowsNotifications-LICENSE.md','WindowsSDK-NOTICE.txt','DotNet-AppHost-LICENSE.txt','DotNet-AppHost-THIRD-PARTY-NOTICES.txt',
  'THIRD-PARTY-NOTICES.md','VERSIONS.txt','xterm/LICENSE','xterm/addon-fit-LICENSE',
  'dsh-bridge/Bridge-MIT-LICENSE.txt','dsh-bridge/DeepSeek-MIT-LICENSE.txt'}
 

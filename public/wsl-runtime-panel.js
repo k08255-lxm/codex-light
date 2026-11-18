@@ -48,7 +48,9 @@ export function mountWslRuntimePanel(host, { read, discover, select, isLocal = (
     facts.replaceChildren();
     if(snapshot){
       facts.append(row('当前运行',runtimeTargetLabel(snapshot.current)),row('下次启动',runtimeTargetLabel(snapshot.selected)));
+      if(snapshot.current.target==='wsl'&&snapshot.engineVersion)facts.append(row('当前引擎版本',String(snapshot.engineVersion)));
       if(snapshot.restartRequired)facts.append(row('重启后生效','环境已保存。请先完成当前任务，再完全退出并重新打开码舱；最小化到托盘不会切换环境。'));
+      if(snapshot.current.target==='wsl'||snapshot.selected.target==='wsl')facts.append(row('WSL 引擎更新','在所选发行版内使用原安装方式更新 Linux Codex CLI，例如该 Linux 用户自己的 npm。'));
       for(const limitation of snapshot.limitations||[])facts.append(row('兼容提示',String(limitation)));
       for(const candidate of candidates)facts.append(row(`${candidate.distribution} · ${candidate.user || '默认用户'}`,candidate.available ? `${candidate.codexPath || '已找到 Codex'}${candidate.codexHome ? ` · 配置：${candidate.codexHome}` : ''}` : candidate.diagnostic || '未发现可用 Codex。请在此发行版内检查安装与 PATH。'));
     }

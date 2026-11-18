@@ -5,11 +5,12 @@ import {existsSync,statSync} from 'node:fs';
 import {isAbsolute} from 'node:path';
 import {Runtime} from './runtime.mjs';
 import {ExternalSessions} from './external-sessions.mjs';
-import {events as projectEvents} from './projection.mjs';
+import {events as projectEvents,eventProjection} from './projection.mjs';
 import {contextLimitTokens} from './config.mjs';
 import {isolationEnabled, prepareWorkspace, assertWorkspaceOwner, validateAgentWorkspace, isolatedPrompt} from './workspace-isolation.mjs';
 
 const ACTIVE=['starting','running','interrupting'];
+const clipHistoryText=value=>value.length>12000?`${value.slice(0,12000)}\n…〔显示已截断〕`:value;
 // The session DSH Web shows in place of the individual bridge agents.
 export const PARENT_TITLE='Claude Code / Codex 子代理';
 // A turn that overflowed the model window cannot succeed on the same
@@ -84,6 +85,52 @@ export class Manager extends EventEmitter {
     const rows=this.db.prepare('SELECT * FROM events WHERE agent=? AND seq>? ORDER BY seq LIMIT ?').all(id,after,limit);
     return {events:rows.map(r=>({...r,data:JSON.parse(r.data)})),next_cursor:rows.at(-1)?.seq ?? after};
   }
+  historyEvents(id, before, limit=80, {maxChars=48000}={}) {
+    this.get(id);
+    const tail=this.db.prepare('SELECT MAX(seq) AS seq FROM events WHERE agent=?').get(id).seq??0;
+    const latest=this.db.prepare("SELECT seq FROM events WHERE agent=? AND type='turn/start' ORDER BY seq DESC LIMIT 1 OFFSET 2").get(id)?.seq??0;
+    const upper=before??tail+1,lower=before===undefined?latest:0;
+    const rows=this.db.prepare('SELECT * FROM events WHERE agent=? AND seq<? AND seq>=? ORDER BY seq DESC LIMIT 512').all(id,upper,lower);
+    const taskAt=this.db.prepare("SELECT COUNT(*) AS number FROM events WHERE agent=? AND type='turn/start' AND seq<=?");
+    const lastStart=this.db.prepare("SELECT MAX(seq) AS seq FROM events WHERE agent=? AND type='turn/start' AND seq<=?");
+    let boundary=null,taskTurn=0,scanned=upper,used=512;
+    const visible=[];
+    for(const row of rows){
+      if(visible.length===limit)break;
+      if(boundary===null||row.seq<boundary){
+        boundary=lastStart.get(id,row.seq).seq;
+        taskTurn=boundary?taskAt.get(id,boundary).number:0;
+      }
+      const item=this.historyEvent(id,row);
+      if(item){
+        if(taskTurn)item.taskTurn=taskTurn;
+        const size=JSON.stringify(item).length;
+        if(visible.length&&used+size>maxChars)break;
+        visible.push(item);used+=size;
+      }
+      scanned=row.seq;
+    }
+    const older=!!this.db.prepare('SELECT 1 FROM events WHERE agent=? AND seq<? LIMIT 1').get(id,scanned);
+    return {agent_id:id,direction:'backward',events:visible.reverse(),tail_cursor:tail,before_cursor:older?scanned:null,has_older:older};
+  }
+  historyEvent(id,row){
+    const data=JSON.parse(row.data);
+    const base={event_id:row.seq,seq:row.seq,time:row.time};
+    if(row.type==='turn/start')return {...base,type:'task/start',taskStatus:'running'};
+    if(row.type==='bridge/prompt'&&typeof data.task==='string')return {...base,type:'user/message',text:clipHistoryText(data.task)};
+    if(row.type==='turn/end'){
+      const previous=this.db.prepare("SELECT type,data FROM events WHERE agent=? AND seq<? AND type IN ('assistant/message','turn/start','turn/end') ORDER BY seq DESC LIMIT 1").get(id,row.seq);
+      const message=previous?.type==='assistant/message'?JSON.parse(previous.data):null;
+      const taskStatus=settledStatus(data.reason);
+      return message?.text&&!message.interrupted&&taskStatus==='completed'
+        ?{...base,type:'assistant/final',text:clipHistoryText(message.text),taskStatus}
+        :{...base,type:'task/end',taskStatus};
+    }
+    const item=eventProjection(row,{includeProgress:true,includeDescendants:true,includeToolEvents:true});
+    if(!item||item.type==='assistant/message'&&!item.text)return null;
+    if(typeof item.text==='string')item.text=clipHistoryText(item.text);
+    return {...base,...item};
+  }
   publicEvents(id, after=0, limit=30, options={}) {
     this.get(id);
     const cursor=typeof after==='string' ? after.split(':').map(Number) : [after,0];
@@ -102,7 +149,12 @@ export class Manager extends EventEmitter {
       const data=JSON.parse(previous.data);
       if(!data.interrupted)row.finalText=data.text;
     }
-    const projected=rows.map(row=>projectEvents([row],{...options,eventId,maxChars:budget})[0]).filter(item=>item && !(item.type==='assistant/message' && !item.text));
+    const turnNumber=options.includeTaskHistory?this.db.prepare("SELECT COUNT(*) AS number FROM events WHERE agent=? AND type='turn/start' AND seq<=?"):null;
+    const projected=rows.map(row=>{
+      if(!turnNumber)return projectEvents([row],{...options,eventId,maxChars:budget})[0];
+      const item=this.historyEvent(id,row),taskTurn=item&&turnNumber.get(id,row.seq).number;
+      return taskTurn?{...item,taskTurn}:item;
+    }).filter(item=>item && !(item.type==='assistant/message' && !item.text));
     let start=0;
     if (offset && projected[0]) start=0;
     const visible=[]; let continuation;

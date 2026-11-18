@@ -17,13 +17,14 @@ internal sealed class MainWindow : CaptionWindow {
  StorageNativeService? nativeStorage;
  Process? backend;ChildJob? job;Uri? origin;bool closing,allowClose,exitRequested,choosingClose,resourcesDisposed,failed,updateShutdownAttempted;
  readonly WindowSessionEnd sessionEnd=new();
+ readonly TaskbarBadge taskbarBadge;
  readonly CloseBehaviorStore closeBehavior=CloseBehaviorStore.ForCurrentUser();
  readonly string closeBehaviorNonce=Guid.NewGuid().ToString("N");
  QuestionNotificationBridge? questionNotifications;
  Task? stopTask;
  string startupStage="检测运行环境";
  readonly WindowPlacementController placement;
- public MainWindow(bool demo){this.demo=demo;Text="码舱 CodeCang";Icon=Icon.ExtractAssociatedIcon(Application.ExecutablePath);Size=new Size(1257,945);MinimumSize=new Size(800,600);BackColor=Color.FromArgb(24,24,24);Controls.Add(view);Controls.Add(loading);BuildCaptionMenu();CaptionBrandInvoked+=async(_,_)=>await ClickWebAsync("menu-app");placement=new WindowPlacementController(this,WindowPlacementStore.ForCurrentUser());Shown+=async(_,_)=>await StartAsync();FormClosing+=OnClosing;}
+ public MainWindow(bool demo){this.demo=demo;taskbarBadge=new(this);Text="码舱 CodeCang";Icon=Icon.ExtractAssociatedIcon(Application.ExecutablePath);Size=new Size(1257,945);MinimumSize=new Size(800,600);BackColor=Color.FromArgb(24,24,24);Controls.Add(view);Controls.Add(loading);BuildCaptionMenu();CaptionBrandInvoked+=async(_,_)=>await ClickWebAsync("menu-app");placement=new WindowPlacementController(this,WindowPlacementStore.ForCurrentUser());Shown+=async(_,_)=>await StartAsync();FormClosing+=OnClosing;}
  protected override void OnLoad(EventArgs e){base.OnLoad(e);placement.Restore();try{ShowTray();}catch{DisposeTray();ShowTrayFailure();}}
  protected override void OnMove(EventArgs e){base.OnMove(e);placement?.Capture();}
  FormWindowState previousWindowState;bool restorePaintQueued;
@@ -104,15 +105,15 @@ internal sealed class MainWindow : CaptionWindow {
     if(e.MenuItems.Count==0)e.Handled=true;
    };
    settings.IsWebMessageEnabled=true;settings.IsStatusBarEnabled=false;settings.IsPasswordAutosaveEnabled=false;settings.IsGeneralAutofillEnabled=false;
-   questionNotifications=new QuestionNotificationBridge(this,core,()=>{ShowTray();return tray!;},RestoreFromTray);
-   core.WebMessageReceived+=(_,e)=>{if(LocalPathLinks.TrustedSource(e.Source,origin)&&LocalPathLinks.TrustedSource(core.Source,origin)){if(HandleWindowCommand(e.WebMessageAsJson)||questionNotifications.Handle(e.WebMessageAsJson))return;if(CloseBehaviorBridge.IsMessage(e.WebMessageAsJson))HandleCloseBehavior(e.WebMessageAsJson);else RevealLocalPath(e.WebMessageAsJson);}};
+   questionNotifications=new QuestionNotificationBridge(this,core,RestoreFromTray);
+   core.WebMessageReceived+=(_,e)=>{if(LocalPathLinks.TrustedSource(e.Source,origin)&&LocalPathLinks.TrustedSource(core.Source,origin)){if(HandleWindowCommand(e.WebMessageAsJson)||taskbarBadge.HandleMessage(e.WebMessageAsJson,!closing&&!failed)||questionNotifications.Handle(e.WebMessageAsJson))return;if(CloseBehaviorBridge.IsMessage(e.WebMessageAsJson))HandleCloseBehavior(e.WebMessageAsJson);else RevealLocalPath(e.WebMessageAsJson);}};
    await core.AddScriptToExecuteOnDocumentCreatedAsync(LocalPathLinks.ClickScript);
    await core.AddScriptToExecuteOnDocumentCreatedAsync(CloseBehaviorBridge.Script(closeBehaviorNonce));
    await core.AddScriptToExecuteOnDocumentCreatedAsync(questionNotifications.Script);
    core.PermissionRequested+=(_,e)=>{e.State=CoreWebView2PermissionState.Deny;e.Handled=true;};
    core.DownloadStarting+=(_,e)=>{e.Cancel=true;e.Handled=true;};
    core.NewWindowRequested+=(_,e)=>{e.Handled=true;if(e.IsUserInitiated)QueueExternal(e.Uri);};
-   core.NavigationStarting+=(_,e)=>{if(!IsOwn(e.Uri)){e.Cancel=true;if(e.IsUserInitiated && !e.IsRedirected)QueueExternal(e.Uri);}};
+   core.NavigationStarting+=(_,e)=>{if(!IsOwn(e.Uri)){e.Cancel=true;if(e.IsUserInitiated && !e.IsRedirected)QueueExternal(e.Uri);}else questionNotifications?.ClearAll();};
    core.FrameNavigationStarting+=(_,e)=>{e.Cancel=true;};
    core.LaunchingExternalUriScheme+=(_,e)=>{e.Cancel=true;};
    core.ServerCertificateErrorDetected+=(_,e)=>{e.Action=CoreWebView2ServerCertificateErrorAction.Cancel;};
@@ -267,7 +268,7 @@ internal sealed class MainWindow : CaptionWindow {
   string? error=null;
   bool velo=installerPath.EndsWith(".nupkg",StringComparison.OrdinalIgnoreCase);
   VelopackApplyLauncher.StagedApply? staged=null;
-  try{if(velo)staged=await VelopackApplyLauncher.StageAsync(installerPath,sha256);else AppUpdateLauncher.Launch(installerPath,sha256);}
+  try{if(velo)staged=await Task.Run(()=>VelopackApplyLauncher.StageAsync(installerPath,sha256));else await Task.Run(()=>AppUpdateLauncher.Launch(installerPath,sha256));}
   catch(AppUpdateLaunchUnknownException){error="APP_UPDATE_LAUNCH_UNKNOWN";}
   catch{error="APP_UPDATE_NOT_EXECUTED";}
   // Success here means worker validated and acknowledged readiness, not that an update applied.
@@ -312,7 +313,7 @@ internal sealed class MainWindow : CaptionWindow {
  }
  void ShowFailure(string message){
   if(closing||IsDisposed||failed)return;
-  failed=true;loading.ShowFailure(message);loading.Show();loading.BringToFront();
+  failed=true;taskbarBadge.Clear();loading.ShowFailure(message);loading.Show();loading.BringToFront();
   if(!Visible)RestoreFromTray();
  }
  void MoveToTray(){
@@ -351,6 +352,7 @@ internal sealed class MainWindow : CaptionWindow {
   // Form raises FormClosing during QUERY, then disposes only on END(TRUE).
   // Leave disposal to that confirmed path, so END(FALSE) remains usable.
   base.WndProc(ref message);
+  taskbarBadge?.ObserveWindowMessage(message);
  }
  async void OnClosing(object? sender,FormClosingEventArgs e){
   placement.Capture();placement.Save();
@@ -399,6 +401,7 @@ internal sealed class MainWindow : CaptionWindow {
   if(backend!=null){try{if(!backend.HasExited)backend.Kill(true);}catch{}backend.Dispose();backend=null;}
  }
  protected override void Dispose(bool disposing){
+  if(disposing)taskbarBadge?.Dispose();
   if(disposing&&!resourcesDisposed){resourcesDisposed=true;placement?.Save();placement?.Dispose();closing=true;hostMessages.Cancel();ReleaseBackend();questionNotifications?.Dispose();questionNotifications=null;DisposeTray();hostMessages.Dispose();hostWrites.Dispose();}
   base.Dispose(disposing);
  }

@@ -36,7 +36,6 @@ export function mountLiveChanges(host, { renderDiff }) {
   document.addEventListener('click',event=>{if(open&&!host.contains(event.target)&&!event.composedPath?.().includes(host)){open=false;draw();}});
   const stats = evidence => statsNode(document,evidence.added,evidence.removed,evidence);
   function draw() {
-    panel.style.maxWidth=Math.max(220,(host.parentElement?.clientWidth||560)-24)+'px';
     host.classList.toggle('hidden', !summary.count);
     if (!summary.count) { open = false; panel.classList.add('hidden'); pill.setAttribute('aria-expanded','false'); return; }
     pill.replaceChildren(icon(document, 'diff', { size: 14 }), el(document, 'span', 'pill-text', `${summary.count} 个文件${summary.running ? '正在更改' : '已更改'}`), stats(summary));
@@ -56,7 +55,7 @@ export function mountLiveChanges(host, { renderDiff }) {
         button.addEventListener('click',()=>{if(expanded.has(row.path))expanded.delete(row.path);else expanded.add(row.path);draw();});
         node.append(button);view={node,button,diff:null,source:null,label:null};rows.set(row.path,view);
       }
-      const label=JSON.stringify([row.path,row.fullPath,row.added,row.removed,row.complete,row.unknownCount,row.statsReasons,row.known]);
+      const label=JSON.stringify([row.path,row.fullPath,row.added,row.removed,row.knownAdded,row.knownRemoved,row.knownEdits,row.complete,row.unknownCount,row.statsReasons,row.known]);
       if(view.label!==label){
         const slash=row.path.lastIndexOf('/');view.button.title=row.fullPath;
         view.button.replaceChildren(el(document,'span','file-dir',slash>=0?row.path.slice(0,slash+1):''),el(document,'span','file-base',slash>=0?row.path.slice(slash+1):row.path),stats(row));view.label=label;

@@ -9,6 +9,8 @@ retain their respective copyright, license and distribution terms.
 | [@xterm/addon-fit](https://github.com/xtermjs/xterm.js/tree/f447274f430fd22513f6adbf9862d19524471c04/addons/addon-fit) | 0.11.0, vendored | Terminal resizing; [MIT license](../licenses/xterm/addon-fit-LICENSE) |
 | [jsdiff](https://github.com/kpdecker/jsdiff) | 9.0.0, minimal vendored ESM files | Applied DSH edit fragment statistics; [BSD license](../public/vendor/jsdiff/LICENSE), retained under `app/public/vendor/jsdiff` in the Windows payload |
 | [Microsoft WebView2 SDK](https://www.nuget.org/packages/Microsoft.Web.WebView2/1.0.4314.35) | 1.0.4314.35, restored and redistributed | Desktop web control and native loader; exact package LICENSE.txt and NOTICE.txt copied into the installed licenses directory |
+| [Windows Community Toolkit Notifications](https://www.nuget.org/packages/Microsoft.Toolkit.Uwp.Notifications/7.1.3) | 7.1.3, restored and redistributed | Native Windows question notifications; exact package MIT license copied as `WindowsNotifications-LICENSE.md` |
+| [Microsoft Windows SDK .NET projection](https://learn.microsoft.com/en-us/legal/windows-sdk/redist#microsoftwindowssdknetref) | Exact restored projection version recorded at build | Unmodified WinRT projection and runtime assemblies; Windows SDK terms and C#/WinRT MIT license recorded in [WindowsSDK-NOTICE.txt](../licenses/windows-notifications/WindowsSDK-NOTICE.txt) |
 | [.NET](https://github.com/dotnet/runtime) / [Windows Forms](https://github.com/dotnet/winforms) | .NET 10 target, exact apphost version recorded at build | Desktop framework and application host; exact apphost LICENSE.TXT and THIRD-PARTY-NOTICES.TXT accompany the payload |
 | [Velopack](https://github.com/velopack/velopack/tree/1.3.39-g8d2844f) | 1.3.39-g8d2844f, Windows installer/updater and managed client | MIT; upstream license retained in `desktop/velopack/LICENSE-Velopack.txt` and installed as `licenses/Velopack-LICENSE.txt`; tool-vendor notices are copied as `licenses/Velopack-VENDOR-NOTICES.md` |
 | [WiX Toolset](https://github.com/wixtoolset/wix) | 6.0.2, build tool only | Builds the internal MSI; see the build-tool terms below |
@@ -173,3 +175,5 @@ Android arrow-back, refresh, paste and settings drawable icons are adapted from
 Google Material Icons (Apache-2.0). Their source revision and local changes are
 recorded in the Android-specific notices, and the full license is packaged as
 `assets/licenses/MATERIAL-ICONS-LICENSE.txt`.
+
+The Windows taskbar counter masks use Open Sans Regular. Digitized data copyright © 2010–2011, Google Corporation. The masks are generated from the [original font](https://github.com/desktop-app/lib_ui/blob/caaa3f1eb20bab7ef838c6aea35db2397e8f3f07/fonts/OpenSans-Regular.ttf). The desktop assembly includes the masks and their [Apache License 2.0](../licenses/taskbar-font/LICENSE.txt).

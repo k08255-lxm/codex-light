@@ -139,7 +139,7 @@
 .changes-pill .ui-icon { width: 14px; height: 14px; color: var(--tertiary); }
 .changes-pill[data-running="true"] .ui-icon { color: var(--brand); }
 .changes-pill[aria-expanded="true"] { background: var(--raised); color: var(--text); }
-.changes-panel { position:absolute;left:50%;right:auto;transform:translateX(-50%);width:min(560px,calc(100vw - 80px));bottom:calc(100% + 6px);z-index:44;max-height:min(420px,55dvh);overflow:auto;background:var(--raised);border-radius:var(--r-lg);box-shadow:var(--shadow-popover); }
+.changes-panel { position:absolute;left:50%;right:auto;translate:-50% 0;width:min(560px,calc(100vw - 80px));bottom:calc(100% + 6px);z-index:44;max-height:min(420px,55dvh);overflow:auto;background:var(--raised);border-radius:var(--r-lg);box-shadow:var(--shadow-popover); }
 .scroll-to-bottom { position:absolute;z-index:25;transform:translateX(-50%);display:grid;place-items:center;width:32px;height:32px;padding:0;border-radius:50%;border:1px solid var(--border-strong);background:var(--raised);color:var(--text);box-shadow:0 2px 8px #0002; }
 .scroll-to-bottom[hidden] { display:none; }
 .scroll-button-host { position:relative; }
@@ -337,6 +337,10 @@
 .agent-detail-content pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:none;overflow:visible}
 .agent-detail-content .step-detail{margin:2px 0 8px 20px;max-height:none;overflow:visible;padding:6px 8px}
 .agent-detail-content .step-detail pre{margin:0;font:inherit}
+.agent-detail-content .md-code-block pre,
+.agent-detail-content .step-detail pre.console-output,
+.tool-operation-group .step-detail pre.console-output{overflow:auto;white-space:pre;overflow-wrap:normal;font-size:.8125rem}
+@media(pointer:coarse){.agent-detail-toolbar .btn{flex-basis:44px;width:44px;height:44px}}
 .agent-tool-record .step-target{flex:1;min-width:0}
 .agent-tool-record .step-summary{font-size:.75rem;min-width:0}
 .agent-thread-tool{margin:12px 0}

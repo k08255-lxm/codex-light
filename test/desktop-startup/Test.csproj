@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
- <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0-windows</TargetFramework><UseWindowsForms>true</UseWindowsForms><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><StartupObject>StartupTest</StartupObject></PropertyGroup>
- <ItemGroup><PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" /><Compile Include="../../desktop/*.cs" Exclude="../../desktop/Program.cs" LinkBase="Host"/><Compile Include="../../desktop/shared/*.cs" LinkBase="Shared"/>
+ <Import Project="../../desktop/TaskbarFont.props" />
+ <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0-windows10.0.19041.0</TargetFramework><SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion><UseWindowsForms>true</UseWindowsForms><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><StartupObject>StartupTest</StartupObject></PropertyGroup>
+ <ItemGroup><PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" /><PackageReference Include="Microsoft.Toolkit.Uwp.Notifications" Version="7.1.3"/><Compile Include="../../desktop/*.cs" Exclude="../../desktop/Program.cs" LinkBase="Host"/><Compile Include="../../desktop/shared/*.cs" LinkBase="Shared"/>
   <Content Include="../../src/**/*"><Link>app/src/%(RecursiveDir)%(Filename)%(Extension)</Link><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>
   <Content Include="../../public/**/*"><Link>app/public/%(RecursiveDir)%(Filename)%(Extension)</Link><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>
   <Content Include="../../package.json"><Link>app/package.json</Link><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>

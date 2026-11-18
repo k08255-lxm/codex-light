@@ -11,7 +11,7 @@ function workbenchHarness({visible=true,mounted}={}){
   loadTerminal:async()=>({mountTerminal:options=>{calls.views.push(options);return view;}})});
  return {wb,calls,click:id=>handlers.get(id+':click')(),view};
 }
-test('official account usage stays account-scoped and context usage replaces rather than sums',async()=>{const account=await readFile(new URL('../public/ui/account-view.js',import.meta.url),'utf8');assert.match(account,/rpc\('account\/usage\/read', \{\}\)/);assert.doesNotMatch(account,/statistics\/query/);assert.match(app,/const snapshot=contextSnapshot\(message\.params\);if\(snapshot\)\{state\.contexts\.set\(snapshot\.threadId,snapshot\)/,'token usage updates replace the per-thread context snapshot');assert.doesNotMatch(app,/contexts\.get\([^)]*\)\s*\+|totalTokens\s*\+=/,'usage notifications are never summed');});
+test('official account usage stays account-scoped and context usage replaces rather than sums',async()=>{const account=await readFile(new URL('../public/ui/account-view.js',import.meta.url),'utf8');assert.match(account,/rpc\('account\/usage\/read', \{\}\)/);assert.doesNotMatch(account,/statistics\/query/);assert.match(app,/cacheContext\(snapshot,'live'\)/,'official token usage updates replace the per-thread context snapshot');assert.doesNotMatch(app,/contexts\.get\([^)]*\)\s*\+|totalTokens\s*\+=/,'usage notifications are never summed');});
 test('terminal opens through operation ledger and restores without another open',async()=>{
  const h=workbenchHarness();await h.click('terminal-open');
  assert.equal(h.calls.views.length,1,'one view mounted by an explicit click');

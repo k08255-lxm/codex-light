@@ -156,5 +156,6 @@ export function createDshView({ document, state, $, dshLive, dshTasks, api, rpc,
     finally { state.dshReads.delete(key); if (generation === state.openGeneration && readGeneration === state.dshReadGeneration) renderDshTasks(); }
   }
 
-  return { renderDshConnection, refreshDsh, syncDshLiveContext, scheduleDshRender, renderDshTasks, ingestDshSnapshot, readDshTask, openAgent };
+  return { renderDshConnection, refreshDsh, syncDshLiveContext, scheduleDshRender, renderDshTasks, ingestDshSnapshot, readDshTask, openAgent,
+    isAgentDetailOpen: () => dshPanelVisible() && inspector.isDetailOpen(), backToAgentList: () => inspector.back() };
 }

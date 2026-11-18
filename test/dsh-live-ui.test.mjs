@@ -50,6 +50,21 @@ test('overview hydrates read-only status automatically and opens one detail surf
   buttons(h)[0].click();assert.equal(h.$('details').classList.contains('agent-detail-mode'),false,'return restores list chrome');
 });
 
+test('a DSH event appended below keeps the open detail nodes and returns focus to the selected row',()=>{
+  const live=liveSnapshot({selectedAgentId:'agent-2',selected:{events:[{seq:1,taskTurn:1,type:'assistant',text:'正在阅读'}]}});
+  const h=harness({tasks:[task(),task({agentId:'agent-2',name:'第二个代理'})],snapshot:live,state:{connected:false}});
+  assert.equal(h.view.openAgent('agent-2','dsh'),true);
+  const host=h.$('dsh-tasks'),toolbar=host.querySelector('.agent-detail-toolbar'),message=host.querySelector('.agent-markdown');
+  const back=toolbar.querySelector('button');assert.equal(h.document.activeElement,back);
+  live.selected.events.push({seq:2,taskTurn:1,type:'assistant',text:'下方的新事件'});
+  h.view.renderDshTasks();
+  assert.equal(host.querySelector('.agent-detail-toolbar'),toolbar);
+  assert.equal(host.querySelector('.agent-markdown'),message);assert.equal(h.document.activeElement,back);
+  assert.match(visibleText(host),/下方的新事件/);
+  assert.equal(h.view.isAgentDetailOpen(),true);assert.equal(h.view.backToAgentList(),true);
+  assert.equal(h.document.activeElement.dataset.agentId,'agent-2');assert.equal(h.view.isAgentDetailOpen(),false);
+});
+
 test('a failed status read is shown as a read error without creating tasks or using a model', async () => {
   const h = harness({ tasks: [task()], api: async () => { throw new Error('offline'); } });
   await h.view.readDshTask('agent-1', 'status');

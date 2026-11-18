@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,rm} from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import {randomUUID} from 'node:crypto';
 import {createServer} from '../src/server.mjs';
 import {DemoClient} from '../src/demo.mjs';
 import {WslSelectionStore} from '../src/wsl-runtime.mjs';
@@ -36,6 +37,25 @@ test('WSL current target and unsupported native actions are explicit',async t=>{
  const runtime=await (await post(app,'/api/runtime/status')).json();assert.equal(runtime.current.source,'wsl');assert.equal(runtime.canUpgrade,false);
  assert.equal((await post(app,'/api/runtime/upgrade')).status,400);
  const selection=await (await post(app,'/api/runtime/wsl/status')).json();assert.equal(selection.restartRequired,false);assert.equal(selection.current.user,'lee');
+});
+
+test('new WSL projectless threads get independent Linux directories under the selected user',async t=>{
+ const {app,service}=await fixture(t,{distribution:'Ubuntu',user:'lee'}),commands=[];
+ service.invoke=async args=>{commands.push(args);return '';};
+ const rpc=async(method,params,mutating=false)=>{
+  const response=await post(app,'/api/rpc',{method,params,...(mutating?{requestId:`${app.operations.serverInstance}:${Date.now()}:${randomUUID()}`}:{})});
+  assert.equal(response.status,200,await response.clone().text());return response.json();
+ };
+ const a=(await rpc('thread/start',{},true)).thread,b=(await rpc('thread/start',{},true)).thread;
+ assert.ok(a.projectless&&b.projectless);assert.notEqual(a.cwd,b.cwd);
+ assert.ok(a.cwd.startsWith('\\\\wsl.localhost\\Ubuntu\\home\\lee\\.local\\share\\codecang\\projectless-threads\\'));
+ for(const command of commands){
+  assert.deepEqual(command.slice(0,-1),['--distribution','Ubuntu','--user','lee','--exec','/bin/mkdir','-p','-m','700','--']);
+  assert.match(command.at(-1),/^\/home\/lee\/\.local\/share\/codecang\/projectless-threads\/[a-f0-9]{32}$/);
+ }
+ await rpc('turn/start',{threadId:a.id,cwd:a.cwd,input:[{type:'text',text:'isolated'}]},true);
+ assert.deepEqual(commands.at(-1),['--distribution','Ubuntu','--user','lee','--exec','/bin/test','-d',commands[0].at(-1)]);
+ assert.equal((await rpc('thread/read',{threadId:a.id})).thread.projectless,true);
 });
 
 test('WSL Git reads use the selected Linux runtime, while write plans stay unavailable',async t=>{

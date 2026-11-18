@@ -1,5 +1,5 @@
 // Mutation identity + minimal durable markers. No prompt, cwd, credentials or result is persisted.
-const METHODS = new Set(['thread/start', 'turn/start', 'turn/steer', 'thread/compact/start', 'turn/interrupt', 'thread/name/set', 'thread/archive', 'thread/unarchive', 'thread/fork', 'review/start', 'remoteControl/enable', 'remoteControl/disable', 'remoteControl/pairing/start', 'remoteControl/client/revoke', 'terminal/open', 'account/start', 'account/cancel', 'account/logout', 'plugin/apply', 'git/apply', 'config/apply', 'runtime/upgrade']);
+const METHODS = new Set(['thread/start', 'turn/start', 'turn/steer', 'thread/compact/start', 'turn/interrupt', 'thread/name/set', 'thread/archive', 'thread/unarchive', 'thread/delete', 'thread/summary', 'thread/fork', 'review/start', 'remoteControl/enable', 'remoteControl/disable', 'remoteControl/pairing/start', 'remoteControl/client/revoke', 'terminal/open', 'account/start', 'account/cancel', 'account/logout', 'plugin/apply', 'git/apply', 'config/apply', 'runtime/upgrade']);
 // Both start and steer carry the same owned attachment envelope.
 METHODS.add('account/rateLimitResetCredit/consume');
 METHODS.add('app-update/download');METHODS.add('app-update/install');
@@ -107,7 +107,7 @@ const SCOPE_METHODS = Object.freeze({
   'app-update': new Set(['app-update/download','app-update/install'])
 });
 const CHAT_THREAD_METHODS = new Set(['turn/start','turn/steer','review/start','thread/compact/start']);
-const THREAD_METHODS = new Set(['thread/name/set','thread/archive','thread/unarchive','thread/fork','review/start']);
+const THREAD_METHODS = new Set(['thread/name/set','thread/archive','thread/unarchive','thread/delete','thread/summary','thread/fork','review/start']);
 function scopeThread(threadId){ return typeof threadId === 'string' && threadId ? threadId : null; }
 export function pendingForScope(records,scope,{threadId=null}={}) {
   const list = Array.isArray(records) ? records : [];
@@ -233,7 +233,7 @@ export class PendingReconciler {
   }
 }
 // One visible explanation for every disabled Send state. No retries or mutation.
-export function sendAvailability({connected,serverInstance,sending,loadingThread,busy,uploadingImages,pending,cwd,hasContent}){
+export function sendAvailability({connected,serverInstance,sending,loadingThread,busy,uploadingImages,pending,cwd,projectless,hasContent}){
  if(!connected)return{disabled:true,reason:'尚未连接 Codex，消息没有发送。',action:'reconnect'};
  if(!serverInstance)return{disabled:true,reason:'正在核对本地服务身份，消息没有发送。',action:'reconnect'};
  if(sending)return{disabled:true,reason:'正在提交这条消息，请勿重复发送。'};
@@ -241,7 +241,7 @@ export function sendAvailability({connected,serverInstance,sending,loadingThread
  if(pending)return{disabled:true,reason:'这条消息的发送状态正在同步…',action:'pending'};
  if(busy)return{disabled:true,reason:'当前任务正在运行；结束或停止后可继续发送。',action:'stop'};
  if(uploadingImages)return{disabled:true,reason:'正在本地准备附件，完成后可发送。'};
- if(!cwd)return{disabled:true,reason:'先选择工作目录，Codex 才知道在哪里读取和修改文件。',action:'cwd'};
+ if(!cwd&&!projectless)return{disabled:true,reason:'先选择工作目录，Codex 才知道在哪里读取和修改文件。',action:'cwd'};
  if(!hasContent)return{disabled:true,reason:'输入消息，或添加图片 / 文件。'};
  return{disabled:false,reason:'',action:null};
 }

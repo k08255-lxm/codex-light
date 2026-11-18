@@ -121,12 +121,18 @@ try{
   await page.setViewportSize({width,height:900});
   await page.evaluate(async()=>{
    const {mountLiveChanges}=await import('/ui/live-changes.js'),{renderDiff}=await import('/activity-feed.js');
-   const host=document.createElement('div');host.id='diff-check';host.className='live-changes';Object.assign(host.style,{position:'fixed',bottom:'20px',left:'20px',transform:'none',zIndex:'9999'});document.body.append(host);
+   const host=document.createElement('div');host.id='diff-check';host.className='live-changes';document.querySelector('.composer-overlays').append(host);
    const diff=Array.from({length:160},(_,i)=>'+'+i+' '+('long line '.repeat(30))).join('\n');
    const summary={turnId:'check',count:1,rows:[{path:'src/test.js',fullPath:'src/test.js',diffs:[diff],added:160,removed:0,known:true}],added:160,removed:0,complete:true};
    window.diffCheck={host,summary,view:mountLiveChanges(host,{renderDiff})};window.diffCheck.view.update(summary,'fixture');
   });
-  await page.locator('#diff-check .pill-text').click();await page.locator('#diff-check .file-base').click();
+  await page.locator('#diff-check .pill-text').click();
+  const bounds=await page.locator('#diff-check').evaluate(host=>{
+   const panel=host.querySelector('.changes-panel').getBoundingClientRect(),pill=host.querySelector('.changes-pill').getBoundingClientRect(),column=host.parentElement.getBoundingClientRect();
+   return {centerError:Math.abs(panel.left+panel.width/2-pill.left-pill.width/2),left:panel.left-column.left,right:column.right-panel.right};
+  });
+  assert.ok(bounds.centerError<1&&bounds.left>=-1&&bounds.right>=-1,`diff panel at ${width}px: ${JSON.stringify(bounds)}`);
+  await page.locator('#diff-check .file-base').click();
   await page.locator('#diff-check .diff-view').evaluate(node=>{node.style.maxHeight='180px';node.scrollTop=420;node.scrollLeft=110;window.checkedDiff=node;});
   const before=await page.locator('#diff-check .diff-view').evaluate(node=>[node.scrollTop,node.scrollLeft]);
   await page.evaluate(()=>{for(let i=0;i<15;i++)window.diffCheck.view.update({...window.diffCheck.summary,running:true},'fixture');});

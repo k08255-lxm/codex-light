@@ -85,8 +85,18 @@ try {
   });
   await check('model-only work shows continuous running feedback', async () => {
     await page.locator('.turn-working[data-running="true"]').waitFor({ timeout: 2000 });
-    const name = await page.locator('.turn-working').evaluate(node => getComputedStyle(node, '::before').animationName);
-    assert.equal(name, 'working-dot');
+    for(const selector of ['.turn-working','.project-group-thread.running .thread-name']){
+      const styles=await page.locator(selector).first().evaluate(node=>[getComputedStyle(node).animationName,getComputedStyle(node).backgroundClip]);
+      assert.deepEqual(styles,['working-shimmer','text']);
+    }
+    assert.equal(await page.locator('.project-group-thread.running').first().evaluate(node=>getComputedStyle(node,'::before').content),'none');
+    for(const theme of ['light','dark']){
+      await page.evaluate(value=>document.documentElement.dataset.theme=value,theme);
+      assert.equal(await page.locator('.turn-working').evaluate(node=>getComputedStyle(node).backgroundClip),'text');
+    }
+    await page.emulateMedia({forcedColors:'active'});
+    assert.equal(await page.locator('.turn-working').evaluate(node=>getComputedStyle(node).animationName),'none');
+    await page.emulateMedia({forcedColors:'none'});
   });
   await check('leave a first running turn and reopen it before history indexing', async () => {
     await page.locator('#new-thread').click();
@@ -122,7 +132,7 @@ try {
     assert.equal(await page.locator('#chat-page').isVisible(), true);
     await page.locator('#sidebar-overlay').waitFor({ state: 'hidden' });
     await page.evaluate(() => document.documentElement.dataset.reducedMotion = 'true');
-    assert.equal(await page.locator('.turn-working').evaluate(node => getComputedStyle(node, '::before').animationName), 'none');
+    assert.equal(await page.locator('.turn-working').evaluate(node => getComputedStyle(node).animationName), 'none');
     await page.evaluate(() => document.documentElement.dataset.reducedMotion = 'false');
     await page.screenshot({ path: path.join(root, '.tmp', 'thread-navigation-narrow.png') });
     await page.setViewportSize({ width: 1440, height: 920 });
@@ -141,6 +151,12 @@ try {
   await page.locator('.project-group-thread').click();
   await page.locator('#stop').waitFor({ state: 'hidden' });
   assert.equal(await page.locator('.turn-working[data-running="true"]').count(), 0);
+  await check('late duplicate starts cannot turn a settled sidebar row back on',async()=>{
+    client.emit('event',{method:'turn/started',params:{threadId:runningId,turn:{id:turn.id,status:'inProgress'}}});
+    await page.waitForTimeout(100);
+    assert.equal(await page.locator('.project-group-thread.running').count(),0);
+    assert.equal(await page.locator('#stop').isVisible(),false);
+  });
   if (!process.argv.includes('--baseline')) {
     await check('opening the completed conversation clears its unread dot',async()=>{
       await page.waitForFunction(()=>document.querySelector('.thread-unread-indicator')?.hidden===true);
@@ -178,7 +194,7 @@ try {
     });
     await page.locator('#thread-menu-button').click();
     await page.locator('#archive-thread').click();
-    await page.getByRole('dialog').getByRole('button', { name: '确认', exact: true }).click();
+    await page.getByRole('dialog').getByRole('button', { name: '归档', exact: true }).click();
     await page.waitForFunction(() => !document.querySelector('.project-group-thread'));
     assert.equal(client.threads.get(runningId).archived, true);
   }

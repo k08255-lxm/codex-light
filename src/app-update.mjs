@@ -79,7 +79,7 @@ export class AppUpdateService{
   this.nativeLaunchAvailable=updateTransport==='msi'||typeof launchFn==='function';
   Object.assign(this,{currentVersion,platform,arch,fetchFn,launchFn:launchFn||(updateTransport==='msi'?launchInstaller:null),updateTransport,now,checkTimeoutMs,downloadTimeoutMs});
   this.cacheRoot=path.resolve(cacheRoot||path.join(platform==='win32'?(process.env.LOCALAPPDATA||path.join(os.homedir(),'AppData','Local')):os.tmpdir(),'CodexLight','Updates'));
-  this.latest=null;this.phase='idle';this.error=null;this.checkedAt=null;this.receivedBytes=0;this.totalBytes=0;this.prepared=null;this.checking=null;this.downloading=null;this.installing=null;this.closed=false;this.abortController=null;
+  this.latest=null;this.phase='idle';this.error=null;this.checkedAt=null;this.receivedBytes=0;this.totalBytes=0;this.prepared=null;this.checking=null;this.checkAbortController=null;this.downloading=null;this.installing=null;this.closed=false;this.abortController=null;
  }
  status(){
   const latest=this.latest?{version:this.latest.version,releaseUrl:this.latest.releaseUrl,notes:this.latest.notes,publishedAt:this.latest.publishedAt,available:this.latest.available}:null;
@@ -98,26 +98,37 @@ export class AppUpdateService{
   }
   throw fail('安装包重定向次数过多','APP_UPDATE_REDIRECT_LIMIT');
  }
- async check(){
+ async check({automatic=false}={}){
   if(this.closed)throw fail('应用更新服务已关闭','APP_UPDATE_CLOSED');
   if(this.checking)return this.checking;
   if(this.downloading||this.installing)throw fail('正在处理应用更新，请稍后检查','APP_UPDATE_BUSY');
-  if(this.phase==='launchUnknown')throw fail('安装程序启动结果未知，请先核对，不能自动重试','APP_UPDATE_LAUNCH_UNKNOWN','unknown');
+  if(this.phase==='launchUnknown'){
+   if(automatic)return this.status();
+   throw fail('安装程序启动结果未知，请先核对，不能自动重试','APP_UPDATE_LAUNCH_UNKNOWN','unknown');
+  }
   if(this.phase==='launched')return this.status();
+  if(automatic&&['available','ready','upToDate'].includes(this.phase)&&this.checkedAt&&this.now()-Date.parse(this.checkedAt)<5*60*1000)return this.status();
+  const previousPhase=this.phase,previousError=this.error;
   this.phase='checking';this.error=null;
+  const controller=new AbortController();this.checkAbortController=controller;
+  const upstreamSignal=()=>AbortSignal.any([controller.signal,AbortSignal.timeout(this.checkTimeoutMs)]);
   this.checking=(async()=>{
    try{
-    const response=await this._fetch(APP_RELEASES_API,AbortSignal.timeout(this.checkTimeoutMs),{api:true});
+    const response=await this._fetch(APP_RELEASES_API,upstreamSignal(),{api:true});
     let raw;try{raw=JSON.parse((await limitedBytes(response,2*1024*1024)).toString('utf8'));}catch(error){if(error.code)throw error;throw fail('发布信息无法解析','APP_UPDATE_RELEASE_INVALID');}
-    const latest=parseAppRelease(raw,this.currentVersion,this.updateTransport);const sums=await this._fetch(latest.sums.url,AbortSignal.timeout(this.checkTimeoutMs));
+    const latest=parseAppRelease(raw,this.currentVersion,this.updateTransport);const sums=await this._fetch(latest.sums.url,upstreamSignal());
     const checksumBytes=await limitedBytes(sums,128*1024);
     if(checksumBytes.length!==latest.sums.size)throw fail('发布校验文件大小与元数据不一致','APP_UPDATE_CHECKSUM_INVALID');
     latest.sha256=publishedSetupHash(checksumBytes.toString('utf8'),latest.setup.name);
     this.latest=latest;this.checkedAt=new Date(this.now()).toISOString();
     if(this.prepared&&(this.prepared.version!==latest.version||this.prepared.sha256!==latest.sha256))this.prepared=null;
     this.phase=this.prepared?'ready':latest.available?'available':'upToDate';return this.status();
-   }catch(error){this.phase='failed';this.error=error?.message||'应用更新检查失败';throw error;}
-   finally{this.checking=null;}
+   }catch(error){
+    this.phase=automatic?previousPhase:'failed';
+    this.error=automatic?previousError:error?.message||'应用更新检查失败';
+    throw error;
+   }
+   finally{this.checking=null;this.checkAbortController=null;}
   })();return this.checking;
  }
  _release(params){
@@ -193,5 +204,5 @@ export class AppUpdateService{
    finally{this.installing=null;}
   })();return this.installing;
  }
- close(){this.closed=true;this.abortController?.abort();return this.downloading?.catch(()=>{});}
+ close(){this.closed=true;this.checkAbortController?.abort();this.abortController?.abort();return this.downloading?.catch(()=>{});}
 }

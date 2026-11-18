@@ -12,9 +12,9 @@ test('title UI defaults off, requires explicit model, saves without toast, and r
  state.lastError='标题总结超时';view.activate();await tick();assert.ok(host.textContent.includes('标题总结超时'));assert.equal(calls.filter(row=>row.route.endsWith('/status')).length,2);
 });
 
-test('title settings live under Appearance and only activate there on the local client',async()=>{
+test('title settings live under Configuration and only activate there on the local client',async()=>{
  const html=await readFile(new URL('../public/index.html',import.meta.url),'utf8');
- const pane=html.match(/<section id="settings-appearance"[\s\S]*?<\/section>/)[0];
+ const pane=html.match(/<section id="settings-configuration"[\s\S]*?<\/section>/)[0];
  assert.match(pane,/id="title-settings-root" class="local-only"/);
  assert.equal((html.match(/id="title-settings-root"/g)||[]).length,1);
  const app=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
@@ -25,6 +25,6 @@ test('title settings live under Appearance and only activate there on the local 
   dshConnectionView:panel,dshConfigView:panel,titleSettings:{activate:()=>calls.push(state.settingsPage)},pluginPanel:panel,lanView:panel,aboutView:panel,storageView:panel,renderPluginPending:noop,syncRuntimePanelActivity:noop};
  vm.createContext(context);vm.runInContext(source,context);
  context.selectSettingsSection('general');assert.deepEqual(calls,[]);
- context.selectSettingsSection('appearance');assert.deepEqual(calls,['appearance']);
- state.lan=true;context.selectSettingsSection('appearance');assert.deepEqual(calls,['appearance']);
+ context.selectSettingsSection('configuration');assert.deepEqual(calls,['configuration']);
+ state.lan=true;context.selectSettingsSection('configuration');assert.deepEqual(calls,['configuration']);
 });

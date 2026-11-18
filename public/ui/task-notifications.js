@@ -23,7 +23,7 @@ export function createTaskMonitor({post,title=()=>'',waiting=()=>false}){
     }
   }
   return {
-    setEnabled(value){enabled=value===true;if(enabled)refresh();},
+    setEnabled(value){if(enabled===(value===true))return;enabled=value===true;if(enabled)refresh();},
     reconcile(rows,isConnected){
       connected=isConnected===true;
       const active=new Map(rows.filter(row=>validId(row?.threadId)&&validId(row?.activeTurnId)).map(row=>[row.threadId,row.activeTurnId]));
@@ -50,6 +50,8 @@ export function mountTaskNotifications({document,window,snapshot,title,waiting,o
   const bridge=window.CodexLightNative,panel=document.getElementById('mobile-task-notifications');
   if(!bridge||!['getTaskNotificationStatus','setTaskNotificationsEnabled','updateTaskNotification','openTaskNotificationSettings'].every(name=>typeof bridge[name]==='function'))return null;
   const toggle=document.getElementById('mobile-task-enabled'),status=document.getElementById('mobile-task-status');
+  const promotion=document.getElementById('mobile-task-promotion-status'),promotionSettings=document.getElementById('mobile-task-promotion-settings');
+  const backgroundPanel=document.getElementById('mobile-task-background-panel'),background=document.getElementById('mobile-task-background'),backgroundStatus=document.getElementById('mobile-task-background-status');
   const monitor=createTaskMonitor({post:data=>bridge.updateTaskNotification(JSON.stringify(data)),title,waiting});
   let failed=false,pendingOpen=null,opening=false,lastOpenError=null;
   async function tryOpen(){
@@ -66,16 +68,30 @@ export function mountTaskNotifications({document,window,snapshot,title,waiting,o
     panel.hidden=result.supported!==true;if(panel.hidden){monitor.setEnabled(false);return;}
     toggle.checked=result.enabled===true;monitor.setEnabled(result.enabled===true&&result.reason==='ready');
     const labels={disabled:'开启后显示运行任务、等待处理和任务结果。',permission_required:'尚未获得系统通知权限，请在系统设置中允许。',channel_blocked:'任务通知渠道已关闭，请在系统设置中开启。'};
-    status.textContent=labels[result.reason]||(result.promotedCandidate?'任务通知已开启。系统支持且允许时，运行状态可尝试显示为状态胶囊。':'任务通知已开启，使用系统通知栏显示任务状态。');failed=false;
+    status.textContent=labels[result.reason]||'任务通知已开启。';failed=false;
+    if(promotion){
+      const messages={promoted:'系统已将运行状态提升为实时通知。',standard:'系统当前以普通通知显示运行状态。',ready:'系统允许实时通知，运行时由系统决定显示位置。',blocked:'实时通知权限关闭，运行状态使用普通通知。',unsupported:'此设备使用普通任务通知。'};
+      promotion.textContent=messages[result.promotion]||(result.promotedCandidate?'运行时由系统决定是否提升实时通知。':'此设备使用普通任务通知。');
+      promotionSettings.hidden=!result.promotedCandidate||typeof bridge.openLiveUpdateSettings!=='function';
+    }
+    if(backgroundPanel){
+      backgroundPanel.hidden=typeof bridge.setBackgroundNotifications!=='function';
+      const backgroundMessages={off:'后台同步已停止。深度休眠或离开可访问电脑的网络时，系统可能暂停同步。',connecting:'正在连接配对电脑…',active:'后台同步已连接。',engine_offline:'已连接电脑，等待 Codex 恢复。',network_error:'暂时无法访问配对电脑，正在重试。',unauthorized:'配对授权已失效，请重新连接电脑。',incompatible:'电脑版本不支持后台同步，请更新电脑端。',permission_required:'请先允许应用发送系统通知。',unavailable:'系统暂未启动后台同步，请回到应用后重试。',expired:'本次后台同步已结束，可再次开启。'};
+      backgroundStatus.textContent=backgroundMessages[result.background]||backgroundMessages.off;
+      background.checked=['connecting','active','engine_offline','network_error'].includes(result.background);
+    }
   });}
   const reconcile=()=>run(()=>{const data=snapshot();monitor.reconcile(data.threads,data.connected);void tryOpen();});
   const refresh=()=>run(()=>{if(snapshot().connected)monitor.refresh();else monitor.disconnected();});
   toggle.addEventListener('change',()=>run(()=>{bridge.setTaskNotificationsEnabled(toggle.checked);}));
   document.getElementById('mobile-task-system-settings').addEventListener('click',()=>run(()=>bridge.openTaskNotificationSettings()));
+  promotionSettings?.addEventListener('click',()=>run(()=>bridge.openLiveUpdateSettings?.()));
+  background?.addEventListener('change',()=>run(()=>bridge.setBackgroundNotifications?.(background.checked,document.getElementById('preference-approval')?.checked===true)));
   window.addEventListener('codexlight-task-notification-status',refreshStatus);
   window.addEventListener('focus',()=>{refreshStatus();void tryOpen();});
   window.CodexLightTaskNotifications={open(threadId){if(validId(threadId)){pendingOpen=threadId;void tryOpen();}}};
   refreshStatus();reconcile();
   window.setInterval(refresh,30000);
+  if(backgroundPanel)window.setInterval(()=>{if(!document.getElementById('settings-notifications')?.classList.contains('hidden'))refreshStatus();},5000);
   return {observe:message=>run(()=>monitor.observe(message)),reconcile,refresh,disconnected:()=>run(()=>monitor.disconnected()),reset:()=>run(()=>{pendingOpen=null;monitor.reset();})};
 }

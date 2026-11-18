@@ -47,7 +47,7 @@ export class NativeAgentChanges {
       const changes = new Map();
       for (const item of turn.items || []) {
         if (item.type !== 'fileChange' || item.status !== 'completed') continue;
-        const edit = projectDelegatedEdit({success:true,changes:item.changes});
+        const edit = projectDelegatedEdit({success:true,changes:item.changes},item);
         const atMs=[item._completedAtMs,item.completedAtMs,item._startedAtMs,item.startedAtMs].find(value=>typeof value==='number'&&Number.isFinite(value)&&value>=0)??null;
         if (edit?.changes.length) changes.set(item.id,{id:item.id,changes:edit.changes,atMs});
       }

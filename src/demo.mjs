@@ -18,9 +18,14 @@ export class DemoClient extends EventEmitter {
    case 'account/rateLimits/read':return {rateLimits:null,rateLimitsByLimitId:null,ordinaryUsageAllowed:null};
    case 'thread/name/set':{const t=this.threads.get(p.threadId);if(!t)throw new Error('对话不存在');t.name=p.name;return {};}
    case 'thread/archive':case 'thread/unarchive':{const t=this.threads.get(p.threadId);if(!t)throw new Error('对话不存在');t.archived=method==='thread/archive';return method==='thread/unarchive'?{thread:t}:{};}
+   case 'thread/delete':{
+    if(!this.threads.delete(p.threadId))throw Object.assign(new Error('对话不存在'),{code:-32602});
+    this.items.delete(p.threadId);this.turns.delete(p.threadId);
+    this.emit('event',{method:'thread/deleted',params:{threadId:p.threadId}});return {};
+   }
    case 'thread/fork':{const source=this.threads.get(p.threadId);if(!source)throw new Error('对话不存在');const thread={...source,id:randomUUID(),name:(source.name||'对话')+' · 分支',archived:false};this.threads.set(thread.id,thread);this.items.set(thread.id,structuredClone(this.items.get(source.id)||[]));this.turns.set(thread.id,structuredClone((this.turns.get(source.id)||[]).filter(t=>t.status!=='inProgress')));return {thread};}
    case 'thread/list':return this.page([...this.threads.values()].filter(t=>!!t.archived===!!p.archived).filter(t=>!p.searchTerm||(t.name||'').includes(p.searchTerm)).sort((a,b)=>b.updatedAt-a.updatedAt),p);
-   case 'thread/start':{const thread={id:randomUUID(),cwd:p.cwd,model:p.model||'demo',reasoningEffort:null,name:'新对话',preview:'',updatedAt:Date.now()/1000};this.threads.set(thread.id,thread);this.items.set(thread.id,[]);this.turns.set(thread.id,[]);return {thread,model:thread.model,reasoningEffort:thread.reasoningEffort};}
+   case 'thread/start':{const createdAt=Date.now()/1000,thread={id:randomUUID(),cwd:p.cwd,model:p.model||'demo',reasoningEffort:null,name:'新对话',preview:'',createdAt,updatedAt:createdAt};this.threads.set(thread.id,thread);this.items.set(thread.id,[]);this.turns.set(thread.id,[]);return {thread,model:thread.model,reasoningEffort:thread.reasoningEffort};}
    case 'thread/resume':case 'thread/read':{const thread=this.threads.get(p.threadId);if(!thread)throw new Error('对话不存在');return {thread:{...thread,turns:p.excludeTurns?[]:this.turns.get(p.threadId)},model:thread.model,reasoningEffort:thread.reasoningEffort};}
    case 'thread/turns/list':return this.page([...(this.turns.get(p.threadId)||[])].reverse(),p);
    case 'thread/items/list':{let items=[...(this.items.get(p.threadId)||[])];if(p.turnId)items=items.filter(e=>e.turnId===p.turnId);if(p.sortDirection!=='asc')items.reverse();return this.page(items,p);}

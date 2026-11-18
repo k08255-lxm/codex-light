@@ -32,7 +32,6 @@
   <div id="mobile-quota-slot" aria-label="剩余额度"></div>
   <div class="mobile-window-controls">
     <button id="mobile-refresh" type="button" class="btn icon-only ghost" aria-label="刷新工作台"><span data-icon="refresh"></span></button>
-    <button id="mobile-connection" type="button" class="btn icon-only ghost" aria-label="连接管理"><span data-icon="settings"></span></button>
   </div>
   <div class="window-controls">
     <button type="button" data-window-command="minimize" aria-label="最小化" title="最小化"><span data-icon="minimize"></span></button>
@@ -135,7 +134,7 @@
             <button type="button" id="permissions-info" class="tool" title="权限策略：继承 Codex 当前配置"><span data-icon="shield"></span><span class="label">权限</span></button>
           </div>
           <div class="selectors native-model-selectors"><label><span class="sr-only">模型</span><select id="model"><option value="">使用 Codex 默认模型</option></select></label><label><span class="sr-only">思考强度</span><select id="effort"><option value="">默认思考强度</option></select></label></div>
-          <button id="context-meter" type="button" class="context-meter hidden" data-known="false" aria-label="上下文未知"><span class="context-ring" aria-hidden="true"></span><span id="context-label">—</span></button>
+          <button id="context-meter" type="button" class="context-meter hidden" data-known="false" aria-label="上下文未知" aria-haspopup="dialog" aria-expanded="false" aria-controls="context-details"><span class="context-ring" aria-hidden="true"></span><span id="context-label">—</span></button>
           <button id="fast-toggle" type="button" class="tool fast-toggle" aria-label="Fast 模式" aria-pressed="false" title="Fast · 继承配置"><span data-icon="bolt"></span></button>
           <div class="model-control"><button type="button" id="model-trigger" aria-haspopup="dialog" aria-expanded="false" aria-controls="reasoning-popover">默认模型<span data-icon="down"></span></button><section id="reasoning-popover" class="reasoning-popover hidden" role="dialog" aria-label="模型与思考强度"><div id="reasoning-controls"><div class="reasoning-heading"><span aria-hidden="true"><span data-icon="bolt"></span></span><output id="reasoning-label" for="reasoning-range">默认</output><button type="button" id="reasoning-reset" aria-label="恢复模型默认思考强度" title="恢复模型默认思考强度"><span data-icon="reset"></span></button></div><button type="button" id="model-list-open" aria-label="选择模型"><span id="reasoning-model-name">默认模型</span><span><span data-icon="right"></span></span></button><div id="reasoning-track" class="reasoning-track"><div id="reasoning-ticks" aria-hidden="true"></div><input id="reasoning-range" type="range" min="0" max="0" step="1" value="0" aria-label="思考强度"></div></div><div id="reasoning-model-list" class="reasoning-model-list hidden" role="group" aria-label="可用模型"><div class="model-list-head"><button type="button" id="model-list-back" aria-label="返回思考强度"><span data-icon="left"></span></button><strong>选择模型</strong></div><div id="model-options"></div></div></section></div>
           <button id="queue-send" type="button" class="queue-send hidden" title="排队到当前任务完成后发送 (Tab)"><span data-icon="queue"></span><span>排队</span></button>
@@ -193,26 +192,39 @@
       <div id="settings-notice" class="notice hidden" role="status"><span></span></div>
       <section id="settings-general" class="settings-section">
         <h1>连接与运行</h1>
-        <div id="desktop-close-preference" class="panel hidden">
-          <label class="pref-row" for="desktop-close-behavior"><div><strong>关闭窗口时</strong><small class="fine">仅此电脑。完全退出会停止后台和任务。</small></div><select id="desktop-close-behavior" disabled><option value="ask">每次询问</option><option value="tray">转入系统托盘</option><option value="exit">完全退出</option></select></label>
-          <p id="desktop-close-status" class="fine" role="status" aria-live="polite"></p>
+        <div id="mobile-connection-settings" class="panel" hidden>
+          <div class="pref-row"><div><strong>手机连接</strong><small class="fine">配对、更换电脑和自动连接</small></div><button id="mobile-connection" type="button" class="btn">管理连接</button></div>
+          <div id="mobile-app-permissions-row" class="pref-row" hidden><div><strong>应用权限</strong><small class="fine">在 Android 系统中管理相机和通知权限</small></div><button id="mobile-app-permissions" type="button" class="btn">打开系统设置</button></div>
+          <div id="mobile-app-update-row" class="pref-row" hidden><div><strong>手机应用更新</strong></div><button id="mobile-app-update" type="button" class="btn">检查更新</button></div>
         </div>
         <form id="settings-form">
+          <h2 class="section-title">当前连接</h2>
           <div class="panel">
             <dl class="kv">
               <dt>连接状态</dt><dd id="status-info">检查中</dd>
               <dt>运行模式</dt><dd id="mode-info">未连接</dd>
+            </dl>
+            <details class="connection-details"><summary>连接详情</summary><dl class="kv">
               <dt>CLI 版本</dt><dd id="version-info">未知</dd>
               <dt>Codex 命令</dt><dd><code id="command-info">codex</code></dd>
-              <dt>安全重开</dt><dd id="reopen-info">未知</dd>
-            </dl>
-            <label class="field">工作目录<input id="cwd-input" placeholder="C:\Users\USER\project" autocomplete="off" spellcheck="false"><small>Codex 与 DSH 在此目录工作，修改会直接影响源文件。</small></label>
+            </dl><p id="reopen-info" class="fine"></p></details>
+          </div>
+          <h2 class="section-title">工作目录</h2>
+          <div class="panel">
+            <label class="field"><span>默认文件夹</span><input id="cwd-input" placeholder="C:\Users\USER\project" autocomplete="off" spellcheck="false"><small>任务在所选目录运行，修改会直接影响源文件。</small></label>
             <div class="work-row end"><button id="settings-cwd-browse" type="button" class="btn local-only" hidden>选择文件夹…</button><button id="settings-cancel" type="button" class="btn">取消</button><button id="save-settings" type="submit" class="btn primary">保存工作目录</button></div>
           </div>
           <div id="wsl-runtime-panel" class="local-only"></div>
           <div id="runtime-panel"></div>
-          <h2 class="section-title">服务</h2>
-          <div class="panel row-panel"><p id="runtime-close-info" class="fine">关闭窗口不等于停止服务。</p><button id="shutdown" type="button" class="btn danger">停止服务</button></div>
+          <div class="local-only"><h2 class="section-title">窗口与后台服务</h2>
+            <div class="panel">
+              <div id="desktop-close-preference" class="hidden">
+                <label class="pref-row" for="desktop-close-behavior"><div><strong>关闭窗口时</strong><small class="fine">转入托盘可让任务继续运行。</small></div><select id="desktop-close-behavior" disabled><option value="ask">每次询问</option><option value="tray">转入系统托盘</option><option value="exit">完全退出</option></select></label>
+                <p id="desktop-close-status" class="fine" role="status" aria-live="polite"></p>
+              </div>
+              <div class="pref-row"><div><strong>后台服务</strong><small id="runtime-close-info" class="fine">停止后会中断运行中的任务。</small></div><button id="shutdown" type="button" class="btn danger">停止服务</button></div>
+            </div>
+          </div>
         </form>
       </section>
       <section id="settings-dsh" class="settings-section hidden">
@@ -231,23 +243,31 @@
         </div>
         <p id="preference-status" class="fine" role="status"></p>
         <button id="preference-native-reload" type="button" class="btn hidden">重新读取本机偏好</button>
-        <div id="title-settings-root" class="local-only"></div>
       </section>
       <section id="settings-notifications" class="settings-section hidden">
         <h1>通知</h1>
         <div id="mobile-task-notifications" class="panel" hidden>
           <label class="pref-row" for="mobile-task-enabled"><div><strong>手机任务通知</strong><small class="fine">主动监控运行中的长任务。通知可显示对话标题；点按返回对话，等待回答和任务结果使用普通通知。</small></div><input id="mobile-task-enabled" type="checkbox" class="switch"></label>
           <p id="mobile-task-status" class="fine" role="status"></p>
-          <p class="fine">状态胶囊由系统决定是否显示。不接入需要厂商审核的服务。应用休眠或断连后，状态会过期，不能保证持续后台更新。</p>
+          <p id="mobile-task-promotion-status" class="fine" role="status"></p>
           <button id="mobile-task-system-settings" type="button" class="btn small">系统通知设置</button>
+          <button id="mobile-task-promotion-settings" type="button" class="btn small" hidden>实时通知设置</button>
+          <div id="mobile-task-background-panel" hidden>
+            <label class="pref-row" for="mobile-task-background"><div><strong>后台同步通知</strong><small class="fine">在离开应用后继续同步。手机需能访问配对电脑，可从通知栏随时停止。</small></div><input id="mobile-task-background" type="checkbox" class="switch"></label>
+            <p id="mobile-task-background-status" class="fine" role="status"></p>
+          </div>
         </div>
-        <div class="panel"><label class="pref-row"><div><strong>任务结束提示</strong><small class="fine">应用内提示，不请求系统通知</small></div><input id="preference-completion" type="checkbox" class="switch"></label><label class="pref-row"><div><strong>提问与审批提醒</strong><small class="fine">应用内持续提示；桌面窗口在后台时发送系统提醒，点击返回对话</small></div><input id="preference-approval" type="checkbox" class="switch"></label></div>
+        <div class="panel">
+          <label class="pref-row"><div><strong>任务结束提示</strong><small class="fine">应用内提示，不请求系统通知</small></div><input id="preference-completion" type="checkbox" class="switch"></label>
+          <label class="pref-row"><div><strong>提问与审批提醒</strong><small id="question-notification-status" class="fine" role="status"></small></div><input id="preference-approval" type="checkbox" class="switch"></label>
+          <button id="question-notification-permission" class="btn small" type="button" hidden>允许系统通知</button>
+        </div>
       </section>
       <section id="settings-shortcuts" class="settings-section hidden">
         <h1>快捷键</h1>
         <div class="panel"><dl class="kv keys"><dt>新对话</dt><dd><kbd>Ctrl N</kbd></dd><dt>模型与思考强度</dt><dd><kbd>Ctrl Shift M</kbd></dd><dt>发送 / 运行中立即补充</dt><dd><kbd>Enter</kbd></dd><dt>运行中排队</dt><dd><kbd>Tab</kbd></dd><dt>换行</dt><dd><kbd>Shift Enter</kbd></dd><dt>命令与技能</dt><dd><kbd>/</kbd></dd><dt>关闭弹层</dt><dd><kbd>Esc</kbd></dd><dt>原生应用菜单</dt><dd><kbd>Alt M</kbd> / <kbd>F10</kbd></dd></dl></div>
       </section>
-      <section id="settings-configuration" class="settings-section hidden"><h1>配置</h1><div id="config-pending"></div><div id="config-panel"></div></section>
+      <section id="settings-configuration" class="settings-section hidden"><h1>配置</h1><div id="config-pending"></div><div id="config-panel"></div><div id="title-settings-root" class="local-only"></div></section>
       <section id="settings-archived" class="settings-section hidden"><div class="section-head"><h1>已归档</h1><button id="refresh-archived" class="btn small">刷新</button></div><div id="archived-list" class="panel list-panel"><p class="fine">尚未读取。</p></div><button id="more-archived" class="btn hidden">加载更多</button></section>
       <section id="settings-remote" class="settings-section hidden">
         <h1>远程控制</h1>
@@ -277,6 +297,18 @@
 
 <dialog id="project-dialog" aria-labelledby="project-heading"><div class="dialog-header"><h2 id="project-heading">打开项目</h2><button id="project-close" type="button" class="btn icon-only ghost" aria-label="关闭"><span data-icon="close"></span></button></div><div id="project-choices" class="project-choices"></div><button id="project-browse" class="btn project-browse" type="button"><span data-icon="folder"></span>选择文件夹…</button><details id="project-manual"><summary>输入文件夹路径</summary><form id="project-form"><label class="field" for="project-path">项目文件夹<input id="project-path" maxlength="4096" autocomplete="off" required placeholder="例如 C:\Users\USER\Projects\my-app"></label><div class="work-row end"><button id="project-save" type="submit" class="btn primary">打开项目</button></div></form></details><p id="project-status" role="status"></p></dialog>
 <dialog id="rename-dialog" aria-labelledby="rename-heading"><form id="rename-form"><div class="dialog-header"><h2 id="rename-heading">重命名对话</h2><button id="rename-close" type="button" class="btn icon-only ghost" aria-label="取消重命名"><span data-icon="close"></span></button></div><label class="field">名称<input id="rename-input" maxlength="200" required autocomplete="off"></label><div class="work-row end"><button id="rename-cancel" type="button" class="btn">取消</button><button id="rename-save" type="submit" class="btn primary">保存</button></div></form></dialog>
+<dialog id="context-details" aria-labelledby="context-details-title">
+  <div class="context-details-body">
+    <div class="dialog-header"><h2 id="context-details-title">上下文用量</h2><button id="context-details-close" class="btn icon-only ghost" type="button" aria-label="关闭上下文详情" autofocus><span data-icon="close"></span></button></div>
+    <p id="context-details-status" role="status"></p>
+    <section aria-labelledby="context-window-heading"><h3 id="context-window-heading">模型窗口</h3><dl id="context-window-metrics"></dl></section>
+    <div class="context-detail-usage">
+      <section aria-labelledby="context-last-heading"><h3 id="context-last-heading">最近一次请求</h3><dl id="context-last-metrics"></dl></section>
+      <section aria-labelledby="context-total-heading"><h3 id="context-total-heading">对话累计</h3><dl id="context-total-metrics"></dl></section>
+    </div>
+    <p class="context-detail-note">单位为 tokens。各项数值和合计均采用 Codex 的报告。</p>
+  </div>
+</dialog>
 <script type="module" src="/app.js"></script>
 </body>
 </html>

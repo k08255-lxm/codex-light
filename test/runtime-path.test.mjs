@@ -35,6 +35,14 @@ test('Windows picks the newer SemVer and prefers npm on a tie',()=>{
  assert.equal(resolved.path,npmPath);assert.equal(resolved.source,'npm');
 });
 
+test('Windows uses the saved explicit source, reports a missing selected binary, and keeps a path override authoritative',()=>{
+ const args={platform:'win32',arch:'x64',env:{APPDATA:'C:\\Users\\u\\AppData\\Roaming'},exists:p=>[npmPath,desktopPath,'C:\\custom\\codex.exe'].includes(p),discoverDesktop:()=>desktopLocation,versionOf:p=>p===npmPath?'1.0.0':'2.0.0'};
+ assert.equal(resolveCodexRuntime({...args,preferredSource:'npm'}).path,npmPath);
+ assert.equal(resolveCodexRuntime({...args,preferredSource:'desktop',versionOf:p=>p===npmPath?'3.0.0':'2.0.0'}).path,desktopPath);
+ assert.throws(()=>resolveCodexRuntime({...args,preferredSource:'desktop',discoverDesktop:()=>null}),{code:'CODEX_SELECTED_SOURCE_UNAVAILABLE'});
+ assert.equal(resolveCodexRuntime({...args,preferredSource:'desktop',env:{...args.env,CODEX_LIGHT_CODEX:'C:\\custom\\codex.exe'}}).source,'env');
+});
+
 test('missing or failed candidate versions use deterministic npm fallback and diagnostics',()=>{
  const versionOf=p=>{if(p===desktopPath)throw new Error('bad probe');return '0.157.1';};
  const resolved=resolveCodexRuntime({platform:'win32',env:{APPDATA:'C:\\Users\\u\\AppData\\Roaming'},exists:p=>p===npmPath||p===desktopPath,discoverDesktop:()=>desktopLocation,versionOf});

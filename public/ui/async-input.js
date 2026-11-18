@@ -82,7 +82,7 @@ function parseAnswers(text, questions) {
   return answers;
 }
 
-export function asyncAnswerHistory(turns, threadId) {
+export function asyncAnswerHistory(turns, threadId, { confirmedOnly = false, allowLegacy = true, fullTranscript = true } = {}) {
   const answered = new Map(), echoes = new Set(), pending = new Map();
   const known = threadId ? answerReceipts().filter(row=>row.threadId===threadId) : [];
   for (const turn of turns) {
@@ -94,6 +94,7 @@ export function asyncAnswerHistory(turns, threadId) {
         continue;
       }
       if (item.type !== 'userMessage') continue;
+      if (confirmedOnly && item._local) continue;
       const first = firstInput; firstInput = false;
       const candidates = legacy;
       legacy = []; // Never claim a subsequent ordinary message as an old untagged reply.
@@ -104,8 +105,8 @@ export function asyncAnswerHistory(turns, threadId) {
       const claimedId = typeof claim === 'string' && claim.startsWith('answer:') ? claim.slice(7) : '';
       if (claim && !claimedId) continue; // An ordinary composer submission owns this echo.
       const tagged = text.startsWith(answerHeading);
-      if (!tagged && !text.startsWith('1. ')) continue;
-      const receipt = known.find(row=>row.turnId===turn.id && (row.echoId ? row.echoId===item.id : first));
+      if (!tagged && (!allowLegacy || !text.startsWith('1. '))) continue;
+      const receipt = known.find(row=>row.turnId===turn.id && (row.echoId ? row.echoId===item.id : fullTranscript&&first));
       const questionId = claimedId || receipt?.questionId;
       const matches = [];
       const source = tagged ? text.slice(answerHeading.length) : text;

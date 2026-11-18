@@ -1,5 +1,6 @@
 using CodexLight.Desktop;
 using System.Text.Json;
+using System.Xml.Linq;
 
 static class Program {
  static int count;
@@ -20,6 +21,12 @@ static class Program {
   Check(QuestionNotificationBridge.Read(clear,"nonce").Operation=="clear","individual clear");
   var reset=JsonSerializer.Serialize(new{type="desktopQuestionNotification",nonce="nonce",sequence="3",operation="clearAll"});
   Check(QuestionNotificationBridge.Read(reset,"nonce").Operation=="clearAll","session reset");
+  string token=Guid.NewGuid().ToString("N");
+  var toast=XElement.Parse(QuestionNotificationBridge.BuildContent(valid.Notice.Kind,token).GetContent());
+  Check(toast.Attribute("launch")?.Value=="questionNotice="+token,"opaque toast click target");
+  Check(toast.Descendants("text").Any(x=>x.Value=="Codex 等待你的回答"),"question wording");
+  Check(!toast.ToString().Contains(valid.Notice.Id)&&!toast.ToString().Contains(valid.Notice.ThreadId),"toast excludes request identity");
+  Check(QuestionNotificationBridge.BuildContent("approval",token).GetContent().Contains("Codex 等待你的审批"),"approval wording");
   Console.WriteLine($"Native question notification checks: {count} passed");
  }
 }

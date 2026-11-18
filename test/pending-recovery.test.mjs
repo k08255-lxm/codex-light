@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {PendingMutations,lookupDecision} from '../public/submissions.js';
+import {threadProjectPath} from '../public/projects.js';
 const app=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
 const INSTANCE='a'.repeat(32),OTHER='b'.repeat(32),NOW=1794400000000;
 // Builds the real workbench module around a minimal DOM, so recovery uses its actual terminal semantics.
@@ -35,7 +36,7 @@ async function harness(method,params={},options={}){
   workbench:await recoveryWorkbench({processId:options.processId||null,view:options.view?view:null,$,createTerminalView:cwd=>{calls.created.push(cwd);return view;},openedOnVisiblePage:options.openedView===true}),clearSubmittedDraft:value=>calls.draft.push(value),restoreThreadReasoning:value=>calls.reasoning.push(value),dshTasks:{reset(){}},renderDshConnection(){},syncDshLiveContext(){},renderDshTasks(){},renderRequests(){calls.requestRenders++;},activity(){},
   loadThreads:async()=>{calls.lists++;if(options.loadThreads)await options.loadThreads();},loadItems:async(...args)=>{calls.history.push(args);if(options.loadItems)await options.loadItems();}};
  const start=app.indexOf('function pendingMarkerExists('),end=app.indexOf('function handlePendingReconcileError(',start);assert.ok(start>=0&&end>start);
- const functions=new Function(...Object.keys(deps),`${app.slice(start,end)};return {handle:handlePendingReconcileResult,invalidate(){pendingReadGeneration++;},terminal(){return workbench.snapshot();}};`)(...Object.values(deps));
+ const functions=new Function('threadProjectPath',...Object.keys(deps),`${app.slice(start,end)};return {handle:handlePendingReconcileResult,invalidate(){pendingReadGeneration++;},terminal(){return workbench.snapshot();}};`)(threadProjectPath,...Object.values(deps));
  const response=result=>({serverInstance:INSTANCE,method,state:'succeeded',result});
  return{...functions,state,calls,ledger,marker,envelope,response,view};
 }

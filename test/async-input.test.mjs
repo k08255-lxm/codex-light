@@ -133,7 +133,7 @@ test('native subagent forms send to their own thread and survive inspector refre
   const posted = [];
   const inspector = createAgentInspector({ document, state, host, el,
     dshTasks: { values: () => [] }, dshLive: { selectAgent() {} },
-    rpc: async method => { assert.equal(method, 'thread/read'); return { thread: { id: 'child', turns: [{ id: 'turn-one', status: 'completed', items: [{ id: 'before', type: 'commandExecution', command: 'echo before' }, { id: 'compact', type: 'contextCompaction' }, {...question,text:'子代理的额外说明。\n\n'+fallback(question.questions)}] }] } }; },
+    rpc: async method => { if(method==='thread/turns/list'||method==='thread/items/list')throw Object.assign(new Error('method not found'),{code:-32601}); assert.equal(method, 'thread/read'); return { thread: { id: 'child', turns: [{ id: 'turn-one', status: 'completed', items: [{ id: 'before', type: 'commandExecution', command: 'echo before' }, { id: 'compact', type: 'contextCompaction' }, {...question,text:'子代理的额外说明。\n\n'+fallback(question.questions)}] }] } }; },
     onAnswerAsync: async payload => { posted.push(payload); return { status: 'sent' }; }
   });
   inspector.render(); assert.equal(inspector.open('child', 'native'), true);

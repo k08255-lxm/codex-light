@@ -1,4 +1,4 @@
-import {spawn} from 'node:child_process';
+import {spawn,spawnSync} from 'node:child_process';
 import {randomBytes} from 'node:crypto';
 import {existsSync} from 'node:fs';
 import {cp,lstat,mkdtemp,readFile,readdir,realpath,rename,rm} from 'node:fs/promises';
@@ -14,6 +14,7 @@ const STATUS_CACHE=10*1000;
 const CHECK_TIMEOUT=10*1000;
 const CHECK_MAX=256*1024;
 const STAGE_TIMEOUT=30*60*1000;
+const STARTUP_STAGE_TIMEOUT=90*1000;
 const STAGE_MAX=512*1024;
 const CANCEL_GRACE=2*1000;
 const FILE_SYSTEM={cp,lstat,mkdtemp,readFile,readdir,realpath,rename,rm};
@@ -26,6 +27,16 @@ function strictKeys(input,allowed){
  for(const key of Object.keys(input))if(!allowed.includes(key))throw fail(`不支持参数 ${key}`,'RUNTIME_INPUT_INVALID');
 }
 const emptyCandidate=()=>({available:false,path:null,version:null});
+
+export function windowsRuntimeOccupied(root,{env=process.env,run=spawnSync}={}){
+ const command=path.win32.join(env.SystemRoot||env.windir||'C:\\Windows','System32','WindowsPowerShell','v1.0','powershell.exe');
+ const script='$p=@(Get-Process -Name codex -ErrorAction SilentlyContinue | ForEach-Object {[string]$_.Path}); ConvertTo-Json -Compress -InputObject $p';
+ const result=run(command,['-NoLogo','-NoProfile','-NonInteractive','-Command',script],{encoding:'utf8',timeout:5000,maxBuffer:64*1024,windowsHide:true,shell:false,stdio:['ignore','pipe','pipe']});
+ if(result?.error||result?.status!==0)return null;
+ let paths;try{paths=JSON.parse(result.stdout);}catch{return null;}
+ if(!Array.isArray(paths)||paths.some(value=>typeof value!=='string'||!path.win32.isAbsolute(value)))return null;
+ return paths.some(value=>{const relative=path.win32.relative(root,value);return !!relative&&!relative.startsWith('..')&&!path.win32.isAbsolute(relative);});
+}
 
 async function limitedText(response,max){
  const declared=Number(response?.headers?.get?.('content-length'));
@@ -47,9 +58,10 @@ async function limitedText(response,max){
 }
 
 export class RuntimeManager {
- constructor({currentPath='',currentSource=null,platform=process.platform,arch=process.arch,env=process.env,home=os.homedir(),exists=existsSync,discoverDesktop,versionOf,probeVersion,spawnSyncFn,npmCliPath,packageRoot,node=process.execPath,spawnFn,spawn:spawnOption,fetchFn,fetch:fetchOption,fs:fsOptions,operations,rpc,now=Date.now,statusCacheMs=STATUS_CACHE,checkTtlMs=CHECK_TTL,checkTimeoutMs=CHECK_TIMEOUT,maxCheckBytes=CHECK_MAX,stageTimeoutMs,upgradeTimeoutMs,maxStageBytes,maxUpgradeBytes}={}){
+ constructor({currentPath='',currentSource=null,platform=process.platform,arch=process.arch,env=process.env,home=os.homedir(),exists=existsSync,discoverDesktop,versionOf,probeVersion,spawnSyncFn,npmCliPath,packageRoot,node=process.execPath,spawnFn,spawn:spawnOption,fetchFn,fetch:fetchOption,fs:fsOptions,operations,rpc,occupancy,now=Date.now,statusCacheMs=STATUS_CACHE,checkTtlMs=CHECK_TTL,checkTimeoutMs=CHECK_TIMEOUT,maxCheckBytes=CHECK_MAX,stageTimeoutMs,upgradeTimeoutMs,maxStageBytes,maxUpgradeBytes}={}){
   Object.assign(this,{currentPath,currentSource,platform,arch,env,home,exists,discoverDesktop,versionOf,probeVersion,npmCliPath,packageRoot,node,spawnFn:spawnFn||spawnOption||spawn,fetchFn:fetchFn||fetchOption||globalThis.fetch,operations,rpc,now,statusCacheMs,checkTtlMs,checkTimeoutMs,maxCheckBytes,spawnSyncFn});
   this.stageTimeoutMs=stageTimeoutMs??upgradeTimeoutMs??STAGE_TIMEOUT;
+  this.occupancy=occupancy;
   this.maxStageBytes=maxStageBytes??maxUpgradeBytes??STAGE_MAX;
   this.fs={...FILE_SYSTEM,...(fsOptions||{})};
   this.paths=platform==='win32'?path.win32:path.posix;
@@ -110,8 +122,9 @@ export class RuntimeManager {
    }
    const candidates=[this.paths.join(this.paths.dirname(this.node),'node_modules','npm','bin','npm-cli.js')];
    if(this.platform==='win32'&&this.env.APPDATA)candidates.push(this.paths.join(this.env.APPDATA,'npm','node_modules','npm','bin','npm-cli.js'));
+   for(const base of new Set([this.env.ProgramFiles,this.env.ProgramW6432]))if(this.platform==='win32'&&base&&this.paths.isAbsolute(base))candidates.push(this.paths.join(base,'nodejs','node_modules','npm','bin','npm-cli.js'));
    for(const candidate of candidates){
-    if(this.paths.isAbsolute(candidate)&&this.paths.basename(candidate)==='npm-cli.js'&&/node_modules[\\/]npm[\\/]bin[\\/]npm-cli\.js$/i.test(candidate)&&this.exists(candidate))return candidate;
+    if(this.paths.isAbsolute(candidate)&&!this._insideCwd(candidate)&&this.paths.basename(candidate)==='npm-cli.js'&&/node_modules[\\/]npm[\\/]bin[\\/]npm-cli\.js$/i.test(candidate)&&this.exists(candidate))return candidate;
    }
    return null;
   }catch{return null;}
@@ -210,20 +223,21 @@ export class RuntimeManager {
   })();
   return this._checking;
  }
- async upgrade(input,{requestId}={}){
+ async upgrade(input,{requestId,beforeEngineStart=false}={}){
   strictKeys(input,['version','confirmed']);
   if(!stableVersion(input.version))throw fail('升级版本必须是合法的稳定 SemVer','RUNTIME_VERSION_INVALID');
   if(input.confirmed!==true)throw fail('升级需要明确确认','RUNTIME_CONFIRM_REQUIRED');
   if(this.closed)throw fail('运行引擎服务已关闭','RUNTIME_CLOSED');
   if(this.upgrading)throw fail('已有升级正在进行','RUNTIME_UPGRADING');
   if(this.busy({requestId}))throw fail('有运行中的任务、待处理审批或未完成操作，暂不能升级','RUNTIME_BUSY');
+  if(beforeEngineStart&&(this.rpc?.started||this.rpc?.connected||this.currentSource!=='npm'||typeof this.occupancy!=='function'))throw fail('启动前升级无法确认引擎和 npm 安装状态','RUNTIME_BUSY');
   if(!this._latestFresh())throw fail('请先检查更新，且检查结果需在 20 分钟内','RUNTIME_CHECK_STALE');
   if(input.version!==this.latest.version)throw fail('只能升级到最近一次检查到的稳定版本','RUNTIME_VERSION_STALE');
   if(this.platform!=='win32')throw fail('当前平台暂不支持 npm CLI 事务升级','RUNTIME_PLATFORM_UNSUPPORTED');
   this.upgrading=true;this.cancelStage=false;this.swapStarted=false;this.phase='prepare';this.upgradeDiagnostics=[];
   let run;
   run=(async()=>{
-   try{return await this._upgradeTransaction(input.version);}
+   try{return await this._upgradeTransaction(input.version,beforeEngineStart);}
    catch(error){
     if(!error?.outcome)error.outcome=this.swapStarted?'unknown':'notExecuted';
     throw error;
@@ -234,17 +248,20 @@ export class RuntimeManager {
   this.upgradePromise=run;
   return run;
  }
- async _upgradeTransaction(version){
+ async _upgradeTransaction(version,beforeEngineStart){
   const discovery=await this._discovery(true);
   if(this.closed||this.cancelStage)throw fail('暂存安装已取消，现有版本未更改','RUNTIME_STAGE_CANCELLED');
   const npm={...discovery.npm};
   if(!npm.available||!npm.path)throw fail('未发现 npm 安装的 Codex CLI','RUNTIME_NPM_MISSING');
   if(!npm.version)throw fail('无法读取已安装 npm CLI 版本','RUNTIME_NPM_VERSION_UNKNOWN');
   if(compareVersions(npm.version,version)>=0)throw fail('目标版本必须高于已安装的 npm CLI 版本','RUNTIME_VERSION_NOT_NEWER');
-  if(this._samePath(this.currentPath,npm.path))throw fail('当前正在使用 npm 安装的 Codex CLI，不能就地替换；请关闭当前引擎，或改从桌面内置引擎启动后再升级','RUNTIME_IN_USE');
+  const samePath=this._samePath(this.currentPath,npm.path);
+  if(samePath&&!beforeEngineStart)throw fail('当前正在使用 npm 安装的 Codex CLI，不能就地替换；请关闭当前引擎，或改从桌面内置引擎启动后再升级','RUNTIME_IN_USE');
+  if(beforeEngineStart&&!samePath)throw fail('预定启动的 npm 引擎路径已变化','RUNTIME_IN_USE');
   const npmCli=this._npmCli();
   if(!npmCli)throw fail('未找到可信的 npm-cli.js，暂不能升级','RUNTIME_NPM_CLI_MISSING');
   const installed=await this._validateInstalledPackage(npm.path,npm.version);
+  this._assertUnoccupied(installed.packageRoot);
   this.origParent=installed.origParent;
   let stageRoot;
   try{stageRoot=await this.fs.mkdtemp(path.join(os.tmpdir(),'codex-light-runtime-'));}
@@ -253,7 +270,7 @@ export class RuntimeManager {
   let preserveStage=false;
   try{
    if(this.closed||this.cancelStage)throw fail('暂存安装已取消，现有版本未更改','RUNTIME_STAGE_CANCELLED');
-   await this._stageInstall({stageRoot,npmCli,version});
+   await this._stageInstall({stageRoot,npmCli,version,timeoutMs:beforeEngineStart?Math.min(this.stageTimeoutMs,STARTUP_STAGE_TIMEOUT):this.stageTimeoutMs});
    if(this.closed||this.cancelStage)throw fail('暂存安装已取消，现有版本未更改','RUNTIME_STAGE_CANCELLED');
    this.phase='verify';
    const stagedRoot=this.paths.join(stageRoot,'node_modules','@openai','codex');
@@ -268,6 +285,11 @@ export class RuntimeManager {
    }
    try{await this._validatePackage(sibling,version,'暂存包复制验证失败');}
    catch(error){await this._removeOwn(sibling);throw error;}
+   try{
+    if(beforeEngineStart&&this.busy())throw fail('其他操作仍在运行，启动前更新已推迟','RUNTIME_BUSY');
+    if(this._probe(npm.path)!==installed.version)throw fail('全局 npm 安装在检查后发生变化，请重新检查更新','RUNTIME_VERSION_CHANGED');
+    this._assertUnoccupied(installed.packageRoot);
+   }catch(error){await this._removeOwn(sibling);throw error;}
    this.phase='swap';this.swapStarted=true;
    return await this._swapTransaction({packageRoot:installed.packageRoot,origParent:installed.origParent,stagedSibling:sibling,oldVersion:installed.version,targetVersion:version,npmPath:npm.path});
   }catch(error){
@@ -283,11 +305,17 @@ export class RuntimeManager {
    }
   }
  }
- async _stageInstall({stageRoot,npmCli,version}){
+ _assertUnoccupied(root){
+  if(!this.occupancy)return;
+  const occupied=this.occupancy(root);
+  if(occupied===true)throw fail('npm 引擎正在被另一个 Codex 进程使用，请结束该进程后再更新','RUNTIME_EXTERNAL_IN_USE');
+  if(occupied!==false)throw fail('无法核实 npm 引擎的进程占用，未替换安装','RUNTIME_OCCUPATION_UNKNOWN');
+ }
+ async _stageInstall({stageRoot,npmCli,version,timeoutMs}){
   this.phase='stage';
   if(this.closed||this.cancelStage)throw fail('暂存安装已取消，现有版本未更改','RUNTIME_STAGE_CANCELLED');
   const args=[npmCli,'install','--global','--prefix',stageRoot,'--ignore-scripts','--no-audit','--no-fund','--registry=https://registry.npmjs.org',`@openai/codex@${version}`];
-  try{await this._runNpm(stageRoot,args);}
+  try{await this._runNpm(stageRoot,args,timeoutMs);}
   catch(error){
    const wrapped=fail(`暂存安装失败，现有版本未更改：${error?.message||'npm 安装失败'}`,error?.code||'RUNTIME_STAGE_FAILED');
    if(error?.preserveStage)wrapped.preserveStage=true;
@@ -295,7 +323,7 @@ export class RuntimeManager {
    throw wrapped;
   }
  }
- _runNpm(cwd,args){
+ _runNpm(cwd,args,timeoutMs=this.stageTimeoutMs){
   return new Promise((resolve,reject)=>{
    let child;
    try{child=this.spawnFn(this.node,args,{cwd,shell:false,windowsHide:true,stdio:['ignore','pipe','pipe']});}
@@ -345,7 +373,7 @@ export class RuntimeManager {
    child.once('error',error=>{errorEvent=error;finish(null);});
    child.once('close',code=>{childClosed=true;finish(code);});
    child.once('exit',code=>{childClosed=true;finish(code);});
-   this.activeTimer=setTimeout(()=>{if(settled)return;timedOut=true;try{child.kill();}catch{finish(null);return;}this.forceTimer=setTimeout(()=>finish(null,{forced:true}),1000);},this.stageTimeoutMs);
+   this.activeTimer=setTimeout(()=>{if(settled)return;timedOut=true;try{child.kill();}catch{finish(null);return;}this.forceTimer=setTimeout(()=>finish(null,{forced:true}),1000);},timeoutMs);
   });
  }
  async _validateInstalledPackage(npmPath,npmVersion){

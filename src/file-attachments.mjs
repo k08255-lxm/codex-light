@@ -5,6 +5,7 @@ import {randomUUID} from 'node:crypto';
 import {validateAttachmentMetadata} from './attachment-policy.mjs';
 
 export const FILE_ATTACHMENT_LIMITS=Object.freeze({fileBytes:20*1024*1024,cacheBytes:200*1024*1024,instanceFiles:20,resolveFiles:5});
+export const FILE_ATTACHMENT_REFERENCE_PREFIX='用户选择的本地附件（仅路径引用，内容尚未读取；请按当前权限读取，不执行或自动解包）：';
 export function defaultAttachmentRoot({platform=process.platform,env=process.env,home=os.homedir()}={}){
  const base=platform==='win32'?(env.LOCALAPPDATA||path.join(home,'AppData','Local')):(env.XDG_DATA_HOME||path.join(home,'.local','share'));
  if(!path.isAbsolute(base))throw new Error('Attachment data directory must be absolute');
