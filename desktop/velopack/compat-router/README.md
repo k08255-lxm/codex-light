@@ -7,7 +7,8 @@ consent, task protection, backups and installation logic. It starts 0.4.4, whose
 startup check (3 seconds, then 6-hour intervals) notifies about latest; the user
 clicks to install that update. No silent second-stage installation is promised.
 
-Existing Velopack: tell the user to update in-app; do not migrate or downgrade.
+Existing Velopack installations use the external update/repair worker when the
+build enables recovery. Other builds direct the user to the in-app updater.
 Fresh install: read the same-version NewInstall ZIP embedded in the EXE, verify
 its build-pinned SHA256, extract bounded safe members, then open the installer UI.
 Unknown/conflicting inventories fail closed. No automatic retry of uncertain
@@ -49,36 +50,30 @@ legacy MSI migration on a new machine, or real mobile/tray behavior. Rerun
 applicable tests for each new candidate. Temporary candidate
 paths, sizes and hashes from development are not supported download targets.
 
-## Recovery candidate (not release validated)
+## Installation and recovery payloads
 
-`build.ps1 -EnableRecovery` optionally embeds a build-pinned full nupkg and a
-self-contained external BootstrapWorker ZIP. Both resource hashes are reopened
-and compared after compilation and recorded in the build receipt. Without this
-switch, existing-install behavior remains the previous in-app update direction.
-The router uses the existing exact update-cache layout and strict receipt, checks
-worker readiness identity/liveness, asks the user to save work and approve graceful closure,
-then commits and exits only after the exact application processes close safely. The corrected external worker, not the old
-installed worker, validates occupancy and applies the package. It never forces
-termination. Cancel/readiness errors write cancellation markers. MSI and fresh
-routes are unchanged; migration text is shown only after detecting legacy MSI.
+The embedded NewInstall ZIP carries the Windows first-install wizard and its
+Velopack Setup, including the complete desktop application package. The wizard
+runs on .NET Framework 4.8 before .NET 10 is installed. The application files
+can be installed offline when the machine already meets the prerequisites.
+Downloads for missing prerequisites or the legacy MSI bridge need a connection.
 
-2026-11-15 local candidate evidence: complete REPAIR-enabled router compiled with
-zero warnings/errors using deliberately invalid non-release resource fixtures;
-11 readiness/hash/extraction tests, 34 routing tests and 5 layout scales passed.
-No actual updater/installer was launched, no registry was modified. This is not
-an end-to-end clean install or repair validation. Native Restart Manager and a
-real isolated upgrade must pass before enabling this in published artifacts.
-All fixture binaries and router-layout-proof.png are diagnostics, not release
-assets. Recovery resource packing adds runtime size; measure final output before
-shipping. A successful handoff is not an installation-success claim.
+`build.ps1 -EnableRecovery` also embeds an external BootstrapWorker ZIP. The
+helper runs from the migration cache, outside the installation being replaced.
+It uses the existing Microsoft.NETCore.App 10 x64 runtime and includes the
+apphost's license and third-party notices. A missing runtime stops the repair
+before the router requests application shutdown.
 
+During packaging the verifier finds the exact full nupkg bytes inside the
+fresh wizard and the build pins their offset, length and SHA256. Both embedded
+ZIPs are rehashed in the compiled EXE. At repair time the router streams the
+pinned range to a temporary file, verifies its hash, then publishes it into
+the update cache. The external helper independently verifies the full package
+and target before reporting readiness. The separate full nupkg in the public
+release continues to serve in-app updates.
 
-Real-resource follow-up: `-EnableRecovery` was built successfully against the
-verified local 0.4.6 fresh ZIP and full nupkg. The final EXE resources were reopened
-and hashed by the build script; the real fresh archive's six members passed
-Windows extraction/lease checks. The self-contained recovery runtime carries the
-exact restored .NET runtime package's LICENSE and THIRD-PARTY-NOTICES. The full
-real helper ZIP also passed the same locked extraction path, without launching
-it. This proves packaging, not installation. The historical 0.4.6 payload still
-contains the old updater, so this test output must not be released; the final
-higher-version package must contain the corrected installed worker as well.
+The router checks the worker's readiness and identity before requesting consent
+for graceful shutdown. Cancel and readiness errors leave a cancellation marker.
+Use the repair tests with the real helper ZIP, helper hash, NewInstall ZIP,
+package offset, package length and package hash to exercise extraction without
+starting an installer.

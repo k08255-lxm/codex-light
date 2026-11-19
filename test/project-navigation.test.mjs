@@ -131,6 +131,9 @@ test('running feedback has no blue dot; dots only represent explicit unread comp
   view.render({ projects, threads, activeThreadId: 'c', runningThreadIds: new Set(['a1']) });
   const row = find(groups(view.host)[0], 'project-group-thread');
   const marker = find(row, 'thread-unread-indicator');
+  const spinner = find(row, 'thread-running-indicator');
+  assert.equal(spinner.hidden, false);
+  assert.equal(spinner.getAttribute('aria-hidden'), 'true');
   assert.equal(row.classList.contains('running'), true);
   assert.equal(row.classList.contains('active'), false);
   assert.equal(marker.hidden, true);
@@ -138,6 +141,7 @@ test('running feedback has no blue dot; dots only represent explicit unread comp
   view.render({ projects, threads, activeThreadId: 'a1', runningThreadIds: new Set() });
   assert.equal(find(groups(view.host)[0], 'project-group-thread'), row, 'running updates retain the existing row');
   assert.equal(row.classList.contains('running'), false);
+  assert.equal(spinner.hidden, true);
   assert.equal(row.classList.contains('active'), true);
   assert.equal(marker.hidden, true);
   assert.equal(row.getAttribute('aria-label'), 'Alpha thread');

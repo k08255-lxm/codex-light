@@ -6,6 +6,7 @@ export class WslWindowsDshBridge {
  constructor({candidate,wsl,queueDescriptor,bundle=new BundledDshBridge()}={}) {Object.assign(this,{candidate,wsl,bundle,queueDescriptor});this.mode='windows';this.root=bundle.root;}
  bundled(){return this.bundle.bundled();}
  modelStatus(){return this.bundle.modelStatus();}
+ modelCatalog(){return this.bundle.modelCatalog();}
  saveModel(value){return this.bundle.saveModel(value);}
  detect(){return {...this.bundle.detect(),mode:this.mode,workspaceSupport:'windows-drives-only',completionMode:this.queueDescriptor?'local-queue':'dsh_wait',automaticWakeup:!!this.queueDescriptor};}
  async probe(value){

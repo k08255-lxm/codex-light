@@ -211,10 +211,14 @@ test('Android question bridge receives private-free events and uses only an expl
   const controller = createQuestionNotifications({ document, window, host, permissionStatus, permissionButton, openThread() {} });
   await tick();
   assert.equal(prompts, 0); permissionButton.dispatch('click'); await tick(); assert.equal(prompts, 1);
+  controller.sync(rows(request()), {notify:false}); await tick();
+  assert.equal(calls.filter(call => call.operation === 'show').length, 0);
   status = 'ready'; window.dispatchEvent(new Event('codexlight-question-notification-status'));
   assert.equal(permissionButton.hidden, true);
   controller.sync(rows(request())); await tick();
   assert.deepEqual(calls.at(-1), { operation: 'show', id: 'question-1', threadId: 'thread-a', kind: 'question' });
+  window.dispatchEvent(new Event('focus')); await tick();
+  assert.equal(calls.filter(call => call.operation === 'show').length, 1);
   status = 'blocked'; window.dispatchEvent(new Event('focus'));
   permissionButton.dispatch('click'); await tick(); assert.equal(settings, 1);
 });

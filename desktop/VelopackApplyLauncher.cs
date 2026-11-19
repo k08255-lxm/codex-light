@@ -31,6 +31,8 @@ internal static class VelopackApplyLauncher {
   internal async Task WaitForReadyAsync(){
    var deadline=DateTime.UtcNow.AddSeconds(15);string ready=receipt+".ready.json";
    while(DateTime.UtcNow<deadline){
+    // A worker showing its final error stays alive until the user dismisses it.
+    if(File.Exists(receipt+".result.json"))throw new IOException("Update worker reported failure before readiness.");
     if(worker.HasExited)throw new IOException("Update worker exited before readiness.");
     if(File.Exists(ready)){
      Plain(ready);using var input=File.Open(ready,FileMode.Open,FileAccess.Read,FileShare.Read);
@@ -43,7 +45,7 @@ internal static class VelopackApplyLauncher {
    }
    throw new TimeoutException("Update worker readiness timed out.");
   }
-  internal void Commit(){if(disposed||committed||worker.HasExited||File.Exists(receipt+".cancel"))throw new IOException("Update worker is no longer ready.");WriteMarker(receipt+".commit");committed=true;}
+  internal void Commit(){if(disposed||committed||worker.HasExited||File.Exists(receipt+".cancel")||File.Exists(receipt+".result.json"))throw new IOException("Update worker is no longer ready.");WriteMarker(receipt+".commit");committed=true;}
   internal void Cancel(){if(disposed)return;WriteMarker(receipt+".cancel");committed=false;}
   static void WriteMarker(string path){Plain(path);try{using var stream=new FileStream(path,FileMode.CreateNew,FileAccess.Write,FileShare.Read);stream.WriteByte(1);stream.Flush(true);}catch(IOException)when(File.Exists(path)){Plain(path);}}
   public void Dispose(){if(disposed)return;try{if(!committed)Cancel();}finally{disposed=true;worker.Dispose();}}

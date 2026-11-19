@@ -3,6 +3,9 @@
 import fs from 'node:fs';import path from 'node:path';import {fileURLToPath} from 'node:url';import {createHash} from 'node:crypto';
 const root=fileURLToPath(new URL('.',import.meta.url)),hash=value=>createHash('sha256').update(value).digest('hex');
 const lockBytes=fs.readFileSync(path.join(root,'package-lock.json')),lock=JSON.parse(lockBytes),inventory=[];
+const {version,codexLightUpstreamVersion:upstreamVersion}=JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8'));
+if(!/^(\d+\.\d+\.\d+)-light\.\d+$/.test(version)||version.split('-')[0]!==upstreamVersion)throw Error('Invalid CodeCang bridge version or upstream base');
+if(lock.version!==version||lock.packages[''].version!==version)throw Error('Sync the bridge package lock after bumping its version');
 const licenseDir=path.join(root,'licenses');fs.mkdirSync(licenseDir,{recursive:true});
 for(const [relative,record] of Object.entries(lock.packages)){
  if(!relative)continue;
@@ -18,11 +21,11 @@ for(const [relative,record] of Object.entries(lock.packages)){
 inventory.sort((a,b)=>a.name.localeCompare(b.name)||a.version.localeCompare(b.version));
 fs.writeFileSync(path.join(licenseDir,'manifest.json'),JSON.stringify(inventory,null,2)+'\n');
 const adapterFiles=['config.mjs','manager.mjs','server.mjs','provider-sources.mjs'];
-fs.writeFileSync(path.join(root,'src','provider-sources-adapter.json'),JSON.stringify({version:1,bridgeVersion:'0.8.0',files:Object.fromEntries(adapterFiles.map(name=>[name,hash(fs.readFileSync(path.join(root,'src',name)))]))},null,2)+'\n');
+fs.writeFileSync(path.join(root,'src','provider-sources-adapter.json'),JSON.stringify({version:1,bridgeVersion:version,files:Object.fromEntries(adapterFiles.map(name=>[name,hash(fs.readFileSync(path.join(root,'src',name)))]))},null,2)+'\n');
 for(const name of ['LICENSE','assets/DeepSeek-MIT-LICENSE','src/light-entry.mjs','src/probe-desktop.cjs'])if(!fs.statSync(path.join(root,name)).isFile())throw Error('Missing component payload: '+name);
-const manifest={component:'codex-light-dsh-bridge',version:'0.8.0-light.1',entry:'src/light-entry.mjs',dshRuntime:'0.2.2',nodeRuntime:'DSH bundled Node 22.15+ with SQLite',dependencyCount:inventory.length,lockSha256:hash(lockBytes),licenses:'licenses/manifest.json'};
+const manifest={component:'codex-light-dsh-bridge',version,upstreamVersion,entry:'src/light-entry.mjs',dshRuntime:'0.2.2',nodeRuntime:'DSH bundled Node 22.15+ with SQLite',dependencyCount:inventory.length,lockSha256:hash(lockBytes),licenses:'licenses/manifest.json'};
 fs.writeFileSync(path.join(root,'manifest.json'),JSON.stringify(manifest,null,2)+'\n');
-const notice='# Third-party notices\n\nThis component derives from dsh-subagent-mcp 0.8.0 (MIT, DSH Subagent MCP contributors); see LICENSE. The desktop preset overlay derives from DeepSeek DSH (MIT); see assets/DeepSeek-MIT-LICENSE. DSH itself is not distributed.\n\nAll dependency copyright and license notices are preserved under licenses/. Exact versions and notice paths are in licenses/manifest.json.\n\n'+inventory.map(row=>`- ${row.name} ${row.version}: ${row.license}`).join('\n')+'\n';
+const notice=`# Third-party notices\n\nThis component derives from dsh-subagent-mcp ${upstreamVersion} (MIT, DSH Subagent MCP contributors); see LICENSE. The desktop preset overlay derives from DeepSeek DSH (MIT); see assets/DeepSeek-MIT-LICENSE. DSH itself is not distributed.\n\nAll dependency copyright and license notices are preserved under licenses/. Exact versions and notice paths are in licenses/manifest.json.\n\n`+inventory.map(row=>`- ${row.name} ${row.version}: ${row.license}`).join('\n')+'\n';
 fs.writeFileSync(path.join(root,'THIRD-PARTY-NOTICES.md'),notice);
 console.log(JSON.stringify({component:manifest.component,version:manifest.version,dependencies:inventory.length,licensesPreserved:true}));
 

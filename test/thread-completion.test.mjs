@@ -42,6 +42,27 @@ test('a genuine completed notification can arrive without its start after a prev
   state.observe(end('completed','thread','second'));assert.equal(state.unread.has('thread'),true);
 });
 
+test('restored running turns, late previous completions and internal work leave the native counter clear',()=>{
+  const messages=[];
+  const badge=createTaskbarBadge(message=>messages.push(message));
+  const state=createThreadCompletion(badge.setCompleted);
+  badge.setCompleted(0);
+  state.trackActive('conversation','running-after-reconnect');
+  state.observe(end('completed','conversation','old'));
+  for (const internal of [{id:'child',parentThreadId:'conversation'}, {id:'review',source:{subAgent:'review'}}, {id:'helper',ephemeral:true}]) {
+    state.observe({method:'thread/started',params:{thread:internal}});
+    state.observe(start(internal.id));
+    state.observe(end('completed',internal.id));
+  }
+  state.observe({method:'item/completed',params:{threadId:'conversation',item:{type:'subAgentActivity',agentThreadId:'child-after-reconnect'}}});
+  state.observe(end('completed','child-after-reconnect'));
+  assert.deepEqual(messages.map(item=>item.count),[0]);
+  badge.setQuestions(1,true);
+  badge.setQuestions(0,false);
+  state.observe(end('completed','conversation','running-after-reconnect'));
+  assert.deepEqual(messages.map(({count,attention})=>[count,attention]),[[0,false],[1,true],[0,false],[1,false]]);
+});
+
 test('unknown terminal states and invalid identities cannot change completion state',()=>{
   const state=createThreadCompletion();state.observe(start());
   state.observe(end('inProgress'));state.observe(end(undefined,null));state.observe(end('completed','thread',{}));

@@ -24,6 +24,7 @@ test('known scope allows external local images while rejecting arbitrary cwd, re
  const {service,root,outside}=await fixture(t);await fs.writeFile(path.join(outside,'secret.png'),png);await fs.writeFile(path.join(root,'auth.json'),png);
  for(const input of [{cwd:root,path:'auth.json'},{projectId:'unknown',path:'x.png'},{projectId:'project-a',threadId:'x',path:'x.png'},{projectId:'project-a',path:'https://example.invalid/a.png'},{projectId:'project-a',path:'a.png:secret'},{projectId:'project-a',path:'a\0.png'},{projectId:'project-a',path:'auth.json'}])await assert.rejects(service.preview(input),e=>[400,403,415].includes(e.status));
  for(const file of ['../other-project/secret.png',path.join(outside,'secret.png'),pathToFileURL(path.join(outside,'secret.png')).href])assert.deepEqual((await service.preview({projectId:'project-a',path:file})).bytes,png);
+ for(const file of ['../other-project/secret.png',path.join(outside,'secret.png')])await assert.rejects(service.preview({projectId:'project-a',path:file,workspaceOnly:true}),error=>error.code==='ARTIFACT_SCOPE_DENIED');
 });
 
 test('byte MIME and dimension admission rejects renamed text, mismatches, oversized and malformed headers',async t=>{

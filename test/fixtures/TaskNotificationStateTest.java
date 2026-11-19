@@ -38,6 +38,41 @@ public final class TaskNotificationStateTest {
         check(!TaskNotificationState.validState("success") && TaskNotificationState.validState("disconnected"), "explicit state enum");
         check(tasks.update("thread-1", "turn-3", "任务", "invented", 100_004) == null, "invalid state leaves existing task intact");
         check(tasks.entries.get("thread-1") == second, "invalid payload cannot replace state");
+        check(tasks.update("thread-1", "turn-1", "任务一", "running", "tool", 100_005) == null,
+            "replayed phase from a replaced turn cannot take over the current notification");
+        checkPhaseUpdates();
         System.out.println("Task notification state checks passed");
+    }
+
+    private static void checkPhaseUpdates() {
+        TaskNotificationState tasks = new TaskNotificationState();
+        TaskNotificationState.Entry first = tasks.update("one", "a", "一", "running", "thinking", 0);
+        TaskNotificationState.Entry second = tasks.update("two", "b", "二", "running", "tool", 0);
+        TaskNotificationState.Entry third = tasks.update("three", "c", "三", "running", "responding", 0);
+        check("思考中".equals(first.phaseLabel()) && "执行中".equals(second.phaseLabel())
+            && "回复中".equals(third.phaseLabel()), "three concurrent tasks keep independent phases");
+        int id = first.notificationId;
+        first.postedAt = 0;
+        tasks.update("one", "a", "一", "running", "thinking", 1000);
+        check(!first.needsPost(1000) && first.updatedAt == 1000, "duplicate phase only renews local freshness");
+        tasks.update("one", "a", "一", "running", 2000);
+        check("思考中".equals(first.phaseLabel()) && !first.needsPost(2000), "old clients can send phase-free heartbeats");
+        check(first.needsPost(TaskNotificationState.RENEW_AFTER_MS), "system timeout is renewed periodically");
+        tasks.update("one", "a", "一", "waiting", "approval", 3000);
+        check(first.needsPost(3000) && "等待审批".equals(first.phaseLabel()) && first.notificationId == id,
+            "approval replaces this task's running card without creating a second card");
+        tasks.update("one", "a", "一", "waiting", "question", 4000);
+        check("等待回答".equals(first.phaseLabel()), "question phase replaces approval text");
+        first.disconnect(5000);
+        check(first.phase == null && !first.active(), "disconnect clears old live activity");
+        tasks.update("one", "a", "一", "running", "responding", 6000);
+        check("回复中".equals(first.phaseLabel()) && first.active(), "fresh live state restores the same card");
+        check(tasks.update("one", "a", "一", "waiting", "thinking", 7000) == null,
+            "running phases cannot be applied to a waiting card");
+        check(tasks.update("one", "a", "一", "running", "arbitrary command", 7000) == null,
+            "free text cannot enter a phase label");
+        tasks.update("one", "a", "一", "completed", 8000);
+        first.postedAt = 8000;
+        check(first.phase == null && !first.needsPost(90000), "completed card drops the ongoing phase and never renews");
     }
 }

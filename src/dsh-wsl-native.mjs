@@ -29,8 +29,10 @@ export class WslNativeDshBridge {
   const bundled=await this.bundled();if(!bundled.available||!bundled.dependenciesReady)throw fail('Bundled DSH verification failed','DSH_COMPONENT_UNAVAILABLE');
   // WslRuntime strips host-origin credentials before invoking WSL. Do not unset
   // variables inside Linux: that would erase the selected user's own environment.
-  const args=['--distribution',this.candidate.distribution,'--user',this.candidate.user,'--cd',this.candidate.home,'--exec','/bin/sh','-lc',DISCOVER,'codecang-dsh',this.candidate.nodeDirectory||'',helper,action,executablePath,expected?JSON.stringify(expected):''];
-  let output;try{output=await this.runtime.invoke(args);}catch(error){if(typeof error.stdout==='string'&&error.stdout.length<128*1024)output=error.stdout;else throw fail('Cannot probe Linux Node/DSH in the selected WSL distribution');}
+  const catalog = action==='model-status';
+  const args=['--distribution',this.candidate.distribution,'--user',this.candidate.user,'--cd',this.candidate.home,'--exec','/bin/sh','-lc',DISCOVER,'codecang-dsh',this.candidate.nodeDirectory||'',...(catalog?['--conditions=import']:[]),helper,action,executablePath,expected?JSON.stringify(expected):''];
+  const maxBuffer=(catalog?2048:128)*1024;
+  let output;try{output=await this.runtime.invoke(args,{maxBuffer});}catch(error){if(typeof error.stdout==='string'&&error.stdout.length<maxBuffer)output=error.stdout;else throw fail('Cannot probe Linux Node/DSH in the selected WSL distribution');}
   let result;try{result=JSON.parse(String(output).trim());}catch{throw fail('Cannot probe Linux Node/DSH in the selected WSL distribution');}
   if(!result.ok)throw fail(result.message||'Linux DSH unavailable',result.code);
   return result;

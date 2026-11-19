@@ -1,7 +1,9 @@
 import {createRequire} from 'node:module';
 import {verifyDshBundle} from './dsh-bundle-integrity.mjs';
+import {ProviderSources} from './dsh-provider-sources.mjs';
+import {promisify} from 'node:util';
 import fs from 'node:fs';import path from 'node:path';import os from 'node:os';
-import {spawnSync} from 'node:child_process';import {randomUUID} from 'node:crypto';import {fileURLToPath} from 'node:url';
+import {execFile,spawnSync} from 'node:child_process';import {randomUUID} from 'node:crypto';import {fileURLToPath} from 'node:url';
 const plain=value=>!!value&&typeof value==='object'&&!Array.isArray(value);
 const error=(code,message,status=400,outcome='notExecuted')=>Object.assign(new Error(message),{code,status,outcome});
 const strict=(input,allowed)=>{if(!plain(input)||Object.keys(input).some(key=>!allowed.includes(key)))throw error('INVALID_INPUT','DSH 连接参数无效');};
@@ -9,13 +11,44 @@ const json=file=>{const stat=fs.statSync(file);if(!stat.isFile()||stat.size>128*
 const managed=new Set(['mdm','system','enterpriseManaged','legacyManagedConfigTomlFromFile','legacyManagedConfigTomlFromMdm']);
 const SERVER='dsh_subagent',PROFILE='codex-light-bridge';
 const modelSettings=()=>import('../components/dsh-bridge/src/model-defaults.mjs').catch(()=>{throw error('DSH_COMPONENT_UNAVAILABLE','随包 DSH 桥缺少模型设置组件',503);});
+const runCatalog = promisify(execFile);
 
 /** File-only discovery is cheap and optional. Probe/prepare run only after an explicit connection action. */
 export class BundledDshBridge {
  async modelStatus(){return (await modelSettings()).readModelDefaults(this.configDir);}
  async saveModel(value){return (await modelSettings()).saveModelDefaults(this.configDir,value);}
  async dismissModelReminder(){return (await modelSettings()).dismissModelReminder(this.configDir);}
- constructor({componentRoot=fileURLToPath(new URL('../components/dsh-bridge/',import.meta.url)),env=process.env,home=os.homedir(),stateRoot,spawnSyncFn=spawnSync}={}){this.root=path.resolve(componentRoot);this.env=env;this.home=home;this.dshHome=env.DSH_HOME&&path.isAbsolute(env.DSH_HOME)?env.DSH_HOME:path.join(home,'.dsh');this.stateRoot=stateRoot||(process.platform==='win32'?path.join(env.LOCALAPPDATA||path.join(home,'AppData','Local'),'CodexLight','dsh'):path.join(env.XDG_DATA_HOME||path.join(home,'.local','share'),'codex-light','dsh'));this.configDir=path.join(this.stateRoot,'config');this.stateDir=path.join(this.stateRoot,'state');this.spawnSync=spawnSyncFn;}
+ constructor({componentRoot=fileURLToPath(new URL('../components/dsh-bridge/',import.meta.url)),env=process.env,home=os.homedir(),stateRoot,spawnSyncFn=spawnSync,runCatalogFn=runCatalog}={}){this.root=path.resolve(componentRoot);this.env=env;this.home=home;this.dshHome=env.DSH_HOME&&path.isAbsolute(env.DSH_HOME)?env.DSH_HOME:path.join(home,'.dsh');this.stateRoot=stateRoot||(process.platform==='win32'?path.join(env.LOCALAPPDATA||path.join(home,'AppData','Local'),'CodexLight','dsh'):path.join(env.XDG_DATA_HOME||path.join(home,'.local','share'),'codex-light','dsh'));this.configDir=path.join(this.stateRoot,'config');this.stateDir=path.join(this.stateRoot,'state');this.spawnSync=spawnSyncFn;this.runCatalog=runCatalogFn;}
+ async modelCatalog(){
+  const {modelChoices}=await modelSettings();
+  let providers={},catalog={},catalogError=null,installation=null;
+  const file=path.join(this.configDir,'installation.json');
+  if(fs.existsSync(file)){
+   try{const installed=json(file);if(installed.owner==='codex-light'&&installed.root===this.root)installation=installed;}catch{}
+  }
+  try{
+   const sources=new ProviderSources({configDir:this.configDir,stateDir:this.stateDir,home:this.dshHome});
+   providers=sources.modelProviders();
+  }catch{
+   catalogError='无法读取已启用的 DSH 模型来源。请检查下方配置。';
+  }
+  const executable=this.executable(installation?.node)??this.detect().executablePath;
+  if(executable&&this.bundled().available){
+   try{
+    const providerIds=Object.keys(providers).filter(id=>!providers[id].models?.length);
+    const env={SystemRoot:process.env.SystemRoot,ELECTRON_RUN_AS_NODE:'1'};
+    const args=['--expose-internals','--conditions=import',path.join(this.root,'src','model-catalog.mjs'),JSON.stringify(providerIds)];
+    const {stdout}=await this.runCatalog(executable,args,{env,windowsHide:true,timeout:8000,maxBuffer:1024*1024});
+    const installed=JSON.parse(stdout);
+    if(!plain(installed))throw new Error('Invalid DSH model catalog');
+    catalog=installed;
+    catalogError??=catalog.error??null;
+   }catch{
+    catalogError??='无法读取已安装 DSH 的模型目录。';
+   }
+  }
+  return {models:modelChoices(providers,{catalog}),catalogError};
+ }
  bundled(){
   try {
    const manifest=json(path.join(this.root,'manifest.json'));
@@ -49,7 +82,9 @@ export class DshConnectionService {
  async modelStatus(input={}) {
   strict(input,['mode']);
   if(this.demo)return {available:false};
-  return {available:true,...await this.selectBundle(input.mode).modelStatus()};
+  const bundle=this.selectBundle(input.mode);
+  const [settings,catalog]=await Promise.all([bundle.modelStatus(),bundle.modelCatalog?.()]);
+  return {available:true,...settings,...catalog};
  }
  async saveModel(input={}) {
   strict(input,['mode','selection']);
@@ -70,7 +105,26 @@ export class DshConnectionService {
  constructor({rpc,bundle=new BundledDshBridge(),bundles=null,callbackStatus=()=>null,clock=()=>Date.now(),demo=false}={}){this.rpc=rpc;this.bundle=bundle;this.bundles=bundles;this.callbackStatus=callbackStatus;this.clock=clock;this.demo=demo;this.plans=new Map();this.pending=false;}
  selectBundle(mode){if(!this.bundles){if(mode!==undefined)throw error('INVALID_INPUT','Bridge mode is only available with WSL');return this.bundle;}if(typeof mode!=='string'||!Object.hasOwn(this.bundles,mode))throw error('DSH_MODE_REQUIRED','Select the Windows or WSL DSH bridge explicitly');return this.bundles[mode];}
  async read(){let result;try{result=await this.rpc.call('config/read',{includeLayers:true});}catch{throw error('CODEX_CONFIG_UNAVAILABLE','无法读取 Codex MCP 配置',503);}if(!plain(result?.config))throw error('CODEX_CONFIG_UNAVAILABLE','无法读取 Codex MCP 配置',503);const user=result.layers?.find(layer=>layer?.name?.type==='user'),table=result.config.mcp_servers,exists=plain(table)&&Object.hasOwn(table,SERVER),value=exists?table[SERVER]:null,origin=result.origins?.['mcp_servers.'+SERVER]?.name?.type;return {exists,value,version:user?.version,writable:typeof user?.version==='string'&&user.version.length>0&&user.disabledReason==null&&!managed.has(origin)};}
- async runtime(){try{let cursor;for(let page=0;page<8;page++){const result=await this.rpc.call('mcpServerStatus/list',{detail:'toolsAndAuthOnly',limit:100,...(cursor?{cursor}:{})});const row=result.data?.find(row=>row.name===SERVER);if(row)return {state:['notStarted','starting','connected','authenticationRequired','failed','cancelled','disabled'].includes(row.runtimeStatus)?row.runtimeStatus:null};if(!result.nextCursor)break;if(result.nextCursor===cursor)break;cursor=result.nextCursor;}}catch{}return {state:null};}
+ async runtime(){
+  try{
+   let cursor;
+   for(let page=0;page<8;page++){
+    const result=await this.rpc.call('mcpServerStatus/list',{detail:'toolsAndAuthOnly',limit:100,...(cursor?{cursor}:{})});
+    const row=result.data?.find(row=>row.name===SERVER);
+    if(row){
+     const state=['notStarted','starting','connected','authenticationRequired','failed','cancelled','disabled'].includes(row.runtimeStatus)?row.runtimeStatus:null;
+     const version=row.serverInfo?.version;
+     if(state!=='connected'||typeof version!=='string'||!version.length||version.length>128||/[\x00-\x1f\x7f]/.test(version))return {state};
+     // Older daemons re-read the on-disk package at handshake time, even after an in-place upgrade.
+     const loadedVersion=row.serverCapabilities?.experimental?.codecangBridge?.version;
+     return {state,reportedVersion:version,loadedVersion:loadedVersion===version?version:null};
+    }
+    if(!result.nextCursor||result.nextCursor===cursor)break;
+    cursor=result.nextCursor;
+   }
+  }catch{}
+  return {state:null};
+ }
  async status(input={}){strict(input,['mode']);if(this.bundles&&input.mode===undefined)return {selectionRequired:true,modes:Object.keys(this.bundles),canConnect:false};const bundle=this.selectBundle(input.mode),bundled=await bundle.bundled(),dsh=await bundle.detect(),capabilities=await bundle.capabilities?.()??null;if(this.demo)return {bundled,dsh:{installed:false,executablePath:null},registration:{state:'none',serverName:SERVER},runtime:{state:null},canConnect:false,error:{code:'DSH_DEMO_DISABLED',message:'演示模式不读取或修改真实 DSH 连接'}};try{const config=await this.read(),state=config.exists?(await bundle.owns(config.value)?'bundled':'external'):'none';return {mode:input.mode,capabilities,callbackStatus:this.callbackStatus(),bundled,dsh,registration:{state,serverName:SERVER},runtime:config.exists?await this.runtime():{state:null},canConnect:bundled.available&&bundled.dependenciesReady&&config.writable&&!config.exists,error:null};}catch{return {mode:input.mode,capabilities,callbackStatus:this.callbackStatus(),bundled,dsh,registration:{state:'unknown',serverName:SERVER},runtime:{state:null},canConnect:false,error:{code:'CODEX_CONFIG_UNAVAILABLE',message:'无法读取 Codex MCP 配置，普通聊天不受影响'}};}}
  async plan(input={}){strict(input,['executablePath','mode']);const bundle=this.selectBundle(input.mode);if(this.demo)throw error('DSH_DEMO_DISABLED','演示模式不注册 MCP');const bundled=await bundle.bundled();if(!bundled.available||!bundled.dependenciesReady)throw error('DSH_COMPONENT_UNAVAILABLE','随包 DSH 桥或依赖未就绪',503);const config=await this.read();if(config.exists)throw error('MCP_ALREADY_CONFIGURED','已存在 DSH MCP 配置，已保留，不会覆盖',409);if(!config.writable)throw error('CODEX_CONFIG_READONLY','Codex 用户配置不可写',409);const candidate=input.executablePath??(await bundle.detect()).executablePath,probe=await bundle.probe(candidate),id=randomUUID(),expiresAt=this.clock()+300000;for(const [key,plan] of this.plans)if(plan.expiresAt<this.clock())this.plans.delete(key);if(this.plans.size>=8)throw error('TOO_MANY_PLANS','已有过多连接计划，请稍后再试',429);this.plans.set(id,{mode:input.mode,version:config.version,probe,expiresAt,state:'prepared'});return {planId:id,mode:input.mode,capabilities:await bundle.capabilities?.()??null,expiresAt,serverName:SERVER,dsh:{executablePath:probe.executablePath,version:probe.version},scope:'user',preservesExisting:true};}
  async connect(input){strict(input,['planId','confirmed']);if(input.confirmed!==true||typeof input.planId!=='string')throw error('CONFIRMATION_REQUIRED','请明确确认连接操作');const plan=this.plans.get(input.planId);if(!plan||plan.expiresAt<this.clock())throw error('PLAN_EXPIRED','连接计划已失效，请重新检查',409);if(plan.state!=='prepared')throw error('CONNECTION_ALREADY_ATTEMPTED','连接已处理或结果待核对，请刷新状态，不要重发',409);if(this.pending)throw error('CONNECTION_BUSY','已有 DSH 连接操作正在处理',409);this.pending=true;const bundle=this.selectBundle(plan.mode);let writeStarted=false;try{const fresh=await this.read();if(fresh.exists)throw error('MCP_ALREADY_CONFIGURED','已有 DSH MCP 配置，已保留，不会覆盖',409);if(!fresh.writable||fresh.version!==plan.version)throw error('REVISION_CONFLICT','Codex 配置已变化，请重新检查连接',409);const bundled=await bundle.bundled();if(!bundled.available||!bundled.dependenciesReady)throw error('DSH_COMPONENT_UNAVAILABLE','Bundled DSH component verification failed',503);await bundle.prepare(plan.probe);plan.state='attempted';writeStarted=true;const written=await this.rpc.call('config/batchWrite',{edits:[{keyPath:'mcp_servers.'+SERVER,value:await bundle.registration(plan.probe.executablePath,plan.probe),mergeStrategy:'replace'}],expectedVersion:fresh.version,reloadUserConfig:false});if(!['ok','okOverridden'].includes(written?.status))throw Error('unknown write status');if(written.status==='okOverridden')return {registered:true,registration:{state:'unknown',serverName:SERVER},reload:{queued:false,error:{code:'MCP_CONFIG_OVERRIDDEN',message:'用户配置已写入，但被更高优先级配置覆盖'}},runtime:{state:null},warning:'已保存但未生效，请检查 Codex 管理配置'};let queued=false;try{await this.rpc.call('config/mcpServer/reload');queued=true;}catch{}return {registered:true,registration:{state:'bundled',serverName:SERVER},reload:{queued,error:queued?null:{code:'MCP_RELOAD_PENDING',message:'已注册；此客户端暂未完成 MCP 刷新，请重新打开会话'}},runtime:{state:null},warning:queued?null:'配置已写入，尚未确认运行时连接'};}catch(e){if(writeStarted)throw error('CONNECTION_OUTCOME_UNKNOWN','配置写入结果需核对，请刷新连接状态，不要自动重发',500,'unknown');throw e;}finally{this.pending=false;}}

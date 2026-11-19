@@ -9,6 +9,19 @@ function fixture(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'dsh-sources
 test('source discovery and status are metadata-only; no tool tree or credentials projected',t=>{const f=fixture(t),status=f.manager.status();assert.equal(status.available,true);assert.equal(status.activation.state,'pendingRestart');assert.equal(status.sources[0].providers[0].id,'synthetic');const output=JSON.stringify(status);assert.ok(!output.includes('DO_NOT_IMPORT'));assert.ok(!output.includes('SYNTHETIC_API_KEY'));assert.equal(status.validation,'provider-import-schema');});
 test('auto-follow refreshes new immutable runtime config, previous runtime patch stays stable',t=>{const f=fixture(t),first=f.manager.prepare(f.config),bytes=fs.readFileSync(first.patch,'utf8');f.write(doc('anthropic-messages'));const second=f.manager.prepare(f.config);assert.notEqual(first.patch,second.patch);assert.notEqual(first.providerRevision,second.providerRevision);assert.equal(fs.readFileSync(first.patch,'utf8'),bytes);assert.match(fs.readFileSync(second.patch,'utf8'),/anthropic-messages/);assert.ok(!bytes.includes('DO_NOT_IMPORT'));});
 test('normal builtin-only desktop profile works without any llm-pi-ai declaration',t=>{const f=fixture(t);f.write([]);const prepared=f.manager.prepare(f.config);assert.equal(fs.readFileSync(prepared.patch,'utf8'),'- id: base\n');assert.equal(f.manager.status().effective.mode,'builtin');assert.equal(f.manager.status().effective.providerCount,0);assert.equal(f.manager.status().error,null);});
+test('model picker reads active sources and frozen snapshots without writing configuration',t=>{
+ const f=fixture(t),value=doc();
+ delete value[1].name;f.write(value);
+ assert.equal(f.manager.modelProviders().synthetic.models[0].id,'synthetic-model');
+ assert.equal(fs.existsSync(f.configDir),false);
+ assert.deepEqual(fs.readdirSync(f.stateDir).sort(),['base.yml','legacy.yml']);
+ f.manager.configure({sourceIds:['default'],autoFollow:false,expectedRevision:f.manager.status().revision});
+ value[1].config.providers.synthetic.models[0].id='updated';
+ f.write(value);
+ assert.equal(f.manager.modelProviders().synthetic.models[0].id,'synthetic-model');
+ f.manager.refresh();
+ assert.equal(f.manager.modelProviders().synthetic.models[0].id,'updated');
+});
 test('fresh standard desktop source can be absent, but explicitly selected missing source still fails',t=>{const f=fixture(t);fs.unlinkSync(f.source);assert.deepEqual(f.manager.status().selectedSourceIds,[]);assert.equal(f.manager.status().error,null);assert.equal(fs.readFileSync(f.manager.prepare(f.config).patch,'utf8'),'- id: base\n');assert.throws(()=>f.manager.configure({sourceIds:['default'],autoFollow:true,expectedRevision:f.manager.status().revision}),{code:'ENOENT'});});
 test('explicit zero imports and empty provider map preserve builtin provider support',t=>{const f=fixture(t);let value=doc();value[1].config.providers={};f.write(value);let state=f.manager.refresh();assert.equal(state.effective.mode,'builtin');f.manager.configure({sourceIds:[],autoFollow:true,expectedRevision:state.revision});f.write({invalid:'not-cordis'});assert.equal(f.manager.status().error,null);assert.equal(fs.readFileSync(f.manager.prepare(f.config).patch,'utf8'),'- id: base\n');});
 test('manual mode freezes bytes and reports drift until explicit refresh',t=>{const f=fixture(t);f.manager.configure({sourceIds:['default'],autoFollow:false,expectedRevision:f.manager.status().revision});const first=f.manager.prepare(f.config);f.write(doc('anthropic-messages'));assert.equal(f.manager.status().drift,true);assert.equal(f.manager.prepare(f.config).providerRevision,first.providerRevision);f.manager.refresh();assert.notEqual(f.manager.prepare(f.config).providerRevision,first.providerRevision);assert.equal(f.manager.status().drift,false);});

@@ -5,33 +5,43 @@ import android.app.Notification;
 import android.app.NotificationManager;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
-import android.net.Uri;
+import android.os.Build;
 import android.provider.Settings;
 
-/** Public API 36 methods, looked up to preserve the offline API 34 build. */
+/** Only called on API 36 and above. */
 final class AndroidLiveUpdates {
-    private static final String SETTINGS_ACTION = "android.settings.APP_NOTIFICATION_PROMOTION_SETTINGS";
-    private static final int PROMOTED_FLAG = 0x00040000;
-
     private AndroidLiveUpdates() {}
 
     static boolean isAllowed(NotificationManager manager) {
-        return callBoolean(NotificationManager.class, manager, "canPostPromotedNotifications");
+        return manager.canPostPromotedNotifications();
     }
 
     static boolean isEligible(Notification notification) {
-        return callBoolean(Notification.class, notification, "hasPromotableCharacteristics");
+        return notification.hasPromotableCharacteristics();
     }
 
-    static boolean isPromoted(Notification notification) { return (notification.flags & PROMOTED_FLAG) != 0; }
+    static boolean isPromoted(Notification notification) {
+        return (notification.flags & Notification.FLAG_PROMOTED_ONGOING) != 0;
+    }
 
-    private static boolean callBoolean(Class<?> type, Object target, String method) {
-        try { return Boolean.TRUE.equals(type.getMethod(method).invoke(target)); }
-        catch (ReflectiveOperationException | SecurityException unavailable) { return false; }
+    static Notification buildRunning(Notification.Builder builder, String phaseLabel) {
+        builder.setStyle(new Notification.ProgressStyle().setProgressIndeterminate(true))
+            .setShortCriticalText(phaseLabel);
+        // The public extra was named in SDK 36.1. It can also be supplied on 36.0.
+        builder.getExtras().putBoolean("android.requestPromotedOngoing", true);
+        Notification notification = builder.build();
+        if (Build.VERSION.SDK_INT == 36 && !isEligible(notification)) {
+            // Android 16's initial release required colorization. Later builds reject it.
+            // Use the legacy version only when this device's eligibility check accepts it.
+            Notification legacy = notification.clone();
+            legacy.extras.putBoolean(Notification.EXTRA_COLORIZED, true);
+            if (isEligible(legacy)) return legacy;
+        }
+        return notification;
     }
 
     static boolean openSettings(Activity activity) {
-        Intent intent = new Intent(SETTINGS_ACTION, Uri.parse("package:" + activity.getPackageName()))
+        Intent intent = new Intent(Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS)
             .putExtra(Settings.EXTRA_APP_PACKAGE, activity.getPackageName());
         try { activity.startActivity(intent); return true; }
         catch (ActivityNotFoundException | SecurityException unavailable) { return false; }

@@ -210,7 +210,10 @@ export class ItemStore {
     }
     return item;
   }
-  upsert(item, { append = null } = {}) {
+  trimWindow() {
+    while (this.items.size > this.limit) { this.forget(this.items.keys().next().value); this.trimmed = true; }
+  }
+  upsert(item, { append = null, deferTrim = false } = {}) {
     if (!item?.id) return;
     item=this.reconcileUserEcho(item);if(!item)return;
     const extracted = extractImageContent(item);
@@ -267,18 +270,50 @@ export class ItemStore {
     if (Object.keys(released).length) { merged._released = released; merged._bodyReleased = true; }
     else { delete merged._released; delete merged._bodyReleased; }
     this.items.set(item.id, merged); this.dirty.add(item.id); this.setTextSize(item.id, bodySize(merged));
-    while (this.items.size > this.limit) { this.forget(this.items.keys().next().value); this.trimmed = true; }
+    if (!deferTrim) this.trimWindow();
     if (!this.preserveBodies && this.textChars > TEXT_LIMITS.total) this.releaseBodies(item.id);
   }
-  /** Add an older page without overwriting newer event/delta state or pooled images. */
-  prependHistory(items) {
-    const existing = new Map(this.items);
-    for (const item of items) if (item?.id && !this.items.has(item.id)) this.upsert(item);
+  /** Merge a chronological native page with items already displayed or received while it was loading. */
+  mergeHistory(items, {before = null, refresh = false} = {}) {
+    if (!items.length) return;
+    const existingIds = [...this.items.keys()];
+    const pageIds = new Set();
+    for (const item of items) {
+      if (!item?.id) continue;
+      pageIds.add(item.id);
+      const current = this.items.get(item.id);
+      // A delta or completed event that raced this request owns the displayed body and image pool.
+      if (!current || before?.get(item.id) === current) this.upsert(item, {deferTrim:true});
+      else if (!current._turnId && item._turnId) {
+        // A delta can arrive without its turn ID. The native record still supplies its identity.
+        this.items.set(item.id,{...current,_turnId:item._turnId});
+        this.dirty.add(item.id);
+      }
+    }
+    // Place store-only rows immediately before their next shared item, or after the page.
+    // An already-loaded prefix outside a refreshing newest page belongs before that page.
+    const prefix = [], gaps = new Map();
+    let next = null;
+    const firstShared = existingIds.findIndex(id => pageIds.has(id));
+    for (let i = existingIds.length - 1; i >= 0; i--) {
+      const id = existingIds[i];
+      if (pageIds.has(id)) { next = id; continue; }
+      if (refresh && (firstShared < 0 || i < firstShared) && before?.has(id)) {
+        prefix.push(id);
+      } else {
+        if (!gaps.has(next)) gaps.set(next, []);
+        gaps.get(next).push(id);
+      }
+    }
     const ordered = new Map();
-    for (const item of items) if (item?.id && !existing.has(item.id) && this.items.has(item.id)) ordered.set(item.id, this.items.get(item.id));
-    for (const id of existing.keys()) if (this.items.has(id)) ordered.set(id, this.items.get(id));
+    const add = id => { if (this.items.has(id)) ordered.set(id, this.items.get(id)); };
+    prefix.reverse().forEach(add);
+    for (const id of pageIds) { gaps.get(id)?.reverse().forEach(add); add(id); }
+    gaps.get(null)?.reverse().forEach(add);
     this.items = ordered;
+    this.trimWindow();
   }
+  prependHistory(items) { this.mergeHistory(items); }
   /** Removes one item from the window (e.g. a local echo replaced by the server copy). */
   delete(id) { this.forget(id); }
   /**

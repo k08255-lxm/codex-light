@@ -1,10 +1,27 @@
 using System.Buffers.Binary;
+using System.IO.Compression;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Security.Cryptography;
 
 try
 {
+    // The fresh install wrapper embeds the native Setup, which contains the full nupkg.
+    // Derive the range from exact bytes for this build instead of relying on a PE layout.
+    if (args.Length == 3 && args[0] == "--package-offset")
+    {
+        using var archive = ZipFile.OpenRead(args[1]);
+        var installer = archive.Entries.Single(entry => entry.FullName == "CodexLight-Install.exe");
+        var package = new FileInfo(args[2]);
+        if (package.Length <= 0 || package.Length > installer.Length || installer.Length > 300L * 1024 * 1024)
+            throw new InvalidDataException("Unexpected installer or package size");
+        var bytes = new byte[(int)installer.Length];
+        using (var stream = installer.Open()) stream.ReadExactly(bytes);
+        int start = bytes.AsSpan().IndexOf(File.ReadAllBytes(package.FullName));
+        if (start < 0) throw new InvalidDataException("Fresh installer does not embed the exact repair package");
+        Console.WriteLine(start);
+        return 0;
+    }
     if (args.Length < 3 || args.Length % 2 != 1)
         throw new ArgumentException("Usage: ResourceVerify EXE RESOURCE SHA256 [RESOURCE SHA256 ...]");
     var expected = new Dictionary<string, byte[]>(StringComparer.Ordinal);

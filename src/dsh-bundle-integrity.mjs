@@ -37,6 +37,8 @@ export function verifyDshBundle(root){
  const json=name=>JSON.parse(fs.readFileSync(path.join(root,name),'utf8'));
  const adapter=json('src/provider-sources-adapter.json');if(adapter.version!==1||['config.mjs','manager.mjs','server.mjs','provider-sources.mjs'].some(name=>adapter.files?.[name]!==actual['src/'+name]))throw Error('Bundle adapter hash mismatch');
  const lock=json('package-lock.json'),licenses=json('licenses/manifest.json');
+ const pkg=json('package.json');
+ if(pkg.codexLightUpstreamVersion!==undefined&&(m.upstreamVersion!==pkg.codexLightUpstreamVersion||m.version!==pkg.version||adapter.bridgeVersion!==pkg.version||lock.version!==pkg.version||lock.packages['']?.version!==pkg.version))throw Error('Bundle bridge version mismatch');
  let packages=Object.entries(lock.packages||{}).filter(([name])=>name);
  if(m.distributedPackages!==undefined){if(!texts||!plain(m.distributedPackages)||!Object.keys(m.distributedPackages).length||Object.entries(m.distributedPackages).some(([n,v])=>!safeBundlePath(n)||!n.startsWith('node_modules/')||lock.packages?.[n]?.version!==v)||!Object.hasOwn(m.distributedPackages,'node_modules/yaml'))throw Error('Invalid distributed package inventory');packages=packages.filter(([n])=>Object.hasOwn(m.distributedPackages,n));}
  if(m.dependencyCount!==packages.length||!Array.isArray(licenses)||licenses.length!==packages.length)throw Error('Bundle license inventory incomplete');

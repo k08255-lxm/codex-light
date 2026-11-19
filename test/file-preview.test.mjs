@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import {pathToFileURL} from 'node:url';
-import {FilePreviewService, FILE_PREVIEW_LIMITS} from '../src/file-preview.mjs';
+import {FilePreviewService, FILE_PREVIEW_LIMITS, FILE_DOWNLOAD_LIMIT} from '../src/file-preview.mjs';
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jF1sAAAAASUVORK5CYII=', 'base64');
 async function fixture(t) {
@@ -61,14 +61,15 @@ test('selected WSL accepts paths across directories and dot segments but never a
   assert.equal(touched, false); await service.close();
 });
 
-test('UTF-16 with BOM and empty text are readable while invalid UTF-8 and binary data are explicit errors', async t => {
+test('UTF-16 and empty text are readable; other encodings and binary files offer an exact download', async t => {
   const {service, root} = await fixture(t);
   await fs.writeFile(path.join(root, 'utf16.txt'), Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('中文\nnext', 'utf16le')]));
   assert.equal((await service.preview({threadId: 'thread', path: 'utf16.txt'})).text, '中文\nnext');
   await fs.writeFile(path.join(root, 'empty.txt'), ''); assert.equal((await service.preview({threadId: 'thread', path: 'empty.txt'})).text, '');
   for (const [name, bytes] of [['binary.bin', Buffer.from([0, 1, 2])], ['invalid.txt', Buffer.from([0xff, 0xee])]]) {
     await fs.writeFile(path.join(root, name), bytes);
-    await assert.rejects(service.preview({threadId: 'thread', path: name}), error => error.status === 415);
+    assert.equal((await service.preview({threadId: 'thread', path: name})).kind, 'download');
+    assert.deepEqual((await service.download({threadId: 'thread', path: name})).bytes, bytes);
   }
 });
 
@@ -87,12 +88,24 @@ test('large text is bounded and large line counts select a bounded window around
   assert.equal(result.text.split('\n').length, FILE_PREVIEW_LIMITS.lines); assert.equal(result.startLine, 3000); assert.equal(result.totalLines, 7000); assert.equal(result.truncated, true); assert.ok(result.text.includes('line 3500\n'));
   const last = await service.preview({threadId: 'thread', path: 'many.txt', line: 99999}); assert.equal(last.line, 7000); assert.equal(last.startLine, 5001); assert.ok(last.text.endsWith('line 7000'));
   await fs.writeFile(path.join(root, 'large.txt'), Buffer.alloc(FILE_PREVIEW_LIMITS.bytes + 1, 65));
-  await assert.rejects(service.preview({threadId: 'thread', path: 'large.txt'}), error => error.code === 'FILE_PREVIEW_SIZE_LIMIT');
+  assert.equal((await service.preview({threadId: 'thread', path: 'large.txt'})).kind, 'download');
+  await fs.truncate(path.join(root, 'large.txt'), FILE_DOWNLOAD_LIMIT + 1);
+  for (const method of ['preview','download']) await assert.rejects(service[method]({threadId:'thread',path:'large.txt'}), {code:'FILE_PREVIEW_SIZE_LIMIT'});
 });
 
-test('directories and missing files produce distinguishable messages', async t => {
+test('project directories list navigable children while missing files and external roots are refused', async t => {
   const {service, root} = await fixture(t); await fs.mkdir(path.join(root, 'folder'));
-  await assert.rejects(service.preview({threadId: 'thread', path: 'folder'}), error => error.code === 'FILE_PREVIEW_FILE_REFUSED');
+  await fs.writeFile(path.join(root,'文档 (1).pdf'), '%PDF');
+  const listing = await service.preview({threadId:'thread',path:root});
+  assert.deepEqual(listing.entries.map(e=>[e.name,e.kind]), [['folder','directory'],['文档 (1).pdf','file']]);
+  assert.deepEqual((await service.preview({projectId:'project',path:listing.entries[0].path})).entries, []);
+  assert.equal((await service.preview({projectId:'project',path:listing.entries[1].path})).kind,'download');
+  assert.equal((await service.download({projectId:'project',path:listing.entries[1].path})).bytes.toString(),'%PDF');
+  await assert.rejects(service.download({threadId:'thread',path:'folder'}), {code:'FILE_PREVIEW_FILE_REFUSED'});
+  await assert.rejects(service.preview({threadId:'thread',path:'..'}), {code:'FILE_PREVIEW_OUTSIDE_SCOPE'});
+  await assert.rejects(service.preview({path:root}), {code:'FILE_PREVIEW_SCOPE_REQUIRED'});
+  await assert.rejects(service.download({threadId:'invented',path:listing.entries[1].path}), {code:'FILE_PREVIEW_SCOPE_UNKNOWN'});
+  await assert.rejects(service.download({threadId:'thread',path:'../elsewhere.pdf'}), {code:'FILE_PREVIEW_OUTSIDE_SCOPE'});
   await assert.rejects(service.preview({threadId: 'thread', path: 'missing.txt'}), error => error.code === 'FILE_PREVIEW_NOT_FOUND');
 });
 

@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Diagnostics;
 using System.Threading.Tasks;
@@ -17,13 +18,45 @@ namespace CodexLight.PublicSetup {
   }
   static void WriteNew(string path,string text){VerifiedLease.Plain(Path.GetDirectoryName(path)!);using(var s=new FileStream(path,FileMode.CreateNew,FileAccess.Write,FileShare.None))using(var w=new StreamWriter(s)){w.Write(text);w.Flush();s.Flush(true);}}
 #if REPAIR
+  internal static void CachePackage(Stream fresh, string package, long offset, long length, string hash) {
+   VerifiedLease.Plain(package);
+   string temporary = package + "." + Guid.NewGuid().ToString("N") + ".tmp";
+   using (var archive = new ZipArchive(fresh, ZipArchiveMode.Read, true)) {
+    var installer = archive.GetEntry("CodexLight-Install.exe") ?? throw new IOException("Missing fresh installer");
+    if (offset < 0 || length <= 0 || installer.Length > 300L * 1024 * 1024 || offset > installer.Length - length)
+     throw new IOException("Invalid embedded repair package range");
+    try {
+     using (var source = installer.Open())
+     using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
+      var buffer = new byte[65536];
+      CopyExactly(source, Stream.Null, offset, buffer);
+      CopyExactly(source, output, length, buffer);
+      output.Flush(true);
+     }
+     using (VerifiedLease.Open(temporary, hash)) { }
+     try { File.Move(temporary, package); }
+     catch (IOException) when (File.Exists(package)) { /* Another repair published its cache first; caller verifies it. */ }
+    } finally { File.Delete(temporary); }
+   }
+  }
+  static void CopyExactly(Stream source, Stream destination, long remaining, byte[] buffer) {
+   while (remaining > 0) {
+    int read = source.Read(buffer, 0, (int)Math.Min(buffer.Length, remaining));
+    if (read == 0) throw new EndOfStreamException("Incomplete embedded repair package");
+    destination.Write(buffer, 0, read);
+    remaining -= read;
+   }
+  }
   static void Resource(string name,string path){VerifiedLease.Plain(path);using(var input=typeof(Repair).Assembly.GetManifestResourceStream(name)??throw new IOException("Missing recovery resource"))using(var output=new FileStream(path,FileMode.CreateNew,FileAccess.Write,FileShare.None)){if(input.Length>300L*1024*1024)throw new IOException("Recovery resource too large");input.CopyTo(output);output.Flush(true);}}
   internal static async Task Prepare(Func<bool> confirm,Action exit){
    string local=Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),updates=Path.Combine(local,"CodexLight","Updates");
    string packageDir=Path.Combine(updates,Pins.Version+"-"+RepairPins.PackageHash.Substring(0,16));
    VerifiedLease.Plain(packageDir);Directory.CreateDirectory(packageDir);
    string package=Path.Combine(packageDir,"CodexLightDesktop-"+Pins.Version+"-full.nupkg");
-   if(!File.Exists(package))Resource("CodeCang.Repair.nupkg",package);
+   if(!File.Exists(package))await Task.Run(()=>{
+    using(var fresh=typeof(Repair).Assembly.GetManifestResourceStream("CodeCang.Fresh.zip")??throw new IOException("Missing embedded installer"))
+     CachePackage(fresh,package,RepairPins.PackageOffset,RepairPins.PackageLength,RepairPins.PackageHash);
+   });
    using(var held=VerifiedLease.Open(package,RepairPins.PackageHash)){
     string cache=Path.Combine(local,"CodexLightMigration","repair-"+Guid.NewGuid().ToString("N"));VerifiedLease.Plain(cache);Directory.CreateDirectory(cache);
     string zip=Path.Combine(cache,"helper.zip");Resource("CodeCang.Repair.zip",zip);
@@ -36,7 +69,11 @@ namespace CodexLight.PublicSetup {
       bool committed=false;
       try{
        using(var child=Process.Start(new ProcessStartInfo(helper.Installer,"--receipt \""+receipt+"\""){UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=Path.GetDirectoryName(helper.Installer)})??throw new IOException("Recovery helper did not start")){
-        var timer=Stopwatch.StartNew();while(!File.Exists(receipt+".ready.json")){if(child.HasExited)throw new IOException("Recovery helper stopped; diagnostic receipt: "+receipt);if(timer.Elapsed>TimeSpan.FromSeconds(30))throw new TimeoutException("Recovery helper readiness timed out");await Task.Delay(100);}
+        var timer=Stopwatch.StartNew();while(!File.Exists(receipt+".ready.json")){if(child.HasExited){
+         if(child.ExitCode==unchecked((int)0x80008096)||child.ExitCode==unchecked((int)0x80008083))
+          throw new IOException("修复需要 Microsoft .NET 10 x64 运行时，请安装或修复该运行时后重试。");
+         throw new IOException("Recovery helper stopped; diagnostic receipt: "+receipt);
+        }if(timer.Elapsed>TimeSpan.FromSeconds(30))throw new TimeoutException("Recovery helper readiness timed out");await Task.Delay(100);}
         VerifiedLease.Plain(receipt+".ready.json");var info=new FileInfo(receipt+".ready.json");if(info.Length>16384||!Ready(File.ReadAllText(info.FullName),pid,time,RepairPins.PackageHash)||child.HasExited)throw new IOException("Recovery readiness identity mismatch");
         if(!confirm())throw new OperationCanceledException("Recovery canceled; installation unchanged");
         // Consent above covers graceful closure only; never force-terminate an app.

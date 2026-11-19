@@ -6,6 +6,53 @@ import {TurnLedger, buildTurns} from '../public/state.js';
 const largeChanges = () => Array.from({length: 4}, (_, index) => ({path: `file-${index}.txt`, kind: {type: 'update'}, diff: '@@ -1 +1 @@\n-a\n+' + 'x'.repeat(33000)}));
 const user = (id, turnId) => ({id, type: 'userMessage', content: [{type: 'text', text: id}], _turnId: turnId, _complete: true});
 
+test('a delayed history page restores native order around events already on screen', () => {
+  const store = new ItemStore(Infinity), ledger = new TurnLedger();
+  ledger.merge({id:'z-old',status:'completed',durationMs:960000});
+  ledger.merge({id:'a-now',status:'inProgress'});
+  const before = new Map(store.items);
+  const steer = user('steer','a-now');
+  store.upsert(steer);
+  store.delta('activity','live');
+  store.upsert({id:'event-only',type:'commandExecution',_turnId:'a-now'});
+  store.mergeHistory([
+    user('original','z-old'), {id:'answer',type:'agentMessage',_turnId:'z-old',phase:'final_answer',text:'finished'},
+    user('next','a-now'), steer, {id:'activity',type:'agentMessage',_turnId:'a-now',text:'stale',_complete:true},
+  ], {before});
+  const turns = buildTurns(store.values(),ledger,{activeTurnId:'a-now'});
+  assert.deepEqual(turns.map(turn=>turn.id),['z-old','a-now']);
+  assert.deepEqual(turns[1].items.map(item=>item.id),['next','steer','activity','event-only']);
+  assert.deepEqual(turns[1].segments.map(segment=>segment.steer),[false,true]);
+  assert.equal(store.items.get('activity').text,'live');
+  assert.equal(store.items.get('activity')._complete,false);
+});
+
+test('refresh keeps the previously loaded prefix and live suffix around a disjoint newest page', () => {
+  const store = new ItemStore(Infinity);
+  store.upsert(user('already-loaded','before'));
+  const before = new Map(store.items);
+  store.upsert(user('arrived-live','after'));
+  store.mergeHistory([user('recent-history','middle')],{before,refresh:true});
+  assert.deepEqual(store.values().map(item=>item.id),['already-loaded','recent-history','arrived-live']);
+});
+
+test('overlapping older history adds rows on both sides of a shared item and retains live data', () => {
+  const store=new ItemStore(Infinity);
+  const activity={id:'shared',type:'agentMessage',_turnId:'active',text:'current live text',_complete:false};
+  store.upsert(activity);store.upsert(user('tail','active'));
+  const page=[user('earlier','older'),user('prompt','active'),{...activity,text:'stale'},user('steer','active')];
+  store.prependHistory(page);store.prependHistory(page);
+  assert.deepEqual(store.values().map(item=>item.id),['earlier','prompt','shared','steer','tail']);
+  assert.equal(store.items.get('shared').text,activity.text);
+});
+
+test('a bounded window trims from the chronological start after adding older history', () => {
+  const store=new ItemStore(2);
+  store.upsert(user('current','active'));store.upsert(user('steer','active'));
+  store.prependHistory([user('old','before')]);
+  assert.deepEqual(store.values().map(item=>item.id),['current','steer']);
+});
+
 test('large file edits retain the real turn ID and never create a second 19-second completed-looking turn', () => {
   const store = new ItemStore(Infinity, {preserveBodies: true}), ledger = new TurnLedger();
   ledger.merge({id: 'real-turn', status: 'inProgress', startedAt: 1000});

@@ -4,6 +4,7 @@
 import { el } from './format.js';
 import { icon } from '../icons.js';
 import { rasterBase64Mime } from '../store.js';
+import { localImageRef } from '../markdown.js';
 
 const PREVIEW_EXT = /\.(png|jpe?g|webp|gif|ico|svg)$/i;
 // MCP image content is shown only for raster types; SVG markup from a tool result is never rendered.
@@ -81,8 +82,8 @@ export function artifactCandidates(item) {
 export function markdownImageRefs(text) {
   const rows = []; const pattern = /!\[([^\]\n]{0,200})\]\((<[^<>\n]+>|[^()\s\n]+)\)/g; let match;
   while ((match = pattern.exec(String(text || ''))) && rows.length < 6) {
-    const path = match[2].replace(/^<|>$/g, '');
-    if (!isRemote(path) && !/^data:/i.test(path) && PREVIEW_EXT.test(path.split(/[?#]/)[0])) rows.push({ path: path.split(/[?#]/)[0], alt: match[1] });
+    const ref = localImageRef(match[2]);
+    if (ref) rows.push({ path: ref.path, alt: match[1] });
   }
   return rows;
 }
@@ -114,10 +115,10 @@ export function mountArtifacts({ document, fetchPreview, onOpen, ttlMs = 60000, 
         if (!stored?.data) throw new Error('图片数据已不在内存中（超过显示预算），请重新打开对话');
         if (!candidate.inline.data && candidate.inline.revision && stored.revision !== candidate.inline.revision) throw new Error('图片已被更新，正在刷新');
         return { blob: decodeBase64(stored.data, candidate.inline.mime), width: null, height: null };
-      }) : enqueue(key,entry,() => fetchPreview(candidate.path,scope));
+      }) : enqueue(key,entry,() => fetchPreview(candidate.path,scope,candidate.kind === 'referenced'));
       source.then(result => {
         if (cache.get(key) !== entry) return;
-        entry.url = URL.createObjectURL(result.blob); entry.width = result.width; entry.height = result.height; entry.state = 'ready';
+        entry.url = URL.createObjectURL(result.blob); entry.width = result.width; entry.height = result.height; entry.localPath = result.localPath; entry.state = 'ready';
       }, error => { if (cache.get(key) === entry) { entry.state = 'error'; entry.error = error?.message || '无法预览'; } })
         .finally(() => { for (const listener of [...entry.listeners]) listener(); });
     }
@@ -155,7 +156,7 @@ export function mountArtifacts({ document, fetchPreview, onOpen, ttlMs = 60000, 
       frame.setAttribute('aria-label', '放大查看 ' + title);
       meta.textContent = entry.width && entry.height ? `${entry.width}×${entry.height}` : '';
     };
-    frame.addEventListener('click', () => { if (entry?.state === 'ready') onOpen({ url: entry.url, name: title, path: candidate.path || '', width: entry.width, height: entry.height, caption: candidate.caption }); });
+    frame.addEventListener('click', () => { if (entry?.state === 'ready') onOpen({ url: entry.url, name: title, path: candidate.path || '', localPath: entry.localPath, width: entry.width, height: entry.height, caption: candidate.caption }); });
     if (entry) entry.listeners.add(paint);
     node._release = () => { if (entry) release(candidate.key, entry, paint); node._release = null; };
     paint();
@@ -178,17 +179,44 @@ export function mountLightbox(document) {
   const bar=el(document,'div','lightbox-bar'),title=el(document,'strong','lightbox-title'),meta=el(document,'span','lightbox-meta');
   const controls=el(document,'div','lightbox-controls');
   function button(label,action){const node=el(document,'button','btn ghost small',label);node.type='button';node.addEventListener('click',action);controls.append(node);return node;}
-  let opener=null,image=null,scale=1,fit=true;
+  let opener=null,image=null,localPath='',scale=1,fit=true;
   button('−',()=>zoom(scale/1.25)).setAttribute('aria-label','缩小图片');
   const percent=el(document,'output','lightbox-zoom');controls.append(percent);
   button('+',()=>zoom(scale*1.25)).setAttribute('aria-label','放大图片');
   const fitButton=button('适应',()=>{fit=true;paint();});
   const actual=button('原尺寸',()=>{fit=false;scale=1;paint();});
   const imageButtons=[...controls.querySelectorAll('button')];
+  const actions=el(document,'div','lightbox-file-actions');
+  if(window.codeCangDesktopImageActions===true && window.chrome?.webview?.postMessage) {
+    for(const [action,label] of [['reveal','在资源管理器中显示'],['open','用默认应用打开']]){
+      const control=el(document,'button','btn ghost small',label);control.type='button';
+      control.addEventListener('click',async event=>{
+        if(!event.isTrusted||!image?.naturalWidth)return;
+        const current=image;
+        try {
+          if(localPath && (action==='reveal'||!localPath.toLowerCase().endsWith('.svg'))){
+            window.chrome.webview.postMessage({type:'previewImageAction',action,path:localPath});return;
+          }
+          // A memory-only image or SVG is exported as the visible raster frame.
+          control.disabled=true;
+          const canvas=document.createElement('canvas');canvas.width=current.naturalWidth;canvas.height=current.naturalHeight;
+          if(canvas.width>4096||canvas.height>4096||canvas.width*canvas.height>16000000)throw new Error('图片尺寸超过 PNG 导出上限');
+          canvas.getContext('2d').drawImage(current,0,0);
+          const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));
+          if(!blob||blob.size>16*1024*1024)throw new Error('PNG 超过 16 MiB 导出上限');
+          const png=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result.split(',')[1]);reader.onerror=()=>reject(new Error('无法读取导出图片'));reader.readAsDataURL(blob);});
+          if(image===current&&dialog.open)window.chrome.webview.postMessage({type:'previewImageAction',action,png});
+        } catch(error){if(image===current){caption.hidden=false;caption.textContent=error.message||'图片导出失败';}}
+        finally{if(image===current)control.disabled=false;}
+      });
+      actions.append(control);imageButtons.push(control);
+    }
+  }
   const close=button('关闭',()=>dialog.close());close.setAttribute('aria-label','关闭预览');
   const stage=el(document,'div','lightbox-stage'),canvas=el(document,'div','lightbox-canvas');
   stage.tabIndex=0;stage.setAttribute('aria-label','图片，可滚动查看');stage.append(canvas);
   const caption=el(document,'p','lightbox-caption');bar.append(title,meta,controls);dialog.append(bar,stage,caption);document.body.append(dialog);
+  if(actions.childElementCount)dialog.append(actions);
   function paint(){
     if(!image?.naturalWidth)return;
     for(const button of imageButtons)button.disabled=false;
@@ -200,10 +228,11 @@ export function mountLightbox(document) {
   function zoom(value){if(!image?.naturalWidth)return;fit=false;scale=Math.max(.01,Math.min(8,value));paint();}
   window.addEventListener('resize',()=>{if(dialog.open&&fit)paint();});
   dialog.addEventListener('click',event=>{if([dialog,stage,canvas].includes(event.target))dialog.close();});
-  dialog.addEventListener('close',()=>{canvas.replaceChildren();image=null;opener?.isConnected&&opener.focus?.();opener=null;});
+  dialog.addEventListener('close',()=>{if(dialog.open)return;canvas.replaceChildren();image=null;localPath='';opener?.isConnected&&opener.focus?.();opener=null;});
   dialog.addEventListener('keydown',event=>{if(event.key==='+'||event.key==='='){event.preventDefault();zoom(scale*1.25);}if(event.key==='-'){event.preventDefault();zoom(scale/1.25);}});
-  return {open({url,name='',path='',caption:text}){
-    if(!/^(blob:|data:image\/(png|jpeg|webp|gif);base64,)/i.test(url||''))return;
+  return {open({url,name='',path='',localPath:sourcePath='',caption:text}){
+    if(!/^(blob:|data:image\/(png|jpeg|webp|gif|svg\+xml|vnd\.microsoft\.icon);base64,)/i.test(url||''))return;
+    localPath=sourcePath||'';
     if(!dialog.open)opener=document.activeElement;
     title.textContent=name||'图片';title.title=path||name;meta.textContent='';percent.textContent='';fit=true;scale=1;
     for(const button of imageButtons)button.disabled=true;

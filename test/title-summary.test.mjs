@@ -22,6 +22,9 @@ function fixture(options={}){
  }};
  service=new TitleSummaryService(rpc,{onEvent:event=>events.push(event),...options});
  function finish(){
+  for(const item of [{type:'configuration_update',reasoning:{effort:'medium'}},{type:'additional_tools',role:'developer',tools:[]},...(options.rawItems||[])]){
+   service.observe({method:'rawResponseItem/completed',params:{threadId:'summary',turnId:'summary-turn',item}});
+  }
   service.observe({method:'item/started',params:{threadId:'summary',item:{type:'reasoning',id:'reason'}}});
   if(options.tool)service.observe({method:'item/started',params:{threadId:'summary',item:{type:'commandExecution',id:'tool'}}});
   else if(!options.turnError)service.observe({method:'item/completed',params:{threadId:'summary',item:{type:'agentMessage',text:options.text??'{"title":"精简的测试标题"}'}}});
@@ -33,6 +36,14 @@ function fixture(options={}){
  return {service,rpc,calls,names,events,first,finish};
 }
 
+test('title preview rejects raw tool activity and unknown raw item types',async()=>{
+ for(const type of ['function_call','custom_tool_call_output','agent_message','other']){
+  const h=fixture({rawItems:[{type}]});
+  await assert.rejects(h.service.testModel({model:'chosen-model'}),new RegExp(type));
+  assert.ok(h.calls.some(row=>row.method==='turn/interrupt'));
+  await h.service.close();
+ }
+});
 test('default off uses a local title without model inference; loaded history is never eligible',async()=>{
  const h=fixture();h.first();await h.service.queue;assert.deepEqual(h.calls.map(row=>row.method),['thread/read','thread/name/set']);assert.equal(h.names.get('original'),'用户原文');assert.deepEqual(h.service.status(),{enabled:false,model:null,lastError:'未启用标题模型，使用本地标题。',usedLocalFallback:true});
  await h.service.configure({enabled:true,model:'chosen-model'});h.service.beforeRpc('turn/start',{threadId:'old',input:[{type:'text',text:'old'}]});h.service.observe({method:'turn/completed',params:{threadId:'old',turn:{id:'old-turn',status:'completed'}}});await h.service.queue;assert.equal(h.calls.filter(row=>row.method==='turn/start').length,0);await h.service.close();
@@ -230,12 +241,16 @@ test('isolation accepts only the initialized engine’s own global files in nati
  }
 });
 
-test('one preview may run at a time; account change cancels it before it can rename anything',async()=>{
+test('one preview may run at a time; a verified account change cancels it before it can rename anything',async()=>{
  const h=fixture({hold:true});
+ let account='one@example.test';
+ const call=h.rpc.call.bind(h.rpc);
+ h.rpc.call=(method,params)=>method==='account/read'?{account:{type:'chatgpt',email:account}}:call(method,params);
  const preview=h.service.testModel({model:'chosen-model'});
  await assert.rejects(h.service.testModel({model:'chosen-model'}),{status:409});
  await until(()=>h.calls.some(row=>row.method==='turn/start'));
- assert.equal(h.service.observe({method:'account/updated',params:{}}),false);
+ account='two@example.test';
+ assert.equal(h.service.observe({method:'account/updated',params:{authMode:'chatgpt'}}),false);
  await assert.rejects(preview,/取消/);
  assert.equal(h.calls.filter(row=>row.method==='turn/interrupt').length,1);
  assert.equal(h.calls.filter(row=>row.method==='thread/unsubscribe').length,1);
@@ -244,9 +259,69 @@ test('one preview may run at a time; account change cancels it before it can ren
  await h.service.close();
 });
 
+test('a same-account notification during title inference preserves the result and never starts another turn',async()=>{
+ for(const preview of [true,false]){
+  const h=fixture({hold:true}),call=h.rpc.call.bind(h.rpc);
+  const checking=deferred(),release=deferred();let reads=0;
+  h.rpc.call=async(method,params)=>{
+   if(method!=='account/read')return call(method,params);
+   assert.deepEqual(params,{refreshToken:false});
+   if(++reads===2){checking.resolve();await release.promise;}
+   return {account:{type:'chatgpt',email:'same@example.test'}};
+  };
+  if(!preview){await h.service.configure({enabled:true,model:'chosen-model'});h.first();}
+  const work=preview?h.service.testModel({model:'chosen-model'}):h.service.queue;
+  await until(()=>h.calls.some(row=>row.method==='turn/start'));
+  h.service.observe({method:'account/updated',params:{authMode:'chatgpt'}});
+  await checking.promise;h.finish();
+  if(!preview)assert.equal(h.names.get('original'),'用户原文');
+  release.resolve();
+  const result=await work;
+  assert.equal(preview?result.title:h.names.get('original'),'精简的测试标题');
+  assert.equal(h.calls.filter(row=>row.method==='turn/start').length,1);
+  assert.ok(!h.calls.some(row=>row.method==='turn/interrupt'));
+  await h.service.close();
+ }
+});
+
+test('disconnect or an unverifiable account notification cancels a pending preview',async()=>{
+ for(const mode of ['disconnect','unidentified','read-failed']){
+  const h=fixture({hold:true}),base=h.rpc.call.bind(h.rpc);
+  let reads=0;
+  h.rpc.call=async(method,params)=>{
+   if(method!=='account/read')return base(method,params);
+   if(mode==='unidentified')return {account:{type:'apiKey'}};
+   if(++reads>1)throw new Error('unavailable');
+   return {account:{type:'chatgpt',email:'first@example.test'}};
+  };
+  const preview=h.service.testModel({model:'chosen-model'});
+  await until(()=>h.calls.some(row=>row.method==='turn/start'));
+  h.service.observe(mode==='disconnect'?{method:'bridge/status',params:{connected:false}}:{method:'account/updated',params:{}});
+  await assert.rejects(preview,/取消/);
+  assert.equal(h.calls.filter(row=>row.method==='turn/interrupt').length,1);
+  await h.service.close();
+ }
+});
+
+test('an account switch while loading saved text prevents a title write or model request',async()=>{
+ const h=fixture(),base=h.rpc.call.bind(h.rpc),reading=deferred(),release=deferred();
+ let account='original@example.test';
+ h.rpc.call=async(method,params)=>{
+  if(method==='account/read')return {account:{type:'chatgpt',email:account}};
+  if(method==='thread/items/list'){reading.resolve();await release.promise;return {data:[{type:'userMessage',content:[{type:'text',text:'原对话'}]}]};}
+  return base(method,params);
+ };
+ await h.service.configure({enabled:true,model:'chosen-model'});
+ const work=h.service.summarizeSavedThread({id:'original'});await reading.promise;
+ account='next@example.test';h.service.observe({method:'account/updated',params:{}});
+ release.resolve();await assert.rejects(work,/取消/);
+ assert.ok(!h.calls.some(row=>['turn/start','thread/name/set'].includes(row.method)));
+ await h.service.close();
+});
+
 test('a preview deadline includes model catalog lookup; a late page cannot start another request',async t=>{
  const h=fixture({timeoutMs:15});
- const waiting=deferred(),catalog=deferred();h.rpc.call=async(method)=>{assert.equal(method,'model/list');waiting.resolve();return catalog.promise;};
+ const waiting=deferred(),catalog=deferred();h.rpc.call=async(method)=>{if(method==='account/read')return {account:null};assert.equal(method,'model/list');waiting.resolve();return catalog.promise;};
  t.mock.timers.enable({apis:['setTimeout']});
  const preview=h.service.testModel({model:'chosen-model'});await waiting.promise;
  t.mock.timers.tick(15);await assert.rejects(preview,/超时/);

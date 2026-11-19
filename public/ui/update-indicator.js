@@ -23,17 +23,22 @@ export function mountUpdateIndicator(host,{onOpen}){
  },button};
 }
 
-export function mountAndroidUpdateIndicator(host,window){
+export function mountAndroidUpdateIndicator(host,window,settingsButton){
  const bridge=window.CodexLightNative;
+ let available=false;
+ if(settingsButton&&typeof bridge?.checkForUpdates==='function'){
+  settingsButton.addEventListener('click',()=>available?bridge.openAppUpdate():bridge.checkForUpdates());
+ }
  if(typeof bridge?.getAppUpdateStatus!=='function'||typeof bridge.openAppUpdate!=='function')return null;
  const indicator=mountUpdateIndicator(host,{onOpen:()=>bridge.openAppUpdate()});
  function refresh(){
   let status;
-  try{status=JSON.parse(bridge.getAppUpdateStatus());}catch{indicator.update(null);return;}
+  try{status=JSON.parse(bridge.getAppUpdateStatus());}catch{status=null;}
   const version=status?.version;
-  const available=typeof version==='string'&&/^(0|[1-9]\d{0,8})(\.(0|[1-9]\d{0,8})){2}$/.test(version)&&
+  available=typeof version==='string'&&/^(0|[1-9]\d{0,8})(\.(0|[1-9]\d{0,8})){2}$/.test(version)&&
     ['checking','available','downloading','verifying','ready','failed','authorizing','staging','confirm','installing'].includes(status.phase);
   indicator.update({supported:true,phase:status?.phase,latest:{available,version:available?version:''}});
+  if(settingsButton)settingsButton.textContent=available?`查看 v${version} 更新`:'检查更新';
  }
  window.addEventListener('codexlight-android-update-status',refresh);
  window.addEventListener('focus',refresh);

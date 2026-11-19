@@ -81,9 +81,10 @@ export class AppUpdateService{
   this.cacheRoot=path.resolve(cacheRoot||path.join(platform==='win32'?(process.env.LOCALAPPDATA||path.join(os.homedir(),'AppData','Local')):os.tmpdir(),'CodexLight','Updates'));
   this.latest=null;this.phase='idle';this.error=null;this.checkedAt=null;this.receivedBytes=0;this.totalBytes=0;this.prepared=null;this.checking=null;this.checkAbortController=null;this.downloading=null;this.installing=null;this.closed=false;this.abortController=null;
  }
+ releaseExpired(){return !this.checkedAt||this.now()-Date.parse(this.checkedAt)>60*60000;}
  status(){
-  const latest=this.latest?{version:this.latest.version,releaseUrl:this.latest.releaseUrl,notes:this.latest.notes,publishedAt:this.latest.publishedAt,available:this.latest.available}:null;
-  return {currentVersion:this.currentVersion,...(this.updateTransport==='velopack'?{updateTransport:this.updateTransport}:{}),supported:this.platform==='win32'&&this.arch==='x64',phase:this.phase,checkedAt:this.checkedAt,latest,receivedBytes:this.receivedBytes,totalBytes:this.totalBytes,preparedVersion:this.prepared?.version||null,...(this.error?{error:this.error}:{}),releasesUrl:APP_RELEASES_URL};
+  const latest=this.latest?{version:this.latest.version,releaseUrl:this.latest.releaseUrl,notes:this.latest.notes,publishedAt:this.latest.publishedAt,available:this.latest.available,downloadBytes:this.latest.setup.size}:null;
+  return {currentVersion:this.currentVersion,...(this.updateTransport==='velopack'?{updateTransport:this.updateTransport}:{}),supported:this.platform==='win32'&&this.arch==='x64',phase:this.phase,checkedAt:this.checkedAt,latest,requiresRecheck:!!latest?.available&&this.releaseExpired(),receivedBytes:this.receivedBytes,totalBytes:this.totalBytes,preparedVersion:this.prepared?.version||null,...(this.error?{error:this.error}:{}),releasesUrl:APP_RELEASES_URL};
  }
  async _fetch(url,signal,{api=false}={}){
   let target=trustedUrl(url,{api});
@@ -135,7 +136,7 @@ export class AppUpdateService{
   if(this.closed)throw fail('应用更新服务已关闭','APP_UPDATE_CLOSED');
   if(this.platform!=='win32'||this.arch!=='x64')throw fail('此安装包仅支持 Windows x64','APP_UPDATE_UNSUPPORTED');
   if(!this.latest?.available||params.version!==this.latest.version)throw fail('请先检查并选择当前可用的更新版本','APP_UPDATE_STALE');
-  if(!this.checkedAt||this.now()-Date.parse(this.checkedAt)>60*60000)throw fail('更新信息已过期，请重新检查','APP_UPDATE_STALE');
+  if(this.releaseExpired())throw fail('更新信息已过期，请重新检查','APP_UPDATE_STALE');
   return this.latest;
  }
  async _safeRoot(){

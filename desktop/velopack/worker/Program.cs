@@ -5,7 +5,7 @@ namespace CodexLight.Desktop;
 internal static class WorkerProgram {
  static int Main(string[] args){
   string? output=null;
-  bool handedOff=false;
+  bool parentExited=false;
   BootstrapProgress? progress=null;
   try{
    var local=Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
@@ -17,6 +17,10 @@ internal static class WorkerProgram {
    if(r.ParentPid==Environment.ProcessId)throw new InvalidDataException("Worker cannot be its own parent.");
    using var parent=Process.GetProcessById(r.ParentPid);
    if(parent.StartTime.ToUniversalTime()!=r.ParentStartUtc||parent.HasExited)throw new InvalidOperationException("Parent absent or PID reused before readiness.");
+#if !BOOTSTRAP
+   progress=BootstrapProgress.Start();
+   progress.Report("正在校验下载的更新包…");
+#endif
    var original=VelopackPackage.ReadInstalled(Path.Combine(r.Root,"current"));
 #if BOOTSTRAP
    string Pin(string name)=>typeof(WorkerProgram).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyMetadataAttribute),false).Cast<System.Reflection.AssemblyMetadataAttribute>().Single(a=>a.Key==name).Value??"";
@@ -31,13 +35,15 @@ internal static class WorkerProgram {
    // here; a full empty-holder check still runs after the committed exit.
    _ = WorkerProcesses.Holders(WorkerProcesses.InstalledResources(r.Root));
 #if !BOOTSTRAP
-   progress=BootstrapProgress.Start();
    progress.Report($"正在等待码舱退出，准备安装 v{heldPackage.Version}…");
 #endif
    WriteReady(receipt+".ready.json",r);
    var timer=Stopwatch.StartNew();
-   while(true){if(WorkerPolicy.MayApply(Marker(receipt+".cancel"),Marker(receipt+".commit"),parent.HasExited,timer.Elapsed))break;Thread.Sleep(100);}
-   handedOff=true;
+   while(true){
+    parentExited=parent.HasExited;
+    if(WorkerPolicy.MayApply(Marker(receipt+".cancel"),Marker(receipt+".commit"),parentExited,timer.Elapsed))break;
+    Thread.Sleep(100);
+   }
    progress??=BootstrapProgress.Start();
    progress.Report("正在检查更新条件…");
    var sid=WindowsIdentity.GetCurrent().User?.Value??throw new InvalidOperationException("Unknown Windows user.");
@@ -58,7 +64,10 @@ internal static class WorkerProgram {
     using var update=Process.Start(start)??throw new InvalidOperationException("Updater did not start.");
     update.WaitForExit();
     exitCode=update.ExitCode;
-    if(exitCode==0){progress.Report("正在校验安装文件…");BootstrapPolicy.VerifyApplied(heldPackage);}
+    if(exitCode==0){
+     progress.Report("正在校验安装文件…");
+     BootstrapPolicy.VerifyApplied(heldPackage,progress.ReportVerification);
+    }
     var shortcutResults=exitCode==0?ShortcutBrandMigration.RunInstalled(heldPackage.Installed.CurrentDirectory):Array.Empty<string>();
     WriteResult(output,exitCode,"Updater exited; no application restart requested. "+string.Join("; ",shortcutResults));
    }finally{if(owned)mutex.ReleaseMutex();}
@@ -67,8 +76,17 @@ internal static class WorkerProgram {
     : $"安装程序返回代码 {exitCode}。诊断文件：{output}");
    progress.WaitForClose();
    return exitCode;
-  }catch(Exception e){if(output!=null)try{WriteResult(output,1,e.GetType().Name+": "+e.Message);}catch{}
-   if(handedOff){if(progress==null)Notify("更新未完成："+e.Message+"\n诊断文件："+output,true);else{progress.Complete(false,"更新未完成："+e.Message+"\n诊断文件："+output);progress.WaitForClose();}}
+  }catch(Exception e){
+   string detail=e.Message;
+   if(output!=null){
+    try{WriteResult(output,1,e.GetType().Name+": "+e.Message);detail+="\r\n诊断文件："+output;}
+    catch(Exception writeError)when(writeError is IOException or UnauthorizedAccessException or InvalidDataException){detail+="\r\n无法保存诊断文件："+writeError.Message;}
+   }
+   // The caller owns explicit cancellation feedback, even if it subsequently exits.
+   if((parentExited||progress!=null)&&e is not OperationCanceledException){
+    if(progress==null)Notify("更新未完成："+detail,true);
+    else{progress.Complete(false,detail);progress.WaitForClose();}
+   }
    return 1;
   }finally{progress?.Dispose();}
  }

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { createThreadCompletion } from '../public/ui/thread-completion.js';
 
 const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
 const source = app.slice(app.indexOf('function withSubmittedActivity('), app.indexOf('const CONVERSATION_ITEMS ='));
@@ -9,9 +10,21 @@ function harness() {
   const state = { threads: [], activeTurns: new Map(), searchGeneration: 0, nextThreads: null };
   const unindexedThreads = new Map(), recentThreads = new Map(), search = { value: '' };
   let list = { data: [], nextCursor: null };
-  const ports = { state, unindexedThreads, threadSearchCache:new Map(),searchStatus:{}, $: () => search, threadAutoLoad: {reset() {}}, captureHistoryAnchor: () => null, restoreHistoryAnchor() {}, sessionFor: () => null, renderThreads() {}, notice() {}, rpc: async () => list };
-  return { state, search, unindexedThreads, setList(value) { list = value; }, ...new Function('recentThreads',...Object.keys(ports), 'let threadSearchController=null;'+source + ';return {rememberThread,loadThreads};')(recentThreads,...Object.values(ports)) };
+  const threadCompletion = createThreadCompletion();
+  const ports = { state, unindexedThreads, threadCompletion, threadSearchCache:new Map(),searchStatus:{}, $: () => search, threadAutoLoad: {reset() {}}, captureHistoryAnchor: () => null, restoreHistoryAnchor() {}, sessionFor: () => null, renderThreads() {}, notice() {}, rpc: async () => list };
+  return { state, search, unindexedThreads, threadCompletion, setList(value) { list = value; }, ...new Function('recentThreads',...Object.keys(ports), 'let threadSearchController=null;'+source + ';return {rememberThread,loadThreads};')(recentThreads,...Object.values(ports)) };
 }
+
+test('native history classifies child sessions before background completions are counted', async () => {
+  const h = harness();
+  h.setList({ data: [thread, { id: 'child', parentThreadId: thread.id }] });
+  await h.loadThreads();
+  for (const threadId of ['child', thread.id]) {
+    h.threadCompletion.observe({method:'turn/completed',params:{threadId,turn:{id:'result',status:'completed'}}});
+  }
+  assert.deepEqual([...h.threadCompletion.unread.keys()], [thread.id]);
+  assert.equal(h.threadCompletion.count, 1);
+});
 
 test('confirmed new threads appear immediately and survive repeated incomplete list refreshes', async () => {
   const h = harness(); h.rememberThread(thread);

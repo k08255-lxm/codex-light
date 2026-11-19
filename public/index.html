@@ -75,7 +75,8 @@
     </div>
     <div id="settings-sidebar" class="side-pane hidden">
       <div class="side-head"><strong class="side-title">设置</strong><button id="settings-sidebar-close" class="btn icon-only ghost side-close" title="收起侧栏" aria-label="收起侧栏" aria-controls="sidebar"><span data-icon="close"></span></button></div>
-      <label class="side-search"><span data-icon="search"></span><input id="settings-search" placeholder="搜索设置" aria-label="搜索设置"></label>
+      <label class="side-search"><span data-icon="search"></span><input id="settings-search" type="search" placeholder="搜索设置" aria-label="搜索设置" aria-controls="settings-search-results"></label>
+      <div id="settings-search-results" class="settings-nav" aria-label="设置搜索结果" hidden></div>
       <nav id="settings-nav" class="settings-nav">
         <div class="side-section"><span>应用</span></div>
         <button class="settings-nav-item active" data-settings-section="general"><span data-icon="computer"></span><span>连接与运行</span></button>
@@ -250,8 +251,10 @@
           <label class="pref-row" for="mobile-task-enabled"><div><strong>手机任务通知</strong><small class="fine">主动监控运行中的长任务。通知可显示对话标题；点按返回对话，等待回答和任务结果使用普通通知。</small></div><input id="mobile-task-enabled" type="checkbox" class="switch"></label>
           <p id="mobile-task-status" class="fine" role="status"></p>
           <p id="mobile-task-promotion-status" class="fine" role="status"></p>
-          <button id="mobile-task-system-settings" type="button" class="btn small">系统通知设置</button>
-          <button id="mobile-task-promotion-settings" type="button" class="btn small" hidden>实时通知设置</button>
+          <div class="settings-actions">
+            <button id="mobile-task-system-settings" type="button" class="btn small">系统通知设置</button>
+            <button id="mobile-task-promotion-settings" type="button" class="btn small" hidden>实时通知设置</button>
+          </div>
           <div id="mobile-task-background-panel" hidden>
             <label class="pref-row" for="mobile-task-background"><div><strong>后台同步通知</strong><small class="fine">在离开应用后继续同步。手机需能访问配对电脑，可从通知栏随时停止。</small></div><input id="mobile-task-background" type="checkbox" class="switch"></label>
             <p id="mobile-task-background-status" class="fine" role="status"></p>
@@ -259,8 +262,12 @@
         </div>
         <div class="panel">
           <label class="pref-row"><div><strong>任务结束提示</strong><small class="fine">应用内提示，不请求系统通知</small></div><input id="preference-completion" type="checkbox" class="switch"></label>
-          <label class="pref-row"><div><strong>提问与审批提醒</strong><small id="question-notification-status" class="fine" role="status"></small></div><input id="preference-approval" type="checkbox" class="switch"></label>
-          <button id="question-notification-permission" class="btn small" type="button" hidden>允许系统通知</button>
+          <div class="notification-preference">
+            <label class="pref-row"><div><strong id="question-notification-label">提问与审批提醒</strong><small id="question-notification-status" class="fine" role="status"></small></div><input id="preference-approval" type="checkbox" class="switch" aria-labelledby="question-notification-label" aria-describedby="question-notification-status"></label>
+            <div class="settings-actions">
+              <button id="question-notification-permission" class="btn small" type="button" hidden>允许系统通知</button>
+            </div>
+          </div>
         </div>
       </section>
       <section id="settings-shortcuts" class="settings-section hidden">

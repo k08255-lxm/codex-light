@@ -12,6 +12,13 @@ using(var stage=new VelopackApplyLauncher.StagedApply(path,Process.GetCurrentPro
 path=Receipt();Ready(path,hash);using(var stage=new VelopackApplyLauncher.StagedApply(path,Process.GetCurrentProcess(),hash,self.Id,time)){await stage.WaitForReadyAsync();}Check(File.Exists(path+".cancel"),"uncommitted dispose cancels");
 path=Receipt();Ready(path,hash);using(var stage=new VelopackApplyLauncher.StagedApply(path,Process.GetCurrentProcess(),hash,self.Id,time)){await stage.WaitForReadyAsync();stage.Commit();Check(File.Exists(path+".commit"),"explicit commit marker");}Check(!File.Exists(path+".cancel"),"successful commit retained");
 path=Receipt();Ready(path,new string('b',64));bool bad=false;using(var stage=new VelopackApplyLauncher.StagedApply(path,Process.GetCurrentProcess(),hash,self.Id,time)){try{await stage.WaitForReadyAsync();}catch(InvalidDataException){bad=true;}}Check(bad&&File.Exists(path+".cancel"),"bad readiness canceled");
+path=Receipt();Ready(path,hash);File.WriteAllText(path+".result.json","{}");
+using(var stage=new VelopackApplyLauncher.StagedApply(path,Process.GetCurrentProcess(),hash,self.Id,time)){
+ bool failed=false;try{await stage.WaitForReadyAsync();}catch(IOException){failed=true;}
+ Check(failed,"a live worker showing an error cannot acknowledge readiness");
+ failed=false;try{stage.Commit();}catch(IOException){failed=true;}
+ Check(failed&&!File.Exists(path+".commit"),"a failed worker cannot be committed");
+}
 var source=File.ReadAllText(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"../../../../../MainWindow.cs")));
 var start=source.IndexOf(" async Task QuitForVerifiedUpdateAsync",StringComparison.Ordinal);var end=source.IndexOf(" async Task WriteHostAsync",start,StringComparison.Ordinal);var quit=source[start..end];
 Check(quit.Contains("while(job!=null&&!job.IsEmpty"),"descendant drain required");Check(quit.IndexOf("job=null",StringComparison.Ordinal)<quit.IndexOf("staged.Commit()",StringComparison.Ordinal),"empty job disposed before commit");Check(quit.Contains("staged.Cancel()"),"failed shutdown cancels worker");Check(source.Contains("!updateShutdownAttempted&&stopTask==null"),"Exited auto-kill disarmed during update");Check(source.Contains("!IsDisposed&&!updateShutdownAttempted"),"EOF auto-kill disarmed during update");

@@ -15,9 +15,18 @@ import {nativeProbe,prepareNative} from '../components/dsh-bridge/src/wsl-native
 test('native helper refuses Windows execution without touching profiles',()=>{assert.throws(()=>nativeProbe({platform:'win32'}),{code:'DSH_NATIVE_LINUX_REQUIRED'});});
 test('prepare rejects changed identity before any directory write',()=>{assert.throws(()=>prepareNative(probe,{...probe,identity:{cli:{size:999}}}),{code:'DSH_CHANGED'});});
 test('shell metacharacters are passed only as literal CLI argument',async()=>{const {bridge,calls}=fixture();const input='/home/lee/dsh; echo bad';await bridge.probe(input);assert.equal(calls[0].at(-2),input);assert.ok(!calls[0].find(a=>a.includes('exec "$n"')).includes(input));});
-import {nativeProviders} from '../components/dsh-bridge/src/wsl-native-helper.mjs';
+import {nativeModelCatalog,nativeProviders} from '../components/dsh-bridge/src/wsl-native-helper.mjs';
 const options={home:'/home/lee/.dsh',cli:'/usr/bin/dsh',stateRoot:'/home/lee/.local/share/codecang/dsh-native',exists:()=>false};
 test('native source uses existing Linux providers and does not export key bytes',()=>{class Source{readSource(){return {valid:true,hash:'h',_providers:{workbuddy:{apiKeyEnv:'WB_KEY',models:[{id:'deepseek'}]}}};}}const result=nativeProviders({...options,Source,env:{DSH_NATIVE_PROVIDER_CONFIG:'/home/lee/.dsh/profiles/sdk/cordis.patch.yml',WB_KEY:'test-private'}});assert.equal(result.defaultProvider,'workbuddy');assert.equal(result.defaultModel,'deepseek');assert.ok(!JSON.stringify(result).includes('test-private'));});
+test('Linux model selection can discover routes before credentials or a default are set',async()=>{
+ class Source{readSource(){return {valid:true,_providers:{team:{models:[{id:'declared'}]},'openai-codex':{apiKeyEnv:'CODEX_KEY'}}};}}
+ const result=await nativeModelCatalog({...options,Source,env:{DSH_NATIVE_PROVIDER_CONFIG:'/p/cordis.patch.yml'}},async(cli,ids)=>{
+  assert.equal(cli,options.cli);assert.deepEqual(ids,['openai-codex']);
+  return {builtin:[{id:'unregistered'}],providers:{'openai-codex':[{id:'catalog'}]}};
+ });
+ assert.deepEqual(result.models.map(({model,provider})=>[provider,model]),[['team','declared'],['openai-codex','catalog']]);
+ assert.doesNotMatch(JSON.stringify(result),/CODEX_KEY/);
+});
 test('native source fails before registration on missing credential',()=>{class Source{readSource(){return {valid:true,_providers:{wb:{apiKeyEnv:'WB_KEY',models:[{id:'deepseek'}]}}};}}assert.throws(()=>nativeProviders({...options,Source,env:{DSH_NATIVE_PROVIDER_CONFIG:'/p/cordis.patch.yml'}}),{code:'DSH_CREDENTIAL_UNAVAILABLE'});});
 test('multiple Linux provider sources never silently choose a default',()=>{class Source{readSource(){return {valid:true,_providers:{wb:{models:[{id:'deepseek'}]}}};}}assert.throws(()=>nativeProviders({...options,exists:()=>true,Source,env:{}}),{code:'DSH_PROVIDER_AMBIGUOUS'});});
 test('missing sources and key rejects otherwise unusable bridge',()=>{assert.throws(()=>nativeProviders({...options,env:{}}),{code:'DSH_CREDENTIAL_UNAVAILABLE'});});

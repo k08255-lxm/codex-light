@@ -23,7 +23,14 @@ export class OptimisticMessages {
    const first=result.findIndex(item=>item._turnId===row.turnId);
    const anchor=tails.get(row.afterItemId)||row.afterItemId;
    const after=result.findIndex(item=>item.id===anchor);
-   const index=row.method==='turn/start'&&first>=0?first:after>=0?after+1:row.afterItemId===null?0:first>=0?first:result.length;
+   let index=after>=0?after+1:result.length;
+   if(row.method==='turn/start'){
+    if(first>=0)index=first;
+    else if(after<0&&row.afterItemId===null)index=0;
+   }else if(first>=0&&result[after]?._turnId!==row.turnId){
+    // A restored page can replace the original anchor or reveal the turn's prompt after submission.
+    index=result.findLastIndex(item=>item._turnId===row.turnId)+1;
+   }
    const id='sent:'+row.id;
    const content=[{type:'text',text:[row.text,...row.images.concat(row.files).map(file=>'附件 · '+file.name)].filter(Boolean).join('\n')}];
    result.splice(index,0,{id,type:'userMessage',content,_turnId:row.turnId,_local:true,_complete:true});

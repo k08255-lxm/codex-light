@@ -12,11 +12,11 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 namespace CodexLight.SetupWrapper {
  internal static class Program {
-  [STAThread]static void Main(){
+  [STAThread]static int Main(){
    Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);
    using(var mutex=new Mutex(true,"CodexLight.SetupWrapper."+WindowsIdentity.GetCurrent().User!.Value,out bool first)){
-    if(!first){MessageBox.Show("已有安装检查窗口正在运行。请先完成或关闭该窗口。","码舱 CodeCang");return;}
-    try{Application.Run(new SetupForm());}finally{mutex.ReleaseMutex();}
+    if(!first){MessageBox.Show("已有安装检查窗口正在运行。请先完成或关闭该窗口。","码舱 CodeCang");return 1618;}
+    try{using(var form=new SetupForm()){Application.Run(form);return form.ExitCode;}}finally{mutex.ReleaseMutex();}
    }
   }
  }
@@ -28,10 +28,12 @@ namespace CodexLight.SetupWrapper {
   readonly CancellationTokenSource cancellation=new CancellationTokenSource();
   readonly string target=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"CodexLightDesktop");
   string? extracted;FileStream? verifiedLease;bool busy,nodeUpgradeRequired;string existingNode="";
+  internal int ExitCode {get;private set;}=1602;
+  readonly Version version=typeof(SetupForm).Assembly.GetName().Version!;
   public SetupForm(){
    Text="安装 码舱 CodeCang";Font=new Font("Microsoft YaHei UI",10);ClientSize=new Size(600,310);MinimumSize=Size;StartPosition=FormStartPosition.CenterScreen;
    var panel=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(24),ColumnCount=1,RowCount=4};panel.RowStyles.Add(new RowStyle(SizeType.Percent,100));panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-   status.Text="先检查并复用已有 Node.js 22.15+ x64（含 DSH 桥要求）与 Codex CLI；缺失项会分别询问是否安装，不会自动登录或更改 Codex 配置。\n\n此入口仅用于首次安装，不覆盖旧 MSI 或既有安装/数据。随后启动应用安装器，成功后可能自动打开新应用。\n\nVelopack 1.3.39-g8d2844f 为预发布依赖。本包尚未数字签名；遇到系统安全阻止请停止，不要绕过。";
+   status.Text="即将安装码舱 CodeCang v"+version.ToString(3)+"（Windows x64），包含桌面界面、本地服务和 DSH 桥。\n安装位置："+target+"\n\n向导会复用兼容的 Node.js 22.15+ x64 和 Codex CLI，缺少时分别询问。也可以稍后在应用中选择已有的 Codex CLI 或 WSL。\n\n本安装包尚未数字签名，使用 Velopack 1.3.39-g8d2844f 预发布版。";
    var buttons=new FlowLayoutPanel{AutoSize=true,Dock=DockStyle.Fill};buttons.Controls.Add(start);buttons.Controls.Add(cancel);panel.Controls.Add(status);panel.Controls.Add(consent);panel.Controls.Add(buttons);Controls.Add(panel);
    cancel.Click+=(_,__)=>cancellation.Cancel();start.Click+=async(_,__)=>await Start();
    FormClosing+=(_,e)=>{if(busy){e.Cancel=true;MessageBox.Show("操作进行中，请等待官方安装器完成或在其窗口取消。下载阶段可以使用“取消下载”。","码舱 CodeCang");}};
@@ -41,9 +43,17 @@ namespace CodexLight.SetupWrapper {
   async Task Start(){
    if(!consent.Checked){MessageBox.Show("请先保存工作、结束任务，再勾选确认。","码舱 CodeCang");return;}
    busy=true;start.Enabled=false;consent.Enabled=false;
-   try{var code=await InstallFlow.Run(this);Progress(code==0?"安装器已成功退出。请确认新应用能正常使用。此结果不代表真实账号或任务已验证。":code==3010?"系统报告需要重启，已停止，尚未继续应用安装。请稍后重新检查。":code==1602?"已取消后续步骤。已经安装的依赖（如有）会保留。":"安装器返回错误 "+code+"。请保留现场并报告，不要绕过系统阻止。");}
-   catch(OperationCanceledException){Progress("已取消后续步骤。已经安装的依赖（如有）会保留。");}
-   catch(Exception e){Progress("已停止："+e.Message+"\n请报告提示；不要管理员重试、关闭防护或绕过安全限制。");}
+   try{
+    ExitCode=await InstallFlow.Run(this);
+    if(ExitCode==0){
+     var executable=Path.Combine(target,"current","CodexLight.exe");Plain(executable);
+     if(!File.Exists(executable)||FileVersionInfo.GetVersionInfo(executable).FileVersion!=version.ToString())
+      throw new IOException("安装程序已退出，但未在目标目录找到对应版本的码舱。");
+     Progress("安装完成 · 码舱 CodeCang v"+version.ToString(3)+"\n"+target);
+    }else Progress(ExitCode==3010?"系统要求重启。重启后请再次检查安装状态。":ExitCode==1602?"已取消安装。已经装好的依赖会保留。":"安装未完成，安装程序返回错误 "+ExitCode+"。");
+   }
+   catch(OperationCanceledException){ExitCode=1602;Progress("已取消安装。已经装好的依赖会保留。");}
+   catch(Exception e){ExitCode=1;Progress("安装未完成："+e.Message);}
    finally{busy=false;cancel.Enabled=false;verifiedLease?.Dispose();verifiedLease=null;}
   }
   internal static void Plain(string path){for(string? p=Path.GetFullPath(path);p!=null;p=Path.GetDirectoryName(p))if((File.Exists(p)||Directory.Exists(p))&&(File.GetAttributes(p)&FileAttributes.ReparsePoint)!=0)throw new IOException("不支持链接/重解析目录。");}

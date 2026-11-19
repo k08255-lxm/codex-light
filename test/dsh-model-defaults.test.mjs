@@ -9,16 +9,17 @@ import {createInterface} from 'node:readline';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {BundledDshBridge,DshConnectionService} from '../src/dsh-connection.mjs';
+import {yamlParser} from '../src/dsh-provider-sources.mjs';
 import {WslNativeDshBridge} from '../src/dsh-wsl-native.mjs';
 import {WslWindowsDshBridge} from '../src/dsh-wsl-windows.mjs';
-import {applyModelDefaults} from '../components/dsh-bridge/src/model-defaults.mjs';
+import {applyModelDefaults,modelChoices} from '../components/dsh-bridge/src/model-defaults.mjs';
 import {createServer} from '../src/server.mjs';
 
 const request = (id,name,args={}) => ({jsonrpc:'2.0',id,method:'tools/call',params:{name,arguments:args}});
 function fixture(t) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'codecang-model-'));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
-  const bundle=new BundledDshBridge({stateRoot:root});
+  const bundle=new BundledDshBridge({stateRoot:root,home:root,env:{}});
   return {root,bundle,service:new DshConnectionService({bundle})};
 }
 
@@ -34,6 +35,51 @@ test('desktop HTTP settings persist under the app-owned bridge and require authe
   assert.deepEqual((await(await post('modelStatus',{})).json()).selection,{model:'local-test'});
   assert.deepEqual(await(await post('modelReminder',{})).json(),{needed:false});
   assert.equal((await post('saveModel',{selection:{model:'bad model'}})).status,400);
+});
+
+test('model choices combine installed metadata with active declared and implicit provider catalogs',()=>{
+  const providers={
+    custom:{displayName:'Team',models:[{id:'vendor/fast',name:'Fast'},{id:'vendor/fast'},{id:'invalid model'}],apiKeyEnv:'PRIVATE_REFERENCE',baseURL:'https://private.invalid'},
+    'openai-codex':{modelOverrides:{'gpt-test':{name:'Renamed'}}},
+  };
+  const catalog={builtin:[{id:'deepseek-test',name:'Installed DeepSeek'}],providers:{'openai-codex':[{id:'gpt-test',name:'Installed GPT'}],custom:[{id:'ignored'}]}};
+  assert.deepEqual(modelChoices(providers,{catalog}),[
+    {provider:'deepseek-official',providerName:'DeepSeek 官方',model:'deepseek-test',name:'Installed DeepSeek'},
+    {provider:'custom',providerName:'Team',model:'vendor/fast',name:'Fast'},
+    {provider:'openai-codex',providerName:'openai-codex',model:'gpt-test',name:'Renamed'},
+  ]);
+});
+
+test('desktop model status delegates only implicit provider IDs to the installed SDK helper',async t=>{
+  const {root}=fixture(t);
+  const home=path.join(root,'dsh-home');
+  try{yamlParser({home});}catch{t.skip('DSH YAML parser is optional and not installed');return;}
+  const profile=path.join(home,'profiles','desktop');
+  fs.mkdirSync(profile,{recursive:true});
+  fs.writeFileSync(path.join(profile,'cordis.patch.yml'),JSON.stringify([{
+    id:'llm-pi-ai',config:{providers:{'openai-codex':{},team:{apiKeyEnv:'PRIVATE_REFERENCE',models:[{id:'explicit-model'}]}}},
+  }]));
+  const executable=path.join(root,'DeepSeek Harness.exe');
+  fs.writeFileSync(executable,'test fixture');
+  fs.mkdirSync(path.join(root,'resources'));
+  fs.writeFileSync(path.join(root,'resources','app.asar'),'test fixture');
+  const stateRoot=path.join(root,'state');
+  const bundle=new BundledDshBridge({
+    home,stateRoot,env:{DSH_HOME:home,CODEX_LIGHT_DSH_EXECUTABLE:executable,FIXTURE_TOKEN:'DO_NOT_INHERIT'},
+    runCatalogFn:async(command,args,options)=>{
+      assert.equal(command,fs.realpathSync(executable));
+      assert.deepEqual(JSON.parse(args.at(-1)),['openai-codex']);
+      assert.equal(options.env.FIXTURE_TOKEN,undefined);
+      return {stdout:JSON.stringify({builtin:[{id:'installed-model'}],providers:{'openai-codex':[{id:'implicit-model'}]}})};
+    },
+  });
+  bundle.bundled=()=>({available:true});
+  const result=await new DshConnectionService({bundle}).modelStatus();
+  assert.deepEqual(result.models.map(row=>[row.provider,row.model]),[
+    ['deepseek-official','installed-model'],['openai-codex','implicit-model'],['team','explicit-model'],
+  ]);
+  assert.doesNotMatch(JSON.stringify(result),/PRIVATE_REFERENCE/);
+  assert.equal(fs.existsSync(stateRoot),false);
 });
 
 test('first-launch reminder can be deferred permanently, settings survive reopening and reset',async t=>{

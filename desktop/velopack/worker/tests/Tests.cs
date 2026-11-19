@@ -69,7 +69,9 @@ using(var z=System.IO.Compression.ZipFile.Open(zipPath,System.IO.Compression.Zip
 }
 var prior=new VelopackInstalledIdentity(Path.Combine(fixture,"install"),current,Path.Combine(fixture,"install","Update.exe"),"0.4.4",data);
 using(var package=new ValidatedVelopackPackage(File.OpenRead(zipPath),zipPath,new string('a',64),"0.4.7",prior)){
- BootstrapPolicy.VerifyApplied(package);Pass(true);
+ var counts=new List<(int,int)>();
+ BootstrapPolicy.VerifyApplied(package,(done,total)=>counts.Add((done,total)));
+ Pass(counts.SequenceEqual(new[]{(0,4),(1,4),(2,4),(3,4),(4,4)}));
  foreach(var pair in new[]{("Update.exe","not executable"),("Codex Light.exe","stub fixture")}){
   var file=Path.Combine(fixture,"install",pair.Item1);File.WriteAllText(file,"corrupt");Reject(()=>BootstrapPolicy.VerifyApplied(package));
   File.Delete(file);Reject(()=>BootstrapPolicy.VerifyApplied(package));File.WriteAllText(file,pair.Item2);

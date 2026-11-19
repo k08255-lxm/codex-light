@@ -3,17 +3,16 @@ import {renderMarkdown} from '../markdown.js';
 
 const RELEASES='https://github.com/k08255-lxm/codex-light/releases';
 const PHASE={idle:'随时检查新版本',checking:'正在检查更新…',available:'有新版本可用',upToDate:'当前已是最新版本',downloading:'正在下载安装包…',ready:'安装包已下载并通过校验',launching:'正在打开安装程序…',launched:'安装程序已打开',launchUnknown:'安装程序启动结果待确认',failed:'应用更新未完成'};
-const bytes=value=>Number.isFinite(value)?`${(value/1024/1024).toFixed(1)} MB`:'';
+const bytes=value=>Number.isFinite(value)?`${(value/1024/1024).toFixed(1)} MiB`:'';
 
 export function mountAbout(host,{api,mutate,onStatus=()=>{}}){
  const document=host.ownerDocument;
- let active=false,generation=0,status=null,busy=null,error=null,timer=null,currentRead=null,confirmInstall=false,uncertainInstall=false;
+ let active=false,generation=0,revision=0,status=null,busy=null,error=null,readError=null,timer=null,currentRead=null,confirmInstall=false,uncertainInstall=false;
  host.classList.add('about-page');
  function button(text,action,{primary=false,disabled=false}={}){
   const node=el(document,'button','btn'+(primary?' primary':''),text);node.type='button';node.disabled=disabled;node.addEventListener('click',action);return node;
  }
  function render(){
-  onStatus(status);
   const header=el(document,'header','page-head');const titles=el(document,'div','page-titles');titles.append(el(document,'h1','','关于'),el(document,'p','page-sub','码舱 CodeCang 应用与版本更新'));header.append(titles);
   const intro=el(document,'section','about-intro');
   const title=el(document,'div','about-brand');title.append(el(document,'h2','','码舱 CodeCang'));
@@ -31,7 +30,10 @@ export function mountAbout(host,{api,mutate,onStatus=()=>{}}){
   if(starting)label=inPlace?'正在准备更新，等待安装窗口…':'正在打开安装程序…';
   if(phase==='launched'&&inPlace)label='已交给更新程序，码舱即将退出';
   const line=el(document,'p','about-update-status',label);line.setAttribute('role','status');info.append(line);
-  if(status?.latest?.available&&status.latest.version)info.append(el(document,'p','about-next-version',`新版本 v${status.latest.version}`));
+  if(status?.latest?.available&&status.latest.version){
+   const download=bytes(status.latest.downloadBytes);
+   info.append(el(document,'p','about-next-version',`新版本 v${status.latest.version}${download?' · '+(inPlace?'桌面更新包':'Windows 安装包')+' '+download:''}`));
+  }
   updateHead.append(info);
   const controls=el(document,'div','about-update-controls');
   const locked=!!busy||['downloading','launching','launchUnknown','launched'].includes(phase);
@@ -48,7 +50,7 @@ export function mountAbout(host,{api,mutate,onStatus=()=>{}}){
     update.append(el(document,'p','about-download-size',`${bytes(progress.value)} / ${bytes(progress.max)}`));
    }
   }
-  if(error||status?.error){const failure=el(document,'p','inline-error',error||status.error);failure.setAttribute('role','alert');update.append(failure);}
+  if(error||readError||status?.error){const failure=el(document,'p','inline-error',error||readError||status.error);failure.setAttribute('role','alert');update.append(failure);}
   if(uncertainInstall||phase==='launchUnknown')update.append(el(document,'p','about-update-message','请先核对安装程序是否已打开。为避免重复启动，此次操作不会自动重试。'));
   else if(phase==='launched')update.append(el(document,'p','about-update-message',inPlace?'请在更新窗口查看安装进度和结果。':'请完全退出码舱（包括系统托盘），在安装程序中完成更新后重新打开应用。'));
   else if(status?.demo)update.append(el(document,'p','about-update-message','演示模式可检查发布信息，不能下载或安装应用更新。'));
@@ -68,13 +70,22 @@ export function mountAbout(host,{api,mutate,onStatus=()=>{}}){
  }
  function schedule(){
   clearTimeout(timer);timer=null;
-  if(active&&(busy||['downloading','launching'].includes(status?.phase)))timer=setTimeout(refresh,900);
+  if(active&&(busy||['checking','downloading','launching'].includes(status?.phase)))timer=setTimeout(refresh,900);
+ }
+ function update(next){
+  if(!next?.currentVersion)return;
+  if(status?.preparedVersion!==next.preparedVersion)confirmInstall=false;
+  status=next;revision++;currentRead=null;readError=null;
+  if(next.phase==='launched')uncertainInstall=false;
+  onStatus(next);
+  if(active)render();
+  schedule();
  }
  async function refresh(){
   if(!active||currentRead)return;
   const read=Symbol();currentRead=read;
-  try{const next=await api('/api/app-update/status',{});if(currentRead===read){status=next;if(next.phase==='launched')uncertainInstall=false;render();}}
-  catch(failure){if(currentRead===read){error=failure?.message||'无法读取应用更新状态';render();}}
+  try{const next=await api('/api/app-update/status',{});if(currentRead===read)update(next);}
+  catch(failure){if(currentRead===read){readError=failure?.message||'无法读取应用更新状态';render();}}
   finally{if(currentRead===read){currentRead=null;schedule();}}
  }
  async function run(action){
@@ -82,15 +93,19 @@ export function mountAbout(host,{api,mutate,onStatus=()=>{}}){
   const mine=generation;busy=action;error=null;confirmInstall=false;render();schedule();
   try{
    const result=action==='check'?await api('/api/app-update/check',{}):await mutate(`app-update/${action}`,{version:status.latest.version,...(action==='install'?{confirmed:true}:{})});
-   if(mine===generation&&result?.currentVersion)status=result;
+   if(mine===generation&&result?.currentVersion)update(result);
   }catch(failure){if(mine===generation){error=failure?.message||'应用更新失败';if(action==='install'&&failure?.outcome!=='notExecuted')uncertainInstall=true;}}
   finally{if(mine===generation){currentRead=null;busy=null;render();if(active)await refresh();}}
  }
  render();
  return {
-  activate(){active=true;return refresh();},
+  async activate(){
+   active=true;render();await refresh();
+   if(active&&status?.requiresRecheck&&['available','ready'].includes(status.phase))await run('check');
+  },
   deactivate(){active=false;clearTimeout(timer);timer=null;confirmInstall=false;},
-  refresh,
-  reset(){generation++;currentRead=null;clearTimeout(timer);timer=null;status=null;error=null;confirmInstall=false;busy=null;render();if(active)refresh();},
+  refresh,update,
+  get revision(){return revision;},
+  reset(){generation++;revision++;currentRead=null;clearTimeout(timer);timer=null;status=null;error=null;readError=null;confirmInstall=false;uncertainInstall=false;busy=null;onStatus(null);render();if(active)refresh();},
  };
 }

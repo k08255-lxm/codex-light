@@ -2,12 +2,23 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 namespace CodexLight.Desktop;
+internal enum ExecutableChoice { Cancel, Run, Reveal }
 internal static class LocalPathLinks {
  internal const string ClickScript = """
- (()=>{if(window!==window.top)return;document.addEventListener('click',event=>{
+ (()=>{if(window!==window.top)return;window.codeCangDesktopImageActions=true;document.addEventListener('click',event=>{
    if(!event.isTrusted||event.button!==0)return;
    const link=event.target instanceof Element?event.target.closest('button.md-file-link[data-path]'):null;
    if(!link)return;const path=link.getAttribute('data-path');if(!path||path.length>4096)return;
+   if(link.hasAttribute('data-preview-image')||link.hasAttribute('data-line'))return;
+   const absolute=value=>typeof value==='string'&&value.length<=4096&&/^(?:[a-z]:[\\/]|\/|\\\\|file:)/i.test(value);
+   if(!absolute(path)){
+     // A projected child reply can precede the first read of its working directory.
+     // The web preview resolves this trusted click against the bound thread.
+     event.revealResolvedLocalPath=value=>{
+       if(link.isConnected&&absolute(value))window.chrome.webview.postMessage({type:'revealLocalPath',path:value});
+     };
+     return;
+   }
    event.preventDefault();event.stopImmediatePropagation();
    window.chrome.webview.postMessage({type:'revealLocalPath',path});
  },true);})();
@@ -22,6 +33,7 @@ internal static class LocalPathLinks {
  internal static string Normalize(string input,string? wslDistribution=null){
   if(string.IsNullOrWhiteSpace(input)||input.Length>4096||input.Any(c=>char.IsControl(c)))throw new InvalidDataException("Invalid local path.");
   var path=input;
+  if(Regex.IsMatch(path,@"^/[A-Za-z]:[\\/]"))path=path[1..];
   if(wslDistribution!=null){
    if(!ValidWslDistribution(wslDistribution))throw new InvalidDataException("Invalid WSL distribution.");
    if(path.StartsWith("/",StringComparison.Ordinal)&&!path.StartsWith("//",StringComparison.Ordinal))path=@"\\wsl.localhost\"+wslDistribution+path.Replace('/','\\');
@@ -50,5 +62,24 @@ internal static class LocalPathLinks {
  }
  internal static ProcessStartInfo Explorer(string path,bool directory){
   var start=new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),"explorer.exe")){UseShellExecute=false};start.ArgumentList.Add(directory?path:"/select,"+path);return start;
+ }
+ internal static bool OpensDocument(string path)=>Path.GetExtension(path).ToLowerInvariant() is
+  ".pdf" or ".epub" or ".doc" or ".docx" or ".xls" or ".xlsx" or ".ppt" or ".pptx" or ".odt" or ".ods" or ".odp" or
+  ".zip" or ".7z" or ".rar" or ".tar" or ".gz" or ".bmp" or ".avif" or ".heic" or ".tif" or ".tiff" or
+  ".txt" or ".md" or ".log" or ".csv" or ".rtf" or
+  ".mp3" or ".m4a" or ".wav" or ".flac" or ".aac" or ".ogg" or
+  ".mp4" or ".m4v" or ".mkv" or ".mov" or ".avi" or ".webm";
+ internal static ProcessStartInfo OpenPlan(string path,bool directory)=>
+  !directory&&OpensDocument(path)?new ProcessStartInfo(path){UseShellExecute=true,Verb="open"}:Explorer(path,directory);
+ internal static bool IsLocalExecutable(string path)=>Regex.IsMatch(path,@"^[A-Za-z]:[\\/]")&&Path.GetExtension(path).Equals(".exe",StringComparison.OrdinalIgnoreCase);
+ internal static ProcessStartInfo? ExecutablePlan(string path,ExecutableChoice choice){
+  if(choice==ExecutableChoice.Cancel)return null;
+  if(!IsLocalExecutable(path)||ValidateExisting(path))throw new InvalidDataException("Expected a local executable file.");
+  // The Windows open verb keeps attachment checks and system prompts. No command interpreter or runas verb.
+  return choice switch{
+   ExecutableChoice.Run=>new ProcessStartInfo(path){UseShellExecute=true,Verb="open"},
+   ExecutableChoice.Reveal=>Explorer(path,false),
+   _=>throw new ArgumentOutOfRangeException(nameof(choice))
+  };
  }
 }

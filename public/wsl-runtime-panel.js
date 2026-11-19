@@ -14,7 +14,10 @@ export function mountWslRuntimePanel(host, { read, discover, select, isLocal = (
   const root = el('section', undefined, 'runtime-panel wsl-runtime-panel');
   const title = el('h2','Codex 运行环境','section-title');
   const intro = el('p','Windows 与 WSL 使用各自的 Codex 登录、配置和会话。切换不会复制或覆盖它们。','runtime-intro');
-  const facts = el('div',undefined,'runtime-setting-rows');
+  const facts = el('dl',undefined,'runtime-setting-rows wsl-runtime-facts');
+  const compatibility = el('details',undefined,'wsl-compatibility');
+  const limitations = el('ul');
+  compatibility.append(el('summary','WSL 兼容说明'),limitations);
   const controls = el('div',undefined,'wsl-runtime-controls');
   const label = el('label','下次启动使用','field');
   const picker = el('select');picker.setAttribute('aria-label','下次启动使用的 Codex 环境');label.append(picker);
@@ -26,11 +29,11 @@ export function mountWslRuntimePanel(host, { read, discover, select, isLocal = (
   const save = el('button','保存环境','btn primary');
   for(const b of [refresh,scan,save])b.type='button';
   actions.append(refresh,scan,save);controls.append(label,pathLabel,actions);
-  const hint = el('p','发现会启动已安装的 WSL 发行版，以其默认 Linux 用户进行只读检查，不调用模型。请先在该用户下安装并登录 Codex。默认用户改变后需重新发现并选择。','runtime-intro');
+  const hint = el('p','发现会启动 WSL，只读检查默认用户的 Codex，不调用模型。请先为该用户安装并登录 Codex。更换默认用户后需重新发现。','runtime-intro');
   const status = el('p','','runtime-status');status.setAttribute('role','status');status.setAttribute('aria-live','polite');
-  root.append(title,intro,facts,controls,hint,status);host.replaceChildren(root);
+  root.append(title,intro,facts,compatibility,controls,hint,status);host.replaceChildren(root);
   const say = text => { status.textContent=text; };
-  const row = (title,text) => { const node=el('div',undefined,'setting-row');const copy=el('div',undefined,'setting-row-copy');copy.append(el('strong',title),el('p',text));node.append(copy);return node; };
+  const row = (title,text) => { const node=el('div',undefined,'setting-row');node.append(el('dt',title),el('dd',text));return node; };
   function targets(){
     const values=[{target:'native'},...candidates.map(c=>({target:'wsl',distribution:c.distribution,user:c.user}))];
     for(const item of [snapshot?.selected,draft])if(item?.target==='wsl'&&!values.some(v=>key(v)===key(item)))values.push(item);
@@ -46,12 +49,14 @@ export function mountWslRuntimePanel(host, { read, discover, select, isLocal = (
     const local=isLocal();root.hidden=!local || snapshot?.supported===false;
     root.setAttribute('aria-busy',String(busy));
     facts.replaceChildren();
+    const notes=Array.isArray(snapshot?.limitations)?snapshot.limitations.filter(note=>typeof note==='string'&&note.trim()):[];
+    compatibility.hidden=notes.length===0;
+    limitations.replaceChildren(...notes.map(note=>el('li',note)));
     if(snapshot){
       facts.append(row('当前运行',runtimeTargetLabel(snapshot.current)),row('下次启动',runtimeTargetLabel(snapshot.selected)));
       if(snapshot.current.target==='wsl'&&snapshot.engineVersion)facts.append(row('当前引擎版本',String(snapshot.engineVersion)));
       if(snapshot.restartRequired)facts.append(row('重启后生效','环境已保存。请先完成当前任务，再完全退出并重新打开码舱；最小化到托盘不会切换环境。'));
       if(snapshot.current.target==='wsl'||snapshot.selected.target==='wsl')facts.append(row('WSL 引擎更新','在所选发行版内使用原安装方式更新 Linux Codex CLI，例如该 Linux 用户自己的 npm。'));
-      for(const limitation of snapshot.limitations||[])facts.append(row('兼容提示',String(limitation)));
       for(const candidate of candidates)facts.append(row(`${candidate.distribution} · ${candidate.user || '默认用户'}`,candidate.available ? `${candidate.codexPath || '已找到 Codex'}${candidate.codexHome ? ` · 配置：${candidate.codexHome}` : ''}` : candidate.diagnostic || '未发现可用 Codex。请在此发行版内检查安装与 PATH。'));
     }
     picker.replaceChildren();

@@ -47,7 +47,7 @@ test('paired HTTP notification feed includes only active, terminal and pending r
   client.requests.set(2,{id:2,method:'mcpServer/elicitation/request',params:{threadId,turnId,_meta:{codex_approval_kind:'mcp_tool_call',tool_name:'TOP_SECRET_TOOL'}}});
   emit('item/completed',{threadId,turnId,item:{id:'async-message',type:'agentMessage',delivery:'async',questions:[{title:'TOP_SECRET_QUESTION'}]}});
   const active=await (await request()).json();
-  assert.deepEqual(active.running,[{threadId,turnId,state:'waiting'}]);
+  assert.deepEqual(active.running,[{threadId,turnId,state:'waiting',phase:'approval'}]);
   assert.deepEqual(active.pending.map(({kind,id})=>[kind,id.split('-')[0]]),[['approval','request'],['approval','request'],['question','async']]);
   assert.deepEqual(Object.keys(active.pending[0]).sort(),['id','kind','threadId']);
   assert.doesNotMatch(JSON.stringify(active),/TOP_SECRET|bridgeRequestToken/);
@@ -73,6 +73,22 @@ test('offline snapshots report no active states or inferred completions and expi
   feed.observe({method:'turn/completed',params:{threadId,turn:{id:turnId,status:'failed'}}},100);
   assert.deepEqual(snapshot(true,200).finished,[{threadId,turnId,state:'failed'}]);
   assert.deepEqual(snapshot(true,15*60_000+100).finished,[]);
+});
+
+test('background activity phases follow actual events across simultaneous tasks without exposing output',()=>{
+  const feed=new MobileNotificationFeed();
+  const event=(method,threadId,item)=>feed.observe({method,params:{threadId,turnId:'one',item,delta:'private',turn:method==='turn/started'?{id:'one'}:undefined}});
+  const snapshot=()=>feed.snapshot({connected:true,serverInstance:'x',threads:[],requests:new Map()}).running;
+  for(const id of ['a','b'])event('turn/started',id);
+  event('item/started','a',{id:'thought',type:'reasoning'});
+  event('item/started','b',{id:'tool',type:'commandExecution',command:'private'});
+  assert.deepEqual(snapshot().map(t=>t.phase),['thinking','tool']);
+  event('item/started','a',{id:'writer',type:'agentMessage'});
+  event('item/completed','a',{id:'thought',type:'reasoning'});
+  assert.deepEqual(snapshot().map(t=>t.phase),['responding','tool']);
+  event('item/completed','b',{id:'tool',type:'commandExecution'});
+  assert.deepEqual(snapshot().map(t=>t.phase),['responding','working']);
+  assert.doesNotMatch(JSON.stringify(snapshot()),/private|commandExecution|writer/);
 });
 
 test('unanswered async notices survive terminal retention and engine reconnect until answer or archive',()=>{

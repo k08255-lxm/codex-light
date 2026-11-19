@@ -100,10 +100,9 @@ final class QuestionNotificationController {
     }
 
     void show(String id, String threadId, String kind) {
-        if (!validId(id) || !"ready".equals(status(null)) || (!threadId.isEmpty() && !TaskNotificationState.validId(threadId))
+        if (pending.containsKey(id) || pending.size() >= 128 || !validId(id) || !"ready".equals(status(null)) || (!threadId.isEmpty() && !TaskNotificationState.validId(threadId))
                 || (!"question".equals(kind) && !"approval".equals(kind))) return;
         try {
-            if (pending.containsKey(id) || pending.size() >= 128) return;
             Entry entry = new Entry(id, threadId, ++nextId);
             post(entry, "question".equals(kind) ? "Codex 等待你的回答" : "Codex 等待你的审批");
             pending.put(id, entry);
@@ -137,7 +136,9 @@ final class QuestionNotificationController {
         int notificationId = intent.getIntExtra("notificationId", 0);
         if (entry != null) {
             if (notificationId != entry.notificationId || !threadId.equals(entry.threadId)) return null;
-            clear(id);
+            // A tap dismisses the system notification. Keep its identity until the
+            // desktop resolves it so the next background snapshot cannot repost it.
+            manager.cancel(TAG, entry.notificationId);
             return entry;
         }
         // The non-exported activity also receives immutable notification intents after process death.

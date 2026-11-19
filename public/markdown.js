@@ -4,11 +4,28 @@ export const MARKDOWN_LIMITS = Object.freeze({ chars: 65536, blocks: 400, inline
 const TRUNCATED = '…〔Markdown 显示已截断〕';
 const safeText = value => typeof value === 'string' ? value : String(value ?? '');
 const CONTROL = /[\u0000-\u001f\u007f]/;
+const IMAGE_PATH = /\.(?:png|jpe?g|webp|gif|ico|svg)$/i;
+
+export function localImageRef(target, context) {
+  const raw = target.replace(/^<|>$/g, '');
+  if (/^file:\/\/(?!\/|localhost\/)/i.test(raw)) return null;
+  const ref = localPathRef(target, context);
+  if (!ref || !IMAGE_PATH.test(ref.path)) return null;
+  const path = ref.path.replaceAll('\\', '/');
+  if (path.startsWith('//') && !/^\/\/(?:wsl\.localhost|wsl\$)\//i.test(path)) return null;
+  return ref;
+}
 
 export function safeLink(value) {
   const source = safeText(value).trim();
   if (!/^https?:\/\//i.test(source) || /[\u0000-\u0020\u007f]/.test(source)) return null;
   try { const url = new URL(source); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password ? url.href : null; } catch { return null; }
+}
+
+export function resolveRelativePath(path,cwd) {
+  if (!cwd) return path;
+  const base = safeText(cwd).replace(/[\\/]+$/, ''), sep = cwd.includes('\\') ? '\\' : '/';
+  return base + sep + path.replace(/^\.[\\/]/, '').replace(/[\\/]/g, sep);
 }
 
 function decode(value) {
@@ -56,14 +73,9 @@ export function localPathRef(value, { cwd = '' } = {}) {
   if (!/^[A-Za-z]:[\\/]/.test(path) && /^[A-Za-z][A-Za-z0-9+.-]*:/.test(path)) return null;
   const windows = /^[A-Za-z]:[\\/]/.test(path), unc = /^\\\\[^\\/]+[\\/]/.test(path), posix = path.startsWith('/') && !path.startsWith('//');
   const absolute = windows || unc || posix;
-  // Bare words such as "foo" are not treated as files; a relative path needs a separator or an extension.
-  if (!absolute && (/^[#?]/.test(path) || !/[\\/]|\.[A-Za-z0-9]{1,12}$/.test(path))) return null;
-  let fullPath = path;
-  const base = safeText(cwd).replace(/[\\/]+$/, '');
-  if (!absolute && base) {
-    const sep = base.includes('\\') ? '\\' : '/';
-    fullPath = base + sep + path.replace(/^\.[\\/]/, '').replace(/[\\/]/g, sep);
-  }
+  // An explicit link can name a folder or extensionless file in a known working directory.
+  if (!absolute && (/^[#?]/.test(path) || (!cwd && !/[\\/]|\.[A-Za-z0-9]{1,12}$/.test(path)))) return null;
+  const fullPath = absolute ? path : resolveRelativePath(path,cwd);
   const name = path.split(/[\\/]/).filter(Boolean).at(-1) || path;
   const location = line === null ? '' : `:${line}${column !== null ? ':' + column : ''}${endLine !== null ? '-' + endLine : ''}`;
   return { path, fullPath, name, line, column, endLine, absolute, location };
@@ -83,7 +95,7 @@ function angledPath(value, context) {
 }
 // Link destinations allow one level of balanced parentheses, e.g. `Program Files (x86)`, or `<…>` with spaces.
 const DEST = '<[^<>\\n]{1,2048}>|(?:[^()\\n]|\\([^()\\n]{0,256}\\)){1,2048}';
-const INLINE = new RegExp(String.raw`\\([\\` + '`' + String.raw`*_\[\]()<>])|(` + '`' + String.raw`{1,3})([^` + '`' + String.raw`\n]{0,4096})\2|\*\*([^\n]{1,4096}?)\*\*|__([^\n]{1,4096}?)__|\[([^\]\n]{1,512})\]\((` + DEST + String.raw`)\)|<([^<>\n]{1,2048})>`, 'g');
+const INLINE = new RegExp(String.raw`\\([\\` + '`' + String.raw`*_\[\]()<>])|(` + '`' + String.raw`{1,3})([^` + '`' + String.raw`\n]{0,4096})\2|\*\*([^\n]{1,4096}?)\*\*|__([^\n]{1,4096}?)__|!?\[([^\]\n]{0,512})\]\((` + DEST + String.raw`)\)|<([^<>\n]{1,2048})>`, 'g');
 
 function destination(raw) {
   let value = safeText(raw).trim();
@@ -112,10 +124,11 @@ function inline(source, context, depth = 0) {
       else push({ type: 'text', text: match[0] });
     } else {
       const target = destination(match[7]);
-      const image = text[match.index - 1] === '!';
-      const href = safeLink(target); const ref = href ? null : localPathRef(target, context);
-      // Images are never loaded; unsafe or unknown destinations stay literal.
-      if (image) push({ type: 'text', text: match[0] });
+      const image = match[0].startsWith('!');
+      const href = safeLink(target);
+      const ref = image ? localImageRef(target, context) : href ? null : localPathRef(target, context);
+      if (image && ref) push({ type: 'file', ref, children: [{type: 'text', text: match[6] || ref.name}] });
+      else if (image || !match[6]) push({ type: 'text', text: match[0] });
       else if (href) push({ type: 'link', href, children: inline(match[6], context, depth + 1) });
       else if (ref) push({ type: 'file', ref, children: inline(match[6], context, depth + 1) });
       else push({ type: 'text', text: match[0] });
@@ -236,13 +249,17 @@ function renderAst(document, ast, { onCopy, onLocalLink }) {
     node.type = 'button';
     node.title = ref.fullPath + ref.location;
     node.setAttribute('data-path', ref.fullPath);
+    if (IMAGE_PATH.test(ref.path)) node.setAttribute('data-preview-image', '');
     if (ref.line !== null) node.setAttribute('data-line', String(ref.line));
     node.setAttribute('aria-label', `文件 ${ref.fullPath}${ref.location ? ' 第 ' + ref.location.slice(1) + ' 行' : ''}`);
     appendInline(node, token.children || []);
     if (ref.location && !safeText(node.textContent).endsWith(ref.location)) { const line = create('span', 'md-file-line'); if (line) { appendText(line, ref.location); node.append(line); } }
     node.addEventListener('click', async event => {
       event?.preventDefault?.();
-      if (onLocalLink) { onLocalLink(ref, node); return; }
+      if (onLocalLink) {
+        const reveal = event?.revealResolvedLocalPath;
+        onLocalLink(typeof reveal === 'function' ? {...ref, revealResolvedLocalPath: reveal} : ref, node); return;
+      }
       try { await copyText(document, ref.fullPath, onCopy); node.setAttribute('data-copied', 'true'); } catch { node.setAttribute('data-copied', 'false'); }
     });
     return node;

@@ -143,6 +143,11 @@ public class CodexLightBridge {
     }
 
     @JavascriptInterface
+    public boolean saveProjectFile(String scopeJson, String path, String name) {
+        return activity instanceof MainActivity && ((MainActivity) activity).saveProjectFile(scopeJson, path, name);
+    }
+
+    @JavascriptInterface
     public boolean copyToClipboard(final String text) {
         if (activity == null || text == null || activity.isFinishing() || activity.isDestroyed()) {
             return false;
@@ -213,7 +218,7 @@ public class CodexLightBridge {
 
     @JavascriptInterface
     public String getAppVersion() {
-        return "0.4.10";
+        return "0.4.11";
     }
 
     @JavascriptInterface

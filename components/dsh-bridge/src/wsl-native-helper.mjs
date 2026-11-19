@@ -3,31 +3,53 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import {ProviderSources} from './provider-sources.mjs';
-import {modelSelection,readModelDefaults,saveModelDefaults} from './model-defaults.mjs';
+import {builtinModel,builtinProvider,modelChoices,modelSelection,readModelDefaults,saveModelDefaults} from './model-defaults.mjs';
+import {loadInstalledModelCatalog} from './model-catalog.mjs';
 import {createRequire} from 'node:module';
 import {fileURLToPath} from 'node:url';
 const root=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const fail=(code,message)=>{throw Object.assign(new Error(message),{code});};
 const fileIdentity=file=>{const s=fs.statSync(file);if(!s.isFile())fail('DSH_PATH_INVALID','Expected a regular Linux runtime file');return {size:s.size,mtimeMs:s.mtimeMs};};
 const readJson=file=>JSON.parse(fs.readFileSync(file,'utf8'));
-export function nativeProviders({home,cli,env,stateRoot,selection,exists=fs.existsSync,Source=ProviderSources}){
+function nativeSource({home,cli,env,stateRoot,exists=fs.existsSync,Source=ProviderSources}){
  const explicit=env.DSH_NATIVE_PROVIDER_CONFIG;
  const files=explicit?[explicit]:['desktop','sdk'].map(p=>path.join(home,'profiles',p,'cordis.patch.yml')).filter(exists);
  const sources=new Source({configDir:path.join(stateRoot,'config'),stateDir:path.join(stateRoot,'state'),home,cli});
  const valid=[];
  for(const file of files){const row=sources.readSource({id:'native',path:file});if(!row.valid)fail('DSH_PROVIDER_INVALID','Linux provider source invalid; inspect it in DSH');if(Object.keys(row._providers||{}).length)valid.push({file,providers:row._providers,hash:row.hash});}
  if(valid.length>1)fail('DSH_PROVIDER_AMBIGUOUS','Multiple Linux provider sources; set DSH_NATIVE_PROVIDER_CONFIG explicitly');
- if(valid.length){const source=valid[0];let provider=env.DSH_DEFAULT_PROVIDER;if(!provider){const names=Object.keys(source.providers);provider=names.length===1?names[0]:selection?.provider;if(!provider)fail('DSH_PROVIDER_AMBIGUOUS','请在子代理默认模型设置中指定 Linux DSH 提供商。');}const entry=source.providers[provider];if(!entry)fail('DSH_PROVIDER_INVALID','Selected provider is absent in the Linux source');
+ return valid[0];
+}
+export function nativeProviders(options){
+ const {env,selection}=options,source=nativeSource(options);
+ if(source){let provider=env.DSH_DEFAULT_PROVIDER;if(!provider){const names=Object.keys(source.providers);provider=names.length===1?names[0]:selection?.provider;if(!provider)fail('DSH_PROVIDER_AMBIGUOUS','请在子代理默认模型设置中指定 Linux DSH 提供商。');}const entry=source.providers[provider];if(!entry)fail('DSH_PROVIDER_INVALID','Selected provider is absent in the Linux source');
   if(entry.apiKeyEnv&&!env[entry.apiKeyEnv])fail('DSH_CREDENTIAL_UNAVAILABLE','Linux provider credential environment variable is unavailable; configure it in the selected Linux login environment');
   const model=env.DSH_DEFAULT_MODEL||(entry.models?.length===1?entry.models[0].id:null)||((!selection?.provider||selection.provider===provider)&&selection?.model);if(!model)fail('DSH_MODEL_REQUIRED','请在子代理默认模型设置中指定 Linux DSH 模型。');return {providerSource:source.file,providerSourceHash:source.hash,defaultProvider:provider,defaultModel:model};
  }
  if(!env.DEEPSEEK_API_KEY)fail('DSH_CREDENTIAL_UNAVAILABLE','No usable Linux provider source or DEEPSEEK_API_KEY found; configure Linux DSH first');
- return {providerSource:null,defaultProvider:'deepseek-official',defaultModel:env.DSH_DEFAULT_MODEL||'deepseek-flash'};
+ return {providerSource:null,defaultProvider:builtinProvider,defaultModel:env.DSH_DEFAULT_MODEL||builtinModel};
+}
+function findCli(env){
+ for(const dir of (env.PATH||'').split(path.delimiter)){
+  if(!path.isAbsolute(dir))continue;
+  const candidate=path.join(dir,'dsh');
+  try{fs.accessSync(candidate,fs.constants.X_OK);return fs.realpathSync(candidate);}catch{}
+ }
+ return '';
+}
+export async function nativeModelCatalog(options, loadCatalog=loadInstalledModelCatalog){
+ let source;
+ try{source=nativeSource(options);}
+ catch{return {models:[],catalogError:'无法读取 Linux DSH 模型来源。请检查当前发行版的 DSH 配置。'};}
+ const providers=source?.providers??{};
+ const implicit=Object.keys(providers).filter(id=>!providers[id].models?.length);
+ const catalog=options.cli?await loadCatalog(options.cli,implicit):{};
+ return {models:modelChoices(providers,{includeBuiltin:!source,catalog}),catalogError:catalog.error??null};
 }
 export function verifyNativeProviderDependency(providers,requireFn){if(providers.providerSource){try{requireFn.resolve('@deepseek-ai/dsh-llm-pi-ai');}catch{fail('DSH_PROVIDER_DEPENDENCY_MISSING','Linux DSH custom providers require @deepseek-ai/dsh-llm-pi-ai; repair the Linux DSH installation first');}}}
 export function nativeProbe({cli='',home=os.homedir(),env=process.env,platform=process.platform,node=process.execPath}={}){
  if(platform!=='linux')fail('DSH_NATIVE_LINUX_REQUIRED','Native DSH requires Linux');
- if(!cli){for(const dir of (env.PATH||'').split(path.delimiter)){const candidate=path.join(dir,'dsh');try{fs.accessSync(candidate,fs.constants.X_OK);cli=candidate;break;}catch{}}}
+ if(!cli)cli=findCli(env);
  if(!path.isAbsolute(cli)||/[\x00-\x1f\x7f]/.test(cli))fail('DSH_NOT_FOUND','No Linux DSH CLI found; provide its absolute path');
  cli=fs.realpathSync(cli);node=fs.realpathSync(node);
  const fd=fs.openSync(node,'r');const magic=Buffer.alloc(4);try{fs.readSync(fd,magic,0,4,0);}finally{fs.closeSync(fd);}if(magic.toString('hex')!=='7f454c46')fail('DSH_NATIVE_LINUX_REQUIRED','Node must be a Linux ELF binary');
@@ -70,7 +92,10 @@ if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.ur
    if(action==='model-save'){
     const selection=modelSelection(JSON.parse(process.argv[4]).selection);
     ownedDirectory(stateRoot);ownedDirectory(dir);result=saveModelDefaults(dir,selection);
-   }else result=readModelDefaults(dir);
+   }else{
+    const env=process.env,home=env.DSH_HOME||path.join(os.homedir(),'.dsh');
+    result={...readModelDefaults(dir),...await nativeModelCatalog({home,cli:findCli(env),env,stateRoot})};
+   }
    result={ok:true,settings:result};
   }else{
    if(!['probe','prepare'].includes(action))fail('INVALID_INPUT','Invalid action');

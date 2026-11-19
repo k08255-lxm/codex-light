@@ -7,6 +7,7 @@ import {Runtime} from './runtime.mjs';
 import {ExternalSessions} from './external-sessions.mjs';
 import {events as projectEvents,eventProjection} from './projection.mjs';
 import {contextLimitTokens} from './config.mjs';
+import {builtinModel,builtinProvider} from './model-defaults.mjs';
 import {isolationEnabled, prepareWorkspace, assertWorkspaceOwner, validateAgentWorkspace, isolatedPrompt} from './workspace-isolation.mjs';
 
 const ACTIVE=['starting','running','interrupting'];
@@ -275,7 +276,7 @@ export class Manager extends EventEmitter {
       if(p.status==='idle') this.release(id).catch(e=>this.event(id,'runtime/release-error',{message:e.message}));
     }
   }
-  async start({task,cwd,name,model=this.config.defaultModel??'deepseek-flash',provider=this.config.defaultProvider??'deepseek-official',effort=this.config.defaultEffort??'max',permission='workspace-write',preset='standard'}, {threadId}={}) {
+  async start({task,cwd,name,model=this.config.defaultModel??builtinModel,provider=this.config.defaultProvider??builtinProvider,effort=this.config.defaultEffort??'max',permission='workspace-write',preset='standard'}, {threadId}={}) {
     if(!isAbsolute(cwd)||!statSync(cwd).isDirectory())throw new Error('cwd must be an existing absolute directory');
     const workspace=isolationEnabled(this.config)?prepareWorkspace(this.config,{cwd,threadId,permission}):{cwd,source_cwd:cwd,workspace_mode:'shared',...(threadId?{parent_thread_id:threadId}:{})};
     const a={id:randomUUID(),callback_generation:randomUUID(),name:name?.trim()||titleFromTask(task),...workspace,model,provider,effort,permission,preset,status:'starting',created_at:new Date().toISOString(),answer:'',partial_text:'',persisted:false};

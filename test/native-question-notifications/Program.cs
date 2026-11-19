@@ -21,6 +21,11 @@ static class Program {
   Check(QuestionNotificationBridge.Read(clear,"nonce").Operation=="clear","individual clear");
   var reset=JsonSerializer.Serialize(new{type="desktopQuestionNotification",nonce="nonce",sequence="3",operation="clearAll"});
   Check(QuestionNotificationBridge.Read(reset,"nonce").Operation=="clearAll","session reset");
+  foreach(var operation in new[]{"status","openSettings"}){
+   Check(QuestionNotificationBridge.Read(reset.Replace("clearAll",operation),"nonce").Operation==operation,operation);
+   Reject(()=>QuestionNotificationBridge.Read(Message(operation:operation),"nonce"));
+  }
+  Check(QuestionNotificationBridge.Read(Message(id:"async-thread-1|item-1"),"nonce").Notice.Id=="async-thread-1|item-1","async question identity");
   string token=Guid.NewGuid().ToString("N");
   var toast=XElement.Parse(QuestionNotificationBridge.BuildContent(valid.Notice.Kind,token).GetContent());
   Check(toast.Attribute("launch")?.Value=="questionNotice="+token,"opaque toast click target");

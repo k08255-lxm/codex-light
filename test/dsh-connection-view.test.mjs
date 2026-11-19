@@ -18,22 +18,88 @@ function harness(responses, opts = {}) {
 
 test('the optional default model editor saves, confirms, clears and stays available without an installed DSH',async()=>{
   const selected={model:'vendor/fast',provider:'custom'};
+  const models=[
+    {...selected,name:'Fast',providerName:'Shared'},
+    {model:'vendor/fast',provider:'other',name:'Fast',providerName:'Shared'},
+    {model:'vendor/alpha',provider:'custom',name:'Alpha',providerName:'Shared'},
+  ];
   let saves=0;
   const h=harness([
-    status({dsh:{installed:false},modelDefaults:{available:true,selection:null}}),
+    status({dsh:{installed:false},modelDefaults:{available:true,selection:null,models}}),
     {available:true,selection:selected},{available:true,selection:null}
   ],{onModelSaved:()=>saves++});
   h.view.activate();await settle();
   const panel=h.host.querySelector('.dsh-default-model'),form=panel.querySelector('form');
-  const [model,provider]=form.querySelectorAll('input');
-  model.value='  vendor/fast ';provider.value=' custom ';
+  const model=form.querySelector('select');
+  assert.equal(form.querySelectorAll('input').length,0);
+  assert.equal(h.byText('保存默认模型').disabled,true);
+  const groups=model.querySelectorAll('optgroup');
+  assert.deepEqual(groups.map(group=>group.label),['Shared（custom）','Shared（other）']);
+  assert.deepEqual(groups.map(group=>group.querySelectorAll('option').map(option=>option.textContent)),[['Fast','Alpha'],['Fast']]);
+  model.value=groups[0].querySelector('option').value;model.dispatch('change');
+  assert.equal(h.byText('保存默认模型').disabled,false);
   form.dispatch('submit');await settle();
   assert.deepEqual(h.calls[1],['/api/dsh/connection/saveModel',{selection:selected}]);
   assert.match(panel.textContent,/已保存/);assert.equal(saves,1);
+  assert.equal(h.byText('保存默认模型').disabled,true);
   h.byText('恢复 DSH 默认值').click();await settle();
-  assert.equal(model.value,'');assert.equal(provider.value,'');
+  assert.equal(model.value,'');assert.equal(model.querySelectorAll('option').length,4);
   assert.deepEqual(h.calls[2],['/api/dsh/connection/saveModel',{selection:null}]);
   assert.equal(h.byText('恢复 DSH 默认值').disabled,true);
+});
+
+test('a saved model outside the catalog stays visible and can be reset when loading the catalog fails',async()=>{
+  const selection={model:'prior/model'};
+  const h=harness([status({modelDefaults:{available:true,selection,models:[],catalogError:'无法读取目录'}}),{available:true,selection:null}]);
+  h.view.activate();await settle();
+  const panel=h.host.querySelector('.dsh-default-model'),model=panel.querySelector('select');
+  assert.match(panel.textContent,/无法读取目录/);
+  const groups=model.querySelectorAll('optgroup');
+  assert.deepEqual(groups.map(group=>group.label),['当前目录外']);
+  assert.match(groups[0].querySelector('option').textContent,/prior\/model · 默认提供商（已保存）/);
+  assert.equal(groups[0].querySelector('option').value,model.value);
+  assert.equal(h.byText('保存默认模型').disabled,true);
+  h.byText('恢复 DSH 默认值').click();await settle();
+  assert.deepEqual(h.calls[1],['/api/dsh/connection/saveModel',{selection:null}]);
+});
+
+test('refreshing enabled sources replaces the model options from the refreshed setting status', async()=>{
+  const row={model:'added/model',provider:'custom',name:'Added',providerName:'Custom'};
+  const h=harness([status({modelDefaults:{available:true,selection:null,models:[]}}),{available:true,selection:null,models:[row]}]);
+  h.view.activate();await settle();
+  assert.equal(h.host.querySelector('.dsh-default-model').querySelector('select').disabled,true);
+  h.view.refreshModels();await settle();
+  assert.deepEqual(h.calls[1],['/api/dsh/connection/modelStatus',{}]);
+  const select=h.host.querySelector('.dsh-default-model').querySelector('select');
+  assert.equal(select.disabled,false);
+  const group=select.querySelector('optgroup');
+  assert.equal(group.label,'Custom');
+  assert.equal(group.querySelector('option').textContent,'Added');
+});
+
+test('source refresh waits for an in-flight default model save and preserves the saved selection',async()=>{
+  const selected={model:'first',provider:'custom'};
+  let finishSave;
+  const pending=new Promise(resolve=>{finishSave=resolve;});
+  const h=harness([
+    status({modelDefaults:{available:true,selection:null,models:[{...selected,name:'First',providerName:'Custom'}]}}),
+    pending,
+    {available:true,selection:null,models:[{model:'new',provider:'other',name:'New',providerName:'Other'}]},
+  ]);
+  h.view.activate();await settle();
+  const form=h.host.querySelector('.dsh-default-model').querySelector('form');
+  const select=form.querySelector('select');
+  select.value=select.querySelector('optgroup').querySelector('option').value;form.dispatch('submit');
+  h.view.refreshModels();
+  assert.equal(h.paths().length,2);
+  finishSave({available:true,selection:selected});await settle();
+  assert.equal(h.paths().at(-1),'/api/dsh/connection/modelStatus');
+  const refreshed=h.host.querySelector('.dsh-default-model').querySelector('select');
+  assert.equal(refreshed.value,select.value);
+  const groups=refreshed.querySelectorAll('optgroup');
+  assert.deepEqual(groups.map(group=>group.label),['Other','当前目录外']);
+  assert.equal(groups[0].querySelector('option').textContent,'New');
+  assert.match(groups[1].querySelector('option').textContent,/first · custom（已保存）/);
 });
 
 test('one click runs plan then connect once; registered and queued are not shown as connected', async () => {
@@ -58,6 +124,22 @@ test('the runtime connected state comes only from status', () => {
   assert.equal(describeConnection(bundled(null), { reload: { queued: true } }).label, '已注册，尚未确认连接');
   assert.match(describeConnection(bundled(null), { reload: { queued: false, error: { message: 'old' } } }).detail, /重新打开会话/);
   assert.equal(describeConnection(bundled('failed')).tone, 'fail');
+});
+
+test('version facts distinguish bundled, loaded, legacy and external bridges',async()=>{
+  const available={available:true,version:'0.8.0-light.3',dependenciesReady:true};
+  for(const [registration,runtime,expected] of [
+    ['bundled',{loadedVersion:'0.8.0-light.2'},/已加载的桥版本0\.8\.0-light\.2.*待当前任务结束后重启/],
+    ['bundled',{reportedVersion:available.version},/已加载的桥版本未确认/],
+    ['bundled',{},/已加载的桥版本当前 Codex 未提供版本/],
+    ['external',{reportedVersion:'custom.1'},/外部桥报告的版本custom\.1/],
+  ]){
+    const h=harness([status({bundled:available,registration:{state:registration},runtime:{state:'connected',...runtime}})]);
+    h.view.activate();await settle();
+    assert.match(h.host.textContent,expected);
+    assert.match(h.host.textContent,/随包桥0\.8\.0-light\.3/);
+    h.view.deactivate();
+  }
 });
 
 test('an existing external MCP is kept; no connect or replace action is offered', async () => {

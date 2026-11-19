@@ -36,7 +36,7 @@ export function sharedProviders(status, selected) {
   return [...seen].filter(([, owners]) => owners.length > 1).map(([id, owners]) => ({ id, owners }));
 }
 
-export function mountDshConfig(host, { api }) {
+export function mountDshConfig(host, { api, onSourcesChanged = () => {} }) {
   const document = host.ownerDocument;
   let status = null, draft = null, busy = false, generation = 0, message = { text: '', error: false };
 
@@ -49,7 +49,11 @@ export function mountDshConfig(host, { api }) {
 
   async function call(path, body, done) {
     const mine = ++generation; busy = true; render();
-    try { const result = await api(path, body); if (mine !== generation) return; status = result; resetDraft(); if (done) message = { text: done, error: false }; }
+    try {
+      const result = await api(path, body); if (mine !== generation) return;
+      status = result; resetDraft(); if (done) message = { text: done, error: false };
+      if (path.endsWith('/configure') || path.endsWith('/refresh')) onSourcesChanged();
+    }
     catch (error) {
       if (mine !== generation) return;
       // Known not-executed errors (409 revision/provider conflict, 400, 503) are shown as-is; nothing is retried.

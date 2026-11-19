@@ -23,6 +23,17 @@ function setup(overrides={}){
 }
 const click=(x,t)=>button(x.host,t).listeners.click();
 const choose=x=>{const select=all(x.host).find(x=>x.tag==='select');select.value=select.children[1].value;select.listeners.change();};
+test('runtime values and expandable compatibility notes have separate hierarchy',async()=>{
+ const notes=['WSL Git 说明','DSH 环境说明'];
+ const x=setup({read:async()=>({...data(),limitations:notes})});
+ x.panel.setActive(true);await flush();
+ const nodes=all(x.host);
+ assert.deepEqual(nodes.filter(node=>node.tag==='dt').map(node=>node.textContent),['当前运行','下次启动']);
+ const details=nodes.find(node=>node.tag==='details');
+ assert.equal(details.hidden,false);assert.ok(!details.open);
+ assert.deepEqual(all(details).filter(node=>node.tag==='li').map(node=>node.textContent),notes);
+ assert.equal(nodes.find(node=>node.tag==='label'&&node.textContent==='Linux Codex 路径（可选）').hidden,true);
+});
 test('entry only reads; explicit discover never saves; save separates current and next launch',async()=>{
  const x=setup();assert.deepEqual(x.calls,[]);x.panel.setActive(true);await flush();assert.deepEqual(x.calls,['read']);
  await click(x,'发现 WSL 中的 Codex');choose(x);assert.equal(button(x.host,'保存环境').disabled,false);assert.equal(x.calls.length,2);

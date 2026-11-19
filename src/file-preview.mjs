@@ -7,6 +7,9 @@ import {WslFileScope} from './wsl-file-scope.mjs';
 import {isAbsoluteWorkingDirectory} from './security.mjs';
 
 export const FILE_PREVIEW_LIMITS = Object.freeze({bytes: 1024 * 1024, lines: 2000, concurrent: 4});
+export const FILE_DOWNLOAD_LIMIT = 64 * 1024 * 1024;
+const directoryEntryLimit = 250;
+const attachmentExtension = /\.(?:pdf|docx?|xlsx?|pptx?|od[pts]|rtf|epub|zip|7z|rar|gz|tar|bz2|xz|apk|exe|msi|dll|mp[34]|m4[av]|mov|avi|mkv|wav|ogg|aac|flac|webm|jp2|avif|heic|bmp|tiff?)$/i;
 const imageExtensions = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.ico', '.svg']);
 const fail = (message, code, status = 400) => Object.assign(new Error(message), {code, status, outcome: 'notExecuted'});
 const validId = value => typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\x00-\x20\x7f]/.test(value);
@@ -107,7 +110,10 @@ export class FilePreviewService {
     return {filename, source, selectedWsl: false};
   }
 
-  async preview(input) {
+  preview(input) {return this.request(input, false);}
+  download(input) {return this.request(input, true);}
+
+  async request(input, download) {
     if (this.closed) throw fail('文件预览服务正在关闭', 'FILE_PREVIEW_CLOSED', 409);
     if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['threadId', 'projectId', 'path', 'line', 'endLine'].includes(key))) throw fail('文件预览参数无效', 'FILE_PREVIEW_INPUT_INVALID');
     if (input.threadId !== undefined && input.projectId !== undefined) throw fail('请选择一个对话或项目', 'FILE_PREVIEW_SCOPE_REQUIRED');
@@ -115,25 +121,66 @@ export class FilePreviewService {
     for (const key of ['line', 'endLine']) if (input[key] !== undefined && (!Number.isSafeInteger(input[key]) || input[key] < 1 || input[key] > 10000000)) throw fail('文件行号无效', 'FILE_PREVIEW_LINE_INVALID');
     if (input.endLine !== undefined && (input.line === undefined || input.endLine < input.line)) throw fail('文件行号范围无效', 'FILE_PREVIEW_LINE_INVALID');
     if (this.pending.size >= FILE_PREVIEW_LIMITS.concurrent) throw fail('同时预览的文件过多，请稍后重试', 'FILE_PREVIEW_BUSY', 429);
-    const operation = this.read(input);
+    if (download && (input.line !== undefined || input.endLine !== undefined)) throw fail('下载请求不支持行号', 'FILE_PREVIEW_INPUT_INVALID');
+    const operation = this.read(input, download);
     this.pending.add(operation);
     try {return await operation;} finally {this.pending.delete(operation);}
   }
 
-  async read(input) {
+  async requireProjectPath(input, target) {
+    const base = await this.resolve({path: await this.root(input)});
+    const contained = target.selectedWsl
+      ? base.selectedWsl && this.wsl.inside(base.filename, target.filename)
+      : !base.selectedWsl && (samePath(base.filename, target.filename) || inside(base.filename, target.filename));
+    if (!contained) throw fail('只能浏览或下载当前对话或项目工作目录内的文件', 'FILE_PREVIEW_OUTSIDE_SCOPE', 403);
+  }
+
+  async listDirectory(target, before) {
+    const {filename, selectedWsl} = target;
+    const directoryPath = selectedWsl ? this.wsl.linux(filename) : filename;
+    const entries = [];
+    let truncated = false;
+    const directory = await fs.opendir(filename);
+    for await (const entry of directory) {
+      if (!entry.isFile() && !entry.isDirectory()) continue;
+      if (entries.length === directoryEntryLimit) {truncated = true; break;}
+      const entryPath = (selectedWsl ? path.posix : path).join(directoryPath, entry.name);
+      entries.push({name: entry.name, path: entryPath, kind: entry.isDirectory() ? 'directory' : 'file'});
+    }
+    await checkPath(filename);
+    const after = await fs.lstat(filename);
+    if (after.dev !== before.dev || after.ino !== before.ino) throw fail('目录已变化，请重试', 'FILE_PREVIEW_CHANGED', 409);
+    entries.sort((a, b) => a.kind === b.kind ? a.name.localeCompare(b.name, 'zh-CN', {numeric:true}) : a.kind === 'directory' ? -1 : 1);
+    return {kind: 'directory', path: directoryPath, name: path.basename(filename) || directoryPath, entries, truncated};
+  }
+
+  async read(input, download) {
     let handle;
     try {
-      const {filename, source, selectedWsl} = await this.resolve(input), root = path.dirname(filename);
+      const target = await this.resolve(input);
+      const {filename, source, selectedWsl} = target, root = path.dirname(filename);
+      if (download) await this.requireProjectPath(input, target);
       await checkPath(root);
       await checkPath(filename, true);
       const equal = selectedWsl ? (a, b) => a === b : samePath;
       const canonicalRoot = await fs.realpath(root), canonicalFile = await fs.realpath(filename);
-      if (!equal(canonicalRoot, root) || !equal(canonicalFile, filename) || !inside(canonicalRoot, canonicalFile)) throw fail('文件目录已变化，请重新预览', 'FILE_PREVIEW_PATH_CHANGED', 409);
+      if (!equal(canonicalRoot, root) || !equal(canonicalFile, filename)) throw fail('文件目录已变化，请重新预览', 'FILE_PREVIEW_PATH_CHANGED', 409);
       const rootStat = await fs.lstat(root), before = await fs.lstat(filename);
-      if (!before.isFile() || before.nlink > 1) throw fail('仅支持普通文件，不支持目录或硬链接', 'FILE_PREVIEW_FILE_REFUSED', 403);
+      if (before.isDirectory() && !download) {
+        await this.requireProjectPath(input, target);
+        return await this.listDirectory(target, before);
+      }
+      if (!before.isFile() || before.nlink > 1) throw fail('此操作仅支持普通文件', 'FILE_PREVIEW_FILE_REFUSED', 403);
       const extension = path.extname(filename).toLowerCase(), isImage = imageExtensions.has(extension);
       const maxBytes = isImage ? (extension === '.svg' ? ARTIFACT_LIMITS.svgBytes : ARTIFACT_LIMITS.bytes) : FILE_PREVIEW_LIMITS.bytes;
-      if (before.size > maxBytes) throw fail(`文件超过预览上限（${maxBytes / 1024 / 1024} MB）`, 'FILE_PREVIEW_SIZE_LIMIT', 413);
+      const meta = {name: path.basename(filename), path: source, bytes: before.size};
+      const attachment = async () => {
+        await this.requireProjectPath(input, target);
+        if (before.size > FILE_DOWNLOAD_LIMIT) throw fail('文件超过下载上限（64 MiB）', 'FILE_PREVIEW_SIZE_LIMIT', 413);
+        return {...meta, path: selectedWsl ? this.wsl.linux(filename) : filename, kind:'download'};
+      };
+      if (!download && (before.size > maxBytes || attachmentExtension.test(filename))) return await attachment();
+      if (download && before.size > FILE_DOWNLOAD_LIMIT) throw fail('文件超过下载上限（64 MiB）', 'FILE_PREVIEW_SIZE_LIMIT', 413);
       handle = await fs.open(canonicalFile, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
       const opened = await handle.stat();
       if (!opened.isFile() || opened.nlink > 1 || opened.dev !== before.dev || opened.ino !== before.ino || opened.size !== before.size) throw fail('文件已变化，请重试', 'FILE_PREVIEW_CHANGED', 409);
@@ -143,9 +190,14 @@ export class FilePreviewService {
       const after = await handle.stat(), afterPath = await fs.lstat(filename), afterRoot = await fs.lstat(root);
       await checkPath(root); await checkPath(filename, true);
       if (count !== opened.size || after.size !== opened.size || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs || afterPath.ino !== opened.ino || afterPath.dev !== opened.dev || afterPath.nlink > 1 || afterRoot.ino !== rootStat.ino || afterRoot.dev !== rootStat.dev || !equal(await fs.realpath(root), canonicalRoot) || !equal(await fs.realpath(filename), canonicalFile)) throw fail('文件在读取时发生变化，请重试', 'FILE_PREVIEW_CHANGED', 409);
-      const meta = {name: path.basename(filename), path: source, bytes: bytes.length};
+      if (download) return {name: meta.name, bytes};
       if (isImage) return {...meta, kind: 'image', base64: bytes.toString('base64'), ...inspectArtifact(bytes, extension)};
-      const lines = decodeText(bytes).split('\n'), totalLines = lines.length;
+      let text;
+      try {text = decodeText(bytes);} catch (error) {
+        if (error.code === 'FILE_PREVIEW_FORMAT_UNSUPPORTED') return await attachment();
+        throw error;
+      }
+      const lines = text.split('\n'), totalLines = lines.length;
       const line = input.line === undefined ? null : Math.min(input.line, totalLines);
       const start = Math.max(0, Math.min((line ?? 1) - 1 - FILE_PREVIEW_LIMITS.lines / 4, totalLines - FILE_PREVIEW_LIMITS.lines));
       return {...meta, kind: 'text', text: lines.slice(start, start + FILE_PREVIEW_LIMITS.lines).join('\n'), startLine: start + 1, totalLines, line, endLine: line === null ? null : Math.min(input.endLine ?? line, totalLines), truncated: totalLines > FILE_PREVIEW_LIMITS.lines};

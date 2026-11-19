@@ -1,6 +1,7 @@
 import { requestKey, requestThread } from '../approval-schemas.js';
 import { icon } from '../icons.js';
 import { asyncInputDefinition, asyncAnswerHistory } from './async-input.js';
+import { waitingPhase } from './task-phase.js';
 
 const QUESTIONS = new Set(['item/tool/requestUserInput', 'tool/requestUserInput', 'mcpServer/elicitation/request']);
 const APPROVALS = new Set(['item/commandExecution/requestApproval', 'item/fileChange/requestApproval', 'item/permissions/requestApproval', 'execCommandApproval', 'applyPatchApproval']);
@@ -139,6 +140,7 @@ function notificationTarget(window, open, failed) {
     if (typeof android.updateQuestionNotification !== 'function') return { status: () => 'unsupported' };
     const update = (operation, data = {}) => android.updateQuestionNotification(JSON.stringify({ operation, ...data }));
     return {
+      restoreOnPermissionGrant: true,
       status: () => android.getQuestionNotificationStatus(),
       requestPermission: () => android.requestQuestionNotificationPermission(),
       openSettings: typeof android.openTaskNotificationSettings === 'function' ? () => android.openTaskNotificationSettings() : undefined,
@@ -202,6 +204,7 @@ export function createQuestionNotifications({ document, window, host, permission
   host.classList.add('question-alert');
   host.replaceChildren(open, dismiss); host.hidden = true;
   const signature = () => items.map(item => item.key).join('\n');
+  let androidPermission = bridge.restoreOnPermissionGrant ? bridge.status() : null;
   function bridgeCall(method, value) {
     if (typeof bridge?.[method] !== 'function') return;
     Promise.resolve().then(() => {
@@ -214,6 +217,8 @@ export function createQuestionNotifications({ document, window, host, permission
     const status = bridge.status?.() || 'desktop';
     const labels = {
       desktop: '发送 Windows 通知，点击回到对应请求。',
+      checking: '正在读取 Windows 通知设置…',
+      unavailable: '暂时无法读取 Windows 通知设置。',
       ready: '系统通知已授权，点击可回到对应请求。',
       permission_required: '授权后可在收到新请求时发送系统通知。',
       blocked: '系统通知已关闭，请在设备或浏览器的通知设置中开启。',
@@ -226,15 +231,30 @@ export function createQuestionNotifications({ document, window, host, permission
     setText(permissionButton, canOpenSettings ? '系统通知设置' : '允许系统通知');
   }
   async function requestPermission() {
+    if (permissionButton.hidden || permissionButton.disabled) return;
+    permissionButton.disabled = true;
     try {
       if (bridge.status?.() === 'blocked') await bridge.openSettings();
-      else await bridge.requestPermission();
-      renderPermission();
+      else if (await bridge.requestPermission() === 'default') notice('尚未授权系统通知，可再次点击申请。');
     } catch { failed(); }
+    finally { permissionButton.disabled = false; renderPermission(); }
+  }
+  async function refreshPermission() {
+    try { if (bridge.refreshStatus) await bridge.refreshStatus(); } catch { failed(); }
+    if (disposed) return;
+    if (bridge.restoreOnPermissionGrant) {
+      const current = bridge.status();
+      if (current === 'ready' && androidPermission !== 'ready' && enabled()) {
+        for (const item of items) postReminder(item);
+      }
+      androidPermission = current;
+    }
+    renderPermission();
   }
   permissionButton?.addEventListener('click', requestPermission);
-  window.addEventListener('focus', renderPermission);
-  window.addEventListener('codexlight-question-notification-status', renderPermission);
+  window.addEventListener('focus', refreshPermission);
+  if (bridge.refreshStatus) void refreshPermission();
+  window.addEventListener('codexlight-question-notification-status', refreshPermission);
   function publishPendingQuestions(count, active) {
     if (lastCount === count && lastEnabled === active) return;
     lastCount = count;
@@ -294,6 +314,9 @@ export function createQuestionNotifications({ document, window, host, permission
   bridgeCall('clearAll');
   bridgeCall('setEnabled',notificationEnabled);
   render();
+  function postReminder(item) {
+    bridgeCall('show', { id: item.id, threadId: item.threadId || '', kind: item.kind });
+  }
   function apply(result) {
     if (disposed) return;
     items = result.items;
@@ -301,12 +324,16 @@ export function createQuestionNotifications({ document, window, host, permission
     const nextEnabled = enabled();
     if(nextEnabled!==notificationEnabled)bridgeCall('setEnabled',nextEnabled);
     if (!nextEnabled && notificationEnabled) { queuedOpen = null; clearSystem(); }
-    else if (nextEnabled) for (const item of result.fresh) bridgeCall('show', { id: item.id, threadId: item.threadId || '', kind: item.kind });
+    else if (nextEnabled) {
+      const reminders = bridge.restoreOnPermissionGrant && !notificationEnabled ? items : result.fresh;
+      for (const item of reminders) postReminder(item);
+    }
     notificationEnabled = nextEnabled;
     render();
     void flushOpen();
   }
   return {
+    waitingPhase: (threadId,turnId) => waitingPhase(items,threadId,turnId),
     sync(requests, options) { if (!disposed) { synced=true; apply(state.sync(requests, options)); } },
     observe(message) { if (!disposed && ['item/started', 'item/completed'].includes(message?.method)) apply(state.observe(message)); },
     answered(threadId, itemId) { if (!disposed) apply(state.answered(threadId, itemId)); },
@@ -323,8 +350,8 @@ export function createQuestionNotifications({ document, window, host, permission
       disposed = true; queuedOpen = null; clearSystem(); host.hidden = true;
       publishPendingQuestions(0, enabled());
       permissionButton?.removeEventListener('click', requestPermission);
-      window.removeEventListener('focus', renderPermission);
-      window.removeEventListener('codexlight-question-notification-status', renderPermission);
+      window.removeEventListener('focus', refreshPermission);
+      window.removeEventListener('codexlight-question-notification-status', refreshPermission);
       window.removeEventListener('codex-light-question-open', onNativeOpen);
       window.removeEventListener('pagehide', clearSystem);
     },

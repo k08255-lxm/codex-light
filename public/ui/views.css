@@ -254,6 +254,7 @@
 @media(max-width:600px){.lightbox-bar{flex-wrap:wrap;gap:4px}.lightbox-title{max-width:55%}.lightbox-meta{margin-left:auto}.lightbox-controls{flex-basis:100%;justify-content:flex-end}.lightbox-caption{max-height:20vh;overflow:auto}}
 .lightbox-caption { margin: 0; padding: 8px 14px; border-top: 1px solid var(--border); font-size: .8125rem; color: var(--secondary); }
 .lightbox-caption[hidden] { display: none; }
+.lightbox-file-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:8px; padding:8px 12px; border-top:1px solid var(--border); }
 
 /* ---------- DSH config sources (local only) ---------- */
 .dshcfg { margin-top: 20px; }

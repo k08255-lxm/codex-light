@@ -10,6 +10,7 @@ const SETTLED = new Set(['connected', 'authenticationRequired', 'failed', 'cance
 // Errors the backend reports before any write; everything else from connect may have written.
 const NOT_EXECUTED = new Set(['INVALID_INPUT', 'CONFIRMATION_REQUIRED', 'PLAN_EXPIRED', 'CONNECTION_ALREADY_ATTEMPTED', 'CONNECTION_BUSY', 'MCP_ALREADY_CONFIGURED', 'REVISION_CONFLICT', 'CODEX_CONFIG_READONLY', 'DSH_COMPONENT_UNAVAILABLE', 'DSH_DEMO_DISABLED', 'TOO_MANY_PLANS', 'LOCAL_ONLY']);
 const runtimeTone = state => state === 'connected' ? 'ok' : ['failed', 'authenticationRequired', 'cancelled', 'disabled'].includes(state) ? 'fail' : 'warn';
+const modelKey = selection => selection ? JSON.stringify([selection.provider || '', selection.model]) : '';
 
 export function describeCallbackStatus(callback) {
   if (!callback || typeof callback !== 'object') return null;
@@ -43,6 +44,7 @@ export function describeConnection(status, result = null) {
 export function mountDshConnection(host, { api, wait = ms => new Promise(resolve => setTimeout(resolve, ms)), followUps = 5, followUpMs = 2000, onChange = () => {}, onModelSaved = () => {}, runtimeTarget = () => 'native' }) {
   const document = host.ownerDocument;
   let status = null, result = null, busy = false, connecting = false, generation = 0, pathDraft = '', message = { text: '', error: false };
+  let savingModel = false, active = false, catalogGeneration = 0, catalogRefreshPending = false;
   let mode = null, context = runtimeTarget();
   const root = el(document, 'section', 'dshcfg dshconn');
   host.replaceChildren(root);
@@ -53,6 +55,23 @@ export function mountDshConnection(host, { api, wait = ms => new Promise(resolve
     catch (error) { if (mine !== generation) return; status = null; message = { text: `无法读取连接状态：${error.message}`, error: true }; }
     finally { if (mine === generation) { busy = false; render(); } }
   }
+  async function refreshModels() {
+    if (!active || !status?.modelDefaults) return;
+    if (savingModel) { catalogRefreshPending = true; return; }
+    catalogRefreshPending = false;
+    const target = status, mine = ++catalogGeneration;
+    let catalog;
+    try {
+      const next = await api('/api/dsh/connection/modelStatus', mode ? { mode } : {});
+      catalog = { models: next.models, catalogError: next.catalogError };
+    } catch {
+      catalog = { models: [], catalogError: '无法更新模型目录。请重新检查连接。' };
+    }
+    if (!active || target !== status || mine !== catalogGeneration) return;
+    if (savingModel) { catalogRefreshPending = true; return; }
+    target.modelDefaults = { ...target.modelDefaults, ...catalog };
+    root.querySelector('.dsh-default-model')?.replaceWith(modelSettings());
+  }
   // After a registration, follow the real runtime status for a bounded time; never infer it.
   async function follow(mine) {
     for (let round = 0; round < followUps; round++) {
@@ -62,7 +81,7 @@ export function mountDshConnection(host, { api, wait = ms => new Promise(resolve
     }
   }
   async function connect() {
-    if (connecting || busy || !describeConnection(status).action) return;
+    if (connecting || busy || savingModel || !describeConnection(status).action) return;
     const executablePath = pathDraft.trim();
     const mine = ++generation; connecting = true; busy = true; result = null; message = { text: '正在注册…', error: false }; render();
     let planned = false;
@@ -89,7 +108,7 @@ export function mountDshConnection(host, { api, wait = ms => new Promise(resolve
     titles.append(el(document, 'h2', 'section-title', 'DSH MCP 连接'), el(document, 'p', 'fine', '码舱 CodeCang 自带 DSH MCP 桥。连接后 Codex 可调用 DSH 子代理；不连接也可以正常聊天。'));
     const reload = el(document, 'button', 'btn icon-only ghost'); reload.type = 'button'; reload.setAttribute('aria-label', '重新检查连接'); reload.title = '重新检查连接';
     reload.append(icon(document, 'refresh', { size: 16 })); reload.disabled = busy;
-    reload.addEventListener('click', () => { message = { text: '', error: false }; load(); });
+    reload.addEventListener('click', () => { if (savingModel) return; message = { text: '', error: false }; load(); });
     head.append(titles, reload);
     return head;
   }
@@ -98,7 +117,7 @@ export function mountDshConnection(host, { api, wait = ms => new Promise(resolve
     const picker = el(document, 'select');picker.setAttribute('aria-label', 'DSH 所在环境');picker.disabled = busy || connecting;
     for(const [value,label] of [['','请选择'],['native-wsl','WSL 原生 DSH'],['windows','Windows DSH']]){const option=el(document,'option','',label);option.value=value;picker.append(option);}
     picker.value=mode||'';
-    picker.addEventListener('change',()=>{if(busy||connecting)return;mode=picker.value||null;status=null;result=null;pathDraft='';message={text:'',error:false};load();});
+    picker.addEventListener('change',()=>{if(busy||connecting||savingModel){picker.value=mode||'';return;}mode=picker.value||null;status=null;result=null;pathDraft='';message={text:'',error:false};load();});
     field.append(picker,el(document,'small','','选择只用于检查和本次注册计划，不会覆盖已有 MCP 配置。'));
     return field;
   }
@@ -115,6 +134,17 @@ export function mountDshConnection(host, { api, wait = ms => new Promise(resolve
     else if(status.dsh?.automaticWakeup===false||status.capabilities?.automaticWakeup===false)fact('自动唤醒','此连接模式不支持完成后自动唤醒；请等待或主动读取任务结果。');
     else if(status.capabilities?.automaticWakeup===true)fact('自动唤醒','支持此能力，但尚未读取实际回调状态，不能确认可以投递。');
     fact('随包桥', bundled.available ? `${bundled.version || '版本未知'} · ${bundled.dependenciesReady ? '依赖就绪' : '依赖缺失'}` : '不可用');
+    if (status.runtime?.state === 'connected') {
+      const {loadedVersion, reportedVersion} = status.runtime;
+      if (status.registration?.state === 'bundled') {
+        let label = loadedVersion || (reportedVersion ? `未确认（MCP 报告 ${reportedVersion}）` : '当前 Codex 未提供版本');
+        if (loadedVersion && bundled.version && loadedVersion !== bundled.version)
+          label += ' · 与随包版本不同。待当前任务结束后重启 DSH 桥，再重新连接。';
+        fact('已加载的桥版本', label);
+      } else if (status.registration?.state === 'external') {
+        fact('外部桥报告的版本', reportedVersion || '当前 Codex 未提供版本');
+      }
+    }
     fact('注册', ({ none: '未注册', bundled: `已注册（随包桥 · ${status.registration?.serverName}）`, external: `已有外部配置（${status.registration?.serverName}，已保留）`, unknown: '未知' })[status.registration?.state] || '未知');
     if (result) fact('MCP 刷新', result.reload?.queued ? '已排队（不等于已连接）' : `未完成：${result.reload?.error?.message || '客户端不支持'}`);
     if (status.registration?.state === 'bundled' || status.registration?.state === 'external') fact('运行时', dshRuntimeStatusLabel(status.runtime?.state ?? null));
@@ -150,37 +180,94 @@ export function mountDshConnection(host, { api, wait = ms => new Promise(resolve
       panel.append(el(document, 'p', 'fine', '通过 DeepSeek Harness 新建子代理时使用。单次任务指定的模型优先。'));
     }
     const form = el(document, 'form', 'dsh-default-fields');
-    function field(title, placeholder, value, maxLength) {
-      const label = el(document, 'label', 'field', title);
-      const input = el(document, 'input');
-      Object.assign(input, {value:value || '', placeholder, maxLength, autocomplete:'off', spellcheck:false});
-      label.append(input); form.append(label); return input;
+    const field = el(document, 'label', 'field', '模型');
+    const model = el(document, 'select');
+    field.append(model); form.append(field);
+    const choices = new Map((defaults.models || []).map(row => [modelKey(row), row]));
+    const groups = new Map();
+    const labelCounts = new Map();
+    for (const [key, choice] of choices) {
+      let group = groups.get(choice.provider);
+      if (!group) {
+        const label = choice.providerName || choice.provider;
+        group = { label, entries: [] };
+        groups.set(choice.provider, group);
+        labelCounts.set(label, (labelCounts.get(label) || 0) + 1);
+      }
+      group.entries.push([key, choice]);
     }
-    const model = field('模型 ID', '例如 deepseek-flash', defaults.selection?.model, 255);
-    const provider = field('提供商 ID（可选）', '使用 DSH 的默认提供商', defaults.selection?.provider, 100);
-    model.required = true;
+    if (defaults.catalogError) panel.append(el(document, 'p', 'inline-error', defaults.catalogError));
+    else if (!choices.size) panel.append(el(document, 'p', 'fine', '当前 DSH 配置没有可选模型。'));
     const row = el(document, 'div', 'actions');
     const submit = el(document, 'button', 'btn primary', '保存默认模型'); submit.type = 'submit';
     const reset = el(document, 'button', 'btn ghost', '恢复 DSH 默认值'); reset.type = 'button';
-    reset.disabled = !defaults.selection;
     const feedback = el(document, 'p', 'fine'); feedback.setAttribute('role', 'status');
-    let saving = false;
+    let saved = defaults.selection;
+    function updateButtons() {
+      submit.disabled = busy || savingModel || !choices.has(model.value) || model.value === modelKey(saved);
+      reset.disabled = busy || savingModel || !saved;
+      model.disabled = busy || savingModel || !choices.size;
+    }
+    function fillOptions() {
+      const empty = el(document, 'option', '', '使用 DSH 默认值');
+      empty.value = ''; empty.disabled = true; model.replaceChildren(empty);
+      for (const [provider, { label, entries }] of groups) {
+        const group = el(document, 'optgroup');
+        group.label = labelCounts.get(label) > 1 ? `${label}（${provider}）` : label;
+        for (const [key, choice] of entries) {
+          const option = el(document, 'option', '', choice.name);
+          option.value = key;
+          option.title = `${choice.model} · ${provider}`;
+          group.append(option);
+        }
+        model.append(group);
+      }
+      const savedKey = modelKey(saved);
+      if (saved && !choices.has(savedKey)) {
+        const provider = saved.provider || '默认提供商';
+        const legacy = el(document, 'option', '', `${saved.model} · ${provider}（已保存）`);
+        legacy.value = savedKey;
+        const group = el(document, 'optgroup');
+        group.label = '当前目录外';
+        group.append(legacy);
+        model.append(group);
+      }
+      model.value = savedKey;
+      updateButtons();
+    }
     async function save(selection) {
-      if (saving) return;
-      saving = true; submit.disabled = true; reset.disabled = true;
-      const target = status, currentMode = mode;
+      if (busy || savingModel) return;
+      savingModel = true; updateButtons();
+      const target = status, currentMode = mode, mine = generation;
       try {
         const next = await api('/api/dsh/connection/saveModel', {...(currentMode ? {mode:currentMode} : {}), selection});
-        target.modelDefaults = next;
-        model.value = next.selection?.model || ''; provider.value = next.selection?.provider || '';
+        target.modelDefaults = {...defaults,...next};
+        saved = next.selection;
+        fillOptions();
         feedback.className = 'fine'; feedback.textContent = next.selection ? '已保存，下次新建子代理时生效。' : '已恢复 DSH 默认值。';
         onModelSaved();
+        if (mine === generation && ['DSH_PROVIDER_AMBIGUOUS', 'DSH_MODEL_REQUIRED'].includes(target.dsh?.diagnostic?.code)) {
+          message = { text: feedback.textContent, error: false };
+          load();
+        }
       } catch (error) { feedback.className = 'inline-error'; feedback.textContent = error.message; }
-      finally { saving = false; submit.disabled = false; reset.disabled = !target.modelDefaults.selection; }
+      finally {
+        savingModel = false; updateButtons();
+        if (active && status !== target) {
+          if (mine !== generation && mode === currentMode) load();
+          else render();
+        }
+        if (catalogRefreshPending) refreshModels();
+      }
     }
-    form.addEventListener('submit', event => { event.preventDefault(); save({model:model.value.trim(), ...(provider.value.trim() ? {provider:provider.value.trim()} : {})}); });
+    model.addEventListener('change', updateButtons);
+    form.addEventListener('submit', event => {
+      event.preventDefault();
+      const choice = choices.get(model.value);
+      if (choice && model.value !== modelKey(saved)) save({model:choice.model,provider:choice.provider});
+    });
     reset.addEventListener('click', () => save(null));
-    row.append(submit, reset); form.append(row); panel.append(form,feedback); return panel;
+    row.append(submit, reset); form.append(row); panel.append(form,feedback); fillOptions(); return panel;
   }
   function render() {
     root.replaceChildren(header());
@@ -201,9 +288,10 @@ export function mountDshConnection(host, { api, wait = ms => new Promise(resolve
   function appendMessage() { if (!message.text) return; const p = el(document, 'p', message.error ? 'inline-error' : 'fine', message.text); p.setAttribute('role', 'status'); root.append(p); }
   render();
   return {
-    activate() { if(context!==runtimeTarget()){context=runtimeTarget();mode=null;status=null;result=null;pathDraft='';} message = { text: '', error: false }; load(); },
+    activate() { active = true; if(context!==runtimeTarget()){context=runtimeTarget();mode=null;status=null;result=null;pathDraft='';} message = { text: '', error: false }; return load(); },
+    refreshModels,
     // Leaving the page stops follow-ups; an in-flight connect still finishes server-side and is re-read on return.
-    deactivate() { generation++; busy = connecting; },
+    deactivate() { active = false; generation++; catalogGeneration++; catalogRefreshPending = false; busy = connecting; },
     snapshot: () => ({ status, result, busy, connecting }),
   };
 }

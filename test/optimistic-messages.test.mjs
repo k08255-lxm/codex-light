@@ -24,6 +24,16 @@ async function composerHarness({ mutation } = {}) {
 
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return {promise,resolve,reject}};
 const rows=h=>h.host.querySelectorAll('.optimistic-message');
+test('a steer with a missing or previous-turn anchor stays after the restored prompt of its own turn',()=>{
+ const item=(id,turn)=>({id,_turnId:turn,type:'userMessage',content:[{type:'text',text:id}]});
+ const history=[item('old','previous'),item('prompt','active')];
+ for(const afterItemId of [null,'unloaded','old']){
+  const messages=new OptimisticMessages();
+  const row=messages.begin({threadId:'t',generation:1,text:'follow-up',method:'turn/steer',afterItemId});
+  messages.patch(row.id,{status:'accepted',turnId:'active'});
+  assert.deepEqual(messages.timeline('t',history).map(item=>item.content[0].text),['old','prompt','follow-up']);
+ }
+});
 test('a stopped submission without a server echo stays in its own turn when another message is sent',()=>{
  const s=new OptimisticMessages(),a=s.begin({threadId:'t',generation:1,text:'A',afterItemId:'old'});
  s.patch(a.id,{status:'accepted',turnId:'stopped'});

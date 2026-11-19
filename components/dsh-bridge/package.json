@@ -1,6 +1,6 @@
 {
   "name": "dsh-subagent-mcp",
-  "version": "0.8.0",
+  "version": "0.8.0-light.2",
   "type": "module",
   "scripts": {
     "build": "node build.mjs"
@@ -45,5 +45,5 @@
     "registry": "https://registry.npmjs.org/"
   },
   "private": true,
-  "codexLightIntegrationVersion": 1
+  "codexLightUpstreamVersion": "0.8.0"
 }

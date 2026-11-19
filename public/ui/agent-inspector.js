@@ -89,9 +89,12 @@ export function createAgentInspector({document,state,host,dshTasks,dshLive,rpc,r
   if(saved.loading||saved.queued)return;
   const active=lifecycle(row).tone==='run';
   const changed=row.native?(row.lastSeenMs||0)>saved.checkedAt:String(row.updated_at||'')!==saved.observed;
-  const interval=saved.error?15000:5000;
-  if(!force&&saved.checkedAt&&!changed&&!saved.error&&(!active||Date.now()-saved.checkedAt<interval))return;
-  if(!force&&saved.error&&Date.now()-saved.checkedAt<interval)return;
+  const starting=saved.waitingForRecord===true;
+  const interval=starting?1000:saved.error?15000:5000;
+  if(!force&&saved.checkedAt){
+   if(starting||saved.error){if(Date.now()-saved.checkedAt<interval)return;}
+   else if(!changed&&(!active||Date.now()-saved.checkedAt<interval))return;
+  }
   saved.queued=true;
   readQueue.push({row,saved,scope,server:scopeServer,generation:readGeneration});
   pumpReads();
@@ -118,10 +121,16 @@ export function createAgentInspector({document,state,host,dshTasks,dshLive,rpc,r
     const failure=state.dshReadErrors.get(`${job.scope}:${row.agentId}`);
     if(failure)throw new Error(failure);
    }
-   saved.error='';
+   saved.error='';saved.waitingForRecord=false;saved.firstEmptyAt=null;
    saved.observed=String((!row.native?dshTasks.values().find(task=>task.agentId===row.agentId)?.updated_at:null)||row.updated_at||'');
   }catch(error){
-   if(job.generation===readGeneration)saved.error=error.message||String(error);
+   if(job.generation===readGeneration){
+    const message=error.message||String(error);
+    const emptyRollout=row.native&&!saved.thread&&/\brollout at [^\r\n]+ is empty\b/i.test(message);
+    if(emptyRollout)saved.firstEmptyAt??=Date.now();
+    saved.waitingForRecord=emptyRollout&&lifecycle(row).tone==='run'&&Date.now()-saved.firstEmptyAt<30000;
+    saved.error=saved.waitingForRecord?'':emptyRollout?'子代理的会话记录仍为空，可点刷新重试。':message;
+   }
   }finally{
    saved.loading=false;saved.checkedAt=Date.now();
    if(job.generation===readGeneration&&job.scope===state.thread?.id)render();
@@ -153,6 +162,7 @@ export function createAgentInspector({document,state,host,dshTasks,dshLive,rpc,r
   if(!visible()||!state.connected||scope!==state.thread?.id)return;
   nextRefresh=Date.now()+5000;
   for(const row of rows())queueRead(row);
+  if([...cache.values()].some(saved=>saved.waitingForRecord))nextRefresh=Date.now()+1000;
  }
  function appendSequence(part,items,key,cwd,running,threadId=null,artifacts=null,history=null){
   let operations=[];
@@ -206,7 +216,8 @@ export function createAgentInspector({document,state,host,dshTasks,dshLive,rpc,r
   if(!saved?.thread){
    if(row.prompt)part('prompt',()=>{const input=markdown(row.prompt,row.cwd,row.id);input.classList.add('agent-user-input');return input;},JSON.stringify([row.cwd,row.prompt]));
    if(row.message)part('native-preview',()=>markdown(row.message,row.cwd,row.id),JSON.stringify([row.cwd,row.message]));
-   if(!row.prompt&&!row.message&&!saved?.error){const text=saved?.loading||saved?.queued?'正在读取…':'尚无内容';part('empty',()=>el('p','muted',text),text);}
+   if(saved?.waitingForRecord)part('starting',()=>el('p','muted','正在等待子代理写入首条记录…'));
+   else if(!row.prompt&&!row.message&&!saved?.error){const text=saved?.loading||saved?.queued?'正在读取…':'尚无内容';part('empty',()=>el('p','muted',text),text);}
    return;
   }
   const turns=saved.thread.turns,history=asyncAnswerHistory(turns,row.id);

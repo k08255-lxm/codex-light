@@ -59,7 +59,7 @@ function isolatedWslEnvironment(source){
 }
 export class WslRuntime {
  constructor({platform=process.platform,env=process.env,run=exec}={}){Object.assign(this,{platform,env,run});this.command=wslExecutable(env);}
- async invoke(args,{encoding='utf8'}={}){if(this.platform!=='win32')throw fail('WSL is available only on Windows','WSL_UNAVAILABLE');const result=await this.run(this.command,args,{encoding,env:isolatedWslEnvironment(this.env),windowsHide:true,shell:false,timeout:10000,maxBuffer:128*1024});return result.stdout;}
+ async invoke(args,{encoding='utf8',maxBuffer=128*1024}={}){if(this.platform!=='win32')throw fail('WSL is available only on Windows','WSL_UNAVAILABLE');const result=await this.run(this.command,args,{encoding,env:isolatedWslEnvironment(this.env),windowsHide:true,shell:false,timeout:10000,maxBuffer});return result.stdout;}
  async distributions(){const raw=await this.invoke(['--list','--quiet'],{encoding:'buffer'});return [...new Set(decodeList(raw).replace(/^\uFEFF/,'').split(/\r?\n/).map(x=>x.trim()).filter(safeName))];}
  async probe(input){
   const selection=validateWslSelection(input);if(!selection)throw fail('Select a WSL distribution');

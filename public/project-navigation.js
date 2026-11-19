@@ -163,12 +163,14 @@ export function mountProjectNavigation(host, { onSelect, onOpenThread, onRemove,
         const button = element(document, 'button', 'project-group-thread');
         button.type = 'button';
         const title = element(document, 'span', 'thread-name');
+        const spinner = element(document, 'span', 'thread-running-indicator');
+        spinner.setAttribute('aria-hidden', 'true');
         const unreadIndicator = element(document, 'span', 'thread-unread-indicator');
         unreadIndicator.setAttribute('aria-hidden', 'true');
-        button.append(title, unreadIndicator);
+        button.append(title, spinner, unreadIndicator);
         const node = element(document, 'div', 'project-thread-row');
         node.append(button);
-        row = { node, button, title, unreadIndicator, thread, view };
+        row = { node, button, title, spinner, unreadIndicator, thread, view };
         button.addEventListener('click', () => onOpenThread(row.thread.id));
         if (onThreadAction) {
           const more = element(document, 'button', 'project-thread-action');
@@ -203,6 +205,7 @@ export function mountProjectNavigation(host, { onSelect, onOpenThread, onRemove,
       row.button.title = description;
       row.button.setAttribute('aria-label', description);
       row.button.classList.toggle('running', running);
+      row.spinner.hidden = !running;
       row.unreadIndicator.hidden = !unread;
       const active = thread.id === activeThreadId;
       row.button.classList.toggle('active', active);

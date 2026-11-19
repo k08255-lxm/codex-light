@@ -67,6 +67,7 @@ publicFiles['/ui/desktop-close-preference.js']='ui/desktop-close-preference.js';
 publicFiles['/ui/navigation-history.js']='ui/navigation-history.js';publicFiles['/ui/shell-polish.css']='ui/shell-polish.css';
 publicFiles['/ui/thread-completion.js']='ui/thread-completion.js';publicFiles['/ui/mobile-layout.js']='ui/mobile-layout.js';
 publicFiles['/ui/task-notifications.js']='ui/task-notifications.js';
+publicFiles['/ui/task-phase.js']='ui/task-phase.js';
 publicFiles['/ui/question-notifications.js']='ui/question-notifications.js';
 publicFiles['/context-usage.js']='context-usage.js';
 publicFiles['/ui/context-details.js']='ui/context-details.js';
@@ -88,6 +89,7 @@ publicFiles['/ui/async-input.js']='ui/async-input.js';
 publicFiles['/ui/agent-avatar.js']='ui/agent-avatar.js';
 publicFiles['/account-identity.js']='account-identity.js';
 publicFiles['/ui/title-settings.js']='ui/title-settings.js';
+publicFiles['/ui/settings-search.js']='ui/settings-search.js';
 publicFiles['/ui/update-indicator.js']='ui/update-indicator.js';
 publicFiles['/ui/optimistic-messages.js']='ui/optimistic-messages.js';
 for(const file of ['about-view.js','about-view.css','notifications.js'])publicFiles['/ui/'+file]='ui/'+file;
@@ -471,9 +473,17 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      }json(res,200,result);return;
     }
     if(url.pathname==='/api/files/preview'){json(res,200,await files.preview(input));return;}
+    if(url.pathname==='/api/files/download'){
+     const file=await files.download(input);
+     if(res.destroyed||res.writableEnded)return;
+     const name=encodeURIComponent(file.name).replace(/['()*]/g,c=>'%'+c.charCodeAt(0).toString(16));
+     res.writeHead(200,{'Content-Type':'application/octet-stream','Content-Length':file.bytes.length,'Content-Disposition':"attachment; filename=\"download\"; filename*=UTF-8''"+name});
+     res.end(file.bytes);return;
+    }
     if(url.pathname==='/api/artifacts/preview'){
      const image=await artifacts.preview(input);
      if(res.destroyed||res.writableEnded)return;
+     if(requestAccess==='local'&&image.localPath){const header=encodeURIComponent(image.localPath);if(header.length<=7000)res.setHeader('X-Artifact-Local-Path',header);}
      res.setHeader('Content-Security-Policy',"sandbox; default-src 'none'; script-src 'none'; object-src 'none'; frame-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'");
      res.writeHead(200,{'Content-Type':image.mime,'Content-Length':image.bytes.length,'Content-Disposition':'attachment; filename="artifact.'+({'image/png':'png','image/jpeg':'jpg','image/webp':'webp','image/gif':'gif','image/vnd.microsoft.icon':'ico','image/svg+xml':'svg'})[image.mime]+'"','X-Artifact-Width':String(image.width),'X-Artifact-Height':String(image.height)});res.end(image.bytes);return;
     }

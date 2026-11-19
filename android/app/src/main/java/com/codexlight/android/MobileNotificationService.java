@@ -36,6 +36,7 @@ public final class MobileNotificationService extends Service {
     private static final long SESSION_MS = 6 * 60 * 60_000L;
     private static volatile String state = "off";
     private static boolean started;
+    private static MobileNotificationService currentService;
     private static String targetHost, targetToken;
     private static int targetPort;
     private static boolean backgroundQuestions = true;
@@ -43,6 +44,19 @@ public final class MobileNotificationService extends Service {
     static String status() { return state; }
     static boolean ownsNotifications() { return started && "active".equals(state); }
     static void setQuestionAlerts(boolean enabled) { backgroundQuestions = enabled; }
+
+    // WebView events wake the authoritative feed while the app is visible. After the
+    // WebView pauses, the same service continues polling without relying on JS timers.
+    static void refreshFromWeb() {
+        MobileNotificationService service = currentService;
+        if (service == null || !ownsNotifications()) return;
+        if (service.polling) service.refreshPending = true;
+        else if (!service.expedited) {
+            service.expedited = true;
+            service.handler.removeCallbacks(service.nextPoll);
+            service.handler.postDelayed(service.nextPoll, 100L);
+        }
+    }
 
     static void stopIfTargetChanged(Context context, ServerConfig config) {
         if (targetHost != null && (config == null || !targetHost.equals(config.getHost())
@@ -74,7 +88,9 @@ public final class MobileNotificationService extends Service {
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
-    private final Set<String> knownQuestions = new LinkedHashSet<>(), knownFinished = new LinkedHashSet<>();
+    private final Set<String> knownFinished = new LinkedHashSet<>();
+    private final Runnable nextPoll = this::poll;
+    private boolean polling, refreshPending, expedited;
     private ServerConfig target;
     private String serverInstance;
     private TaskNotificationController tasks;
@@ -108,8 +124,10 @@ public final class MobileNotificationService extends Service {
         }
         if (!tasks.permissionGranted()) { state = "permission_required"; stopSelf(); return START_NOT_STICKY; }
         started = true;
+        currentService = this;
         target = new ServerConfig(host,port,token);
         generation++;
+        polling = false; refreshPending = false;
         handler.removeCallbacksAndMessages(null);
         serverInstance = null;
         retryMs = 5_000L;
@@ -139,6 +157,8 @@ public final class MobileNotificationService extends Service {
 
     private void poll() {
         if (SystemClock.elapsedRealtime() >= deadline) { expireSession(); return; }
+        expedited = false;
+        polling = true;
         final int session = generation;
         final ServerConfig config = target;
         worker.execute(() -> {
@@ -187,6 +207,9 @@ public final class MobileNotificationService extends Service {
     }
 
     private void receive(JSONObject data, String error) {
+        polling = false;
+        boolean refresh = refreshPending;
+        refreshPending = false;
         if (SystemClock.elapsedRealtime() >= deadline) { expireSession(); return; }
         if (!tasks.permissionGranted()) { state = "permission_required"; stopSelf(); return; }
         if (data == null || !data.optBoolean("connected")) {
@@ -197,7 +220,7 @@ public final class MobileNotificationService extends Service {
                 stopSelf();
                 return;
             }
-            handler.postDelayed(this::poll,retryMs);
+            handler.postDelayed(nextPoll,retryMs);
             retryMs = Math.min(retryMs * 2,60_000L);
             return;
         }
@@ -208,7 +231,7 @@ public final class MobileNotificationService extends Service {
         if (baseline) {
             if (serverInstance != null) { tasks.clear(); questions.clearAll(); }
             serverInstance = instance;
-            knownQuestions.clear(); knownFinished.clear();
+            knownFinished.clear();
         }
         JSONArray incoming = data.optJSONArray("pending"), running = data.optJSONArray("running"), finished = data.optJSONArray("finished");
         Set<String> current = new HashSet<>();
@@ -218,7 +241,7 @@ public final class MobileNotificationService extends Service {
             String id = notice.optString("id");
             if (!QuestionNotificationController.validId(id)) continue;
             current.add(id);
-            if (remember(knownQuestions,id) && !baseline && backgroundQuestions) questions.show(id,notice.optString("threadId"),notice.optString("kind"));
+            if (backgroundQuestions) questions.show(id,notice.optString("threadId"),notice.optString("kind"));
         }
         questions.reconcile(current);
         Set<String> currentThreads = new HashSet<>();
@@ -235,7 +258,7 @@ public final class MobileNotificationService extends Service {
             if (remember(knownFinished,key) && !baseline && !currentThreads.contains(task.optString("threadId"))) tasks.updateFromFeed(task);
         }
         tasks.reconcile(currentThreads);
-        handler.postDelayed(this::poll,5_000L);
+        handler.postDelayed(nextPoll,refresh ? 100L : 5_000L);
     }
 
     private static boolean remember(Set<String> seen, String key) {
@@ -249,6 +272,7 @@ public final class MobileNotificationService extends Service {
     @Override public void onDestroy() {
         generation++;
         started = false;
+        currentService = null;
         targetHost = null; targetToken = null; targetPort = 0;
         if ("active".equals(state) || "connecting".equals(state) || "network_error".equals(state) || "engine_offline".equals(state)) state = "off";
         handler.removeCallbacksAndMessages(null);

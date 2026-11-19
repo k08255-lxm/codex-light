@@ -118,7 +118,8 @@ test('known pre-launch failure can be retried without falsely claiming installer
 });
 test('stale or injected update parameters are rejected before filesystem or launch',async t=>{
  let now=1700000000000;const {service}=await fixture(t,{now:()=>now});await service.check();await assert.rejects(service.download({version:'../0.4.0'}),/选择/);await assert.rejects(service.download({version:'0.4.0',url:'https://evil.example/'}),/参数/);
- now+=60*60000+1;await assert.rejects(service.download({version:'0.4.0'}),/过期/);
+ assert.equal(service.status().requiresRecheck,false);
+ now+=60*60000+1;assert.equal(service.status().requiresRecheck,true);await assert.rejects(service.download({version:'0.4.0'}),/过期/);
 });
 
 

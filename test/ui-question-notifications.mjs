@@ -34,6 +34,12 @@ try {
     window.nativeQuestionCalls = []; window.nativeBadges = []; window.testForeground = true;
     document.hasFocus = () => window.testForeground;
     window.codexLightQuestionNotifications = Object.fromEntries(['show', 'clear', 'clearAll'].map(name => [name, async value => window.nativeQuestionCalls.push({ name, value })]));
+    window.testNotificationPermission = 'blocked';
+    Object.assign(window.codexLightQuestionNotifications, {
+      status: () => window.testNotificationPermission,
+      refreshStatus: async () => {},
+      openSettings: () => window.nativeQuestionCalls.push({ name:'openSettings' }),
+    });
     window.chrome.webview = { postMessage(message) { if (message.type === 'desktopTaskbarBadge') window.nativeBadges.push(message); } };
   });
   page.on('pageerror', error => errors.push(error.message));
@@ -86,6 +92,12 @@ try {
   checks.push('async started/completed deduplicate and banner locates the async question');
 
   await page.locator('#rail-settings').click(); await page.locator('[data-settings-section="notifications"]').click();
+  await page.getByRole('button', { name:'系统通知设置', exact:true }).filter({visible:true}).click();
+  assert.equal(await page.evaluate(() => window.nativeQuestionCalls.filter(call => call.name === 'openSettings').length), 1);
+  await page.evaluate(() => { window.testNotificationPermission = 'ready'; window.dispatchEvent(new Event('focus')); });
+  await page.locator('#question-notification-permission').waitFor({state:'hidden'});
+  assert.match(await page.locator('#question-notification-status').textContent(), /已授权/);
+  checks.push('blocked permission opens system settings and returning hides the permission action when granted');
   await page.locator('#preference-approval').uncheck(); await page.locator('#question-alert').waitFor({ state: 'hidden' });
   assert.deepEqual(await page.evaluate(() => window.nativeBadges.at(-1)), {type:'desktopTaskbarBadge',count:1,attention:false});
   await page.locator('#preference-approval').check(); await page.locator('#question-alert').waitFor();
@@ -111,6 +123,8 @@ try {
   await liveCard.locator('.answer-value').filter({hasText:'Confirmed browser answer'}).waitFor();
   await liveWork.getByRole('button',{name:'收起本轮过程'}).click();
   assert.equal(await liveCard.isVisible(),false);
+  // Let the demo answer's own turn finish before reloading into the next badge scenario.
+  await page.locator('#stop').waitFor({state:'hidden'});
   await page.reload();await page.locator('.project-group-thread').filter({hasText:first.name}).click();
   await liveCard.waitFor({state:'attached'});assert.equal(await liveCard.isVisible(),false);
   await liveWork.locator(':scope > summary').click();
@@ -143,6 +157,7 @@ try {
   if (page) {
     await page.screenshot({ path: path.join(output, 'failure.png') });
     console.error(JSON.stringify({ checks, answerStarted, pageErrors: errors,
+      badges: await page.evaluate(() => window.nativeBadges),
       liveCard: await page.locator('[data-item-id="live-question"]').textContent().catch(() => ''),
       notice: await page.locator('#notice').textContent().catch(() => '') }, null, 2));
   }

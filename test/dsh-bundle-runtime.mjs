@@ -4,6 +4,25 @@ const sdk='../components/dsh-bridge/node_modules/@modelcontextprotocol/sdk/dist/
 const {Client}=await import(sdk+'client/index.js');const {InMemoryTransport}=await import(sdk+'inMemory.js');
 const {makeServer}=await import('../components/dsh-bridge/dist/src/server.mjs');
 const checks=[];const manager=new Proxy({config:{},list:()=>[],external:{}},{get(t,p){return p in t?t[p]:(()=>{throw Error('fixture-no-agent');});}});
+// Upgrade a private bundle copy after daemon module load, then handshake with that daemon.
+{
+ const copy=fs.mkdtempSync(path.join(tmp,'version-'));
+ try{
+  fs.cpSync('components/dsh-bridge/dist',copy,{recursive:true});
+  const pkgFile=path.join(copy,'package.json'),pkg=JSON.parse(fs.readFileSync(pkgFile,'utf8'));
+  const manifest=JSON.parse(fs.readFileSync(path.join(copy,'manifest.json'),'utf8'));
+  assert.equal(manifest.version,pkg.version);
+  const {makeServer:loaded}=await import(pathToFileURL(path.join(copy,'src','server.mjs')));
+  fs.writeFileSync(pkgFile,JSON.stringify({...pkg,version:'99.0.0-test'}));
+  const server=loaded(manager),client=new Client({name:'upgrade-fixture',version:'1'});
+  const [a,b]=InMemoryTransport.createLinkedPair();
+  await server.connect(a);await client.connect(b);
+  assert.equal(client.getServerVersion().version,manifest.version);
+  assert.equal(client.getServerCapabilities().experimental.codecangBridge.version,manifest.version);
+  await client.close();await server.close();
+  checks.push('MCP handshake retains the running bridge version across an on-disk replacement');
+ }finally{fs.rmSync(copy,{recursive:true,force:true});}
+}
 const args={dsh_start:{task:'fixture',cwd:tmp},dsh_attach:{session_id:'fixture',web_url:'http://127.0.0.1'},dsh_send:{agent_id:'fixture',task:'fixture'},dsh_status:{agent_id:'fixture'},dsh_list:{},dsh_events:{agent_id:'fixture'},dsh_rename:{agent_id:'fixture',name:'fixture'},dsh_followup:{agent_id:'fixture',task:'fixture'},dsh_interrupt:{agent_id:'fixture'},dsh_close:{agent_id:'fixture'},dsh_release:{agent_id:'fixture'},dsh_wait:{agent_id:'fixture',seconds:0},dsh_watch:{agent_id:'fixture'},dsh_unwatch:{agent_id:'fixture',output_dir:tmp}};
 for(const desktop of [false,true]){const server=makeServer(manager,{desktop});const client=new Client({name:'bundle-fixture',version:'1'});const [a,b]=InMemoryTransport.createLinkedPair();await server.connect(a);await client.connect(b);const {tools}=await client.listTools();assert.equal(tools.length,desktop?12:14);for(const tool of tools){const result=await client.callTool({name:tool.name,arguments:args[tool.name]});if(tool.name==='dsh_list')assert.ok(!result.isError);else assert.equal(result.isError,true,tool.name);}const invalid=await client.callTool({name:'dsh_start',arguments:{task:1}});assert.equal(invalid.isError,true);await client.close();await server.close();checks.push(`MCP ${desktop?'desktop12':'full14'} tools discovery + all tool dispatch, mock failures + list success + invalid schema`);}
 {const server=makeServer(manager,{desktop:true,desktopQueue:true});const client=new Client({name:'queue-fixture',version:'1'});const [a,b]=InMemoryTransport.createLinkedPair();await server.connect(a);await client.connect(b);assert.equal(client.getServerCapabilities().experimental.codecangCallbackQueue.version,1);assert.equal((await client.listTools()).tools.length,14);await client.close();await server.close();checks.push('MCP queue capability schema and desktop-queue14 tools validated by actual SDK');}

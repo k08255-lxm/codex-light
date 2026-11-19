@@ -51,28 +51,26 @@ body .app{height:calc(100dvh - 38px)}
 #settings-dialog .settings-section{min-width:0}
 #settings-dialog .section-title,#settings-dialog .runtime-panel>h2{font-size:1rem;line-height:1.35;letter-spacing:normal;color:var(--text);margin:24px 0 10px}
 #settings-dialog .config-settings-panel>.section-title{margin-top:0}
-#settings-dialog :is(.fine,.field small,.runtime-intro){font-size:.8125rem;line-height:1.55;font-weight:400;color:var(--secondary);overflow-wrap:anywhere;text-wrap:pretty}
+#settings-dialog :is(.fine,.field small,.runtime-intro){font-size:.8125rem;line-height:1.55;font-weight:400;color:var(--secondary);overflow-wrap:anywhere;text-wrap:wrap}
 #settings-dialog :is(.pref-row>div:first-child,.setting-copy){display:flex;flex-direction:column;gap:4px;min-width:0}
 #settings-dialog :is(.pref-row strong,.setting-copy strong,.field>span){font-size:.875rem;font-weight:550;color:var(--text);line-height:1.45}
-#settings-dialog .pref-row small,#settings-dialog .runtime-intro{max-width:68ch}
-#settings-dialog p:empty{display:none}
+#settings-dialog p:empty:not(.settings-feedback){display:none}
 #settings-dialog .connection-details{padding:12px 0;border-top:1px solid var(--border)}
 #settings-dialog .connection-details summary{width:fit-content;cursor:pointer;font-size:.8125rem;color:var(--secondary)}
 #settings-dialog .connection-details .fine{margin:8px 0 0}
 #settings-dialog .config-settings-field :is(select,input){width:min(16rem,48%);min-width:0}
-#settings-dialog .config-settings-controls{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:8px}
+#settings-dialog .config-settings-controls{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:12px 10px}
 #settings-dialog .config-settings-diff p{margin:.35rem 0}
 #settings-dialog .pref-row{flex-wrap:nowrap}
 #settings-dialog .pref-row>select{min-width:0;max-width:55%}
 #settings-dialog .pref-row input[type=checkbox]{flex:none}
 #settings-dialog .pref-row>button{flex:none}
 #settings-dialog .panel+.panel{margin-top:12px}
-#settings-dialog :is(.config-settings-status,#title-settings-root [role=status]){color:var(--secondary);margin:10px 0}
+#settings-dialog .config-settings-status{color:var(--secondary);margin:10px 0}
 @media(max-width:600px){
  #settings-dialog .settings-content{padding:16px 14px 36px}
  #settings-dialog .section-title,#settings-dialog .runtime-panel>h2{margin-top:22px}
- #settings-dialog .pref-row:has(.style-cards),#settings-dialog .pref-row:has(select[aria-label="标题总结模型"]){align-items:stretch;flex-direction:column;gap:8px}
- #settings-dialog .pref-row select[aria-label="标题总结模型"]{width:100%;max-width:100%}
+ #settings-dialog .pref-row:has(.style-cards),#settings-dialog .title-settings-model{align-items:stretch;flex-direction:column;gap:8px}
  #settings-dialog .setting-row-path{min-width:0;flex-basis:36%}
  #settings-dialog .config-settings-field label{gap:8px;align-items:stretch;flex-direction:column}
  #settings-dialog .config-settings-field :is(select,input){width:100%;max-width:100%;font-size:1rem}

@@ -1,6 +1,17 @@
 // Backend owner: synthetic Codex RPC and filesystem only; never registers the user's real MCP.
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import path from 'node:path';import os from 'node:os';import http from 'node:http';
 import {BundledDshBridge,DshConnectionService} from '../src/dsh-connection.mjs';import {createServer} from '../src/server.mjs';
+test('only a connected bridge handshake can confirm the process-loaded version',async()=>{
+ const version='0.8.0-light.2',row={name:'dsh_subagent',runtimeStatus:'connected',serverInfo:{version}};
+ const service=new DshConnectionService({bundle:{},rpc:{call:async()=>({data:[row]})}});
+ assert.deepEqual(await service.runtime(),{state:'connected',reportedVersion:version,loadedVersion:null});
+ row.serverCapabilities={experimental:{codecangBridge:{version},codecangCallbackQueue:{version:1}}};
+ assert.equal((await service.runtime()).loadedVersion,version);
+ row.serverCapabilities.experimental.codecangBridge.version='different';
+ assert.equal((await service.runtime()).loadedVersion,null);
+ row.runtimeStatus='failed';
+ assert.deepEqual(await service.runtime(),{state:'failed'});
+});
 function fixture(){const calls=[],prepared=[],cfg={config:{mcp_servers:{}},layers:[{name:{type:'user'},version:'v1'}]},bundle={bundled:()=>({available:true,dependenciesReady:true,version:'synthetic'}),detect:()=>({installed:false,executablePath:null}),probe:value=>{if(!value)throw Object.assign(Error('DSH missing'),{code:'DSH_NOT_FOUND'});return {executablePath:value,version:'0.2.2-rc.1',identity:{size:1,mtimeMs:1}};},owns:value=>value?.owned===true,prepare:p=>prepared.push(p),registration:exe=>({owned:true,command:exe,args:['synthetic-entry'],env:{CODEX_LIGHT_DSH_BRIDGE:'1'}})};let write='ok',reload=true;const rpc={call:async(method,params)=>{calls.push([method,params]);if(method==='config/read')return structuredClone(cfg);if(method==='config/batchWrite'){if(write instanceof Error)throw write;if(write==='ok'){cfg.config.mcp_servers.dsh_subagent=params.edits[0].value;cfg.layers[0].version='v2';}return {status:write};}if(method==='config/mcpServer/reload'){if(!reload)throw Error('PRIVATE RELOAD');return {};}if(method==='mcpServerStatus/list')return {data:[{name:'dsh_subagent',runtimeStatus:'connected',toolsError:'PRIVATE'}]};throw Error('Unexpected RPC');}};const service=new DshConnectionService({rpc,bundle});return {service,bundle,rpc,calls,cfg,prepared,setWrite:x=>write=x,setReload:x=>reload=x};}
 test('connection status is read-only and reports missing optional DSH without secrets',async()=>{const f=fixture(),status=await f.service.status();assert.equal(status.dsh.installed,false);assert.equal(status.registration.state,'none');assert.equal(f.prepared.length,0);assert.deepEqual(f.calls.map(row=>row[0]),['config/read']);});
 test('existing external MCP config is preserved; no probe, prepare, write or reload occurs',async()=>{const f=fixture();f.cfg.config.mcp_servers.dsh_subagent={command:'external',env:{KEY:'PRIVATE'}};const status=await f.service.status();assert.equal(status.registration.state,'external');assert.equal(status.runtime.state,'connected');assert.ok(!JSON.stringify(status).includes('PRIVATE'));await assert.rejects(f.service.plan({executablePath:'/synthetic/DSH.exe'}),{code:'MCP_ALREADY_CONFIGURED'});assert.equal(f.prepared.length,0);assert.ok(!f.calls.some(row=>row[0]==='config/batchWrite'));});

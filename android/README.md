@@ -24,9 +24,9 @@
 ### 安装与升级
 
 - 最低系统版本为 Android 7.0（API 24），Manifest 的 target SDK 为 34。需要可用的 Android System WebView；不要把 target SDK 当作最低 Android 版本。
-- 从本项目的 [Releases](https://github.com/k08255-lxm/codex-light/releases) 下载匹配发布版本的 Windows 安装器和 APK，也可以按下文从源码构建。v0.4.10 支持在手机设置中检查、下载并安装更新，下载文件为 `codex-light-0.4.10.apk`，versionCode 为 410。
+- 从本项目的 [Releases](https://github.com/k08255-lxm/codex-light/releases) 下载匹配发布版本的 Windows 安装器和 APK，也可以按下文从源码构建。v0.4.11 支持在手机设置中检查、下载并安装更新，下载文件为 `codex-light-0.4.11.apk`，versionCode 为 411。
 - 将 APK 传到手机，用系统安装器打开；如系统提示，仅为当前使用的文件管理器或浏览器允许安装该来源的应用。安装后即可关闭这项许可。
-- 若要核对下载文件，在 Windows 执行 `Get-FileHash .\codex-light-0.4.10.apk -Algorithm SHA256`，与同一发布的 `SHA256SUMS.txt` 中对应文件名的条目对比。哈希只校验文件一致性，不能代替对发布者和签名的信任。
+- 若要核对下载文件，在 Windows 执行 `Get-FileHash .\codex-light-0.4.11.apk -Algorithm SHA256`，与同一发布的 `SHA256SUMS.txt` 中对应文件名的条目对比。哈希只校验文件一致性，不能代替对发布者和签名的信任。
 - 覆盖升级需要相同应用 ID 和签名证书。作者发布包、自行构建包及其他机器生成的调试密钥不保证互相兼容；签名不匹配时不要直接卸载来强行升级，因为卸载会清除手机保存的连接地址和令牌。请优先使用同一来源、同一签名的更新包。
 
 ### 连接电脑
@@ -43,7 +43,7 @@
 
 - Windows PowerShell 5.1+ 或 PowerShell 7+
 - JDK 17+（设置 `JAVA_HOME` 或加入 `PATH`）
-- Android SDK Platform 34 与 Build-Tools 34.0.0+（设置 `ANDROID_HOME` 或 `ANDROID_SDK_ROOT`）
+- Android SDK Platform 36 或更高版本与 Build-Tools 34.0.0+（设置 `ANDROID_HOME` 或 `ANDROID_SDK_ROOT`）
 
 ### 执行构建
 
@@ -120,13 +120,14 @@ Android 普通返回按钮/边缘返回手势先交给桌面服务提供的网�
 
 连接正常时约每 30 秒及离开页面前尝试更新，空白、未就绪或断线状态不会覆盖上次可用快照。内容最多 10 万字符，按电脑地址与端口隔离，在 Android 应用私有 `noBackup` 目录原子保存，最多保留 8 台电脑；当前访问令牌在写入前脱敏。展示使用独立的无 JavaScript、无原生 bridge、禁止网络和导航的 WebView。原生网页归档不承诺剔除认证元数据，因此这里保存的是受控文字，而非可重新执行的整页资源。
 
-## 任务通知与系统胶囊
+## 任务通知与 Android 实时通知
 
-在手机「设置 → 通知」开启「手机任务通知」，Android 13+ 会申请系统通知权限。运行状态可固定，完成、失败和停止使用普通通知，每个对话一条，最多三条。点击可回到对话，「取消固定」或划除后停止提醒同一轮。「提问与审批提醒」使用独立通知渠道，授权后新请求可直接打开对应的审批或提问。历史未处理请求继续在应用内显示。
+在手机「设置 → 通知」开启「手机任务通知」，Android 13 及以上会申请系统通知权限。运行中的任务随实际活动显示工作中、思考中、执行中或回复中。等待回答、等待审批、完成、失败、停止和断线会更新同一条通知。每个对话一条，最多同时显示三条。点击通知可回到对话，划除或选择「取消固定」可停止提醒同一轮。「提问与审批提醒」使用独立通知渠道，点击可打开相应请求。
 
-Android 16 系列可使用「实时通知设置」调整公开的 [Live Updates](https://developer.android.com/develop/ui/views/notifications/live-update) 权限。运行时应用读取系统返回的权限和提升状态，系统提供普通通知或在胶囊等位置显示实时通知。厂商可以限制胶囊支持范围，荣耀等厂商的具体机型仍需真机确认。
+Android 16 及以上可在「实时通知设置」查看系统授权。任务运行时，设置页会显示系统是否已将该条任务通知提升为实时通知。若「任务状态」通知类别的重要性为最低，可点「系统通知设置」进入该类别调整。实时通知在通知栏、锁屏或状态栏的展示由系统决定。[Android 实时通知](https://developer.android.com/develop/ui/views/notifications/live-update)
 
-可主动开启「后台同步通知」。手机会通过 Android 前台数据同步服务直连已配对电脑，在 WebView 暂停时也能同步任务和新请求。通知栏有停止入口，每次最长六小时，离开可访问电脑的网络或进入深度休眠时可能暂停。电脑端需为同版或更新版本，配对授权仍须有效。旧版电脑继续通过应用内网页连接提供通知。
+
+可主动开启「后台同步通知」。首次开启时，Android 13 及以上会请求通知权限。允许后手机会把电脑上仍待处理的提问和审批加入通知栏。应用打开时，新事件会立即触发同步；离开应用后，前台数据同步服务会定期检查已配对电脑。通知栏有停止入口，每次最长六小时，离开可访问电脑的网络或进入深度休眠时可能暂停。电脑端需要支持后台通知接口，配对授权仍须有效。旧版电脑继续通过应用内网页连接提供通知。
 
 维护入口为 `TaskNotificationController`、`QuestionNotificationController` 和 `MobileNotificationService`。`GET /api/mobile/notification-state` 限有效的局域网配对授权，返回任务状态、请求类别及对话路由标识，排除命令、消息、问题正文。后台和网页使用同一通知标识，恢复时既有通知静默同步。可运行 `node --test test/android-task-notifications.test.mjs test/mobile-notification-feed.test.mjs` 验证状态和配对链路。
 

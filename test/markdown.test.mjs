@@ -39,6 +39,15 @@ test('only credential-free absolute HTTP(S) URLs become links', () => {
  const nodes = walk(renderMarkdown(document, '[safe](https://example.com) [unsafe](javascript:alert(1))'));
  const a = nodes.find(x => x.tag === 'a'); assert.equal(a.href, 'https://example.com/'); assert.equal(a.rel, 'noopener noreferrer'); assert.equal(a.target, '_blank'); assert.equal(nodes.filter(x => x.tag === 'a').length, 1);
 });
+test('local image Markdown uses the preview button and external image sources remain inert', () => {
+ const nodes = walk(renderMarkdown(document, '![截图](</C:/图%20片.PNG>) ![](C:/目录/B.png) ![远程](//other.test/a.png) ![远程](file://other.test/f/a.png) ![外部](https://other.test/a.png)'));
+ assert.deepEqual(nodes.filter(node => node.tag === 'button').map(node => [node.textContent,node.attributes['data-path'],node.attributes['data-preview-image']]),[
+  ['截图','/C:/图 片.PNG',''],['B.png','C:/目录/B.png','']
+ ]);
+ assert.equal(nodes.some(node=>node.tag==='img'||node.tag==='a'),false);
+ const dir = parseInline('[截图](screenshots)',{cwd:'C:/项目'})[0];
+ assert.equal(dir.ref.fullPath, 'C:/项目/screenshots');
+});
 test('tables support bounded cells, escaped pipes, alignment and inline formatting', () => {
  const ast = parseMarkdown('| **Name** | Value |\n| :--- | ---: |\n| a\\|b | `42` |');
  assert.equal(ast[0].type, 'table'); assert.deepEqual(ast[0].align, ['left','right']); assert.equal(ast[0].rows[0][0][0].text, 'a|b');

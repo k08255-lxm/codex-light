@@ -1,3 +1,4 @@
+import {createTurnActivity} from './task-phase.js';
 const validId=value=>typeof value==='string'&&/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(value);
 const titleText=value=>Array.from(String(value||'Codex 任务').replace(/[\x00-\x1f\x7f]/g,' ')).slice(0,40).join('');
 
@@ -6,20 +7,27 @@ export function createTaskMonitor({post,title=()=>'',waiting=()=>false}){
   const tasks=new Map(),settled=new Set(),known=new Set();
   let connected=false,enabled=false;
   const key=(threadId,turnId)=>threadId+'\n'+turnId;
-  function send(task){if(enabled){post({threadId:task.threadId,turnId:task.turnId,title:titleText(title(task.threadId)),state:task.state});known.add(task.threadId);if(known.size>1000)known.delete(known.values().next().value);}}
+  function send(task){if(enabled){const data={threadId:task.threadId,turnId:task.turnId,title:titleText(title(task.threadId)),state:task.state};if(task.phase)data.phase=task.phase;post(data);known.add(task.threadId);if(known.size>1000)known.delete(known.values().next().value);}}
+  function update(task,force=false){
+    const wait=connected&&waiting(task.threadId,task.turnId);
+    const state=connected?(wait?'waiting':'running'):'disconnected';
+    const phase=state==='running'?task.activity.phase:state==='waiting'&&typeof wait==='string'?wait:undefined;
+    if(!force&&task.state===state&&task.phase===phase)return;
+    task.state=state;task.phase=phase;send(task);
+  }
   function start(threadId,turnId){
     if(!validId(threadId)||!validId(turnId)||settled.has(key(threadId,turnId)))return;
     const old=tasks.get(threadId);
     if(old&&old.turnId!==turnId)remember(old);
-    const task={threadId,turnId,state:connected?(waiting(threadId,turnId)?'waiting':'running'):'disconnected'};
-    tasks.set(threadId,task);send(task);
+    const task=old?.turnId===turnId?old:{threadId,turnId,activity:createTurnActivity(turnId)};
+    tasks.set(threadId,task);update(task);
     if(tasks.size>1000)tasks.delete(tasks.keys().next().value);
   }
   function remember(task){settled.add(key(task.threadId,task.turnId));if(settled.size>1000)settled.delete(settled.values().next().value);}
   function refresh(){
     for(const task of tasks.values()){
       if(task.state==='disconnected')continue;
-      task.state=waiting(task.threadId,task.turnId)?'waiting':'running';send(task);
+      update(task,true);
     }
   }
   return {
@@ -29,18 +37,22 @@ export function createTaskMonitor({post,title=()=>'',waiting=()=>false}){
       const active=new Map(rows.filter(row=>validId(row?.threadId)&&validId(row?.activeTurnId)).map(row=>[row.threadId,row.activeTurnId]));
       // The server emits its idle session snapshot before the terminal turn event.
       // Stop the heartbeat, but retain identity so that event can still report its real outcome.
-      for(const [threadId,task]of tasks)if(!active.has(threadId)&&task.state!=='disconnected'){task.state='disconnected';send(task);}
+      for(const [threadId,task]of tasks)if(!active.has(threadId)&&task.state!=='disconnected'){task.state='disconnected';task.phase=undefined;send(task);}
       for(const [threadId,turnId]of active)start(threadId,turnId);
     },
     observe(message){
-      const p=message?.params||{},threadId=p.threadId,turnId=p.turn?.id;
-      if(message?.method==='turn/started'){connected=true;start(threadId,turnId);}
-      if(message?.method!=='turn/completed'||!validId(threadId)||!validId(turnId))return;
+      const p=message?.params||{},threadId=p.threadId,turnId=p.turn?.id||p.turnId;
+      if(message?.method==='turn/started'){connected=true;start(threadId,turnId);return;}
       const task=tasks.get(threadId);if(!task||task.turnId!==turnId)return;
+      if(message?.method!=='turn/completed'){
+        if(connected&&task.state!=='disconnected'&&message.method?.startsWith('item/')){task.activity.observe(message);update(task);}
+        return;
+      }
       task.state=['completed','failed','interrupted'].includes(p.turn?.status)?p.turn.status:'disconnected';
+      task.phase=undefined;
       send(task);remember(task);tasks.delete(threadId);
     },
-    disconnected(){connected=false;for(const task of tasks.values()){task.state='disconnected';send(task);}},
+    disconnected(){connected=false;for(const task of tasks.values())if(task.state!=='disconnected'){task.activity=createTurnActivity(task.turnId);update(task);}},
     refresh,
     reset(){for(const threadId of known)post({threadId,state:'idle'});tasks.clear();settled.clear();known.clear();connected=false;},
   };
@@ -52,7 +64,11 @@ export function mountTaskNotifications({document,window,snapshot,title,waiting,o
   const toggle=document.getElementById('mobile-task-enabled'),status=document.getElementById('mobile-task-status');
   const promotion=document.getElementById('mobile-task-promotion-status'),promotionSettings=document.getElementById('mobile-task-promotion-settings');
   const backgroundPanel=document.getElementById('mobile-task-background-panel'),background=document.getElementById('mobile-task-background'),backgroundStatus=document.getElementById('mobile-task-background-status');
-  const monitor=createTaskMonitor({post:data=>bridge.updateTaskNotification(JSON.stringify(data)),title,waiting});
+  let supportsTaskPhase=false;
+  const monitor=createTaskMonitor({post:data=>{
+    if(!supportsTaskPhase)delete data.phase;
+    bridge.updateTaskNotification(JSON.stringify(data));
+  },title,waiting});
   let failed=false,pendingOpen=null,opening=false,lastOpenError=null;
   async function tryOpen(){
     if(!pendingOpen||opening||!snapshot().canOpen)return;
@@ -65,14 +81,25 @@ export function mountTaskNotifications({document,window,snapshot,title,waiting,o
   function run(action){try{action();}catch(error){report(error);}}
   function refreshStatus(){run(()=>{
     const result=JSON.parse(bridge.getTaskNotificationStatus());
+    supportsTaskPhase=result.supportsTaskPhase===true;
     panel.hidden=result.supported!==true;if(panel.hidden){monitor.setEnabled(false);return;}
     toggle.checked=result.enabled===true;monitor.setEnabled(result.enabled===true&&result.reason==='ready');
     const labels={disabled:'开启后显示运行任务、等待处理和任务结果。',permission_required:'尚未获得系统通知权限，请在系统设置中允许。',channel_blocked:'任务通知渠道已关闭，请在系统设置中开启。'};
     status.textContent=labels[result.reason]||'任务通知已开启。';failed=false;
     if(promotion){
-      const messages={promoted:'系统已将运行状态提升为实时通知。',standard:'系统当前以普通通知显示运行状态。',ready:'系统允许实时通知，运行时由系统决定显示位置。',blocked:'实时通知权限关闭，运行状态使用普通通知。',unsupported:'此设备使用普通任务通知。'};
-      promotion.textContent=messages[result.promotion]||(result.promotedCandidate?'运行时由系统决定是否提升实时通知。':'此设备使用普通任务通知。');
-      promotionSettings.hidden=!result.promotedCandidate||typeof bridge.openLiveUpdateSettings!=='function';
+      const messages = {
+        promoted: 'Android 已将运行中的任务提升为实时通知。显示位置由手机系统决定。',
+        standard: '运行中的任务已发到通知栏，系统暂未将它提升为实时通知。',
+        ineligible: '运行中的任务已发到通知栏，当前系统判定这条通知不符合实时通知条件。',
+        ready: '系统允许实时通知。开始任务后可在这里查看它是否已被提升。',
+        blocked: '系统暂不允许码舱发送实时通知，可在「实时通知设置」中查看。',
+        channel_min: '「任务状态」通知类别的重要性为最低，无法显示实时通知。可在「系统通知设置」中调整。',
+        unsupported: 'Android 16 以下仅支持普通任务通知。'
+      };
+      promotion.hidden = result.promotion !== 'unsupported' && result.reason !== 'ready';
+      promotion.textContent = promotion.hidden ? '' : messages[result.promotion] || (result.promotedCandidate
+        ? '运行时由系统决定是否提升实时通知。' : '此设备使用普通任务通知。');
+      if (promotionSettings) promotionSettings.hidden = !result.promotedCandidate || typeof bridge.openLiveUpdateSettings !== 'function';
     }
     if(backgroundPanel){
       backgroundPanel.hidden=typeof bridge.setBackgroundNotifications!=='function';

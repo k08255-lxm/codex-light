@@ -249,10 +249,26 @@ internal sealed class MainWindow : CaptionWindow {
  void RevealLocalPath(string json){
   if(closing||revealingLocalPath)return;revealingLocalPath=true;
   try{
+   if(ImagePreviewActions.Handle(this,json,activeWslDistribution))return;
    var path=LocalPathLinks.Normalize(LocalPathLinks.ReadMessage(json),activeWslDistribution);var directory=LocalPathLinks.ValidateExisting(path,activeWslDistribution);
-   if(MessageBox.Show(this,(directory?"在资源管理器中打开此文件夹？":"在资源管理器中定位此文件？不会运行文件。")+"\n"+path,"本地文件",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
-   directory=LocalPathLinks.ValidateExisting(path,activeWslDistribution);Process.Start(LocalPathLinks.Explorer(path,directory))?.Dispose();
-  }catch(Exception error) when(error is IOException or UnauthorizedAccessException or ArgumentException or JsonException or InvalidOperationException or System.ComponentModel.Win32Exception){MessageBox.Show(this,"无法定位此路径。请确认它是本机现有文件或文件夹；不支持网络路径、快捷方式跳转和特殊协议。","码舱 CodeCang");}
+   if(!directory&&LocalPathLinks.IsLocalExecutable(path)){
+    using var selectedFile=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read);
+    TaskDialogButton run=new("运行"),reveal=new("打开所在目录"),cancel=TaskDialogButton.Cancel;
+    var page=new TaskDialogPage{Caption="本地程序 · 码舱 CodeCang",Heading="要运行这个程序吗？",Text=path,AllowCancel=true,Buttons={run,reveal,cancel},DefaultButton=cancel};
+    var selection=TaskDialog.ShowDialog(this,page);
+    var choice=selection==run?ExecutableChoice.Run:selection==reveal?ExecutableChoice.Reveal:ExecutableChoice.Cancel;
+    var plan=LocalPathLinks.ExecutablePlan(path,choice);
+    if(plan!=null)Process.Start(plan)?.Dispose();
+    return;
+   }
+   var prompt=directory?"在资源管理器中打开此文件夹？":LocalPathLinks.OpensDocument(path)?"用系统默认应用打开此文件？":"在资源管理器中定位此文件？";
+   if(MessageBox.Show(this,prompt+"\n"+path,"本地文件",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
+   if(directory!=LocalPathLinks.ValidateExisting(path,activeWslDistribution))throw new InvalidDataException("File type changed.");
+   try{Process.Start(LocalPathLinks.OpenPlan(path,directory))?.Dispose();}
+   catch(System.ComponentModel.Win32Exception error) when(!directory&&LocalPathLinks.OpensDocument(path)&&error.NativeErrorCode is 31 or 1155){
+    if(MessageBox.Show(this,"未找到关联的应用。要在资源管理器中定位此文件吗？\n"+path,"本地文件",MessageBoxButtons.YesNo,MessageBoxIcon.Question)==DialogResult.Yes&&!LocalPathLinks.ValidateExisting(path,activeWslDistribution))Process.Start(LocalPathLinks.Explorer(path,false))?.Dispose();
+   }
+  }catch(Exception error) when(error is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException or FormatException or JsonException or InvalidOperationException or ExternalException){MessageBox.Show(this,"无法打开此文件。请检查路径、文件格式和关联的应用。","码舱 CodeCang");}
   finally{revealingLocalPath=false;}
  }
  async Task PickFolderAsync(string requestId){

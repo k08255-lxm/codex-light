@@ -51,11 +51,12 @@ $BuildToolsEntry = Get-ChildItem -Path (Join-Path $ResolvedSdk "build-tools") -D
 if (-not $BuildToolsEntry) { throw "No Android SDK build-tools installed under $ResolvedSdk\build-tools" }
 $BuildToolsDir = $BuildToolsEntry.FullName
 
-$AndroidJar = Join-Path $ResolvedSdk "platforms\android-34\android.jar"
+$AndroidJar = Join-Path $ResolvedSdk "platforms\android-36\android.jar"
 if (!(Test-Path $AndroidJar)) {
     $PlatformEntry = Get-ChildItem -Path (Join-Path $ResolvedSdk "platforms") -Directory -Filter "android-*" -ErrorAction Stop |
-        Sort-Object Name -Descending | Select-Object -First 1
-    if (-not $PlatformEntry) { throw "No Android SDK platform installed under $ResolvedSdk\platforms" }
+        Where-Object { $_.Name -match '^android-(\d+)(\.\d+)?$' -and [int]$Matches[1] -ge 36 } |
+        Sort-Object { [version](($_.Name -replace '^android-', '') -replace '^(\d+)$', '$1.0') } -Descending | Select-Object -First 1
+    if (-not $PlatformEntry) { throw "Android SDK Platform 36 or newer is required to compile Live Updates." }
     $AndroidJar = Join-Path $PlatformEntry.FullName "android.jar"
 }
 

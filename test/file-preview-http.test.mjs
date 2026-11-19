@@ -26,6 +26,21 @@ test('file preview HTTP requires bearer and same origin; errors never include fi
   const denied = await post(app, {path: String.raw`\\server.invalid\share\file.txt`}); assert.equal(denied.status, 403); assert.equal((await denied.json()).code, 'FILE_PREVIEW_NETWORK_REFUSED');
 });
 
+test('document downloads require authentication and a bound project, and preserve the suggested filename', async t => {
+  const {app,root} = await fixture(t), name="材料 (1).pdf", payload=Buffer.from('%PDF-1.7\n');
+  await fs.writeFile(path.join(root,name),payload);
+  const download=(input,token=app.token)=>fetch(app.origin+'/api/files/download',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify(input)});
+  const input={projectId:'project',path:name};
+  assert.equal((await download(input,'expired')).status,401);
+  assert.equal((await download({projectId:'project',path:'../outside.txt'})).status,403);
+  const file=await download(input);
+  assert.equal(file.status,200);
+  assert.equal(file.headers.get('content-type'),'application/octet-stream');
+  assert.equal(file.headers.get('x-content-type-options'),'nosniff');
+  assert.equal(decodeURIComponent(file.headers.get('content-disposition').split("filename*=UTF-8''")[1]),name);
+  assert.deepEqual(Buffer.from(await file.arrayBuffer()),payload);
+});
+
 test('opening a trusted RPC thread supplies the base for relative links', async t => {
   const {app, root} = await fixture(t);
   assert.equal((await post(app, {threadId: 'invented', path: '测试.txt'})).status, 403);

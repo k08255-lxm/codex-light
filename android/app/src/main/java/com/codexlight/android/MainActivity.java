@@ -42,10 +42,12 @@ public class MainActivity extends Activity {
     private int navigationGeneration = 0;
     private android.window.OnBackInvokedCallback systemBackCallback;
     private ValueCallback<Uri[]> fileUploadCallback;
+    private ProjectFileDownload projectFileDownload;
     private TaskNotificationController taskNotifications;
     private QuestionNotificationController questionNotifications;
     private String pendingNotificationThread;
     private QuestionNotificationController.Entry pendingQuestion;
+    private ServerConfig backgroundPermissionTarget;
     private OfflineSnapshotController offlineSnapshots;
     private boolean snapshotPageReady;
     private boolean requestedToolbarIntegrated;
@@ -226,8 +228,26 @@ public class MainActivity extends Activity {
     public void setBackgroundNotifications(boolean enabled, boolean questionsEnabled) {
         if (!canOpenWorkbenchSettings() || !hasWindowFocus()) return;
         MobileNotificationService.setQuestionAlerts(questionsEnabled);
+        backgroundPermissionTarget = null;
+        if (enabled && !taskNotifications.permissionGranted()) {
+            backgroundPermissionTarget = currentConfig;
+            if ("permission_required".equals(questionNotifications.status(this))) {
+                questionNotifications.requestPermission(this);
+            } else {
+                taskNotifications.openSettings(this);
+            }
+            return;
+        }
         MobileNotificationService.setEnabled(this,currentConfig,enabled);
         notifyTaskNotificationStatus();
+    }
+
+    private void continueBackgroundPermission() {
+        if (backgroundPermissionTarget == null || !taskNotifications.permissionGranted()) return;
+        if (backgroundPermissionTarget == currentConfig && trustedTaskNotificationPage()) {
+            MobileNotificationService.setEnabled(this,currentConfig,true);
+        }
+        backgroundPermissionTarget = null;
     }
 
     public String getQuestionNotificationStatus() {
@@ -245,7 +265,9 @@ public class MainActivity extends Activity {
     }
 
     public void updateQuestionNotification(String json) {
-        if (trustedTaskNotificationPage() && questionNotifications != null && !MobileNotificationService.ownsNotifications()) questionNotifications.update(json);
+        if (!trustedTaskNotificationPage() || questionNotifications == null) return;
+        if (MobileNotificationService.ownsNotifications()) MobileNotificationService.refreshFromWeb();
+        else questionNotifications.update(json);
     }
 
     private void notifyQuestionNotificationStatus() {
@@ -256,7 +278,8 @@ public class MainActivity extends Activity {
 
     public void updateTaskNotification(String json) {
         if (trustedTaskNotificationPage() && taskNotifications != null) {
-            if (!MobileNotificationService.ownsNotifications()) taskNotifications.update(json);
+            if (MobileNotificationService.ownsNotifications()) MobileNotificationService.refreshFromWeb();
+            else taskNotifications.update(json);
             deliverTaskNotificationIntent();
         }
     }
@@ -329,6 +352,8 @@ public class MainActivity extends Activity {
             if (questionNotifications != null) {
                 questionNotifications.permissionResult(grantResults);
             }
+            continueBackgroundPermission();
+            backgroundPermissionTarget = null;
             notifyTaskNotificationStatus();
             notifyQuestionNotificationStatus();
         }
@@ -351,13 +376,14 @@ public class MainActivity extends Activity {
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
 
         String defaultUa = settings.getUserAgentString();
-        settings.setUserAgentString(defaultUa + " CodexLightMobile/0.4.10");
+        settings.setUserAgentString(defaultUa + " CodexLightMobile/0.4.11");
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             settings.setSafeBrowsingEnabled(false);
         }
 
         webView.setBackgroundColor(0xFF181818);
+        projectFileDownload = new ProjectFileDownload(this, webView, this::trustedProjectFilePage, () -> navigationGeneration);
         webView.addJavascriptInterface(new CodexLightBridge(this), "CodexLightNative");
         webView.setWebChromeClient(new AppWebChromeClient(this, progressBar));
         webView.setWebViewClient(new AppWebViewClient(this, progressBar));
@@ -499,6 +525,22 @@ public class MainActivity extends Activity {
             && webView.getVisibility() == View.VISIBLE;
     }
 
+    boolean saveProjectFile(String scopeJson, String path, String name) {
+        return trustedTaskNotificationPage() && projectFileDownload != null
+            && projectFileDownload.request(scopeJson, path, name);
+    }
+
+    private ServerConfig trustedProjectFilePage() {
+        if (!canOpenWorkbenchSettings() || connectionFailed || authorizationFailed) return null;
+        String location = webView.getUrl();
+        if (location == null) return null;
+        Uri page = Uri.parse(location);
+        String path = page.getPath();
+        return isTrustedOrigin(page) && ("/".equals(path) || "/index.html".equals(path))
+            && ReconnectPolicy.eligible(currentConfig.getHost(), currentConfig.getPort(), currentConfig.getToken())
+            ? currentConfig : null;
+    }
+
     public void openWorkbenchServerManager() {
         if (canOpenWorkbenchSettings()) openServerManager();
     }
@@ -525,6 +567,10 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == ProjectFileDownload.REQUEST_CODE) {
+            if (projectFileDownload != null) projectFileDownload.onActivityResult(resultCode, data);
+            return;
+        }
         if (requestCode == FILE_CHOOSER_REQUEST_CODE) {
             ValueCallback<Uri[]> callback = fileUploadCallback;
             fileUploadCallback = null;
@@ -596,6 +642,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        continueBackgroundPermission();
         AppUpdateChecker.start(this);
         if (webView != null) webView.onResume();
         notifyTaskNotificationStatus();
@@ -630,6 +677,7 @@ public class MainActivity extends Activity {
             getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(systemBackCallback);
         }
         cancelPendingFileUpload();
+        if (projectFileDownload != null) projectFileDownload.close();
         if (webView != null) {
             webView.stopLoading();
             webView.destroy();

@@ -12,11 +12,17 @@ internal sealed class BootstrapProgress : IDisposable {
  readonly object gate=new(); readonly bool visible;
  IntPtr window,heading,body,bar,close,font,headingFont; Exception? startupError;
  string phase="正在准备更新…",message="更新正在进行，请不要关闭电脑。";
+ int? verifiedPercent;
  bool completed,disposed; readonly WindowProc callback;
  BootstrapProgress(bool visible){this.visible=visible;callback=Handle;thread=new Thread(Run){IsBackground=true,Name="CodeCang update progress"};thread.SetApartmentState(ApartmentState.STA);thread.Start();if(!ready.Wait(TimeSpan.FromSeconds(10))){lock(gate){disposed=true;}if(window!=IntPtr.Zero)PostMessageW(window,StopMessage,IntPtr.Zero,IntPtr.Zero);throw new TimeoutException("Update progress window did not start.");}if(startupError!=null)throw new InvalidOperationException("Cannot display update progress.",startupError);}
  internal static BootstrapProgress Start(bool visible=true)=>new(visible);
- internal void Report(string text){lock(gate){if(completed||disposed)return;phase=text;message="更新正在进行，请不要关闭电脑。";}PostMessageW(window,RefreshMessage,IntPtr.Zero,IntPtr.Zero);}
- internal void Complete(bool success,string text){lock(gate){if(disposed)return;completed=true;phase=success?"更新已完成":"更新未完成";message=text;}PostMessageW(window,RefreshMessage,IntPtr.Zero,IntPtr.Zero);}
+ internal void Report(string text,string detail="更新正在进行，请不要关闭电脑。",int? percent=null){
+  lock(gate){if(completed||disposed)return;phase=text;message=detail;verifiedPercent=percent;}
+  PostMessageW(window,RefreshMessage,IntPtr.Zero,IntPtr.Zero);
+ }
+ internal void ReportVerification(int verified,int total)=>
+  Report("正在校验安装文件…",$"已校验 {verified:N0} / {total:N0} 个文件。",total==0?null:(int)(100L*verified/total));
+ internal void Complete(bool success,string text){lock(gate){if(completed||disposed)return;completed=true;phase=success?"更新已完成":"更新未完成";message=text;}PostMessageW(window,RefreshMessage,IntPtr.Zero,IntPtr.Zero);}
  internal void WaitForClose(){if(Thread.CurrentThread!=thread)thread.Join();}
  public void Dispose(){lock(gate){if(disposed)return;disposed=true;}if(window!=IntPtr.Zero)PostMessageW(window,StopMessage,IntPtr.Zero,IntPtr.Zero);if(Thread.CurrentThread!=thread)thread.Join(TimeSpan.FromSeconds(5));}
  void Run(){
@@ -41,7 +47,23 @@ internal sealed class BootstrapProgress : IDisposable {
  }
  IntPtr Control(string type,string text,uint style,int id){var h=CreateWindowExW(0,type,text,0x50000000|style,0,0,0,0,window,(IntPtr)id,GetModuleHandleW(null),IntPtr.Zero);if(h==IntPtr.Zero)throw new Win32Exception();return h;}
  void Layout(){if(body==IntPtr.Zero)return;GetClientRect(window,out var r);int d=(int)GetDpiForSystem();int S(int n)=>n*d/96;int w=r.Right;int h=r.Bottom;MoveWindow(heading,S(28),S(25),w-S(56),S(30),true);MoveWindow(body,S(28),S(65),w-S(56),Math.Max(S(50),h-S(145)),true);MoveWindow(bar,S(28),h-S(70),w-S(56),S(6),true);MoveWindow(close,w-S(132),h-S(52),S(104),S(34),true);}
- void Render(){string p,m;bool done;lock(gate){p=phase;m=message;done=completed;}SetWindowTextW(heading,p);SetWindowTextW(body,m);ShowScrollBar(body,1,done&&m.Length>400);EnableWindow(close,done);if(done){SendMessageW(bar,0x40A,IntPtr.Zero,IntPtr.Zero);ShowWindow(bar,0);SetFocus(close);}}
+ void Render(){
+  string p,m;bool done;int? percent;
+  lock(gate){p=phase;m=message;done=completed;percent=verifiedPercent;}
+  SetWindowTextW(window,p+" · 码舱 CodeCang");SetWindowTextW(heading,p);SetWindowTextW(body,m);
+  ShowScrollBar(body,1,done&&m.Length>400);EnableWindow(close,done);
+  const int styleIndex=-16,marqueeStyle=8;
+  const uint setMarquee=0x40A,setPosition=0x402;
+  if(done){SendMessageW(bar,setMarquee,IntPtr.Zero,IntPtr.Zero);ShowWindow(bar,0);SetFocus(close);return;}
+  int style=GetWindowLongW(bar,styleIndex);
+  bool marquee=(style&marqueeStyle)!=0;
+  if(percent.HasValue){
+   if(marquee){SendMessageW(bar,setMarquee,IntPtr.Zero,IntPtr.Zero);SetWindowLongW(bar,styleIndex,style&~marqueeStyle);}
+   SendMessageW(bar,setPosition,(IntPtr)percent.Value,IntPtr.Zero);
+  }else if(!marquee){
+   SetWindowLongW(bar,styleIndex,style|marqueeStyle);SendMessageW(bar,setMarquee,(IntPtr)1,(IntPtr)35);
+  }
+ }
  IntPtr Handle(IntPtr hwnd,uint msg,IntPtr wp,IntPtr lp){switch(msg){case 0x138:SetBkColor(wp,GetSysColor(5));SetTextColor(wp,GetSysColor(8));return GetSysColorBrush(5);case RefreshMessage:Render();return IntPtr.Zero;case StopMessage:DestroyWindow(hwnd);return IntPtr.Zero;case 0x10:lock(gate){if(!completed)return IntPtr.Zero;}DestroyWindow(hwnd);return IntPtr.Zero;case 0x111:if((wp.ToInt64()&0xffff)==103){lock(gate){if(completed)DestroyWindow(hwnd);}return IntPtr.Zero;}break;case 5:Layout();break;case 2:PostQuitMessage(0);return IntPtr.Zero;}return DefWindowProcW(hwnd,msg,wp,lp);}
  delegate IntPtr WindowProc(IntPtr hwnd,uint message,IntPtr wp,IntPtr lp);
  [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)]struct WindowClass{public uint Size,Style;public WindowProc Proc;public int ClassExtra,WindowExtra;public IntPtr Instance,Icon,Cursor,Background;public string? Menu;public string Name;public IntPtr SmallIcon;}
@@ -62,6 +84,8 @@ internal sealed class BootstrapProgress : IDisposable {
  [DllImport("gdi32.dll")]static extern uint SetTextColor(IntPtr dc,uint color);
  [DllImport("user32.dll")]static extern bool ShowWindow(IntPtr h,int command);
  [DllImport("user32.dll")]static extern bool EnableWindow(IntPtr h,bool value);
+ [DllImport("user32.dll")]static extern int GetWindowLongW(IntPtr h,int index);
+ [DllImport("user32.dll")]static extern int SetWindowLongW(IntPtr h,int index,int value);
  [DllImport("user32.dll")]static extern IntPtr SetFocus(IntPtr h);
  [DllImport("user32.dll")]static extern bool MoveWindow(IntPtr h,int x,int y,int w,int height,bool repaint);
  [DllImport("user32.dll")]static extern bool GetClientRect(IntPtr h,out Rect value);

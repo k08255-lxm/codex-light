@@ -1,4 +1,5 @@
 import {createQuestionNoticeState} from '../public/ui/question-notifications.js';
+import {createTurnActivity, waitingPhase} from '../public/ui/task-phase.js';
 
 const validId = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(value);
 const completedStates = new Set(['completed','failed','interrupted']);
@@ -10,6 +11,16 @@ export class MobileNotificationFeed {
   #running = new Map();
   #notices = createQuestionNoticeState({maxAsyncItems:1024});
 
+  #track(threadId,turnId) {
+    let activity = this.#running.get(threadId);
+    if (activity?.turnId === turnId) return activity;
+    activity = createTurnActivity(turnId);
+    this.#running.delete(threadId);
+    this.#running.set(threadId,activity);
+    if (this.#running.size > 128) this.#running.delete(this.#running.keys().next().value);
+    return activity;
+  }
+
   observe(message, now = Date.now()) {
     const {method, params = {}} = message;
     const {thread, turn, threadId = thread?.id} = params;
@@ -19,11 +30,11 @@ export class MobileNotificationFeed {
     if (!validId(threadId)) return;
     const turnId = turn?.id || params.turnId;
     if (method === 'turn/started' && validId(turnId)) {
-      this.#running.delete(threadId);
-      this.#running.set(threadId,turnId);
-      if (this.#running.size > 128) this.#running.delete(this.#running.keys().next().value);
+      this.#track(threadId,turnId);
     }
-    if (method === 'thread/closed' || (method === 'turn/completed' && this.#running.get(threadId) === turnId)) this.#running.delete(threadId);
+    const activity = this.#running.get(threadId);
+    if (activity && activity.turnId === turnId) activity.observe(message);
+    if (method === 'thread/closed' || (method === 'turn/completed' && activity?.turnId === turnId)) this.#running.delete(threadId);
     if (method === 'thread/archived' || method === 'thread/deleted') {
       this.#running.delete(threadId);
       for (const [key, task] of this.#finished) if (task.threadId === threadId) this.#finished.delete(key);
@@ -44,16 +55,15 @@ export class MobileNotificationFeed {
     this.#notices.sync(requests,{notify:false});
     for (const [key, task] of this.#finished) if (now-task.at >= retentionMs) this.#finished.delete(key);
     const pending = connected ? this.#notices.snapshot() : [];
-    const waiting = (threadId,turnId) => pending.some(notice => {
-      const requestTurnId = notice.turnId || notice.request?.params?.turnId;
-      return notice.threadId === threadId && (!requestTurnId || requestTurnId === turnId);
-    });
     const active = connected ? new Map(this.#running) : new Map();
     if (connected) for (const row of threads) {
-      if (validId(row.threadId) && validId(row.activeTurnId) && row.state === 'active') active.set(row.threadId,row.activeTurnId);
+      if (validId(row.threadId) && validId(row.activeTurnId) && row.state === 'active') active.set(row.threadId,this.#track(row.threadId,row.activeTurnId));
       else active.delete(row.threadId);
     }
-    const running = [...active].slice(-32).map(([threadId,turnId]) => ({threadId,turnId,state:waiting(threadId,turnId) ? 'waiting' : 'running'}));
+    const running = [...active].slice(-32).map(([threadId,activity]) => {
+      const turnId = activity.turnId, waiting = waitingPhase(pending,threadId,turnId);
+      return {threadId,turnId,state:waiting ? 'waiting' : 'running',phase:waiting || activity.phase};
+    });
     return {
       connected, serverInstance, running,
       finished:connected ? [...this.#finished.values()].map(({threadId,turnId,state}) => ({threadId,turnId,state})) : [],

@@ -33,7 +33,12 @@ test('Native notification integration guards trust, uses public Android promotio
   assert.match(activity, /!isDemoMode && currentPageTrusted && currentConfig != null/);
   assert.match(activity, /trustedTaskNotificationPage\(\) && taskNotifications != null/);
   assert.match(controller, /json.length\(\) > 4096/);
-  assert.match(controller, /"android.requestPromotedOngoing"/);
+  const live = read('AndroidLiveUpdates.java');
+  assert.match(live, /"android.requestPromotedOngoing"/);
+  assert.match(live, /Notification\.ProgressStyle\(\)\.setProgressIndeterminate\(true\)/);
+  assert.match(live, /new Intent\(Settings\.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS\)\s*\.putExtra\(Settings\.EXTRA_APP_PACKAGE/);
+  assert.match(live, /notification\.flags & Notification\.FLAG_PROMOTED_ONGOING/);
+  assert.match(controller, /importance == NotificationManager\.IMPORTANCE_MIN/);
   assert.match(controller, /Build.VERSION.SDK_INT >= 36 && running/);
   assert.match(controller, /setTimeoutAfter/);
   assert.match(controller, /setDeleteIntent\(deleteIntent\)/);

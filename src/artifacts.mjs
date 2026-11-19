@@ -149,7 +149,7 @@ export class ArtifactPreviewService {
  }
  async preview(input){
   if(this.closed)throw fail('产物预览服务正在关闭','ARTIFACT_CLOSED',409);
-  if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['threadId','projectId','path'].includes(key)))throw fail('产物预览参数无效','ARTIFACT_INPUT_INVALID');
+  if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['threadId','projectId','path','workspaceOnly'].includes(key))||(input.workspaceOnly!==undefined&&input.workspaceOnly!==true))throw fail('产物预览参数无效','ARTIFACT_INPUT_INVALID');
   if(this.pending.size>=ARTIFACT_LIMITS.concurrent)throw fail('同时预览过多图片，请稍后重试','ARTIFACT_BUSY',429);
   const operation=this.read(input);this.pending.add(operation);try{return await operation;}finally{this.pending.delete(operation);}
  }
@@ -167,6 +167,7 @@ export class ArtifactPreviewService {
    if(process.platform!=='win32'&&/^[A-Za-z]:[\\/]/.test(source))throw fail('当前系统无法读取 Windows 路径','ARTIFACT_PATH_INVALID',400);
    const extension=path.extname(source).toLowerCase();if(!allowed.has(extension))throw unsupported();
    const filename=this.wsl?this.wsl.resolve(projectRoot,source):path.resolve(projectRoot,source);
+   if(input.workspaceOnly&&!(this.wsl?this.wsl.inside(projectRoot,filename):inside(projectRoot,filename)))throw fail('只自动预览对话工作目录中的图片','ARTIFACT_SCOPE_DENIED',403);
    const referenceKey=this.wsl?filename:pathKey(filename);
    if(this.wsl&&!this.wsl.inside(projectRoot,filename)&&!this.references.get(input.threadId)?.has(referenceKey))throw fail('WSL image is outside the conversation workspace','ARTIFACT_SCOPE_DENIED',403);
    // Local preview accepts absolute image paths outside the workspace as well.
@@ -190,7 +191,7 @@ export class ArtifactPreviewService {
    const after=await handle.stat(),afterPath=await fs.lstat(filename),afterRoot=await fs.lstat(root);
    await checkPath(root);await checkPath(filename,true);
    if(count!==opened.size||after.size!==opened.size||after.mtimeMs!==opened.mtimeMs||after.ctimeMs!==opened.ctimeMs||afterPath.ino!==opened.ino||afterPath.dev!==opened.dev||afterPath.nlink>1||afterRoot.ino!==rootStat.ino||afterRoot.dev!==rootStat.dev||!samePath(await fs.realpath(root),canonicalRoot)||!samePath(await fs.realpath(filename),canonicalFile))throw fail('产物文件在读取时发生变化，请重新预览','ARTIFACT_CHANGED',409);
-   return {bytes,...inspectArtifact(bytes,extension)};
+   return {bytes,localPath:this.wsl?this.wsl.linux(filename):filename,...inspectArtifact(bytes,extension)};
   }catch(error){if(error.code==='ENOENT'||error.code==='ENOTDIR')throw fail('产物图片不存在或已移动','ARTIFACT_NOT_FOUND',404);if(['EACCES','EPERM','ELOOP'].includes(error.code))throw fail('无法安全读取产物图片','ARTIFACT_ACCESS_DENIED',403);throw error;}
   finally{await handle?.close();}
  }

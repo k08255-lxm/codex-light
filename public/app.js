@@ -15,6 +15,7 @@ import { mountUpdateIndicator, mountAndroidUpdateIndicator } from './ui/update-i
 import { mountContextDetails } from './ui/context-details.js';
 import { bootstrapToken } from './ui/access.js';
 import { mountConfigSettingsPanel } from './config-settings-panel.js';
+import { mountSettingsSearch } from './ui/settings-search.js';
 import { createNotifications } from './ui/notifications.js';
 import { mountAccountLoginPanel } from './account-login-panel.js';
 import { mountStatistics } from './ui/stats-view.js';
@@ -24,6 +25,7 @@ import { mountAccountQuota } from './account-quota.js';
 import { createAccountIdentityController } from './account-identity.js';
 import { mountArtifacts, mountLightbox } from './ui/artifacts.js';
 import { createFilePreview } from './ui/file-preview.js';
+import { resolveRelativePath } from './markdown.js';
 import { pastedFiles, classifyPaste } from './ui/paste.js';
 import { renderApprovals } from './ui/approvals-view.js';
 import { createDshView } from './ui/dsh-view.js';
@@ -140,9 +142,16 @@ const sidebarController = (() => {
     if(!narrow()&&Object.hasOwn(desktopOpen,mode))desktopOpen[mode]=open;
     if(open&&!wasOpen&&narrow())returnFocus=document.activeElement;
     sync();
-    if(open&&narrow()&&focus)requestAnimationFrame(()=>closeButton()?.focus());
+    if(open&&narrow()&&focus)requestAnimationFrame(()=>{if(open&&narrow())closeButton()?.focus();});
     const activeInside=sidebar.contains(document.activeElement);
-    if(!open&&(focus||activeInside))requestAnimationFrame(()=>{const remembered=returnFocus;returnFocus=null;const target=remembered?.isConnected&&remembered.getClientRects().length?remembered:$('rail-sidebar');target?.focus();});
+    if(!open&&(focus||activeInside))requestAnimationFrame(()=>{
+      if(open)return;
+      const remembered=returnFocus;returnFocus=null;
+      const active=document.activeElement;
+      if(!focus&&active&&active!==document.body&&!sidebar.contains(active))return;
+      const target=remembered?.isConnected&&remembered.getClientRects().length?remembered:$('rail-sidebar');
+      target?.focus();
+    });
   }
   sidebar.addEventListener('keydown',event=>{
     if(event.key!=='Tab'||!narrow()||!open)return;
@@ -193,23 +202,51 @@ const dshLive = new DshLiveMonitor({
 });
 const toolTypes = new Set(['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'webSearch', 'collabAgentToolCall', 'fileDiff']);
 function el(tag, className, text) { const e = document.createElement(tag); if (className) e.className = className; if (text != null) e.textContent = text; return e; }
-const filePreview=createFilePreview({document,fetchPreview:async(input,{signal})=>{
+const filePreview=createFilePreview({document,openImage:view=>lightbox.open(view),downloadFile:async({path,...scope},name,{signal})=>{
+  const bridge=window.CodexLightNative;
+  if(bridge?.isNativeApp?.()){
+    if(typeof bridge.saveProjectFile!=='function')throw new Error('请更新 Android 客户端以保存文件，或在浏览器中打开。');
+    if(bridge.saveProjectFile(JSON.stringify(scope),path,name)===false)throw new Error('无法打开系统保存窗口，请重试。');
+    return '请在系统窗口选择保存位置。';
+  }
+  const response=await fetch('/api/files/download',{method:'POST',signal,headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({...scope,path})});
+  if(!response.ok){const result=await response.json();throw new Error(result.error?.message||result.error||'文件下载失败');}
+  const blob=await response.blob();signal.throwIfAborted();
+  const url=URL.createObjectURL(blob),link=document.createElement('a');
+  link.href=url;link.download=name;document.body.append(link);link.click();link.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),60000);
+  return '已交给浏览器下载。';
+},fetchPreview:async(input,{signal})=>{
   const response=await fetch('/api/files/preview',{method:'POST',signal,headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify(input)});
   const result=await response.json();if(!response.ok)throw new Error(typeof result.error==='string'?result.error:result.error?.message||'文件预览失败');return result;
 }});
-function previewLocalFile(ref,node,threadId=state.thread?.id){filePreview.open(ref,{threadId},node);}
+let localFileClick = 0;
+async function previewLocalFile(ref,node,threadId=state.thread?.id){
+  const click=++localFileClick;
+  if(!ref.absolute&&ref.fullPath===ref.path&&threadId){
+    try{
+      const {thread}=await rpc('thread/read',{threadId,includeTurns:false});
+      if(click!==localFileClick||!node.isConnected)return;
+      if(thread?.id!==threadId||!thread.cwd)throw new Error('未取得该对话的工作目录');
+      ref={...ref,fullPath:resolveRelativePath(ref.path,thread.cwd)};
+    }catch(error){if(click===localFileClick)notice('无法解析文件链接：'+error.message,true);return;}
+  }
+  if(ref.revealResolvedLocalPath){ref.revealResolvedLocalPath(ref.fullPath);return;}
+  filePreview.open(ref,{threadId},node);
+}
 // Image previews go only through the authenticated, thread-scoped preview API; the token never enters a URL.
-async function fetchArtifactPreview(path, threadId = state.thread?.id) {
+async function fetchArtifactPreview(path, threadId = state.thread?.id, workspaceOnly = false) {
   if (!threadId) throw new Error('需要已保存的对话才能预览');
   if (!token) throw new Error('缺少本地访问令牌');
   const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 30000);
   try {
-    const response = await fetch('/api/artifacts/preview', { method: 'POST', signal: controller.signal, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ threadId, path }) });
+    const response = await fetch('/api/artifacts/preview', { method: 'POST', signal: controller.signal, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ threadId, path, ...(workspaceOnly ? {workspaceOnly:true} : {}) }) });
     if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(typeof data.error === 'string' ? data.error : data.error?.message || (response.status === 404 ? '图片不存在或已移动' : `无法预览（${response.status}）`)); }
     const type = response.headers.get('Content-Type') || '';
     if (!/^image\//.test(type)) throw new Error('服务返回的不是图片');
     const width = Number(response.headers.get('X-Artifact-Width')) || null, height = Number(response.headers.get('X-Artifact-Height')) || null;
-    return { blob: await response.blob(), width, height };
+    const localPath=decodeURIComponent(response.headers.get('X-Artifact-Local-Path')||'');
+    return { blob: await response.blob(), width, height, localPath };
   } catch (error) { throw new Error(error.name === 'AbortError' ? '预览超时' : error.message); }
   finally { clearTimeout(timer); }
 }
@@ -466,10 +503,10 @@ const titleSettings=mountTitleSettings($('title-settings-root'),{api,notice});
 const updateHost=document.querySelector('.rail');
 const androidUpdateHost=document.documentElement.dataset.mobileShell==='android';
 const updateIndicator = !androidUpdateHost&&!access.lan ? mountUpdateIndicator(updateHost, {onOpen:()=>route('settings',{section:'about'})}) : null;
-if(androidUpdateHost)mountAndroidUpdateIndicator(updateHost,window);
+if(androidUpdateHost)mountAndroidUpdateIndicator(updateHost,window,$('mobile-app-update'));
 let announcedUpdate='';
 function applyAutomaticUpdate(status) {
-  updateIndicator?.update(status);
+  aboutView.update(status);
   const version=status?.latest?.available&&status.supported&&!status.demo&&status.latest.version;
   if(window.chrome?.webview&&version&&version!==announcedUpdate&&!['launched','launchUnknown'].includes(status.phase)){
     announcedUpdate=version;
@@ -481,7 +518,7 @@ const aboutView = mountAbout($('about-root'), { api, onStatus:status=>updateIndi
   return performMutation(method, params);
 } });
 // Local-only: the LAN page never mounts requests for DSH config management (server also refuses with 403).
-const dshConfigView = mountDshConfig($('dsh-config-root'), { api });
+const dshConfigView = mountDshConfig($('dsh-config-root'), { api, onSourcesChanged: () => dshConnectionView.refreshModels() });
 const dshModelReminder = $('dsh-model-reminder');
 $('configure-dsh-model').addEventListener('click', () => openSettings('dsh'));
 $('dismiss-dsh-model').addEventListener('click', async () => {
@@ -590,7 +627,6 @@ function newThread(cwd = '') {
   if (state.sending) return;
   route('chat',{back:true}); sidebarController.closeForNavigation();
   const previous = state.thread?.id || null;
-  if (state.busy) notice('原任务继续在后台运行，可从侧栏对话列表返回。');
   // A new chat is only a draft; thread/start happens on first send.
   state.openGeneration++; state.loadingThread = false; state.thread = null; state.reasoning = restoredReasoning(null); populateEfforts(); dshTasks.reset(); state.dshReadErrors.clear(); state.dshOpenDetails.clear(); state.dshConnection = null; renderDshConnection(); syncDshLiveContext(); renderDshTasks(); state.turnId = null; state.busy = false; resetThreadView(); $('tool-list').replaceChildren(el('p', 'muted', '暂无工具活动')); $('thread-title').textContent = '新对话'; $('welcome').classList.remove('hidden'); $('earlier').classList.add('hidden'); activity(''); renderContext(); renderQueue(); updateControls(); renderThreads(); renderRequests(); $('prompt').focus();
   setCwd(cwd); releaseThread(previous);
@@ -598,9 +634,18 @@ function newThread(cwd = '') {
 }
 function renderThreads() {
   threadCompletion.read(viewedThreadId());
-  const runningThreadIds=new Set([...state.activeTurns].filter(([,id])=>id&&!state.terminalTurns.has(id)).map(([id])=>id));
-  if(state.busy&&state.thread?.id&&state.turnId&&!state.terminalTurns.has(state.turnId))runningThreadIds.add(state.thread.id);
-  if(!state.connected)runningThreadIds.clear();
+  const runningThreadIds = new Set();
+  if (state.connected) {
+    for (const thread of state.threads) if (thread.status?.type === 'active') runningThreadIds.add(thread.id);
+    const track = (threadId, turnId) => {
+      if (!threadId || !turnId || state.terminalTurns.has(turnId)) return;
+      runningThreadIds.add(threadId);
+      // History and reconnect snapshots can restore a running turn without replaying its start.
+      threadCompletion.trackActive(threadId, turnId);
+    };
+    for (const [threadId, turnId] of state.activeTurns) track(threadId, turnId);
+    if (state.busy && !state.activeTurns.has(state.thread?.id)) track(state.thread?.id, state.turnId);
+  }
   projectNavigation.render({projects:projectsState.projects,threads:state.threads,selectedPath:state.cwd,activeThreadId:state.thread?.id||'',runningThreadIds,unreadThreadIds:threadCompletion.unread,searchStatus,searching:!!$('search').value.trim(),busy:projectsState.busy||state.sending,error:projectsState.error});
   $('more-threads').classList.toggle('hidden', !state.nextThreads);
   $('add-project').disabled=projectsState.busy||state.sending;
@@ -745,6 +790,7 @@ async function loadThreads(more = false, current = ()=>true) {
   const anchor = more ? captureHistoryAnchor($('thread-scroll'), ['.project-group-thread', '[data-project-key]']) : null;
   const listed = (result.data || []).map(withSubmittedActivity);
   for (const row of listed) {
+    threadCompletion.trackThread(row);
     if (!state.activeTurns.has(row.id) && !sessionFor(row.id)?.activeTurnId) unindexedThreads.delete(row.id);
     else if (unindexedThreads.has(row.id)) unindexedThreads.set(row.id, { ...unindexedThreads.get(row.id), ...row });
   }
@@ -864,6 +910,8 @@ async function loadItems(earlier = false, generation = state.openGeneration, cur
   // Read-only paging: thread/items/list, else thread/turns/list(itemsView:'full') + cursor, else one
   // explicit thread/read. A fresh (non-earlier) load restarts from the newest page.
   if (earlier && (!state.pager || state.pager.threadId !== id || !state.pager.hasMore)) return;
+  const refresh = !earlier && !!state.pager;
+  const before = refresh ? new Map(state.store.items) : null;
   const pager = earlier ? state.pager : new HistoryPager(rpc, id, historyCaps);
   const page = await pager.next({ max: CONVERSATION_ITEMS });
   if (!current() || generation !== state.openGeneration || id !== state.thread?.id) return;
@@ -880,9 +928,7 @@ async function loadItems(earlier = false, generation = state.openGeneration, cur
     : `此 Codex CLI 不支持分页读取，已一次完整读取对话（共 ${page.read.totalTurns} 个回合），先显示最近 ${page.read.shownTurns} 个回合${page.hasMore ? '；“加载更早的内容”需要再次完整读取' : ''}。`);
   for (const item of items.slice(-CONVERSATION_ITEMS)) dshTasks.ingest(id, item, { older: earlier, source: '已加载的 Codex 对话记录' });
   const anchor = earlier ? captureHistoryAnchor($('conversation')) : null;
-  if (earlier) {
-    state.store.prependHistory(items);
-  } else { for (const item of items.slice(-CONVERSATION_ITEMS)) state.store.upsert(item); }
+  state.store.mergeHistory(items, {before, refresh});
   state.nextItems = pager.hasMore ? pager.mode : null;
   $('earlier').classList.toggle('hidden', !pager.hasMore);
   $('earlier').title = pager.nextNeedsFullRead ? '此 Codex CLI 不支持分页读取：加载更早内容需要再次完整读取对话' : '';
@@ -913,7 +959,7 @@ function renderTools() {
 const toolActivity=mountToolActivity($('tool-list'),{artifacts:artifactView});
 const liveChanges=mountLiveChanges($('live-changes'),{renderDiff});
 const scrollToBottom=mountScrollToBottom($('conversation'),{onBottom:behavior=>conversationScroll.toBottom({behavior})});
-const dshView = createDshView({ document, state, $, dshLive, dshTasks, api, rpc, el, onAnswerAsync:payload=>answerAsync(payload), onLocalLink:(ref,node,threadId)=>filePreview.open(ref,{threadId},node), artifactFactory:({threadId,resolveImage})=>mountArtifacts({document,fetchPreview:fetchArtifactPreview,getScope:()=>threadId,onOpen:view=>lightbox.open(view),resolveImage}) });
+const dshView = createDshView({ document, state, $, dshLive, dshTasks, api, rpc, el, onAnswerAsync:payload=>answerAsync(payload), onLocalLink:previewLocalFile, artifactFactory:({threadId,resolveImage})=>mountArtifacts({document,fetchPreview:fetchArtifactPreview,getScope:()=>threadId,onOpen:view=>lightbox.open(view),resolveImage}) });
 const { renderDshConnection, refreshDsh, syncDshLiveContext, scheduleDshRender, renderDshTasks, ingestDshSnapshot } = dshView;
 $('dsh-live-refresh').addEventListener('click', () => { dshLive.refresh(); scheduleDshRender(); });
 function removeAttachment(id) {
@@ -1200,8 +1246,8 @@ async function loadModels(current=()=>true) {
 // model-loader:end
 function renderRequests({notify=false}={}) {
   renderApprovals($('approvals'), { document, requests: state.requests, currentThreadId: state.thread?.id || null, api, notice, el, boundedText, lookupFileChange, rerender: renderRequests });
-  taskNotifications?.refresh();
   questionNotifications?.sync(state.requests,{notify});
+  taskNotifications?.refresh();
 }
 // Files/diff for a modern fileChange approval come from its correlated item (loaded only for the open conversation).
 function lookupFileChange(threadId, itemId) {
@@ -1317,9 +1363,10 @@ function applyThreadSessions(params) {
   updateControls(); renderThreads();watchExternalTurn();drainAll();
 }
 async function syncStatus() {
+  const updateRevision=aboutView.revision;
   const status = await api('/api/status'); applyAccessMode(state.lan || status.access === 'lan'); state.cliVersion = typeof status.version==='string'&&status.version ? boundedText(status.version,300) : null; state.desktop = status.desktop === true; state.runtimeTarget=status.runtimeTarget==='wsl'?'wsl':'native';applyRuntimeTarget(); if($('version-info'))$('version-info').textContent=state.cliVersion||'未知'; document.body.classList.toggle('native-desktop',state.desktop); $('runtime-close-info').textContent='停止服务会中断正在运行的本应用任务。'; $('reopen-info').textContent=state.desktop?'重新打开窗口可查看对话历史。':status.reopenAvailable===true?'可通过启动器重新打开本地界面。':status.reopenAvailable===false?'关闭后可能需要重新运行启动器。':''; if(!state.desktop&&status.reopenError)$('reopen-info').textContent+=' '+boundedText(status.reopenError,800); if(state.serverInstance !== (status.serverInstance || null)){resetContext();sessionControls.reset();deactivatePendingReconciler();historyCaps.unsupported.clear();pluginPanel.reset();configPanel.reset();resetUsage();resetRuntimePanel();dshLive.reset();remoteReset({statusMessage:'本地服务实例已变化，请重新读取远控状态。',pairMessage:'本地服务实例已变化，本机配对码显示已清除；不会撤销旧环境设备。',devicesMessage:'本地服务实例已变化，旧设备显示已清除；不会撤销旧环境设备。'});}state.serverInstance = status.serverInstance || null; state.demo = !!status.demo; setConnected(status.connected, status.demo ? '演示模式 · 不调用模型' : undefined); if(state.desktop){await loadDesktopState();preferencesView.syncHostTheme();} $('mode-info').textContent = status.demo ? '演示模式，不消耗额度' : '本地 Codex app-server';
   // Replace with the server's current set; unchanged instances keep their card and draft.
-  if(status.appUpdate&&!state.lan)applyAutomaticUpdate(status.appUpdate);
+  if(status.appUpdate&&!state.lan&&aboutView.revision===updateRevision)applyAutomaticUpdate(status.appUpdate);
   applyThreadSessions(status.threadSessions); const pending = new Map(); for (const request of status.pendingRequests || []) if (validRequestId(request?.id)) { const key = requestKey(request.id), known = state.requests.get(key); pending.set(key, known && known.bridgeRequestToken === request.bridgeRequestToken ? known : request); } state.requests = pending; renderRequests();
   if (status.demo) notice('当前是演示模式：仅测试界面和协议，不会调用真实模型。'); engineOnboarding.start(); return status;
 }
@@ -1561,7 +1608,11 @@ $('window-menu').addEventListener('keydown', e => {
   } else if (e.key === 'Tab') { closeWindowMenu(); focusAfterWindowMenu(); }
 });
 $('menu-help').addEventListener('click', () => notice('码舱 CodeCang 支持本地聊天、历史、审批与 DSH 任务展示，通过本机 Codex CLI 工作。设置仅显示当前可用功能。'));
-$('settings-search').addEventListener('input', () => { const query = $('settings-search').value.trim().toLowerCase(); for (const item of document.querySelectorAll('.settings-nav-item')) item.classList.toggle('hidden', !item.textContent.toLowerCase().includes(query)); });
+mountSettingsSearch({ document, navigate(section) {
+  const ready = state.settingsPage === section ? undefined : selectSettingsSection(section);
+  if (sidebarController.isOverlayOpen()) sidebarController.closeForNavigation();
+  return ready;
+} });
 for (const button of document.querySelectorAll('[data-settings-section]')) button.addEventListener('click', () => {const wasOverlay=sidebarController.isOverlayOpen();selectSettingsSection(button.dataset.settingsSection);if(wasOverlay){sidebarController.closeForNavigation();$('settings-back').focus();}});
 function selectSettingsSection(section = 'general') {
   if(section==='account'||section==='usage'){route(section);return;}
@@ -1570,7 +1621,8 @@ function selectSettingsSection(section = 'general') {
   for (const name of ['general','dsh','archived','remote','plugins','appearance','notifications','shortcuts','configuration','about','storage']) $('settings-' + name).classList.toggle('hidden', name !== page);
   for (const item of document.querySelectorAll('[data-settings-section]')) item.classList.toggle('active', item.dataset.settingsSection === section);
   document.querySelector('.settings-content').scrollTop = 0;
-  if (page === 'dsh' && !state.lan) { dshConnectionView.activate(); if(state.runtimeTarget!=='wsl')dshConfigView.activate();else dshConfigView.deactivate(); } else { dshConnectionView.deactivate(); dshConfigView.deactivate(); }
+  let ready;
+  if (page === 'dsh' && !state.lan) { ready=dshConnectionView.activate(); if(state.runtimeTarget!=='wsl')dshConfigView.activate();else dshConfigView.deactivate(); } else { dshConnectionView.deactivate(); dshConfigView.deactivate(); }
   if (page === 'configuration' && !state.lan) titleSettings.activate();
   if (page === 'archived') loadArchived().catch(e => notice(e.message, true));
   if(page==='plugins')pluginPanel.activate();else pluginPanel.deactivate();renderPluginPending();
@@ -1581,6 +1633,7 @@ function selectSettingsSection(section = 'general') {
   if (page === 'remote'){if(state.connected)refreshRemote();else remoteReset({statusMessage:'尚未连接 Codex，无法读取远控状态。',pairMessage:'尚未连接，本机配对码显示已清除；不会撤销已配对设备。',devicesMessage:'未连接时设备列表不可用；不会撤销旧环境设备。'});}
   syncRuntimePanelActivity();
   if(currentRoute==='settings')recordNavigation();
+  return ready;
 }
 function rowsNode(rows) {
   const list = el('dl', 'status-rows'); for (const [label, value] of rows) list.append(el('dt', '', label), el('dd', '', value)); return list;
@@ -1753,7 +1806,7 @@ questionNotifications=createQuestionNotifications({document,window,host:$('quest
 taskNotifications=mountTaskNotifications({document,window,notice,
   snapshot:()=>({connected:state.connected&&lastEventAt>0&&Date.now()-lastEventAt<60000,canOpen:state.connected&&!state.loadingThread&&!state.sending,threads:state.threadSessions.filter(row=>!state.terminalTurns.has(row.activeTurnId))}),
   title:id=>(state.thread?.id===id?state.thread:state.threads.find(thread=>thread.id===id))?.name||'Codex 任务',
-  waiting:(threadId,turnId)=>[...state.requests.values()].some(request=>requestThread(request)===threadId&&(!request.params?.turnId||request.params.turnId===turnId)),
+  waiting:(threadId,turnId)=>questionNotifications?.waitingPhase(threadId,turnId),
   openThread:async threadId=>{if(state.sending||state.loadingThread)throw new Error('当前操作结束后请再打开。');await openThread(state.threads.find(thread=>thread.id===threadId)||{id:threadId});if(state.thread?.id!==threadId||state.loadingThread)throw new Error('对话加载被其他导航打断。');},
 });
 // Keep the caret visible when the phone keyboard opens.

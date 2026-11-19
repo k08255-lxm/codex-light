@@ -53,7 +53,12 @@ try{
  checks.push('the APK update button sits between the phone title and quotas, opens the Android updater, and tracks the native state');
  await page.locator('#rail-settings').click();assert.equal(await page.locator('#sidebar-overlay').isVisible(),false);
  await page.locator('#mobile-connection').click();await page.locator('#mobile-app-permissions').click();await page.locator('#mobile-app-update').click();
- assert.deepEqual(await page.evaluate(()=>window.nativeCalls),[['toolbar',true],['android-update-open'],['connection'],['permissions'],['android-update']]);
+ assert.equal(await page.locator('#mobile-app-update').innerText(),'查看 v0.5.0 更新');
+ assert.deepEqual(await page.evaluate(()=>window.nativeCalls),[['toolbar',true],['android-update-open'],['connection'],['permissions'],['android-update-open']]);
+ await updateNative({phase:'up_to_date'});
+ await page.getByRole('button',{name:'检查更新',exact:true}).click();
+ assert.deepEqual(await page.evaluate(()=>window.nativeCalls.at(-1)),['android-update']);
+ await updateNative({phase:'available',version:'0.5.0'});
  assert.equal(await page.evaluate(()=>window.CodexLightNavigation.back()),true);assert.equal(await page.locator('#app').getAttribute('data-view'),'chat');
  await page.setViewportSize({width:700,height:500});await page.locator('.app-titlebar #rail-settings').waitFor();
  await page.locator('#rail-settings').click();await page.locator('#mobile-connection-settings').waitFor();

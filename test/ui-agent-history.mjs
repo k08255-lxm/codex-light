@@ -28,6 +28,11 @@ try{
    id:'spawn',type:'collabAgentToolCall',tool:'spawnAgent',receiverThreadIds:['two','long'],agentsStates:{two:{status:'completed'},long:{status:'completed'}}
   }]}};
   let retry=true,inspection;
+  const originalRows=state.store.values;
+  window.startChild=(id='new-child')=>{
+   state.store.values=()=>[...originalRows(),{id:'child-start',type:'subAgentActivity',kind:'started',agentThreadId:id}];
+   inspection.render();inspection.open(id,'native');
+  };
   const calls=[];window.fixtureHistoryCalls=calls;
   const tasks={values:()=>[{threadId:'parent',agentId:'delegated',name:'DSH example',status:'completed'}]};
   const dsh=new DshLiveMonitor({historyPaging:true,onChange:()=>inspection?.render(),api:async(route,input)=>{
@@ -42,6 +47,11 @@ try{
   }});
   inspection=createAgentInspector({document,state,host,dshTasks:tasks,dshLive:dsh,rpc:async(method,params)=>{
    calls.push({method,params});
+   if(params.threadId==='denied-child')throw new Error('无权限读取会话记录');
+   if(['new-child','empty-child'].includes(params.threadId)){
+    if(params.threadId==='empty-child'||!window.childRecordReady)throw new Error('failed to read thread: failed to read session metadata: rollout at C:/fixture/child.jsonl is empty');
+    if(method==='thread/turns/list')return {data:[turn('new-turn',[{id:'first-entry',type:'agentMessage',text:'First child record'}])],nextCursor:null};
+   }
    if(method==='thread/read')return {thread:{id:params.threadId,model:'gpt-fixture'}};
    if(method!=='thread/turns/list')throw new Error('Unexpected operation '+method);
    const source=params.threadId==='two'?two:long;
@@ -89,4 +99,18 @@ try{
  assert.ok((await page.evaluate(()=>window.fixtureHistoryCalls)).every(call=>['thread/read','thread/turns/list'].includes(call.method)));
  assert.deepEqual(errors,[]);
  console.log('PASS: DSH old task pages retain more than 100 events in chronological task groups');
+ await page.evaluate(()=>window.startChild());
+ await panel.getByText('正在等待子代理写入首条记录…',{exact:true}).waitFor();
+ assert.equal(await panel.locator('.inline-error').count(),0);
+ await page.evaluate(()=>{window.childRecordReady=true;});
+ await panel.getByText('First child record',{exact:true}).waitFor({timeout:6500});
+ assert.equal(await panel.locator('.inline-error').count(),0);
+ console.log('PASS: opening a just-started native child waits for its first record and retries automatically');
+ await page.evaluate(()=>window.startChild('empty-child'));
+ await panel.getByText('正在等待子代理写入首条记录…',{exact:true}).waitFor();
+ await page.evaluate(()=>{const now=Date.now;Date.now=()=>now()+31000;window.fixtureHistory.refresh();});
+ await panel.getByText('子代理的会话记录仍为空，可点刷新重试。',{exact:true}).waitFor();
+ await page.evaluate(()=>window.startChild('denied-child'));
+ await panel.getByText('无权限读取会话记录',{exact:true}).waitFor();
+ console.log('PASS: a persistently empty rollout shows a retry action; unrelated errors remain visible immediately');
 }finally{await browser?.close();await app.close();}
