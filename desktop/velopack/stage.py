@@ -11,6 +11,11 @@ def validate_worker(root,version):
  for name in WORKER_FILES:
   p=root/name;plain(p)
   if not p.is_file():raise ValueError('Missing worker file: '+name)
+ # A .NET apphost carries its managed entry point as a NUL-terminated UTF-8 path.
+ # Both worker projects can produce valid, same-version EXEs with different bindings.
+ bound_name=(WORKER+'.dll').encode('utf-8')+b'\0'
+ if bound_name not in (root/(WORKER+'.exe')).read_bytes():
+  raise ValueError('Update worker EXE does not bind to '+WORKER+'.dll')
  deps=json.loads((root/(WORKER+'.deps.json')).read_text(encoding='utf-8-sig'))
  runtime=json.loads((root/(WORKER+'.runtimeconfig.json')).read_text(encoding='utf-8-sig'))['runtimeOptions']
  if deps.get('runtimeTarget',{}).get('name')!='.NETCoreApp,Version=v10.0/win-x64':raise ValueError('Worker must target win-x64/net10')

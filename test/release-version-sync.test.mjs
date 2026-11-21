@@ -47,6 +47,13 @@ test('public download instructions match the release asset/version contract', ()
   assert.ok(readme.includes('desktop/velopack/compat-router/README.md'));
 });
 
+test('the 0.4.11 client can reach the current Windows installer from the latest release notes', () => {
+  const version = JSON.parse(read('package.json')).version;
+  const notes = read(`releases/${version}.md`).slice(0, 12000); // The shipped client truncates release bodies here.
+  const installer = `https://github.com/k08255-lxm/codex-light/releases/download/v${version}/CodexLight-Setup-${version}-x64.exe`;
+  assert.ok(notes.includes('0.4.11') && notes.includes(`](${installer})`));
+});
+
 // Historical entries are immutable release evidence, not current-version examples.
 test('Android historical release versionCode remains pinned', () => {
   const android = read('android/README.md');

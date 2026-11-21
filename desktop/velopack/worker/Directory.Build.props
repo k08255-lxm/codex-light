@@ -1,0 +1,7 @@
+<Project>
+  <!-- Both release workers live here. Each .NET apphost embeds its own DLL name. -->
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'UpdateWorker' Or '$(MSBuildProjectName)' == 'BootstrapWorker'">
+    <BaseIntermediateOutputPath>obj/$(MSBuildProjectName)/</BaseIntermediateOutputPath>
+    <BaseOutputPath>bin/$(MSBuildProjectName)/</BaseOutputPath>
+  </PropertyGroup>
+</Project>

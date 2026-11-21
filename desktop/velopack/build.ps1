@@ -46,6 +46,7 @@ python (Join-Path $repo 'desktop/msi/generate.py') $payload $manifestDir --versi
 if($LASTEXITCODE -ne 0){throw 'Existing complete-payload/licensing verification failed'}
 python (Join-Path $PSScriptRoot 'stage.py') $payload (Join-Path $manifestDir 'payload-manifest.json') $stage $workerDir $version
 if($LASTEXITCODE -ne 0){throw 'Verified payload staging failed'}
+& (Join-Path $PSScriptRoot 'worker/verify-entrypoint.ps1') -Directory (Join-Path $stage 'update-worker') -Name 'CodexLight.UpdateWorker'
 & python (Join-Path $PSScriptRoot 'source_integrity.py') $repo $stage --filtered --output (Join-Path $work 'filtered-source-tree.json')
 if($LASTEXITCODE -ne 0){throw 'Filtered package source tree mismatch'}
 Copy-Item -LiteralPath $sourceFingerprint -Destination (Join-Path $stage 'source-tree.json')

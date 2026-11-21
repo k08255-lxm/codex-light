@@ -10,7 +10,7 @@ class VerificationTests(unittest.TestCase):
    f=self.p/name;f.parent.mkdir(parents=True,exist_ok=True);f.write_bytes(name.encode())
   shutil.copytree(NOTICE_ROOT,self.p/'licenses'/NOTICE_NAME)
   worker=self.p/'update-worker';worker.mkdir()
-  (worker/'CodexLight.UpdateWorker.exe').write_bytes(b'MZfixture')
+  (worker/'CodexLight.UpdateWorker.exe').write_bytes(b'MZfixture\0CodexLight.UpdateWorker.dll\0')
   (worker/'CodexLight.UpdateWorker.dll').write_bytes(b'fixture-dll')
   (worker/'CodexLight.UpdateWorker.deps.json').write_text(json.dumps({'runtimeTarget':{'name':'.NETCoreApp,Version=v10.0/win-x64'},'libraries':{'CodexLight.UpdateWorker/'+self.v:{}}}))
   (worker/'CodexLight.UpdateWorker.runtimeconfig.json').write_text(json.dumps({'runtimeOptions':{'tfm':'net10.0','framework':{'name':'Microsoft.NETCore.App','version':'10.0.0'}}}))
@@ -59,6 +59,9 @@ class VerificationTests(unittest.TestCase):
  def test_worker_missing(self):
   (self.p/'update-worker/CodexLight.UpdateWorker.dll').unlink()
   with self.assertRaises((ValueError,FileNotFoundError)):verify(self.r,self.p,self.v)
+ def test_worker_bound_to_recovery_dll(self):
+  (self.p/'update-worker/CodexLight.UpdateWorker.exe').write_bytes(b'MZfixture\0CodeCang.BootstrapWorker.dll\0')
+  with self.assertRaisesRegex(ValueError,'EXE does not bind'):verify(self.r,self.p,self.v)
  def test_worker_wrong_version(self):
   p=self.p/'update-worker/CodexLight.UpdateWorker.deps.json';d=json.loads(p.read_text());d['libraries']={'CodexLight.UpdateWorker/1.0.0':{}};p.write_text(json.dumps(d))
   with self.assertRaises(ValueError):verify(self.r,self.p,self.v)

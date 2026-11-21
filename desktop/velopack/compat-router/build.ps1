@@ -28,6 +28,7 @@ if($EnableRecovery){
  $worker=Join-Path $PSScriptRoot '../worker/BootstrapWorker.csproj'
  & dotnet publish $worker -c Release -r win-x64 --self-contained false "-p:Version=$Version" "-p:RepairVersion=$Version" "-p:RepairSha256=$packageHash" -p:DebugSymbols=false -p:DebugType=none -o $helper --nologo
  if($LASTEXITCODE -ne 0){throw 'Recovery helper publish failed'}
+ & (Join-Path $PSScriptRoot '../worker/verify-entrypoint.ps1') -Directory $helper -Name 'CodeCang.BootstrapWorker'
  $framework=(Get-Content (Join-Path $helper 'CodeCang.BootstrapWorker.runtimeconfig.json') -Raw |ConvertFrom-Json).runtimeOptions.framework
  if($framework.name -ne 'Microsoft.NETCore.App' -or $framework.version -ne '10.0.0'){throw 'Unexpected repair runtime requirement'}
  # Only the native apphost is redistributed. Resolve its notices from the SDK or restored host pack.

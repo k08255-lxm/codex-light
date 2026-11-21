@@ -4,6 +4,16 @@ using System.Text.Json;
 namespace CodexLight.Desktop;
 internal static class WorkerProgram {
  static int Main(string[] args){
+  // Packaging launches the published EXE with this argument before it can read
+  // a receipt, show a window or touch the installation.
+  if(args is ["--verify-entrypoint"]){
+#if BOOTSTRAP
+   Console.WriteLine("CodeCang.BootstrapWorker");
+#else
+   Console.WriteLine("CodexLight.UpdateWorker");
+#endif
+   return 0;
+  }
   string? output=null;
   bool parentExited=false;
   BootstrapProgress? progress=null;

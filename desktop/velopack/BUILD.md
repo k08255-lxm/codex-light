@@ -6,7 +6,7 @@ This tooling builds/verifies artifacts only. It never publishes, installs, start
 
 - A complete current-version payload produced by `desktop/build.ps1` (including the inherited license bundle).
 - A matching host published with the opt-in Velopack integration, using **Velopack 1.3.39-g8d2844f**. For the current opt-in switch: `dotnet publish desktop/CodexLight.Desktop.csproj -c Release -r win-x64 --self-contained false -p:EnableVelopackPrototype=true -o <new-host-directory>`.
-- Standalone worker output: `dotnet publish desktop/velopack/worker/UpdateWorker.csproj -c Release -r win-x64 --self-contained false -p:Version=<current-package-version> -p:DebugSymbols=false -p:DebugType=none -o <worker-output>`. The worker is never executed by packaging.
+- Standalone worker output: `dotnet publish desktop/velopack/worker/UpdateWorker.csproj -c Release -r win-x64 --self-contained false -p:Version=<current-package-version> -p:DebugSymbols=false -p:DebugType=none -o <worker-output>`.
 - Python, .NET SDK, and optionally a `dotnet tool install vpk --version 1.3.39-g8d2844f --tool-path <local-tools> --add-source https://api.nuget.org/v3/index.json` installation. If `-ToolPath` is omitted, the build installs that pinned tool inside its new output directory, not globally.
 
 ```powershell
@@ -21,6 +21,8 @@ The output path must not already exist. Existing/distributed artifacts are never
 `release/` contains a full `.nupkg`, installer EXE, portable ZIP, full-only feed, SHA256SUMS and a verification report. No deltas are generated. WorkerPath is mandatory. Only the worker EXE, DLL, deps.json and runtimeconfig.json are staged under `update-worker/`; exact version, win-x64/net10 and framework-dependent runtime are checked. `work/final-payload-manifest.json` records hashes of all final staged files including the worker.
 
 Every staged source file is compared against its packaged and portable content. Feed package identity/version/name/size/SHA256/SHA1 are checked. The installer must contain the exact verified full package. ZIP traversal, duplicates and unknown payload content are rejected. The MIT license is pinned to the NuGet package repository commit `8d2844f324a69bd848719ef465b1ae12c5060524`; the pinned tool's vendor notice is included too.
+
+The regular update worker and the recovery helper use separate MSBuild intermediate directories. During packaging, each published EXE must run with `--verify-entrypoint` and return its own worker name before its files can be distributed. This probe runs before receipt handling and cannot start an installation. The static payload verifier also checks that the regular worker names its shipped DLL.
 
 The tool's normal app-invocation bootstrap check is deliberately skipped to guarantee the packaging command cannot open an app window. Runtime reference/version is verified statically, but fast-hook correctness must pass integration tests independently. A successful build is not evidence of safe migration or a working app.
 
