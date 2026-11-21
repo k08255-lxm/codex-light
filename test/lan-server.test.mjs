@@ -33,6 +33,57 @@ async function sse(state){
 }
 const bounded=promise=>{let timer;return Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Loopback connection was not revoked')),2000);})]).finally(()=>clearTimeout(timer));};
 
+async function desktopEvents(app, signal) {
+ const response=await fetch(app.origin+'/api/events',{headers:{Authorization:'Bearer '+app.token},signal});
+ const reader=response.body.getReader(),decoder=new TextDecoder();
+ let buffer='';
+ return async method=>{
+  while(true){
+   const boundary=buffer.indexOf('\n\n');
+   if(boundary>=0){
+    const raw=buffer.slice(0,boundary);buffer=buffer.slice(boundary+2);
+    if(!raw.startsWith('data: '))continue;
+    const event=JSON.parse(raw.slice(6));
+    if(event.method===method)return event.params;
+    continue;
+   }
+   const {value,done}=await reader.read();
+   assert.equal(done,false,'desktop event stream ended');
+   buffer+=decoder.decode(value,{stream:true});
+  }
+ };
+}
+
+test('paired phone receipts reach the desktop live and are recovered on desktop reconnect',async t=>{
+ const {app}=await fixture(t),lan=(await owner(app,'enable',{address})).body;
+ const desktop=new AbortController();t.after(()=>desktop.abort());
+ const next=await desktopEvents(app,desktop.signal);
+ const {scope,reads}=await bounded(next('bridge/threadReads'));assert.deepEqual(reads,[]);
+ const finish=(threadId,id,status='completed')=>app.rpc.emit('event',{method:'turn/completed',params:{threadId,turn:{id,status}}});
+ finish('first','earlier');finish('first','later');finish('first','failed','failed');finish('second','earlier');
+ const receipt={scope,threadId:'first',turnIds:['earlier','failed','unknown','earlier']};
+ const send=(body,extra)=>request(lan,{pathname:'/api/thread-reads',method:'POST',body,...extra});
+ assert.equal((await send(receipt,{token:null})).status,401);
+ assert.equal((await send({...receipt,turnIds:[]})).status,400);
+ const local=await fetch(app.origin+'/api/thread-reads',{method:'POST',headers:{Authorization:'Bearer '+app.token},body:JSON.stringify(receipt)});
+ assert.equal(local.status,403);
+ assert.equal((await send(receipt)).status,200);
+ assert.deepEqual(await bounded(next('bridge/threadReads')),{scope,reads:[{threadId:'first',turnIds:['earlier']}]});
+ desktop.abort();
+
+ assert.equal((await send({scope,threadId:'second',turnIds:['earlier']})).status,200);
+ assert.equal((await send(receipt)).status,200,'repeated receipt is idempotent');
+ const reconnected=new AbortController();t.after(()=>reconnected.abort());
+ const afterReconnect=await desktopEvents(app,reconnected.signal);
+ assert.deepEqual(await bounded(afterReconnect('bridge/threadReads')),{scope,reads:[
+  {threadId:'first',turnIds:['earlier']},{threadId:'second',turnIds:['earlier']},
+ ]});
+ app.rpc.emit('event',{method:'account/login/completed',params:{success:true}});
+ const reset=await bounded(afterReconnect('bridge/threadReads'));
+ assert.notEqual(reset.scope,scope);assert.deepEqual(reset.reads,[]);
+ assert.equal((await send({...receipt,turnIds:['later']})).status,409);
+});
+
 test('LAN is default-off; only owner token manages it and loopback/phone use the same application handler',async t=>{
  const f=await fixture(t),{app}=f;assert.equal(f.listeners,0);
  let result=await owner(app,'status');assert.equal(result.status,200);assert.equal(result.body.enabled,false);assert.equal(result.body.url,null);assert.equal(result.body.addresses[0].address,address);

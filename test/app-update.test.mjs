@@ -12,6 +12,9 @@ const HASH=createHash('sha256').update(SETUP).digest('hex');
 const SUMS=`${HASH}  CodexLight-Setup.exe\n`;
 const URL_BASE='https://github.com/k08255-lxm/codex-light/releases/download/v0.4.0/';
 const VERSIONED_SETUP='CodexLight-Setup-0.4.0-x64.exe';
+const FULL_PACKAGE='CodexLightDesktop-0.4.0-full.nupkg';
+const LARGE_SETUP=Buffer.concat([1,2,3,4].map(value=>Buffer.alloc(1024*1024,value)).concat(Buffer.from('end')));
+const LARGE_RANGES=['bytes=0-1048575','bytes=1048576-2097152','bytes=2097153-3145729','bytes=3145730-4194306'];
 function release(overrides={}){
  return {tag_name:'v0.4.0',draft:false,prerelease:false,html_url:'https://github.com/k08255-lxm/codex-light/releases/tag/v0.4.0',body:'更新说明',published_at:'2026-11-13T00:00:00Z',assets:[{name:'CodexLight-Setup.exe',size:SETUP.length,browser_download_url:URL_BASE+'CodexLight-Setup.exe'},{name:'SHA256SUMS.txt',size:Buffer.byteLength(SUMS),browser_download_url:URL_BASE+'SHA256SUMS.txt'}],...overrides};
 }
@@ -27,6 +30,32 @@ async function fixture(t,{raw=release(),setup=SETUP,sums=SUMS,fetchExtra,launchF
  };
  const service=new AppUpdateService({currentVersion:'0.3.0',platform:'win32',arch:'x64',cacheRoot:root,fetchFn,launchFn,...options});t.after(()=>service.close());
  return {service,root,calls};
+}
+
+function rangeBody(request){
+ const [,start,end]=/^bytes=(\d+)-(\d+)$/.exec(request.headers.Range);
+ return LARGE_SETUP.subarray(Number(start),Number(end)+1);
+}
+function rangeResponse(request,{body=rangeBody(request),headers={}}={}){
+ return new Response(body,{status:206,headers:{
+  'Content-Range':`${request.headers.Range.replace('=', ' ')}/${LARGE_SETUP.length}`,
+  'Content-Length':rangeBody(request).length,
+  ...headers
+ }});
+}
+async function largeFixture(t,{fetchExtra,updateTransport='msi',...options}={}){
+ const name=updateTransport==='msi'?VERSIONED_SETUP:FULL_PACKAGE;
+ const hash=createHash('sha256').update(LARGE_SETUP).digest('hex');
+ const sums=`${hash}  ${name}\n`;
+ const raw=release({assets:[
+  {name,size:LARGE_SETUP.length,browser_download_url:URL_BASE+name},
+  {name:'SHA256SUMS.txt',size:Buffer.byteLength(sums),browser_download_url:URL_BASE+'SHA256SUMS.txt'}
+ ]});
+ const result=await fixture(t,{raw,sums,updateTransport,launchFn:async()=>{},...options,
+  fetchExtra:async(url,request)=>await fetchExtra?.(url,request)||(url===URL_BASE+name?rangeResponse(request):null)
+ });
+ await result.service.check();
+ return {...result,url:URL_BASE+name};
 }
 
 test('release accepts only the fixed project assets and stable versions',()=>{
@@ -85,6 +114,7 @@ test('download validates exact size/hash and only explicit confirmed install lau
  await assert.rejects(service.install({version:'0.4.0',confirmed:false}),/确认/);
  assert.equal((await service.install({version:'0.4.0',confirmed:true})).phase,'launched');assert.equal(launches.length,1);assert.deepEqual(launches[0][1],{sha256:HASH});assert.equal(path.basename(launches[0][0]),'CodexLight-Setup.exe');assert.deepEqual(await readFile(launches[0][0]),SETUP);
  await service.install({version:'0.4.0',confirmed:true});await service.check();await service.install({version:'0.4.0',confirmed:true});assert.equal(launches.length,1);assert.equal(calls.filter(call=>call.url.endsWith('.exe')).length,1);
+ assert.ok(calls.every(call=>call.request.headers.Range===undefined));
 });
 test('wrong hash or truncated stream deletes partial files and cannot launch',async t=>{
  for(const setup of [Buffer.alloc(SETUP.length,99),SETUP.subarray(0,8)]){
@@ -100,6 +130,139 @@ test('download rejects off-site redirects and oversized responses',async t=>{
 test('GitHub asset CDN redirect remains verified against published hash',async t=>{
  const cdn='https://release-assets.githubusercontent.com/github-production-release-asset/123/fixture';
  const {service}=await fixture(t,{fetchExtra:url=>url===URL_BASE+'CodexLight-Setup.exe'?new Response(null,{status:302,headers:{location:cdn}}):url===cdn?new Response(SETUP):null});await service.check();assert.equal((await service.download({version:'0.4.0'})).phase,'ready');
+});
+test('large Windows packages use four parallel, disjoint ranges through trusted redirects',async t=>{
+ for(const updateTransport of ['msi','velopack'])await t.test(updateTransport,async t=>{
+  const redirect='https://release-assets.githubusercontent.com/github-production-release-asset/123/large-fixture';
+  let releaseBodies;
+  const allRequested=new Promise(resolve=>{releaseBodies=resolve;});
+  let cdnRequests=0;
+  const {service,calls,root,url}=await largeFixture(t,{updateTransport,downloadTimeoutMs:2000,fetchExtra:(url,request)=>{
+   if(url.endsWith(VERSIONED_SETUP)||url.endsWith(FULL_PACKAGE))return new Response(null,{status:302,headers:{location:redirect}});
+   if(url!==redirect)return;
+   if(++cdnRequests===LARGE_RANGES.length)releaseBodies();
+   const body=new ReadableStream({start(controller){
+    request.signal.addEventListener('abort',()=>controller.error(request.signal.reason),{once:true});
+    allRequested.then(()=>{
+     if(request.signal.aborted)return;
+     controller.enqueue(rangeBody(request));
+     controller.close();
+    });
+   }});
+   return rangeResponse(request,{body});
+  }});
+  const [ready,joined]=await Promise.all([service.download({version:'0.4.0'}),service.download({version:'0.4.0'})]);
+  assert.deepEqual(joined,ready);
+  assert.equal(ready.phase,'ready');
+  assert.equal(ready.receivedBytes,LARGE_SETUP.length);
+  assert.equal(ready.totalBytes,LARGE_SETUP.length);
+  for(const origin of [url,redirect]){
+   const requests=calls.filter(call=>call.url===origin).map(call=>call.request);
+   assert.deepEqual(requests.map(request=>request.headers.Range).sort(),LARGE_RANGES.toSorted());
+   assert.ok(requests.every(request=>request.headers['Accept-Encoding']==='identity'&&request.redirect==='manual'));
+  }
+  assert.ok(calls.filter(call=>call.url!==url&&call.url!==redirect).every(call=>call.request.headers.Range===undefined));
+  const [directory]=await readdir(root);
+  const stagedName=updateTransport==='msi'?'CodexLight-Setup.exe':FULL_PACKAGE;
+  assert.deepEqual(await readdir(path.join(root,directory)),[stagedName]);
+  assert.deepEqual(await readFile(path.join(root,directory,stagedName)),LARGE_SETUP);
+ });
+});
+test('a server that ignores Range reuses the complete response and still verifies the checksum',async t=>{
+ for(const validHash of [true,false]){
+  const body=validHash?LARGE_SETUP:Buffer.alloc(LARGE_SETUP.length,9);
+  const {service,calls,root,url}=await largeFixture(t,{fetchExtra:url=>url.endsWith(VERSIONED_SETUP)?new Response(body):null});
+  if(validHash){
+   const ready=await service.download({version:'0.4.0'});
+   assert.equal(ready.phase,'ready');
+   assert.equal(ready.receivedBytes,LARGE_SETUP.length);
+  }else{
+   await assert.rejects(service.download({version:'0.4.0'}),{code:'APP_UPDATE_HASH_MISMATCH'});
+   for(const directory of await readdir(root))assert.deepEqual(await readdir(path.join(root,directory)),[]);
+  }
+  assert.deepEqual(calls.filter(call=>call.url===url).map(call=>call.request.headers.Range),[LARGE_RANGES[0]]);
+ }
+});
+test('invalid range responses never stage an installer',async t=>{
+ const cases=[
+  ['wrong offsets',request=>rangeResponse(request,{headers:{'Content-Range':`bytes 0-1048575/${LARGE_SETUP.length}`}}),'APP_UPDATE_RANGE_INVALID'],
+  ['wrong total',request=>rangeResponse(request,{headers:{'Content-Range':`bytes 1048576-2097152/${LARGE_SETUP.length+1}`}}),'APP_UPDATE_RANGE_INVALID'],
+  ['inconsistent 200',()=>new Response(LARGE_SETUP),'APP_UPDATE_RANGE_INVALID'],
+  ['compressed segment',request=>rangeResponse(request,{headers:{'Content-Encoding':'gzip'}}),'APP_UPDATE_RANGE_INVALID'],
+  ['incorrect Content-Length',request=>rangeResponse(request,{headers:{'Content-Length':1}}),'APP_UPDATE_SIZE_MISMATCH'],
+  ['short body',request=>rangeResponse(request,{body:rangeBody(request).subarray(1)}),'APP_UPDATE_SIZE_MISMATCH'],
+  ['overlong body',request=>rangeResponse(request,{body:Buffer.concat([rangeBody(request),Buffer.from([1])])}),'APP_UPDATE_TOO_LARGE'],
+  ['tampered bytes',request=>rangeResponse(request,{body:Buffer.alloc(rangeBody(request).length,9)}),'APP_UPDATE_HASH_MISMATCH'],
+  ['untrusted redirect',()=>new Response(null,{status:302,headers:{location:'https://example.com/update.exe'}}),'APP_UPDATE_SOURCE_INVALID']
+ ];
+ for(const [name,response,code] of cases)await t.test(name,async t=>{
+  const {service,root}=await largeFixture(t,{fetchExtra:(url,request)=>url.endsWith(VERSIONED_SETUP)&&request.headers.Range===LARGE_RANGES[1]?response(request):null});
+  await assert.rejects(service.download({version:'0.4.0'}),{code});
+  assert.equal(service.status().phase,'failed');
+  assert.equal(service.status().preparedVersion,null);
+  for(const directory of await readdir(root))assert.deepEqual(await readdir(path.join(root,directory)),[]);
+ });
+});
+test('an unsatisfiable range aborts outstanding requests, joins them, and allows retry',async t=>{
+ let retry=false;let aborted=0;
+ const {service,root}=await largeFixture(t,{fetchExtra:(url,request)=>{
+  if(retry||!url.endsWith(VERSIONED_SETUP)||request.headers.Range===LARGE_RANGES[0])return;
+  if(request.headers.Range===LARGE_RANGES[1])return new Response(null,{status:416,headers:{'Content-Range':`bytes */${LARGE_SETUP.length}`}});
+  return new Promise((_,reject)=>request.signal.addEventListener('abort',()=>setImmediate(()=>{
+   aborted++;
+   reject(request.signal.reason);
+  }),{once:true}));
+ }});
+ await assert.rejects(service.download({version:'0.4.0'}),{code:'APP_UPDATE_HTTP_FAILED',message:/HTTP 416/});
+ assert.equal(aborted,2);
+ for(const directory of await readdir(root))assert.deepEqual(await readdir(path.join(root,directory)),[]);
+ retry=true;
+ assert.equal((await service.download({version:'0.4.0'})).phase,'ready');
+});
+test('closing or timing out a parallel download aborts its active bodies and cleans up',async t=>{
+ for(const mode of ['close','timeout'])await t.test(mode,async t=>{
+  let started=0;let aborted=0;
+  let notifyStarted;
+  const allStarted=new Promise(resolve=>{notifyStarted=resolve;});
+  const {service,root}=await largeFixture(t,{downloadTimeoutMs:500,fetchExtra:(url,request)=>{
+   if(!url.endsWith(VERSIONED_SETUP))return;
+   const body=new ReadableStream({start(controller){
+    if(++started===LARGE_RANGES.length)notifyStarted();
+    request.signal.addEventListener('abort',()=>{
+     aborted++;
+     controller.error(request.signal.reason);
+    },{once:true});
+   }});
+   return rangeResponse(request,{body});
+  }});
+  const failure=assert.rejects(service.download({version:'0.4.0'}),{name:'AbortError'});
+  if(mode==='close'){
+   await Promise.race([allStarted,failure]);
+   assert.equal(started,LARGE_RANGES.length);
+   await service.close();
+  }
+  await failure;
+  assert.ok(started>0);
+  assert.equal(aborted,started);
+  assert.equal(service.status().preparedVersion,null);
+  for(const directory of await readdir(root))assert.deepEqual(await readdir(path.join(root,directory)),[]);
+ });
+});
+test('short positional writes are retried in order on a shared file handle',async t=>{
+ const {service}=await largeFixture(t);
+ const target=Buffer.alloc(LARGE_SETUP.length);
+ let writing=false;
+ await service._downloadAsset(service.latest.setup,{async write(chunk,offset,length,position){
+  assert.equal(writing,false);
+  writing=true;
+  await new Promise(resolve=>setImmediate(resolve));
+  const bytesWritten=Math.min(length,127*1024);
+  target.set(chunk.subarray(offset,offset+bytesWritten),position);
+  writing=false;
+  return {bytesWritten};
+ }},new AbortController().signal);
+ assert.deepEqual(target,LARGE_SETUP);
+ assert.equal(service.receivedBytes,LARGE_SETUP.length);
 });
 test('tampered prepared file cannot be executed',async t=>{
  let installer;let launches=0;const {service,root}=await fixture(t,{launchFn:async file=>{installer=file;launches++;}});await service.check();await service.download({version:'0.4.0'});

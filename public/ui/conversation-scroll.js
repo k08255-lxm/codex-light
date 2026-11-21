@@ -93,7 +93,7 @@ export function mountConversationScroll(container) {
   const mutation = new window.MutationObserver(() => { observeChildren(); schedule(); });
   mutation.observe(container, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['open', 'class', 'style', 'hidden'] });
   observeChildren(); saved = capture();
-  return { capture, restore, toBottom, pause, get following() { return following; }, destroy() {
+  return { capture, restore, toBottom, pause, get following() { return following; }, get atBottom() { return gap() <= EPSILON; }, destroy() {
     destroyed = true; if (frame !== null) window.cancelAnimationFrame(frame); resize.disconnect(); mutation.disconnect();
     for (const [name, listener] of [['scroll', scroll], ['wheel', wheel], ['keydown', keydown], ['touchstart', touchstart], ['touchmove', touchmove], ['pointerdown', pointerdown]]) container.removeEventListener(name, listener);
     container.style.overflowAnchor = originalAnchor;

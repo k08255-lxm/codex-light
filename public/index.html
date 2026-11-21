@@ -87,6 +87,7 @@
         <button class="settings-nav-item" data-settings-section="configuration"><span data-icon="settings"></span><span>配置</span></button>
         <button class="settings-nav-item" data-settings-section="archived"><span data-icon="archive"></span><span>已归档</span></button>
         <button class="settings-nav-item" data-settings-section="dsh"><span data-icon="branch"></span><span>DSH 与 MCP</span></button>
+        <button class="settings-nav-item" data-settings-section="skills" data-search-keywords="Skills 技能管理 启用 停用" data-search-target="#skills-search"><span data-icon="spark"></span><span>技能</span></button>
         <button class="settings-nav-item" data-settings-section="plugins"><span data-icon="plug"></span><span>插件</span></button>
         <button class="settings-nav-item" data-settings-section="remote"><span data-icon="remote"></span><span>远程控制</span></button>
         <button class="settings-nav-item local-only" data-settings-section="storage"><span data-icon="archive"></span><span>存储空间</span></button>
@@ -285,6 +286,7 @@
         <div class="panel"><p class="fine">配对码到期只结束本次配对流程，已授权设备不会自动撤销。</p><button id="remote-pair" type="button" class="btn">创建配对码</button><div id="remote-pairing" class="hidden"><code id="remote-pair-code"></code><p id="remote-pair-expiry" class="fine"></p><div class="work-row"><button id="remote-pair-check" type="button" class="btn">查询状态</button><button id="remote-pair-hide" type="button" class="btn">隐藏</button></div></div><p id="remote-pair-status" class="fine" role="status"></p></div>
         <section id="settings-lan" class="local-only remote-lan-section"><h2 class="section-title">局域网访问</h2><div id="lan-root"></div></section>
       </section>
+      <section id="settings-skills" class="settings-section hidden"></section>
       <section id="settings-plugins" class="settings-section hidden"></section>
       <section id="settings-storage" class="settings-section hidden"><div id="storage-root"></div></section>
       <section id="settings-about" class="settings-section hidden"><div id="about-root"></div></section>

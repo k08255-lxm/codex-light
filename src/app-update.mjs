@@ -15,6 +15,8 @@ const FULL_PACKAGE=/^CodexLightDesktop-(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-
 function transport(value){if(value!=='msi'&&value!=='velopack')throw fail('Unsupported application update transport','APP_UPDATE_TRANSPORT_INVALID');return value;}
 function cacheName(version,updateTransport){return updateTransport==='velopack'?`CodexLightDesktop-${version}-full.nupkg`:SETUP;}
 const MAX_SETUP=300*1024*1024;
+const MIN_PARALLEL_SIZE=4*1024*1024;
+const DOWNLOAD_SEGMENTS=4;
 const VERSION=/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const fail=(message,code,outcome='notExecuted')=>Object.assign(new Error(message),{code,outcome});
 function strict(input,keys){
@@ -61,7 +63,7 @@ export function publishedSetupHash(text,name=SETUP){
  if(matches.length!==1)throw fail('发布校验文件缺少唯一的安装包 SHA256','APP_UPDATE_CHECKSUM_INVALID');
  return matches[0][1].toLowerCase();
 }
-async function fileHash(file){const hash=createHash('sha256');for await(const chunk of createReadStream(file))hash.update(chunk);return hash.digest('hex');}
+async function fileHash(file,signal){const hash=createHash('sha256');for await(const chunk of createReadStream(file,{signal}))hash.update(chunk);return hash.digest('hex');}
 async function launchInstaller(file){
  await new Promise((resolve,reject)=>{
   let child;try{child=spawn(file,[],{detached:true,stdio:'ignore',shell:false,windowsHide:false});}catch(error){reject(Object.assign(error,{outcome:'notExecuted'}));return;}
@@ -86,13 +88,20 @@ export class AppUpdateService{
   const latest=this.latest?{version:this.latest.version,releaseUrl:this.latest.releaseUrl,notes:this.latest.notes,publishedAt:this.latest.publishedAt,available:this.latest.available,downloadBytes:this.latest.setup.size}:null;
   return {currentVersion:this.currentVersion,...(this.updateTransport==='velopack'?{updateTransport:this.updateTransport}:{}),supported:this.platform==='win32'&&this.arch==='x64',phase:this.phase,checkedAt:this.checkedAt,latest,requiresRecheck:!!latest?.available&&this.releaseExpired(),receivedBytes:this.receivedBytes,totalBytes:this.totalBytes,preparedVersion:this.prepared?.version||null,...(this.error?{error:this.error}:{}),releasesUrl:APP_RELEASES_URL};
  }
- async _fetch(url,signal,{api=false}={}){
+ async _fetch(url,signal,{api=false,range}={}){
   let target=trustedUrl(url,{api});
+  const headers={
+   Accept:api?'application/vnd.github+json':'application/octet-stream',
+   'User-Agent':`Codex-Light/${this.currentVersion}`,
+   ...(range?{Range:`bytes=${range.start}-${range.end}`,'Accept-Encoding':'identity'}:{})
+  };
   for(let redirects=0;redirects<=4;redirects++){
-   const response=await this.fetchFn(target.href,{redirect:'manual',signal,headers:{Accept:api?'application/vnd.github+json':'application/octet-stream','User-Agent':`Codex-Light/${this.currentVersion}`}});
+   signal.throwIfAborted();
+   const response=await this.fetchFn(target.href,{redirect:'manual',signal,headers});
    if([301,302,303,307,308].includes(response.status)){
+    await response.body?.cancel?.();
     if(api)throw fail('应用更新 API 重定向被拒绝','APP_UPDATE_SOURCE_INVALID');
-    const next=new URL(response.headers.get('location')||'',target);target=trustedUrl(next.href);await response.body?.cancel?.();continue;
+    const next=new URL(response.headers.get('location')||'',target);target=trustedUrl(next.href);continue;
    }
    if(!response.ok){await response.body?.cancel?.();throw fail(response.status===404?'尚未发布可用的应用版本':`应用更新请求失败（HTTP ${response.status}）`,'APP_UPDATE_HTTP_FAILED');}
    return response;
@@ -149,6 +158,77 @@ export class AppUpdateService{
   if((await lstat(this.cacheRoot)).isSymbolicLink())throw fail('更新缓存路径不能是链接','APP_UPDATE_PATH_INVALID');
   return realpath(this.cacheRoot);
  }
+ async _writeAsset(response,write,signal,size,range){
+  try{
+   const contentRange=response.headers.get('content-range');
+   let length=size;
+   if(range){
+    const match=/^bytes (\d+)-(\d+)\/(\d+)$/i.exec(contentRange||'');
+    const encoding=response.headers.get('content-encoding');
+    if(response.status!==206||!match||Number(match[1])!==range.start||Number(match[2])!==range.end||Number(match[3])!==size||(encoding!==null&&encoding.toLowerCase()!=='identity'))throw fail('安装包分段响应与请求范围不一致','APP_UPDATE_RANGE_INVALID');
+    length=range.end-range.start+1;
+   }else if(response.status!==200||contentRange!==null){
+    throw fail('安装包请求未返回完整文件','APP_UPDATE_RANGE_INVALID');
+   }
+   const declared=response.headers.get('content-length');
+   if(declared!==null&&(!/^\d+$/.test(declared)||Number(declared)!==length))throw fail('安装包大小与发布信息不一致','APP_UPDATE_SIZE_MISMATCH');
+   if(!response.body)throw fail('安装包下载内容为空','APP_UPDATE_EMPTY');
+   const start=range?.start??0;
+   let received=0;
+   for await(const chunk of response.body){
+    if(received+chunk.length>length)throw fail('安装包下载超过允许大小','APP_UPDATE_TOO_LARGE');
+    let offset=0;
+    while(offset<chunk.length){
+     const {bytesWritten}=await write(chunk,offset,start+received,signal);
+     if(bytesWritten===0)throw fail('安装包写入失败','APP_UPDATE_WRITE_FAILED');
+     offset+=bytesWritten;
+     received+=bytesWritten;
+     this.receivedBytes+=bytesWritten;
+    }
+   }
+   signal.throwIfAborted();
+   if(received!==length)throw fail('安装包下载不完整','APP_UPDATE_SIZE_MISMATCH');
+  }finally{
+   await response.body?.cancel?.()?.catch(()=>{});
+  }
+ }
+ async _downloadAsset({url,size},handle,signal){
+  // The requests stream concurrently, but writes to their shared file handle must be serialized.
+  let pendingWrite=Promise.resolve();
+  const write=(chunk,offset,position,writeSignal)=>{
+   pendingWrite=pendingWrite.then(()=>{
+    writeSignal.throwIfAborted();
+    return handle.write(chunk,offset,chunk.length-offset,position);
+   });
+   return pendingWrite;
+  };
+  if(size<MIN_PARALLEL_SIZE){
+   await this._writeAsset(await this._fetch(url,signal),write,signal,size);
+   return;
+  }
+  const ranges=Array.from({length:DOWNLOAD_SEGMENTS},(_,index)=>({
+   start:Math.floor(index*size/DOWNLOAD_SEGMENTS),
+   end:Math.floor((index+1)*size/DOWNLOAD_SEGMENTS)-1
+  }));
+  const segments=new AbortController();
+  const rangeSignal=AbortSignal.any([signal,segments.signal]);
+  const first=await this._fetch(url,rangeSignal,{range:ranges[0]});
+  // The first response also carries the complete file if the server ignores Range.
+  if(first.status!==206){
+   await this._writeAsset(first,write,signal,size);
+   return;
+  }
+  await Promise.allSettled(ranges.map(async(range,index)=>{
+   try{
+    const response=index===0?first:await this._fetch(url,rangeSignal,{range});
+    await this._writeAsset(response,write,rangeSignal,size,range);
+   }catch(error){
+    segments.abort(error);
+    throw error;
+   }
+  }));
+  rangeSignal.throwIfAborted();
+ }
  async download(params){
   strict(params,['version']);const latest=this._release(params);
   if(this.downloading)return this.downloading;
@@ -163,14 +243,12 @@ export class AppUpdateService{
     const root=await this._safeRoot();const directory=path.join(root,`${latest.version}-${latest.sha256.slice(0,16)}`);
     await mkdir(directory,{recursive:true});if((await lstat(directory)).isSymbolicLink())throw fail('更新缓存路径不能是链接','APP_UPDATE_PATH_INVALID');
     partial=path.join(directory,`${randomUUID()}.partial`);handle=await open(partial,'wx');
-    const response=await this._fetch(latest.setup.url,this.abortController.signal);
-    const declared=response.headers.get('content-length');if(declared!==null&&Number(declared)!==latest.setup.size)throw fail('安装包大小与发布信息不一致','APP_UPDATE_SIZE_MISMATCH');
-    if(!response.body)throw fail('安装包下载内容为空','APP_UPDATE_EMPTY');
-    const hash=createHash('sha256');
-    for await(const chunk of response.body){this.receivedBytes+=chunk.length;if(this.receivedBytes>latest.setup.size||this.receivedBytes>MAX_SETUP)throw fail('安装包下载超过允许大小','APP_UPDATE_TOO_LARGE');hash.update(chunk);await handle.writeFile(chunk);}
+    const {signal}=this.abortController;
+    await this._downloadAsset(latest.setup,handle,signal);
+    if(this.receivedBytes!==latest.setup.size||(await handle.stat()).size!==latest.setup.size)throw fail('安装包下载不完整','APP_UPDATE_SIZE_MISMATCH');
     await handle.close();handle=null;
-    if(this.receivedBytes!==latest.setup.size)throw fail('安装包下载不完整','APP_UPDATE_SIZE_MISMATCH');
-    if(hash.digest('hex')!==latest.sha256)throw fail('安装包 SHA256 校验失败，已拒绝安装','APP_UPDATE_HASH_MISMATCH');
+    if(await fileHash(partial,signal)!==latest.sha256)throw fail('安装包 SHA256 校验失败，已拒绝安装','APP_UPDATE_HASH_MISMATCH');
+    signal.throwIfAborted();
     const file=path.join(directory,cacheName(latest.version,this.updateTransport));await rename(partial,file);partial=null;
     this.prepared={version:latest.version,sha256:latest.sha256,size:latest.setup.size,file};this.phase='ready';return this.status();
    }catch(error){this.phase='failed';this.error=error?.message||'安装包下载失败';throw error;}

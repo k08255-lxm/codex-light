@@ -4,7 +4,7 @@ import {randomBytes} from 'node:crypto';
 import {DEFAULT_PREFERENCES,validatePreferences} from '../public/preferences.js';
 import {MUTATING_METHODS} from './operations.mjs';
 const MAX=256*1024;
-const methods=new Set([...MUTATING_METHODS,'config/apply','plugin/apply','git/apply','account/start','account/cancel','account/logout','terminal/open','runtime/upgrade']);
+const methods=new Set([...MUTATING_METHODS,'config/apply','skills/config/write','plugin/apply','git/apply','account/start','account/cancel','account/logout','terminal/open','runtime/upgrade']);
 const error=()=>new Error('本机状态无法安全读取或保存；未使用替代存储。');
 async function noLinks(file){for(let p=path.resolve(file);;p=path.dirname(p)){try{if((await lstat(p)).isSymbolicLink())throw error();}catch(e){if(e.code!=='ENOENT')throw e;}if(path.dirname(p)===p)break;}}
 function receipt(v){if(!v||typeof v!=='object'||Array.isArray(v)||Object.keys(v).sort().join(',')!=='createdAt,method,outcome,requestId,state'||typeof v.requestId!=='string'||! /^[a-f0-9]{32}:\d{13}:[A-Za-z0-9_-]{8,100}$/.test(v.requestId)||!methods.has(v.method)||!Number.isSafeInteger(v.createdAt)||v.createdAt<0||!['pending','succeeded','failed','unknown','inspection'].includes(v.state)||!['pending','succeeded','failed','unknown','notExecuted','inspection'].includes(v.outcome))throw error();return {...v};}

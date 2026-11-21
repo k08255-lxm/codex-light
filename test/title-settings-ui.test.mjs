@@ -22,7 +22,7 @@ test('title settings live under Configuration and only activate there on the loc
  const noop=()=>{},nodes=new Map(),state={lan:false,connected:false},calls=[];
  const panel={activate:noop,deactivate:noop};
  const context={state,currentRoute:'settings',recordNavigation:noop,configPanel:panel,document:{querySelectorAll:()=>[],querySelector:()=>({scrollTop:0})},$:id=>{if(!nodes.has(id))nodes.set(id,{classList:{toggle:noop},scrollIntoView:noop});return nodes.get(id);},route:noop,
-  dshConnectionView:panel,dshConfigView:panel,titleSettings:{activate:()=>calls.push(state.settingsPage)},pluginPanel:panel,lanView:panel,aboutView:panel,storageView:panel,renderPluginPending:noop,syncRuntimePanelActivity:noop};
+  dshConnectionView:panel,dshConfigView:panel,titleSettings:{activate:()=>calls.push(state.settingsPage)},pluginPanel:panel,skillsView:panel,lanView:panel,aboutView:panel,storageView:panel,renderPluginPending:noop,syncRuntimePanelActivity:noop};
  vm.createContext(context);vm.runInContext(source,context);
  context.selectSettingsSection('general');assert.deepEqual(calls,[]);
  context.selectSettingsSection('configuration');assert.deepEqual(calls,['configuration']);

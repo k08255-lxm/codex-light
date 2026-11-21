@@ -35,6 +35,11 @@ test('public download instructions match the release asset/version contract', ()
   const apkExamples = [...android.slice(installStart, installEnd).matchAll(/codex-light-(?:android-)?(\d+\.\d+\.\d+)\.apk/g)];
   assert.ok(apkExamples.length > 0, 'Android download instructions need an exact APK example');
   for (const match of apkExamples) assert.equal(match[1], version);
+  const releaseApks = read(`releases/${version}.md`).match(/codex-light-(?:android-)?\d+\.\d+\.\d+\.apk/g) || [];
+  const apkNames = [...new Set(apkExamples.map(match => match[0]))];
+  assert.equal(apkNames.length, 1, 'Current Android installation instructions must name one APK');
+  assert.deepEqual([...new Set(releaseApks)], apkNames, 'Release notes and Android instructions must name the same APK');
+  if (version === '0.4.12') assert.equal(apkNames[0], 'codex-light-android-0.4.12.apk');
   assert.ok(android.includes(`versionCode 为 ${versionCode}`));
   assert.ok(readme.includes('SHA256SUMS.txt'));
   assert.ok(android.includes('SHA256SUMS.txt'));

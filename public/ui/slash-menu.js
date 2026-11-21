@@ -8,20 +8,36 @@ import { icon } from '../icons.js';
  * @param {object} deps
  * @param {HTMLTextAreaElement} deps.prompt  @param {HTMLElement} deps.menu
  * @param {() => {thread:boolean,busy:boolean,sending:boolean,connected:boolean,cwd:string}} deps.context
- * @param {Function} deps.rpc  read-only `skills/list`
+ * @param {Function} deps.readSkills read-only skill catalog for the active project or session cwd
  * @param {Record<string, Function>} deps.commands  handlers for implemented command ids
  * @param {() => void} deps.onDraftChange  called after the draft text changes
  */
-export function createSlashMenu({ document, prompt, menu, el, rpc, context, commands, onDraftChange }) {
+export function createSlashMenu({ document, prompt, menu, el, readSkills, context, commands, onDraftChange }) {
   const slash = { open: false, entries: [], index: 0 };
-  let skills = { cwd: null, rows: [], loading: false, error: '' };
+  const empty = () => ({ key: '', rows: [], loading: false, error: '' });
+  let skills = empty();
+  let contextKey = '';
+  let controller = null;
+  let forceNextRead = false;
+  const keyFor = ({ cwd, connected, serverInstance, runtimeTarget }) => JSON.stringify([cwd || '', connected, serverInstance, runtimeTarget]);
 
   async function loadSkills() {
-    const { cwd, connected } = context();
-    if (!cwd || !connected || skills.loading || skills.cwd === cwd) return;
-    skills = { cwd, rows: [], loading: true, error: '' };
-    try { const result = await rpc('skills/list', { cwds: [cwd] }); if (skills.cwd === cwd) skills = { cwd, rows: skillsFromResponse(result), loading: false, error: '' }; }
-    catch (error) { if (skills.cwd === cwd) skills = { cwd, rows: [], loading: false, error: error.message }; }
+    const current = context();
+    const key = keyFor(current);
+    if (!current.connected || skills.key === key) return;
+    const request = new AbortController();
+    controller = request;
+    skills = { ...empty(), key, loading: true };
+    try {
+      const result = await readSkills(current.cwd, { forceReload: forceNextRead, signal: request.signal });
+      if (controller !== request || keyFor(context()) !== key) return;
+      skills = { ...empty(), key, rows: skillsFromResponse(result) };
+      forceNextRead = false;
+    } catch (error) {
+      if (controller !== request || keyFor(context()) !== key) return;
+      skills = { ...empty(), key, error: error.message || String(error) };
+    }
+    controller = null;
     if (slash.open) update();
   }
   function close() {
@@ -31,7 +47,8 @@ export function createSlashMenu({ document, prompt, menu, el, rpc, context, comm
   function update() {
     const query = slashQuery(prompt.value, prompt.selectionStart ?? prompt.value.length);
     if (!query) { close(); return; }
-    loadSkills();
+    syncContext(false);
+    void loadSkills();
     const entries = slashEntries(query.query, skills.rows, context());
     const firstEnabled = entries.findIndex(entry => entry.enabled);
     if (!slash.open || slash.entries.length !== entries.length || slash.entries.some((entry, i) => entry.id !== entries[i].id)) slash.index = Math.max(0, firstEnabled);
@@ -56,6 +73,7 @@ export function createSlashMenu({ document, prompt, menu, el, rpc, context, comm
     menu.replaceChildren(fragment); menu.classList.remove('hidden');
     prompt.setAttribute('aria-expanded', 'true');
     if (slash.entries.length) { prompt.setAttribute('aria-activedescendant', 'slash-option-' + slash.index); menu.querySelector?.('#slash-option-' + slash.index)?.scrollIntoView?.({ block: 'nearest' }); }
+    else prompt.removeAttribute('aria-activedescendant');
   }
   function move(step) {
     const { entries } = slash; if (!entries.length) return;
@@ -81,7 +99,18 @@ export function createSlashMenu({ document, prompt, menu, el, rpc, context, comm
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); return true; }
     return false;
   }
-  /** Skill list is cwd-scoped; a `skills/changed` notification invalidates it. */
-  function invalidateSkills() { skills = { cwd: null, rows: [], loading: false, error: '' }; if (slash.open) update(); }
-  return { update, close, handleKey, invalidateSkills, isOpen: () => slash.open, snapshot: () => ({ ...slash, skills }) };
+  function invalidateSkills({ updateOpen = true, forceReload = true } = {}) {
+    controller?.abort();
+    controller = null;
+    skills = empty();
+    forceNextRead ||= forceReload;
+    if (updateOpen && slash.open) update();
+  }
+  function syncContext(updateOpen = true) {
+    const key = keyFor(context());
+    if (key === contextKey) return;
+    contextKey = key;
+    invalidateSkills({ updateOpen, forceReload: false });
+  }
+  return { update, close, handleKey, invalidateSkills, syncContext, isOpen: () => slash.open, snapshot: () => ({ ...slash, skills }) };
 }

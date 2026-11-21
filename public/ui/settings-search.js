@@ -88,14 +88,14 @@ export function mountSettingsSearch({ document, navigate }) {
         });
         results.append(button);
       }
-      add(page, category);
+      add(page, category, link.dataset.searchKeywords, link.dataset.searchTarget);
       for (const [id, label, keywords, destination] of anchors) {
         const target = document.getElementById(id);
         if (target && page.contains(target)) add(target, label, keywords, destination);
       }
       for (const node of page.querySelectorAll('h2, h3, .pref-row strong, .field > span, dt, summary, button, .config-settings-field strong')) {
         // Never include archived conversation names, paired devices or plugin entries.
-        if (node.closest('#archived-list, #remote-devices, #settings-plugins, #question-notification-permission')) continue;
+        if (node.closest('#archived-list, #remote-devices, #settings-plugins, #settings-skills, #question-notification-permission')) continue;
         const row = node.closest('.pref-row');
         add(node, node.textContent.trim(), row?.querySelector('small')?.textContent || '');
       }

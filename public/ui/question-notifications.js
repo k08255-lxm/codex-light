@@ -239,8 +239,7 @@ export function createQuestionNotifications({ document, window, host, permission
     } catch { failed(); }
     finally { permissionButton.disabled = false; renderPermission(); }
   }
-  async function refreshPermission() {
-    try { if (bridge.refreshStatus) await bridge.refreshStatus(); } catch { failed(); }
+  function permissionChanged() {
     if (disposed) return;
     if (bridge.restoreOnPermissionGrant) {
       const current = bridge.status();
@@ -251,10 +250,18 @@ export function createQuestionNotifications({ document, window, host, permission
     }
     renderPermission();
   }
+  let checkingPermission = false;
+  async function refreshPermission() {
+    if (!bridge.refreshStatus) { permissionChanged(); return; }
+    if (checkingPermission) return;
+    checkingPermission = true;
+    try { await bridge.refreshStatus(); } catch { failed(); }
+    finally { checkingPermission = false; permissionChanged(); }
+  }
   permissionButton?.addEventListener('click', requestPermission);
   window.addEventListener('focus', refreshPermission);
   if (bridge.refreshStatus) void refreshPermission();
-  window.addEventListener('codexlight-question-notification-status', refreshPermission);
+  window.addEventListener('codexlight-question-notification-status', permissionChanged);
   function publishPendingQuestions(count, active) {
     if (lastCount === count && lastEnabled === active) return;
     lastCount = count;
@@ -351,7 +358,7 @@ export function createQuestionNotifications({ document, window, host, permission
       publishPendingQuestions(0, enabled());
       permissionButton?.removeEventListener('click', requestPermission);
       window.removeEventListener('focus', refreshPermission);
-      window.removeEventListener('codexlight-question-notification-status', refreshPermission);
+      window.removeEventListener('codexlight-question-notification-status', permissionChanged);
       window.removeEventListener('codex-light-question-open', onNativeOpen);
       window.removeEventListener('pagehide', clearSystem);
     },

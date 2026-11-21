@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createThreadCompletion,createTaskbarBadge} from '../public/ui/thread-completion.js';
+import {setImmediate as tick} from 'node:timers/promises';
+import {createThreadCompletion,createTaskbarBadge,createThreadReadReporter} from '../public/ui/thread-completion.js';
 
 const start=(threadId='thread',id='turn')=>({method:'turn/started',params:{threadId,turn:{id,status:'inProgress'}}});
 const end=(status='completed',threadId='thread',id='turn')=>({method:'turn/completed',params:{threadId,turn:{id,status}}});
@@ -89,4 +90,53 @@ test('badge combines individual unread turns and outstanding questions, independ
   state.read('a');badge.setQuestions(1,false);state.read('b');badge.setQuestions(0,false);
   assert.deepEqual(messages.map(({count,attention})=>[count,attention]),[[0,false],[1,false],[2,false],[3,false],[5,true],[3,true],[2,false],[1,false],[0,false]]);
   assert.ok(messages.every(message=>message.type==='desktopTaskbarBadge'));
+});
+
+test('a mobile receipt only clears its exact completed turns and never consumes question badges',()=>{
+  const messages=[];
+  const badge=createTaskbarBadge(message=>messages.push(message));
+  const state=createThreadCompletion(badge.setCompleted);
+  state.observe(end('completed','first','same-id'));
+  state.observe(end('completed','second','same-id'));
+  state.observe(end('completed','first','newer'));
+  badge.setQuestions(1,true);
+  assert.equal(state.syncRead([{threadId:'first',turnIds:['same-id','already-read']}]),true);
+  assert.deepEqual([...state.unread.get('first')],['newer']);
+  assert.deepEqual([...state.unread.get('second')],['same-id']);
+  assert.deepEqual(messages.at(-1),{type:'desktopTaskbarBadge',count:3,attention:true});
+  assert.equal(state.syncRead([{threadId:'first',turnIds:['same-id']}]),false);
+  state.observe(end('completed','first','already-read'));
+  assert.equal(state.count,2,'a receipt arriving before the replay suppresses the completion');
+  state.syncRead([{threadId:'first',turnIds:['newer']}]);
+  assert.equal(state.unread.has('first'),false);
+  assert.equal(state.unread.has('second'),true);
+  assert.deepEqual(messages.at(-1),{type:'desktopTaskbarBadge',count:2,attention:true});
+});
+
+test('phone retries a read after reconnect and discards unacknowledged receipts when the scope changes',async()=>{
+  const calls=[];
+  let complete;
+  const reporter=createThreadReadReporter(input=>{
+    calls.push(input);
+    return new Promise((resolve,reject)=>{complete={resolve,reject};});
+  });
+  reporter.connect('old-scope');
+  reporter.record('thread',['first','first']);
+  reporter.record('thread',['first','second']);
+  reporter.disconnect();
+  complete.reject(new Error('connection lost'));
+  await tick();
+  assert.equal(calls.length,1);
+
+  reporter.connect('old-scope');
+  assert.deepEqual(calls[1],{scope:'old-scope',threadId:'thread',turnIds:['first','second']});
+  reporter.connect('new-scope');
+  reporter.record('other-thread',['first']);
+  complete.resolve();
+  await tick();
+  assert.deepEqual(calls[2],{scope:'new-scope',threadId:'other-thread',turnIds:['first']});
+  complete.resolve();
+  await tick();
+  reporter.record('other-thread',['first']);
+  assert.equal(calls.length,3);
 });

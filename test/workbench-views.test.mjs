@@ -249,7 +249,7 @@ test('slash menu opens after ordinary text, skips disabled rows, and replaces on
   const document = createDocument(); const prompt = document.createElement('textarea'); const menu = document.createElement('div'); menu.className = 'hidden';
   prompt.setSelectionRange = (a) => { prompt.selectionStart = a; };
   const ran = []; let ctx = { thread: false, busy: false, sending: false, connected: true, cwd: '' };
-  const slash = createSlashMenu({ document, prompt, menu, el: (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; }, rpc: async () => ({ data: [] }), context: () => ctx, commands: { new: () => ran.push('new'), model: () => ran.push('model') }, onDraftChange: () => {} });
+  const slash = createSlashMenu({ document, prompt, menu, el: (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; }, readSkills: async () => ({ data: [] }), context: () => ctx, commands: { new: () => ran.push('new'), model: () => ran.push('model') }, onDraftChange: () => {} });
   prompt.value = '修改文件的时候会有这个小标吗 /'; prompt.selectionStart = prompt.value.length; slash.update();
   assert.equal(slash.isOpen(), true); assert.equal(menu.classList.contains('hidden'), false);
   const selected = () => menu.querySelector('[aria-selected="true"]').querySelector('.slash-label').textContent;

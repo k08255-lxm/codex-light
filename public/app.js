@@ -1,7 +1,7 @@
 import { confirmApp } from './app-confirm-dialog.js';
 import { createBackHandler, dismissBackLayer } from './ui/back-navigation.js';
 import { createNavigationHistory } from './ui/navigation-history.js';
-import { createThreadCompletion, createTaskbarBadge } from './ui/thread-completion.js';
+import { createThreadCompletion, createTaskbarBadge, createThreadReadReporter } from './ui/thread-completion.js';
 import { mountMobileLayout } from './ui/mobile-layout.js';
 import { mountTaskNotifications } from './ui/task-notifications.js';
 import { createQuestionNotifications } from './ui/question-notifications.js';
@@ -16,6 +16,7 @@ import { mountContextDetails } from './ui/context-details.js';
 import { bootstrapToken } from './ui/access.js';
 import { mountConfigSettingsPanel } from './config-settings-panel.js';
 import { mountSettingsSearch } from './ui/settings-search.js';
+import { mountSkillsView } from './ui/skills-view.js';
 import { createNotifications } from './ui/notifications.js';
 import { mountAccountLoginPanel } from './account-login-panel.js';
 import { mountStatistics } from './ui/stats-view.js';
@@ -95,6 +96,8 @@ const projectsState={projects:[],selectedId:null,canPickFolder:false,busy:false,
 const recentThreads = new Map();
 const taskbarBadge = createTaskbarBadge(message => window.chrome?.webview?.postMessage(message));
 const threadCompletion = createThreadCompletion(taskbarBadge.setCompleted);
+const threadReadReporter = createThreadReadReporter(input => api('/api/thread-reads', input, {timeoutMs: 5000}));
+let threadReadFrame = null, renderedThreadReads = null;
 taskbarBadge.setCompleted(0);
 const threadSearchCache = new Map();
 let searchStatus = { text: '', busy: false };
@@ -261,6 +264,7 @@ function releaseThread(threadId) {
   rpc('thread/unsubscribe', { threadId }).catch(error => notice('离开对话时未能释放会话订阅：' + error.message + '。关闭应用时会统一释放。', true));
 }
 function resetThreadView() {
+  renderedThreadReads = null;
   historyAutoLoad?.reset(); state.store.clear(); state.ledger.clear(); conversation.clear(); state.nextItems = null; state.nextTurns = null; state.historyFallback = false; state.pager = null;
   liveChanges.update(pillChanges([]), state.thread?.id || null);
   composer.renderOptimistic();
@@ -458,6 +462,7 @@ async function handlePendingReconcileResult(marker,response,decision){
   await recoverPendingResult(marker,response.result,current);
   if(!current())return;
  }
+ const skillPath=marker.method==='skills/config/write'?pendingMutations.envelope(marker.requestId)?.params?.path:undefined;
  composer.resolveOptimistic(marker,response,resolved);
  pendingMutations.settle(marker.requestId);
  mutationContexts.delete(marker.requestId);
@@ -466,6 +471,10 @@ async function handlePendingReconcileResult(marker,response,decision){
  if(marker.method.startsWith('account/')&&currentRoute==='account')refreshAccount().catch(error=>notice('无法刷新账户状态：'+error.message,true));
  if(marker.method.startsWith('remoteControl/'))remoteControls();
  if(marker.method==='terminal/open')workbench.dropUnexecuted(resolved);
+ if(marker.method==='skills/config/write'){
+  slashMenu.invalidateSkills();
+  skillsView.recover(skillPath,response?.result,resolved);
+ }
  noteLedgerChanged();
 }
 function handlePendingReconcileError(marker,error){
@@ -558,6 +567,7 @@ function updateControls() { syncSettingsFolderPicker();const availability=curren
  $('prompt').placeholder=running?'补充说明，或排队下一条消息':state.thread?'继续对话':'描述要完成的任务';
  const reason=running?'':availability.reason;$('send-state-text').textContent=reason;$('send-state').classList.toggle('hidden',!reason||(!availability.action&&reason==='输入消息，或添加图片 / 文件。'));const action=$('send-state-action');action.classList.toggle('hidden',running||!availability.action||availability.action==='stop');action.dataset.action=availability.action||'';action.textContent=({reconnect:'重新检查连接',cwd:'选择工作目录',pending:'查看消息状态'})[availability.action]||'';
  $('stop').classList.toggle('hidden', !state.busy); $('stop').disabled = state.loadingThread || !state.turnId || !state.connected || !state.serverInstance || state.interruptingTurns.has(state.turnId) || pendingMutations.has('turn/interrupt', state.thread?.id, state.turnId); $('new-thread').disabled = state.sending; $('add-project').disabled=state.sending||projectsState.busy; $('model').disabled = state.busy || state.sending || state.loadingThread; $('effort').disabled = state.busy || state.sending || state.loadingThread; $('model-trigger').disabled = $('effort').disabled; if ($('effort').disabled) closeReasoning(false); $('add-attachment').disabled = state.sending || state.uploadingImages || !state.connected; $('add-file').disabled = $('add-attachment').disabled; $('thread-menu-button').disabled = !state.thread || state.sending || state.loadingThread || state.busy || !!pendingMutations.storageError || threadPendingRecords().length>0;
+ syncSkillsContext();
  void questionNotifications?.flushOpen();
 }
 function setCwd(cwd) { if(state.cwd !== (cwd || '')){workbench.cwdChanged();pluginPanel.reset();configPanel.reset();} state.cwd = cwd || ''; try { localSession.setItem('codex-light-cwd', state.cwd); } catch {} const label=state.cwd.split(/[\\/]/).filter(Boolean).at(-1)||'无项目';$('cwd-label').textContent=label; $('cwd-button').title=state.cwd||'选择项目'; $('project-name').textContent=label;syncSessionDefaults();updateControls();renderThreads(); }
@@ -607,7 +617,8 @@ function route(name, { section, back = false } = {}) {
   // Deactivate pages being left so their polling/reads stop.
   if (previous === 'usage' && name !== 'usage') statsView.deactivate();
   if (previous === 'account' && name !== 'account') { accountView.deactivate(); accountLoginPanel.deactivate(); }
-  if (previous === 'settings' && name !== 'settings') { pluginPanel.deactivate(); aboutView.deactivate(); lanView.deactivate(); runtimePanel?.setActive?.(false); wslRuntimePanel.setActive(false); }
+  if (previous === 'settings' && name !== 'settings') { pluginPanel.deactivate(); skillsView.deactivate(); aboutView.deactivate(); lanView.deactivate(); runtimePanel?.setActive?.(false); wslRuntimePanel.setActive(false); }
+  if (previous === 'chat' && name !== 'chat') slashMenu.close();
   if (name === 'usage') statsView.activate();
   if (name === 'account') { accountView.activate(); accountLoginPanel.activate(); }
   if (name === 'settings') { renderDshConnection(); $('cwd-input').value = state.cwd; $('settings-notice').classList.add('hidden'); selectSettingsSection(section || 'general'); }
@@ -634,6 +645,7 @@ function newThread(cwd = '') {
 }
 function renderThreads() {
   threadCompletion.read(viewedThreadId());
+  scheduleThreadRead();
   const runningThreadIds = new Set();
   if (state.connected) {
     for (const thread of state.threads) if (thread.status?.type === 'active') runningThreadIds.add(thread.id);
@@ -951,6 +963,10 @@ function renderMessages(follow = true) {
   state.store.dirty.clear(); $('welcome').classList.toggle('hidden', !!state.thread || items.length > 0 || Boolean($('optimistic-messages') && !$('optimistic-messages').hidden));
   if (!$('details').classList.contains('hidden')) { if (state.detailsTab === 'dsh') renderDshTasks(); else renderTools(); }
   conversationScroll.restore(scrollSnapshot,{follow});
+  if (state.lan && state.thread?.id) {
+    renderedThreadReads = {threadId: state.thread.id, turnIds: turns.filter(turn => !turn.local && turn.status === 'completed').map(turn => turn.id)};
+    scheduleThreadRead();
+  }
 }
 function scheduleRender() { if (state.rendering) return; state.rendering = true; setTimeout(() => requestAnimationFrame(() => { state.rendering = false; renderMessages(); }), 32); }
 function renderTools() {
@@ -1025,6 +1041,7 @@ async function inspectRelatedRequest(marker) {
   if(marker.method==='config/apply'){openSettings('configuration');return;}
   if(marker.method==='git/apply'){showTerminal();showWorkspaceTab('git');return;}
   if(marker.method==='plugin/apply'){openSettings('plugins');return;}
+  if(marker.method==='skills/config/write'){openSettings('skills');return;}
   if(marker.method.startsWith('account/')){openSettings('account');return;}
   if (marker.method==='terminal/open') { showTerminal(); return; }
   if (marker.method.startsWith('remoteControl/')) { openSettings('remote'); return; }
@@ -1061,7 +1078,7 @@ function renderPendingMutations() {
     }
     fragment.append(row);
   }
-  container.replaceChildren(fragment);renderAccountPending();renderPluginPending();renderGitPending();renderConfigPending();
+  container.replaceChildren(fragment);renderAccountPending();renderPluginPending();renderGitPending();renderConfigPending();skillsView.syncPending();
 }
 async function performMutation(method, params, extras = {}) {
   let envelope;
@@ -1074,7 +1091,9 @@ async function performMutation(method, params, extras = {}) {
     const result = method==='runtime/upgrade'
       ? await api('/api/runtime/upgrade',{...envelope.params,requestId:envelope.requestId},{timeoutMs:1860000})
       : method.startsWith('app-update/') ? await api('/api/'+method,{...envelope.params,requestId:envelope.requestId},{timeoutMs:method==='app-update/download'?960000:60000})
+      : method==='skills/config/write' ? await api('/api/skills/set-enabled',{...envelope.params,requestId:envelope.requestId})
       : await (method==='config/apply' ? api('/api/config-settings/apply',{...envelope.params,requestId:envelope.requestId}) : method==='git/apply' ? api('/api/git/apply',{...envelope.params,requestId:envelope.requestId}) : method==='plugin/apply' ? api('/api/plugins/apply',{...envelope.params,requestId:envelope.requestId}) : method==='terminal/open' ? api('/api/terminal/open',{...envelope.params,requestId:envelope.requestId}) : ['account/start','account/cancel','account/logout'].includes(method) ? api('/api/'+method,{...envelope.params,requestId:envelope.requestId}) : api('/api/rpc', envelope));
+    if(method==='skills/config/write'&&typeof result?.effectiveEnabled!=='boolean')throw Object.assign(new Error('Codex 未返回生效状态，请刷新技能目录核对。'),{outcome:'unknown'});
     if(method.startsWith('app-update/')){
       const marker=pendingMutations.values().find(row=>row.requestId===envelope.requestId);
       if(!marker||lookupDecision(marker,{serverInstance:state.serverInstance,method,state:'succeeded',result})!=='succeeded')throw Object.assign(new Error('应用更新结果尚未确认，请先核对已有操作。'),{outcome:'unknown'});
@@ -1158,10 +1177,30 @@ async function loadSavedContext(id,generation,rebind=false) {
 }
 
 // ---------- Slash menu ----------
-const slashMenu = createSlashMenu({ document, prompt: $('prompt'), menu: $('slash-menu'), el, rpc,
-  context: () => ({ thread: !!state.thread, busy: state.busy, sending: state.sending, connected: state.connected, cwd: state.thread?.cwd || state.cwd }),
+function skillContext() {
+  const cwd = state.thread?.cwd || state.cwd;
+  return { cwd, projectless: state.thread?.projectless === true || !cwd, connected: state.connected,
+    serverInstance: state.serverInstance, runtimeTarget: state.runtimeTarget };
+}
+function readSkillDirectory(cwd, { forceReload = false, signal } = {}) {
+  return api('/api/skills/list', { ...(cwd ? { cwd } : {}), ...(forceReload ? { forceReload } : {}) }, { signal });
+}
+const slashMenu = createSlashMenu({ document, prompt: $('prompt'), menu: $('slash-menu'), el, readSkills: readSkillDirectory,
+  context: () => ({ ...skillContext(), thread: !!state.thread, busy: state.busy, sending: state.sending }),
   commands: { new: newThread, compact: () => compactThread(), fork: () => forkCurrentThread(), rename: () => openRename(), model: () => openReasoning(), usage: () => route('usage'), account: () => route('account'), terminal: () => showTerminal() },
   onDraftChange: () => { autosizePrompt(); updateControls(); } });
+const skillsView = mountSkillsView($('settings-skills'), {
+  read: readSkillDirectory,
+  write: params => performMutation('skills/config/write', params),
+  pending: () => scopedPending('skills')
+    .filter(marker => marker.serverInstance === state.serverInstance)
+    .map(marker => ({ requestId: marker.requestId, path: pendingMutations.envelope(marker.requestId)?.params?.path })),
+  onCatalogChanged: () => slashMenu.invalidateSkills(),
+});
+function syncSkillsContext() {
+  skillsView.setContext(skillContext());
+  slashMenu.syncContext();
+}
 async function compactThread() {
   if (!state.thread || state.busy || state.sending) return;
   const threadId = state.thread.id; state.sending = true; updateControls(); activity('正在请求压缩上下文…');
@@ -1301,8 +1340,19 @@ function onEvent(message) {
   if(message.method==='account/updated')return accountIdentity.verify();
   if(message.method==='bridge/accountLogin'){accountLoginPanel.update(message.params);if(['completed','loggedOut'].includes(message.params?.state)){accountIdentity.reset();resetAccountScopedViews('账户已改变');}return;}
   if(message.method==='thread/tokenUsage/updated'){if(!state.connected)return;const snapshot=contextSnapshot(message.params);if(snapshot){cacheContext(snapshot,'live');if(snapshot.threadId===state.thread?.id)renderContext();}return;}
+  if(message.method==='bridge/threadReads'){
+    const {scope, reads} = message.params;
+    const changedScope = threadReadReporter.connect(scope);
+    if (changedScope) {
+      threadCompletion.reset();
+      renderedThreadReads = null;
+    }
+    if (threadCompletion.syncRead(reads) || changedScope) renderThreads();
+    scheduleThreadRead();
+    return;
+  }
   if(message.method==='bridge/threadSessions'){applyThreadSessions(message.params);return;}
-  if(message.method==='skills/changed'){slashMenu.invalidateSkills();return;}
+  if(message.method==='skills/changed'){slashMenu.invalidateSkills();void skillsView.invalidate();return;}
   if (message.method === 'remoteControl/status/changed') { applyRemoteStatus(message.params); return; }
   if (message.method === 'bridge/appUpdate') { if(!state.lan)applyAutomaticUpdate(message.params); return; }
   if (message.method === 'bridge/dshSnapshot') { ingestDshSnapshot(message.params); return; }
@@ -1388,7 +1438,7 @@ async function events() {
         if (buffer.length > 8 * 1024 * 1024) throw new Error('事件超过界面缓冲限制');
         let split; while ((split = buffer.indexOf('\n\n')) >= 0) { const raw = buffer.slice(0, split); buffer = buffer.slice(split + 2); const data = raw.split('\n').filter(l => l.startsWith('data:')).map(l => l.slice(5).trimStart()).join('\n'); if (data) { try { onEvent(JSON.parse(data)); } catch (e) { notice('无法处理事件：' + e.message, true); } } }
       }
-    } catch (e) { setConnected(false); if (!state.shuttingDown) activity('连接已断开，正在重连。不会自动重发消息。'); }
+    } catch (e) { threadReadReporter.disconnect(); setConnected(false); if (!state.shuttingDown) activity('连接已断开，正在重连。不会自动重发消息。'); }
     finally { controller.abort(); if (reader) { try { await reader.cancel(); } catch {} } }
     await new Promise(r => setTimeout(r, delay)); delay = Math.min(10000, delay * 2);
   }
@@ -1617,14 +1667,16 @@ for (const button of document.querySelectorAll('[data-settings-section]')) butto
 function selectSettingsSection(section = 'general') {
   if(section==='account'||section==='usage'){route(section);return;}
   if(section==='lan')section='remote';
-  const page = (['about','storage'].includes(section) && state.lan) ? 'general' : ['general','dsh','archived','remote','plugins','appearance','notifications','shortcuts','configuration','about','storage'].includes(section) ? section : 'general'; state.settingsPage = page;
-  for (const name of ['general','dsh','archived','remote','plugins','appearance','notifications','shortcuts','configuration','about','storage']) $('settings-' + name).classList.toggle('hidden', name !== page);
+  const sections = ['general','dsh','archived','remote','plugins','skills','appearance','notifications','shortcuts','configuration','about','storage'];
+  const page = (['about','storage'].includes(section) && state.lan) || !sections.includes(section) ? 'general' : section; state.settingsPage = page;
+  for (const name of sections) $('settings-' + name).classList.toggle('hidden', name !== page);
   for (const item of document.querySelectorAll('[data-settings-section]')) item.classList.toggle('active', item.dataset.settingsSection === section);
   document.querySelector('.settings-content').scrollTop = 0;
   let ready;
   if (page === 'dsh' && !state.lan) { ready=dshConnectionView.activate(); if(state.runtimeTarget!=='wsl')dshConfigView.activate();else dshConfigView.deactivate(); } else { dshConnectionView.deactivate(); dshConfigView.deactivate(); }
   if (page === 'configuration' && !state.lan) titleSettings.activate();
   if (page === 'archived') loadArchived().catch(e => notice(e.message, true));
+  if (page === 'skills') ready = skillsView.activate(); else skillsView.deactivate();
   if(page==='plugins')pluginPanel.activate();else pluginPanel.deactivate();renderPluginPending();
   if(page==='configuration')configPanel.activate();
   if(page==='remote'&&!state.lan)lanView.activate();else lanView.deactivate();
@@ -1639,7 +1691,19 @@ function rowsNode(rows) {
   const list = el('dl', 'status-rows'); for (const [label, value] of rows) list.append(el('dt', '', label), el('dd', '', value)); return list;
 }
 function viewedThreadId(){return currentRoute==='chat'&&!state.loadingThread&&conversationScroll.following&&document.visibilityState!=='hidden'&&document.hasFocus()?state.thread?.id:null;}
-$('conversation').addEventListener('scroll',()=>{if(threadCompletion.unread.has(viewedThreadId()))renderThreads();},{passive:true});
+function scheduleThreadRead() {
+  if (!state.lan || threadReadFrame !== null) return;
+  threadReadFrame = requestAnimationFrame(() => {
+    threadReadFrame = null;
+    const threadId = viewedThreadId();
+    if (!threadId || renderedThreadReads?.threadId !== threadId || document.visibilityState !== 'visible' || !conversationScroll.atBottom
+        || sidebarController.isOverlayOpen() || document.querySelector('dialog[open]')) return;
+    threadReadReporter.record(threadId, renderedThreadReads.turnIds);
+  });
+}
+$('conversation').addEventListener('scroll',()=>{if(threadCompletion.unread.has(viewedThreadId()))renderThreads();else scheduleThreadRead();},{passive:true});
+document.addEventListener('focusin',scheduleThreadRead);
+document.addEventListener('close',scheduleThreadRead,true);
 document.addEventListener('visibilitychange',()=>{renderThreads();remoteView.expireIfNeeded();syncDshLiveContext();syncDelegationMonitor();syncPendingReconciler();syncRuntimePanelActivity();});
 window.addEventListener('focus',()=>renderThreads());
 const workbench = createWorkbench({ document, state, $, el, api, notice, confirm: text => confirm(text), performMutation, scopedPending, pendingMutations, pendingReconcileErrors, eventSubscribers, showTerminal, openSettings });

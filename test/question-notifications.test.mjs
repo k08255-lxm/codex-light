@@ -1,11 +1,47 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
 import { createDocument, visibleText } from './mini-dom.mjs';
 import { createQuestionNoticeState, createQuestionNotifications } from '../public/ui/question-notifications.js';
 
 const request = (id = 1, token = 'instance-1', method = 'item/tool/requestUserInput') => ({ id, bridgeRequestToken: token, method, params: { threadId: 'thread-a', questions: [{ question: 'private question' }] } });
 const rows = (...values) => new Map(values.map((value, index) => [index, value]));
 const tick = () => new Promise(resolve => setImmediate(resolve));
+
+test('Windows permission replies settle and repeated focus events share a pending lookup', async () => {
+  const document = createDocument(), window = new EventTarget(), webview = new EventTarget();
+  window.top = window;
+  window.chrome = { webview };
+  const requests = [];
+  webview.postMessage = message => requests.push(message);
+  const source = readFileSync(new URL('../desktop/QuestionNotificationBridge.cs', import.meta.url), 'utf8');
+  const script = source.split('internal string Script=>"""')[1].split('"""')[0].replace('NONCE', '"test"');
+  runInNewContext(script, { window, Event, setTimeout: () => 1, clearTimeout() {} });
+  const permissionStatus = document.createElement('p'), permissionButton = document.createElement('button');
+  const controller = createQuestionNotifications({ document, window, host: document.createElement('aside'), permissionStatus, permissionButton });
+  const queries = () => requests.filter(row => row.operation === 'status');
+  function reply(request, status) {
+    const event = new Event('message');
+    event.data = { type: 'desktopQuestionNotificationResult', sequence: request.sequence, status };
+    webview.dispatchEvent(event);
+  }
+  for (let i = 0; i < 8; i++) window.dispatchEvent(new Event('focus'));
+  await tick();
+  assert.equal(queries().length, 1);
+  reply(queries()[0], 'ready');
+  await tick();
+  assert.equal(queries().length, 1, 'a reply must not trigger another native call');
+  assert.match(permissionStatus.textContent, /已授权/);
+  window.dispatchEvent(new Event('focus'));
+  await tick();
+  assert.equal(queries().length, 2);
+  reply(queries()[1], 'blocked');
+  await tick();
+  assert.equal(queries().length, 2);
+  assert.equal(permissionButton.hidden, false);
+  controller.dispose();
+});
 
 test('only actual request instances alert, and reconnect snapshots remain silent', () => {
   const state = createQuestionNoticeState(), a = request();

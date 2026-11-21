@@ -105,15 +105,39 @@ internal sealed class MainWindow : CaptionWindow {
     if(e.MenuItems.Count==0)e.Handled=true;
    };
    settings.IsWebMessageEnabled=true;settings.IsStatusBarEnabled=false;settings.IsPasswordAutosaveEnabled=false;settings.IsGeneralAutofillEnabled=false;
-   questionNotifications=new QuestionNotificationBridge(this,core,RestoreFromTray);
-   core.WebMessageReceived+=(_,e)=>{if(LocalPathLinks.TrustedSource(e.Source,origin)&&LocalPathLinks.TrustedSource(core.Source,origin)){if(HandleWindowCommand(e.WebMessageAsJson)||taskbarBadge.HandleMessage(e.WebMessageAsJson,!closing&&!failed)||questionNotifications.Handle(e.WebMessageAsJson))return;if(CloseBehaviorBridge.IsMessage(e.WebMessageAsJson))HandleCloseBehavior(e.WebMessageAsJson);else RevealLocalPath(e.WebMessageAsJson);}};
+   questionNotifications=new QuestionNotificationBridge(this,core.PostWebMessageAsJson,RestoreFromTray);
+   ulong documentId=0;
+   core.WebMessageReceived+=(_,e)=>{
+    if(LocalPathLinks.TrustedSource(e.Source,origin)&&LocalPathLinks.TrustedSource(core.Source,origin)){
+     string json=e.WebMessageAsJson;
+     string? commandType;
+     try{
+      using var payload=JsonDocument.Parse(json);
+      if(payload.RootElement.ValueKind!=JsonValueKind.Object||!payload.RootElement.TryGetProperty("type",out var type)||type.ValueKind!=JsonValueKind.String)return;
+      commandType=type.GetString();
+     }catch(JsonException){return;}
+     ulong senderDocument=documentId;
+     // A close, file or image command can open a modal WinForms dialog. Return
+     // to WebView2 before starting a nested Windows message loop.
+     BeginInvoke((Action)(()=>{
+      if(closing||IsDisposed||senderDocument!=documentId||!LocalPathLinks.TrustedSource(core.Source,origin))return;
+      switch(commandType){
+       case "windowCommand":HandleWindowCommand(json);break;
+       case "desktopTaskbarBadge":taskbarBadge.HandleMessage(json,!failed);break;
+       case "desktopQuestionNotification":questionNotifications.Handle(json);break;
+       case "desktopCloseBehavior":HandleCloseBehavior(json);break;
+       case "previewImageAction":case "revealLocalPath":RevealLocalPath(json);break;
+      }
+     }));
+    }
+   };
    await core.AddScriptToExecuteOnDocumentCreatedAsync(LocalPathLinks.ClickScript);
    await core.AddScriptToExecuteOnDocumentCreatedAsync(CloseBehaviorBridge.Script(closeBehaviorNonce));
    await core.AddScriptToExecuteOnDocumentCreatedAsync(questionNotifications.Script);
    core.PermissionRequested+=(_,e)=>{e.State=CoreWebView2PermissionState.Deny;e.Handled=true;};
    core.DownloadStarting+=(_,e)=>{e.Cancel=true;e.Handled=true;};
    core.NewWindowRequested+=(_,e)=>{e.Handled=true;if(e.IsUserInitiated)QueueExternal(e.Uri);};
-   core.NavigationStarting+=(_,e)=>{if(!IsOwn(e.Uri)){e.Cancel=true;if(e.IsUserInitiated && !e.IsRedirected)QueueExternal(e.Uri);}else questionNotifications?.ClearAll();};
+   core.NavigationStarting+=(_,e)=>{if(!IsOwn(e.Uri)){e.Cancel=true;if(e.IsUserInitiated && !e.IsRedirected)QueueExternal(e.Uri);}else{documentId++;questionNotifications?.ClearAll();}};
    core.FrameNavigationStarting+=(_,e)=>{e.Cancel=true;};
    core.LaunchingExternalUriScheme+=(_,e)=>{e.Cancel=true;};
    core.ServerCertificateErrorDetected+=(_,e)=>{e.Action=CoreWebView2ServerCertificateErrorAction.Cancel;};

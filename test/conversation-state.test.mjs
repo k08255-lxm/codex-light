@@ -63,12 +63,13 @@ test('replacing a slash token preserves the surrounding draft exactly', () => {
 });
 
 test('slash entries list only implemented commands and real enabled skills with honest availability', () => {
-  const skills = skillsFromResponse({ data: [{ cwd: '/p', errors: [], skills: [{ name: 'pdf', description: 'PDF tools', enabled: true, path: '/s', scope: 'user', interface: { displayName: 'PDF', shortDescription: '处理 PDF' } }, { name: 'off', description: '', enabled: false, path: '/o', scope: 'user' }, { name: 'pdf', description: 'dup', enabled: true, path: '/d', scope: 'repo' }] }] });
-  assert.deepEqual(skills.map(skill => skill.name), ['pdf', 'off']);
+  const skills = skillsFromResponse({ data: [{ cwd: '/p', errors: [], skills: [{ name: 'pdf', description: 'disabled duplicate', enabled: false, path: '/x', scope: 'system' }, { name: 'pdf', description: 'PDF tools', enabled: true, path: '/s', scope: 'user', interface: { displayName: 'PDF', shortDescription: '处理 PDF' } }, { name: 'off', description: '', enabled: false, path: '/o', scope: 'user' }, { name: 'pdf', description: 'dup', enabled: true, path: '/d', scope: 'repo' }] }] });
+  assert.deepEqual(skills.map(skill => skill.name), ['pdf', 'pdf', 'off', 'pdf']);
   const draft = slashEntries('', skills, { thread: false, busy: false, sending: false, connected: true });
   assert.deepEqual(draft.filter(e => e.kind === 'command').map(e => e.id), SLASH_COMMANDS.map(c => c.id));
   assert.equal(draft.find(e => e.id === 'compact').enabled, false, 'compact needs an existing thread');
   assert.deepEqual(draft.filter(e => e.kind === 'skill').map(e => e.label), ['$pdf']);
+  assert.equal(draft.find(e => e.kind === 'skill').title, 'PDF', 'a disabled copy cannot hide an enabled one');
   const running = slashEntries('', skills, { thread: true, busy: true, sending: false, connected: true });
   assert.equal(running.find(e => e.id === 'compact').enabled, false); assert.equal(running.find(e => e.id === 'new').enabled, true);
   const idle = slashEntries('comp', [], { thread: true, busy: false, sending: false, connected: true });

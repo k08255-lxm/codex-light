@@ -381,8 +381,11 @@ export function slashEntries(query, skills, ctx) {
   const match = (...values) => !q || values.some(value => text(value).toLowerCase().includes(q));
   const commands = SLASH_COMMANDS.filter(command => match(command.name, command.title))
     .map(command => ({ kind: 'command', id: command.id, icon: command.icon, label: '/' + command.name, title: command.title, detail: command.detail, ...slashAvailability(command, ctx) }));
-  const skillRows = (Array.isArray(skills) ? skills : []).filter(skill => skill.enabled !== false && typeof skill.name === 'string' && skill.name)
-    .filter(skill => match(skill.name, skill.interface?.displayName, skill.shortDescription))
+  const enabledSkills = (Array.isArray(skills) ? skills : []).filter(skill => skill.enabled !== false && typeof skill.name === 'string' && skill.name);
+  const skillsByName = new Map();
+  for (const skill of enabledSkills) if (!skillsByName.has(skill.name)) skillsByName.set(skill.name, skill);
+  const skillRows = [...skillsByName.values()]
+    .filter(skill => match(skill.name, skill.interface?.displayName, skill.interface?.shortDescription, skill.shortDescription))
     .slice(0, 50)
     .map(skill => ({ kind: 'skill', id: 'skill:' + skill.name, icon: 'spark', label: '$' + skill.name, title: text(skill.interface?.displayName) || skill.name,
       detail: text(skill.interface?.shortDescription || skill.shortDescription || skill.description).slice(0, 160), enabled: true, name: skill.name }));
@@ -491,11 +494,11 @@ function turnItems(turn) {
   return (Array.isArray(turn?.items) ? turn.items : []).filter(item => item?.id).map(item => ({ ...item, _turnId: turn.id, _complete: true }));
 }
 
-/** Flattens `skills/list` entries for one cwd, deduplicated by name. */
+/** Flattens `skills/list` entries while preserving same-name skills from different paths. */
 export function skillsFromResponse(result) {
-  const seen = new Set(); const rows = [];
+  const rows = [];
   for (const entry of Array.isArray(result?.data) ? result.data : []) for (const skill of Array.isArray(entry?.skills) ? entry.skills : []) {
-    if (typeof skill?.name !== 'string' || seen.has(skill.name)) continue; seen.add(skill.name); rows.push(skill);
+    if (typeof skill?.name === 'string') rows.push(skill);
   }
   return rows;
 }

@@ -8,6 +8,7 @@ import {StorageMaintenance} from './storage-maintenance.mjs';
 import http from 'node:http';
 import {spawn} from 'node:child_process';
 import {ConfigSettingsService} from './config-settings.mjs';
+import {createSkillsManagement} from './skills-management.mjs';
 import {EngineOnboarding,EngineSetupStore} from './engine-onboarding.mjs';
 import {DesktopState} from './desktop-state.mjs';
 import {ProjectStore} from './projects.mjs';
@@ -43,6 +44,7 @@ import {TerminalService} from './terminal.mjs';
 import { RpcClient } from './rpc.mjs';
 import {validServerRequestId,findServerRequest} from './server-requests.mjs';
 import {ThreadSessions} from './thread-sessions.mjs';
+import {ThreadReads} from './thread-reads.mjs';
 import {MobileNotificationFeed} from './mobile-notification-feed.mjs';
 import {ThreadListService} from './thread-list.mjs';
 import { DemoClient } from './demo.mjs';
@@ -69,6 +71,7 @@ publicFiles['/ui/thread-completion.js']='ui/thread-completion.js';publicFiles['/
 publicFiles['/ui/task-notifications.js']='ui/task-notifications.js';
 publicFiles['/ui/task-phase.js']='ui/task-phase.js';
 publicFiles['/ui/question-notifications.js']='ui/question-notifications.js';
+publicFiles['/ui/skills-view.js']='ui/skills-view.js';
 publicFiles['/context-usage.js']='context-usage.js';
 publicFiles['/ui/context-details.js']='ui/context-details.js';
 publicFiles['/ui/conversation-scroll.js']='ui/conversation-scroll.js';
@@ -168,6 +171,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
  const rpc=client || (demo?new DemoClient():new RpcClient(wslLaunch?{...wslLaunch,mapRequest:params=>mapWslRequest(params,value=>wslRuntime.toLinux(value,wslCandidate)),mapResponse:value=>mapWslResponse(value,wslCandidate.distribution)}:{command,cwd:cwd||os.homedir()}));
  if(runtimeStartupError){rpc.connected=false;rpc.start=async()=>{throw runtimeStartupError;};}
  const sessions=new ThreadSessions(rpc,{onEvent:message=>broadcast(message),onThreadLoaded:result=>statistics.thread(result?.thread,result)});
+ const threadReads=new ThreadReads();
  const mobileNotifications=new MobileNotificationFeed();
  const threadList=new ThreadListService(rpc);
  const artifacts=new ArtifactPreviewService({projects,...(wslCandidate?{wslDistribution:wslCandidate.distribution,rolloutRoots:['sessions','archived_sessions'].map(part=>wslPathToHost(wslCandidate.codexHome+'/'+part,wslCandidate.distribution))}:{})});
@@ -247,6 +251,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
  const accountLogin=new AccountLoginService(rpc);
  const pluginActions=new PluginActionService({rpc});
  const configSettings=new ConfigSettingsService({rpc});
+ const skillsManagement=createSkillsManagement(rpc,{wsl:wslActive});
  const sessionDefaults=new SessionDefaultsService({rpc,demo});
  const dshConfigSources=dshConfigSourcesService||new DshConfigSourcesService({demo});
  let dshWakeup=null,dshWakeupError=null;
@@ -297,6 +302,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
     if(stopping&&req.method==='POST'&&url.pathname!=='/api/shutdown')throw Object.assign(new Error('Light 正在关闭，此请求未发送'),{code:'CLIENT_CLOSING',outcome:'notExecuted',status:409});
     if(url.pathname==='/api/events' && req.method==='GET'){
      res.writeHead(200,{'Content-Type':'text/event-stream','Connection':'keep-alive'});res.write(': connected\n\n');streams.set(res,requestAccess);
+     res.write(`data: ${JSON.stringify({method:'bridge/threadReads',params:threadReads.snapshot()})}\n\n`);
      const heartbeat=setInterval(()=>{if(res.writableLength>4*1024*1024)res.destroy();else res.write(': keepalive\n\n');},15000);
      req.on('close',()=>{streams.delete(res);clearInterval(heartbeat);});return;
     }
@@ -312,6 +318,12 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
     if(url.pathname==='/api/desktop/preferences'&&req.method==='GET'){if(!desktopState)throw new Error('仅桌面模式支持本机状态');json(res,200,{preferences:await desktopState.preferences()});return;}
     if(url.pathname==='/api/desktop/receipts'&&req.method==='GET'){if(!desktopState)throw new Error('仅桌面模式支持本机状态');json(res,200,{receipts:await desktopState.list(),persistenceWarning:operations.persistenceWarning||desktopState.persistenceWarning});return;}
     if(req.method!=='POST'){json(res,405,{error:'不支持的操作'});return;}
+    if(url.pathname==='/api/thread-reads'){
+     if(requestAccess!=='lan'){json(res,403,{error:'仅配对设备可上报对话已读',code:'LAN_ONLY'});return;}
+     const reads=threadReads.read(await body(req));
+     if(reads)broadcast({method:'bridge/threadReads',params:reads});
+     json(res,200,{});return;
+    }
     if(url.pathname.startsWith('/api/dsh/connection/')){
      const action=url.pathname.slice('/api/dsh/connection/'.length),input=await body(req);
      if(action!=='modelReminder'&&wslActive&&!wslCandidate)throw Object.assign(new Error('The selected WSL runtime is unavailable; reconnect it before configuring DSH.'),{code:'WSL_RUNTIME_UNAVAILABLE',status:409,outcome:'notExecuted'});
@@ -445,6 +457,18 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      if(!desktopState||!input||Object.keys(input).sort().join(',')!=='confirmed,requestIds'||input.confirmed!==true)throw new Error('需明确确认具体待核对记录');
      if(input.requestIds?.some(id=>operations.entries.get(id)?.state==='pending'))throw new Error('操作仍在执行，不能移除记录');
      await desktopState.ack(input.requestIds);for(const id of input.requestIds){const entry=operations.entries.get(id);if(entry)delete entry.persistenceWarning;}if(![...operations.entries.values()].some(entry=>entry.persistenceWarning)){operations.persistenceWarning=null;desktopState.persistenceWarning=null;}json(res,200,{acknowledged:input.requestIds});return;
+    }
+    if(url.pathname==='/api/skills/list'){
+     json(res,200,await skillsManagement.list(input));return;
+    }
+    if(url.pathname==='/api/skills/set-enabled'){
+     const {requestId,...params}=input;
+     const result=await operations.execute(requestId,'skills/config/write',params,async()=>{
+      const saved=await skillsManagement.setEnabled(params);
+      broadcast({method:'skills/changed',params:{}});
+      return saved;
+     });
+     json(res,200,result);return;
     }
     if(url.pathname.startsWith('/api/config-settings/')){
      if(demo)throw new Error('演示模式不读取或更改真实配置');if(!input||typeof input!=='object'||Array.isArray(input))throw new Error('配置参数无效');
@@ -721,7 +745,8 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
   if(method==='remoteControl/pairing/status'&&result?.claimed)clearPairing();
  }
  function broadcast(message,{localOnly=false}={}){const exposed=message.id!==undefined&&typeof message.method==='string'?presentRequest(message):message;const event=`data: ${JSON.stringify(exposed)}\n\n`;for(const [res,access] of streams){if(res.destroyed){streams.delete(res);continue;}if(localOnly&&access!=='local')continue;if(res.writableLength>4*1024*1024){streams.delete(res);res.destroy();}else res.write(event);}}
- accountLogin.on('event',event=>{if(['starting','loggingOut','completed','loggedOut','unknown','closed'].includes(event.params.state))clearStatisticsAccount();if(['completed','failed','canceled','loggedOut','unknown','closed'].includes(event.params.state)){for(const entry of operations.entries.values())if(entry.method==='account/start'&&entry.result){delete entry.result.authUrl;delete entry.result.verificationUrl;delete entry.result.userCode;entry.result.redacted=true;}}broadcast(event);});
+ function resetThreadReads(){threadReads.reset();broadcast({method:'bridge/threadReads',params:threadReads.snapshot()});}
+ accountLogin.on('event',event=>{if(['starting','loggingOut','completed','loggedOut','unknown','closed'].includes(event.params.state))clearStatisticsAccount();if(['completed','failed','canceled','loggedOut','unknown','closed'].includes(event.params.state)){for(const entry of operations.entries.values())if(entry.method==='account/start'&&entry.result){delete entry.result.authUrl;delete entry.result.verificationUrl;delete entry.result.userCode;entry.result.redacted=true;}}broadcast(event);if(event.params.state==='loggedOut')resetThreadReads();});
  terminal.on('event',broadcast);
  function clearDsh(){dsh.clear().then(()=>{dshResetError=null;},error=>{dshResetError=error?.message||'子代理读取会话清理失败';});}
  rpc.on('event',message=>{
@@ -729,6 +754,8 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
   if(message.method==='account/updated'||(message.method==='bridge/status'&&message.params?.connected===false))clearStatisticsAccount();
   const threadId=message.params?.threadId||message.params?.thread?.id;
   if(threadId&&dsh.isReaderThread(threadId))return;
+  if(message.method==='account/login/completed'&&message.params?.success===true)resetThreadReads();
+  threadReads.observe(message);
   mobileNotifications.observe(message);
   statistics.observe(message);sessions.observe(message);threadList.observe(message);
   if(message.method==='bridge/status'&&message.params?.connected===true)void dshWakeup?.refreshAccount();

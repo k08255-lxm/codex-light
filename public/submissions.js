@@ -2,6 +2,7 @@
 const METHODS = new Set(['thread/start', 'turn/start', 'turn/steer', 'thread/compact/start', 'turn/interrupt', 'thread/name/set', 'thread/archive', 'thread/unarchive', 'thread/delete', 'thread/summary', 'thread/fork', 'review/start', 'remoteControl/enable', 'remoteControl/disable', 'remoteControl/pairing/start', 'remoteControl/client/revoke', 'terminal/open', 'account/start', 'account/cancel', 'account/logout', 'plugin/apply', 'git/apply', 'config/apply', 'runtime/upgrade']);
 // Both start and steer carry the same owned attachment envelope.
 METHODS.add('account/rateLimitResetCredit/consume');
+METHODS.add('skills/config/write');
 METHODS.add('app-update/download');METHODS.add('app-update/install');
 const ATTACHMENT_METHODS = new Set(['turn/start', 'turn/steer']);
 const STABLE_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
@@ -89,6 +90,7 @@ export function lookupDecision(marker, response) {
   if (!response || response.serverInstance !== marker.serverInstance || (response.method && response.method !== marker.method)) return 'unknown';
   if (response.state === 'succeeded' && marker.method === 'git/apply') return response.result?.outcome === 'completed' ? (response.result.exitCode === 0 ? 'succeeded' : 'failed') : response.result?.outcome === 'notExecuted' ? 'notExecuted' : 'unknown';
   if (response.state === 'succeeded' && ['plugin/apply','config/apply'].includes(marker.method)) return response.result?.outcome === 'succeeded' ? 'succeeded' : response.result?.outcome === 'not-executed' ? 'notExecuted' : 'unknown';
+  if (response.state === 'succeeded' && marker.method === 'skills/config/write') return typeof response.result?.effectiveEnabled === 'boolean' ? 'succeeded' : 'unknown';
   if (response.state === 'succeeded' && marker.method === 'runtime/upgrade') { const result = response.result; if (result?.outcome === 'succeeded') return stableVersion(result.installedVersion) && result.restartRequired === true ? 'succeeded' : 'unknown'; if (result?.outcome === 'not-executed' || result?.outcome === 'notExecuted') return 'notExecuted'; return 'unknown'; }
   if (response.state === 'succeeded' && marker.method === 'app-update/download') return response.result?.phase === 'ready' && stableVersion(marker.appVersion) && response.result.preparedVersion === marker.appVersion ? 'succeeded' : 'unknown';
   if (response.state === 'succeeded' && marker.method === 'app-update/install') return response.result?.phase === 'launched' && stableVersion(marker.appVersion) && response.result.preparedVersion === marker.appVersion ? 'succeeded' : 'unknown';
@@ -103,6 +105,7 @@ const SCOPE_METHODS = Object.freeze({
   git: new Set(['git/apply']),
   config: new Set(['config/apply']),
   plugin: new Set(['plugin/apply']),
+  skills: new Set(['skills/config/write']),
   runtime: new Set(['runtime/upgrade']),
   'app-update': new Set(['app-update/download','app-update/install'])
 });
