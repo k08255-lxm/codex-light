@@ -20,3 +20,16 @@ test('unsupported and corrupted persistence never reset selection',async t=>{con
 test('incomplete native probe cannot auto-select WSL as only engine',async t=>{const x=await setup(t,{nativeCandidate:async()=>{throw Error('timeout');},listDistributions:async()=>['Ubuntu']});await x.service.inventory();const d=await x.service.discover();assert.equal(d.discoveryPending,true);await assert.rejects(x.service.complete({id:'wsl:Ubuntu',automatic:true}));});
 
 test('list failure after prior known inventory prevents automatic selection',async t=>{let fail=false;const x=await setup(t,{listDistributions:async()=>{if(fail)throw Error('offline');return [];}});await x.service.inventory();fail=true;const state=await x.service.discover();assert.equal(state.discoveryPending,true);await assert.rejects(x.service.complete({id:'native',automatic:true}));});
+
+test('onboarding auto-detects running WSL and waits for choice when Windows is also ready',async t=>{
+ const x=await setup(t,{discoverRunning:async()=>({candidates:[{distribution:'Ubuntu',...wsl}],pendingDistributions:[],discoveryIncomplete:false}),probeDistribution:async()=>assert.fail('manual probe should not run')});
+ const s=await x.service.inventory();assert.equal(engineSetupDecision(s).kind,'choose');
+ assert.deepEqual(s.candidates.map(c=>c.id),['native','wsl:Ubuntu']);
+ assert.deepEqual(x.saves,[]);
+ await assert.rejects(x.service.complete({id:'native',automatic:true}));
+});
+test('stopped distro or unknown runtime does not trigger an automatic choice',async t=>{
+ const x=await setup(t,{discoverRunning:async()=>({candidates:[{distribution:'Debian',available:false,probePending:true}],pendingDistributions:['Debian'],discoveryIncomplete:false})});
+ const s=await x.service.inventory();assert.equal(engineSetupDecision(s).kind,'discover');
+ await assert.rejects(x.service.complete({id:'native',automatic:true}));assert.deepEqual(x.saves,[]);
+});

@@ -102,7 +102,7 @@ export class DshConnectionService {
   if(input.dismiss){await this.bundle.dismissModelReminder();return {needed:false};}
   return {needed:!(await this.bundle.modelStatus()).acknowledged};
  }
- constructor({rpc,bundle=new BundledDshBridge(),bundles=null,callbackStatus=()=>null,clock=()=>Date.now(),demo=false}={}){this.rpc=rpc;this.bundle=bundle;this.bundles=bundles;this.callbackStatus=callbackStatus;this.clock=clock;this.demo=demo;this.plans=new Map();this.pending=false;}
+ constructor({rpc,bundle=new BundledDshBridge(),bundles=null,callbackStatus=()=>null,clock=()=>Date.now(),demo=false}={}){this.rpc=rpc;this.bundle=bundle;this.bundles=bundles;this.callbackStatus=callbackStatus;this.clock=clock;this.demo=demo;this.plans=new Map();this.pending=false;this.connectionTests=new Map();}
  selectBundle(mode){if(!this.bundles){if(mode!==undefined)throw error('INVALID_INPUT','Bridge mode is only available with WSL');return this.bundle;}if(typeof mode!=='string'||!Object.hasOwn(this.bundles,mode))throw error('DSH_MODE_REQUIRED','Select the Windows or WSL DSH bridge explicitly');return this.bundles[mode];}
  async read(){let result;try{result=await this.rpc.call('config/read',{includeLayers:true});}catch{throw error('CODEX_CONFIG_UNAVAILABLE','无法读取 Codex MCP 配置',503);}if(!plain(result?.config))throw error('CODEX_CONFIG_UNAVAILABLE','无法读取 Codex MCP 配置',503);const user=result.layers?.find(layer=>layer?.name?.type==='user'),table=result.config.mcp_servers,exists=plain(table)&&Object.hasOwn(table,SERVER),value=exists?table[SERVER]:null,origin=result.origins?.['mcp_servers.'+SERVER]?.name?.type;return {exists,value,version:user?.version,writable:typeof user?.version==='string'&&user.version.length>0&&user.disabledReason==null&&!managed.has(origin)};}
  async runtime(){
@@ -110,22 +110,99 @@ export class DshConnectionService {
    let cursor;
    for(let page=0;page<8;page++){
     const result=await this.rpc.call('mcpServerStatus/list',{detail:'toolsAndAuthOnly',limit:100,...(cursor?{cursor}:{})});
-    const row=result.data?.find(row=>row.name===SERVER);
+    if(!Array.isArray(result?.data))return {state:null,observation:'unavailable'};
+    const row=result.data.find(row=>row?.name===SERVER);
     if(row){
      const state=['notStarted','starting','connected','authenticationRequired','failed','cancelled','disabled'].includes(row.runtimeStatus)?row.runtimeStatus:null;
+     const toolNames=Array.isArray(row.tools)?row.tools.map(tool=>tool?.name):plain(row.tools)?Object.keys(row.tools):null;
+     const tools=toolNames?{count:toolNames.length,subagent:toolNames.includes('dsh_start')&&toolNames.includes('dsh_wait')}:null;
+     if(state!=='connected')return state?{state}:{state:null,observation:'listed',...(tools?{tools}:{})};
      const version=row.serverInfo?.version;
-     if(state!=='connected'||typeof version!=='string'||!version.length||version.length>128||/[\x00-\x1f\x7f]/.test(version))return {state};
+     const metadata={state,...(tools?{tools}:{}),...(typeof row.toolsError==='string'&&row.toolsError?{toolsUnavailable:true}:{})};
+     if(typeof version!=='string'||!version.length||version.length>128||/[\x00-\x1f\x7f]/.test(version))return metadata;
      // Older daemons re-read the on-disk package at handshake time, even after an in-place upgrade.
      const loadedVersion=row.serverCapabilities?.experimental?.codecangBridge?.version;
-     return {state,reportedVersion:version,loadedVersion:loadedVersion===version?version:null};
+     return {...metadata,reportedVersion:version,loadedVersion:loadedVersion===version?version:null};
     }
-    if(!result.nextCursor||result.nextCursor===cursor)break;
+    if(!result.nextCursor)return {state:null,observation:'missing'};
+    if(result.nextCursor===cursor)break;
     cursor=result.nextCursor;
    }
   }catch{}
-  return {state:null};
+  return {state:null,observation:'unavailable'};
  }
- async status(input={}){strict(input,['mode']);if(this.bundles&&input.mode===undefined)return {selectionRequired:true,modes:Object.keys(this.bundles),canConnect:false};const bundle=this.selectBundle(input.mode),bundled=await bundle.bundled(),dsh=await bundle.detect(),capabilities=await bundle.capabilities?.()??null;if(this.demo)return {bundled,dsh:{installed:false,executablePath:null},registration:{state:'none',serverName:SERVER},runtime:{state:null},canConnect:false,error:{code:'DSH_DEMO_DISABLED',message:'演示模式不读取或修改真实 DSH 连接'}};try{const config=await this.read(),state=config.exists?(await bundle.owns(config.value)?'bundled':'external'):'none';return {mode:input.mode,capabilities,callbackStatus:this.callbackStatus(),bundled,dsh,registration:{state,serverName:SERVER},runtime:config.exists?await this.runtime():{state:null},canConnect:bundled.available&&bundled.dependenciesReady&&config.writable&&!config.exists,error:null};}catch{return {mode:input.mode,capabilities,callbackStatus:this.callbackStatus(),bundled,dsh,registration:{state:'unknown',serverName:SERVER},runtime:{state:null},canConnect:false,error:{code:'CODEX_CONFIG_UNAVAILABLE',message:'无法读取 Codex MCP 配置，普通聊天不受影响'}};}}
+ async status(input={}){
+  strict(input,['mode']);
+  if(this.bundles&&input.mode===undefined)return {selectionRequired:true,modes:Object.keys(this.bundles),canConnect:false};
+  const bundle=this.selectBundle(input.mode);
+  if(this.demo)return {bundled:{available:false,version:null,dependenciesReady:false},dsh:{installed:false,executablePath:null},registration:{state:'none',serverName:SERVER},runtime:{state:null},canConnect:false,error:{code:'DSH_DEMO_DISABLED',message:'演示模式不读取或修改真实 DSH 连接'}};
+  const bundled=await bundle.bundled(),capabilities=await bundle.capabilities?.()??null;
+  let dsh;
+  try{dsh=await bundle.detect();}catch{dsh={installed:false,executablePath:null,diagnostic:{code:'DSH_DETECTION_UNAVAILABLE',message:'无法检查所选环境中的 DSH 程序，请确认环境可访问后重新检查。'}};}
+  const base={mode:input.mode,capabilities,callbackStatus:this.callbackStatus(),bundled,dsh};
+  try{
+   const config=await this.read();
+   let state='none',configuredMode;
+   if(config.exists){
+    if(await bundle.owns(config.value)){
+     state='bundled';
+     configuredMode=input.mode??'desktop';
+    }else{
+     state='external';
+     for(const [mode,other] of Object.entries(this.bundles??{})){
+      if(mode!==input.mode&&await other.owns(config.value)){
+       state='otherMode';
+       configuredMode=mode;
+       break;
+      }
+     }
+    }
+   }
+   let runtime={state:null};
+   if(config.exists){
+    runtime=await this.runtime();
+    if(runtime.state!=='connected'&&config.value?.enabled===false)runtime={state:'disabled'};
+   }
+   return {...base,checkedAt:this.clock(),registration:{state,serverName:SERVER,...(configuredMode?{mode:configuredMode}:{})},runtime,canConnect:bundled.available&&bundled.dependenciesReady&&config.writable&&!config.exists,error:null};
+  }catch{
+   return {...base,checkedAt:this.clock(),registration:{state:'unknown',serverName:SERVER},runtime:{state:null},canConnect:false,error:{code:'CODEX_CONFIG_UNAVAILABLE',message:'无法读取 Codex MCP 配置'}};
+  }
+ }
+ // Re-read the active Codex app-server's MCP status and tools. Do not
+ // launch a process independently, reload MCP, invoke a tool, or start a turn.
+ testConnection(input={}){
+  strict(input,['mode']);
+  const bundle=this.selectBundle(input.mode);
+  const key=input.mode??'desktop';
+  if(this.connectionTests.has(key))return this.connectionTests.get(key);
+  const pending=this._testConnection(bundle,input.mode).finally(()=>this.connectionTests.delete(key));
+  this.connectionTests.set(key,pending);
+  return pending;
+ }
+ async _testConnection(bundle,selectedMode){
+  const checked=(outcome,reason,runtime={state:null})=>({outcome,reason,runtime,checkedAt:this.clock()});
+  if(this.demo)return checked('inconclusive','demo');
+  if(this.rpc?.connected===false)return checked('inconclusive','codexDisconnected');
+  let config;
+  try{config=await this.read();}catch{return checked('inconclusive','configUnavailable');}
+  if(!config.exists)return checked('failed','notConfigured');
+  if(config.value?.enabled===false)return checked('failed','disabled',{state:'disabled'});
+  try{
+   if(this.bundles&&!(await bundle.owns(config.value))){
+    for(const [mode,other] of Object.entries(this.bundles)){
+     if(mode!==selectedMode&&await other.owns(config.value))return checked('inconclusive','otherMode');
+    }
+   }
+  }catch{return checked('inconclusive','unavailable');}
+  const runtime=await this.runtime();
+  if(runtime.state==='connected'){
+   if(runtime.toolsUnavailable||runtime.tools?.subagent===false)return checked('failed','missingTools',runtime);
+   if(runtime.tools?.subagent!==true)return checked('inconclusive','toolsUnreported',runtime);
+   return checked('passed','mcpAndTools',runtime);
+  }
+  if(['failed','cancelled','authenticationRequired','disabled'].includes(runtime.state))return checked('failed',runtime.state,runtime);
+  return checked('inconclusive',runtime.state||runtime.observation||'unavailable',runtime);
+ }
  async plan(input={}){strict(input,['executablePath','mode']);const bundle=this.selectBundle(input.mode);if(this.demo)throw error('DSH_DEMO_DISABLED','演示模式不注册 MCP');const bundled=await bundle.bundled();if(!bundled.available||!bundled.dependenciesReady)throw error('DSH_COMPONENT_UNAVAILABLE','随包 DSH 桥或依赖未就绪',503);const config=await this.read();if(config.exists)throw error('MCP_ALREADY_CONFIGURED','已存在 DSH MCP 配置，已保留，不会覆盖',409);if(!config.writable)throw error('CODEX_CONFIG_READONLY','Codex 用户配置不可写',409);const candidate=input.executablePath??(await bundle.detect()).executablePath,probe=await bundle.probe(candidate),id=randomUUID(),expiresAt=this.clock()+300000;for(const [key,plan] of this.plans)if(plan.expiresAt<this.clock())this.plans.delete(key);if(this.plans.size>=8)throw error('TOO_MANY_PLANS','已有过多连接计划，请稍后再试',429);this.plans.set(id,{mode:input.mode,version:config.version,probe,expiresAt,state:'prepared'});return {planId:id,mode:input.mode,capabilities:await bundle.capabilities?.()??null,expiresAt,serverName:SERVER,dsh:{executablePath:probe.executablePath,version:probe.version},scope:'user',preservesExisting:true};}
  async connect(input){strict(input,['planId','confirmed']);if(input.confirmed!==true||typeof input.planId!=='string')throw error('CONFIRMATION_REQUIRED','请明确确认连接操作');const plan=this.plans.get(input.planId);if(!plan||plan.expiresAt<this.clock())throw error('PLAN_EXPIRED','连接计划已失效，请重新检查',409);if(plan.state!=='prepared')throw error('CONNECTION_ALREADY_ATTEMPTED','连接已处理或结果待核对，请刷新状态，不要重发',409);if(this.pending)throw error('CONNECTION_BUSY','已有 DSH 连接操作正在处理',409);this.pending=true;const bundle=this.selectBundle(plan.mode);let writeStarted=false;try{const fresh=await this.read();if(fresh.exists)throw error('MCP_ALREADY_CONFIGURED','已有 DSH MCP 配置，已保留，不会覆盖',409);if(!fresh.writable||fresh.version!==plan.version)throw error('REVISION_CONFLICT','Codex 配置已变化，请重新检查连接',409);const bundled=await bundle.bundled();if(!bundled.available||!bundled.dependenciesReady)throw error('DSH_COMPONENT_UNAVAILABLE','Bundled DSH component verification failed',503);await bundle.prepare(plan.probe);plan.state='attempted';writeStarted=true;const written=await this.rpc.call('config/batchWrite',{edits:[{keyPath:'mcp_servers.'+SERVER,value:await bundle.registration(plan.probe.executablePath,plan.probe),mergeStrategy:'replace'}],expectedVersion:fresh.version,reloadUserConfig:false});if(!['ok','okOverridden'].includes(written?.status))throw Error('unknown write status');if(written.status==='okOverridden')return {registered:true,registration:{state:'unknown',serverName:SERVER},reload:{queued:false,error:{code:'MCP_CONFIG_OVERRIDDEN',message:'用户配置已写入，但被更高优先级配置覆盖'}},runtime:{state:null},warning:'已保存但未生效，请检查 Codex 管理配置'};let queued=false;try{await this.rpc.call('config/mcpServer/reload');queued=true;}catch{}return {registered:true,registration:{state:'bundled',serverName:SERVER},reload:{queued,error:queued?null:{code:'MCP_RELOAD_PENDING',message:'已注册；此客户端暂未完成 MCP 刷新，请重新打开会话'}},runtime:{state:null},warning:queued?null:'配置已写入，尚未确认运行时连接'};}catch(e){if(writeStarted)throw error('CONNECTION_OUTCOME_UNKNOWN','配置写入结果需核对，请刷新连接状态，不要自动重发',500,'unknown');throw e;}finally{this.pending=false;}}
 }

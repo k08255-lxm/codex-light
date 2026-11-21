@@ -6,6 +6,7 @@ import {ProviderSources} from './provider-sources.mjs';
 import {builtinModel,builtinProvider,modelChoices,modelSelection,readModelDefaults,saveModelDefaults} from './model-defaults.mjs';
 import {loadInstalledModelCatalog} from './model-catalog.mjs';
 import {createRequire} from 'node:module';
+import {resolvePresetLayout} from './preset-layout.mjs';
 import {fileURLToPath} from 'node:url';
 const root=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const fail=(code,message)=>{throw Object.assign(new Error(message),{code});};
@@ -59,7 +60,8 @@ export function nativeProbe({cli='',home=os.homedir(),env=process.env,platform=p
  if(!pkg||!/^0\.2\.2(?:-|$)/.test(pkg.version))fail('DSH_RUNTIME_UNSUPPORTED','Requires Linux @deepseek-ai/dsh 0.2.2');
  const bin=typeof pkg.bin==='string'?pkg.bin:pkg.bin?.dsh;if(!bin||fs.realpathSync(path.resolve(packageRoot,bin))!==cli)fail('DSH_RUNTIME_UNSUPPORTED','DSH path is not the package CLI entry');
  const req=createRequire(path.join(packageRoot,'package.json'));
- for(const name of ['@deepseek-ai/dsh-base','@deepseek-ai/dsh-sdk-app','@deepseek-ai/dsh-agent-presets','@deepseek-ai/dsh-sdk-jsonrpc-server','@deepseek-ai/dsh-workspace','@deepseek-ai/dsh-tool-subagent/model-selection-settings'])req.resolve(name);
+ for(const name of ['@deepseek-ai/dsh-base','@deepseek-ai/dsh-sdk-app','@deepseek-ai/dsh-sdk-jsonrpc-server','@deepseek-ai/dsh-workspace','@deepseek-ai/dsh-tool-subagent/model-selection-settings'])req.resolve(name);
+ resolvePresetLayout(cli,req);
  const major=Number(process.versions.node.split('.')[0]);if(major<22)fail('DSH_RUNTIME_UNSUPPORTED','Linux Node 22 or newer with node:sqlite required');
  if(env.DSH_HOME&&(!path.isAbsolute(env.DSH_HOME)||/^\/mnt\/[a-z]\//i.test(env.DSH_HOME)))fail('DSH_PATH_INVALID','DSH_HOME must be a native Linux directory');
  const stateRoot=path.join(home,'.local/share/codecang/dsh-native');

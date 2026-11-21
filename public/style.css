@@ -545,6 +545,7 @@ dialog::backdrop { background: var(--overlay); }
 .review-workspace > * { width: min(100%, var(--content-width)); }
 
 /* ---------- Access mode ---------- */
+:root:not([data-access="lan"]) .dsh-settings-lan-summary { display: none; }
 /* A phone on the LAN cannot manage this computer: hide local-only controls (server also refuses them). */
 :root[data-access="lan"] .local-only, :root[data-access="lan"] #shutdown, :root[data-access="lan"] #runtime-panel, :root[data-access="lan"] #desktop-receipts, :root[data-access="lan"] #project-browse, :root[data-access="lan"] #preference-native-reload, :root[data-access="lan"] .row-panel:has(#shutdown) { display: none !important; }
 
@@ -934,11 +935,15 @@ dialog::backdrop { background: var(--overlay); }
 /* Skills uses the settings column and one list of path-scoped controls. */
 .skills-settings .section-head { margin-bottom: 12px; }
 .skills-settings .section-head h1 { margin: 0; }
+.skills-header-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.skills-import-feedback { margin: 0 0 12px; overflow-wrap: anywhere; }
+.skills-header-actions button[hidden] { display: none; }
 .skills-context { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0; color: var(--secondary); }
 .skills-context .mono { min-width: 0; align-self: center; font-size: .8125rem; overflow-wrap: anywhere; }
 .skills-guidance { margin: 4px 0 16px; font-size: .8125rem; }
 #skills-search { width: min(100%, 24rem); }
 .skills-status { margin: 16px 0; font-size: .8125rem; }
+.skills-recovery[hidden] { display: none; }
 .skills-list { margin: 16px 0 0; padding: 0; list-style: none; }
 .skills-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 12px; padding: 16px 0; border-top: 1px solid var(--border); }
 .skills-row-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; overflow-wrap: anywhere; }

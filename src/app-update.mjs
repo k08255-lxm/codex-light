@@ -180,7 +180,6 @@ export class AppUpdateService{
     let offset=0;
     while(offset<chunk.length){
      const {bytesWritten}=await write(chunk,offset,start+received,signal);
-     if(bytesWritten===0)throw fail('安装包写入失败','APP_UPDATE_WRITE_FAILED');
      offset+=bytesWritten;
      received+=bytesWritten;
      this.receivedBytes+=bytesWritten;
@@ -194,11 +193,15 @@ export class AppUpdateService{
  }
  async _downloadAsset({url,size},handle,signal){
   // The requests stream concurrently, but writes to their shared file handle must be serialized.
-  let pendingWrite=Promise.resolve();
+  let pendingWrite=Promise.resolve(),writeError;
   const write=(chunk,offset,position,writeSignal)=>{
-   pendingWrite=pendingWrite.then(()=>{
+   pendingWrite=pendingWrite.then(async()=>{
     writeSignal.throwIfAborted();
-    return handle.write(chunk,offset,chunk.length-offset,position);
+    try{
+     const result=await handle.write(chunk,offset,chunk.length-offset,position);
+     if(result.bytesWritten===0)throw fail('安装包写入失败','APP_UPDATE_WRITE_FAILED');
+     return result;
+    }catch(error){writeError=error;throw error;}
    });
    return pendingWrite;
   };
@@ -212,22 +215,39 @@ export class AppUpdateService{
   }));
   const segments=new AbortController();
   const rangeSignal=AbortSignal.any([signal,segments.signal]);
-  const first=await this._fetch(url,rangeSignal,{range:ranges[0]});
-  // The first response also carries the complete file if the server ignores Range.
-  if(first.status!==206){
-   await this._writeAsset(first,write,signal,size);
+  let first,sourceError;
+  try{
+   first=await this._fetch(url,rangeSignal,{range:ranges[0]});
+   if(first.status===206){
+    await Promise.allSettled(ranges.map(async(range,index)=>{
+     try{
+      const response=index===0?first:await this._fetch(url,rangeSignal,{range});
+      await this._writeAsset(response,write,rangeSignal,size,range);
+     }catch(error){
+      if(error?.code==='APP_UPDATE_SOURCE_INVALID'||error?.code==='APP_UPDATE_REDIRECT_LIMIT')sourceError=error;
+      segments.abort(error);
+      throw error;
+     }
+    }));
+    rangeSignal.throwIfAborted();
+    return;
+   }
+  }catch(error){
+   signal.throwIfAborted();
+   if(writeError||sourceError)throw writeError||sourceError;
+   if(error?.code==='APP_UPDATE_SOURCE_INVALID'||error?.code==='APP_UPDATE_REDIRECT_LIMIT')throw error;
+   // All range workers are settled. Discard their partial bytes before
+   // retrying once without Range under the original deadline.
+   await pendingWrite.catch(()=>{});
+   signal.throwIfAborted();
+   await handle.truncate(0);
+   this.receivedBytes=0;
+   pendingWrite=Promise.resolve();
+   await this._writeAsset(await this._fetch(url,signal),write,signal,size);
    return;
   }
-  await Promise.allSettled(ranges.map(async(range,index)=>{
-   try{
-    const response=index===0?first:await this._fetch(url,rangeSignal,{range});
-    await this._writeAsset(response,write,rangeSignal,size,range);
-   }catch(error){
-    segments.abort(error);
-    throw error;
-   }
-  }));
-  rangeSignal.throwIfAborted();
+  // Reuse an already complete response if the server ignored the first Range.
+  await this._writeAsset(first,write,signal,size);
  }
  async download(params){
   strict(params,['version']);const latest=this._release(params);

@@ -113,7 +113,7 @@ test('one click runs plan then connect once; registered and queued are not shown
   assert.equal(h.paths().filter(p => p.endsWith('/connect')).length, 1, 'a double click never connects twice');
   assert.deepEqual(h.calls[2][1], { planId: 'p1', confirmed: true });
   const text = h.host.textContent;
-  assert.match(text, /已注册，尚未确认连接/); assert.match(text, /已排队（不等于已连接）/); assert.match(text, /正在启动/);
+  assert.match(text, /已配置 · 正在启动/); assert.match(text, /已排队（不等于已连接）/); assert.match(text, /正在启动/);
   assert.doesNotMatch(text, /随包桥已在 Codex 中注册并连接/);
   assert.equal(h.paths().filter(p => p.endsWith('/status')).length, 4, 'runtime status is re-read a bounded number of times');
   assert.equal(h.changes(), 1);
@@ -236,4 +236,52 @@ test('callback state reports account pause and error rather than treating capabi
 test('callback error is rendered as bounded text',async()=>{
  const h=harness([status({callbackStatus:{automaticWakeup:true,accountVerified:true,error:'<script>bad</script>'}})]);
  h.view.activate();await settle();assert.match(h.host.textContent,/自动唤醒暂停：<script>bad<\/script>/);assert.equal(h.host.querySelectorAll('script').length,0);
+});
+
+
+test('health explains observations and never treats merely listed tools or a different bridge mode as connected',()=>{
+ const as = runtime => describeConnection({...bundled(null),runtime});
+ assert.equal(as({state:null,observation:'listed',tools:{count:10,subagent:true}}).tone,'warn');
+ assert.match(as({state:null,observation:'missing'}).label,/未报告/);
+ assert.match(as({state:null,observation:'unavailable'}).detail,/无法读取/);
+ assert.match(as({state:'connected',tools:{count:1,subagent:false}}).label,/工具未就绪/);
+ assert.match(as({state:'connected',tools:{count:2,subagent:true}}).detail,/未运行子代理/);
+ assert.match(as({state:'failed'}).next,/检查/);
+ assert.match(as({state:'disabled'}).next,/启用 dsh_subagent/);
+ const different = describeConnection({...bundled('connected'),registration:{state:'otherMode',mode:'native-wsl'}});
+ assert.equal(different.tone,'warn');assert.match(different.detail,/WSL 原生 DSH/);
+ assert.equal(different.action,null);
+});
+
+test('health is visible while the separate optional model directory request is pending',async()=>{
+ let finish;
+ const h=harness([{...bundled('connected'),checkedAt:Date.now(),modelStatusAvailable:true},new Promise(resolve=>{finish=resolve;})]);
+ await h.view.activate();
+ assert.match(h.host.textContent,/Codex 报告 MCP 已连接/);
+ assert.match(h.host.textContent,/检查于/);
+ assert.equal(h.host.querySelector('.dsh-default-model'),null);
+ assert.deepEqual(h.paths(),['/api/dsh/connection/status','/api/dsh/connection/modelStatus']);
+ finish({available:true,models:[]}); await settle();
+ assert.ok(h.host.querySelector('.dsh-default-model'));
+});
+
+test('immediate test reports scoped fresh verification and never submits twice while pending',async()=>{
+ let finish;
+ const h=harness([bundled('connected'),new Promise(resolve=>{finish=resolve;})]);
+ h.view.activate();await settle();
+ const action=h.byText('立即测试');
+ action.click();action.click();
+ assert.equal(h.byText('正在测试…').disabled,true);
+ assert.deepEqual(h.paths(),['/api/dsh/connection/status','/api/dsh/connection/testConnection']);
+ finish({outcome:'passed',reason:'mcpAndTools'});await settle();
+ assert.match(h.host.textContent,/连接测试通过/);
+ assert.match(h.host.textContent,/未运行子代理/);
+ assert.equal(h.byText('立即测试').disabled,false);
+});
+
+test('immediate test without a fresh tool listing cannot claim a pass',async()=>{
+ const h=harness([bundled('connected'),{outcome:'inconclusive',reason:'toolsUnreported'}]);
+ h.view.activate();await settle();h.byText('立即测试').click();await settle();
+ assert.match(h.host.textContent,/连接测试未能确认/);
+ assert.doesNotMatch(h.host.textContent,/连接测试通过/);
 });

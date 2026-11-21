@@ -14,20 +14,31 @@ export class EngineSetupStore {
 // One native candidate represents npm + official desktop. Their existing resolver
 // still chooses the executable. WSL inventory never launches a distro; probe does.
 export class EngineOnboarding {
- constructor({store,supported=true,nativeCandidate,listDistributions,probeDistribution,saveSelection,current=()=>({target:'native'}),busy=()=>false}){Object.assign(this,{store,supported,nativeCandidate,listDistributions,probeDistribution,saveSelection,current,busy});this.candidates=[];this.pending=[];this.diagnostic='';this.nativeUnresolved=false;this.required=false;this.operation=null;}
+ constructor({store,supported=true,nativeCandidate,listDistributions,probeDistribution,discoverRunning,saveSelection,current=()=>({target:'native'}),busy=()=>false}){Object.assign(this,{store,supported,nativeCandidate,listDistributions,probeDistribution,discoverRunning,saveSelection,current,busy});this.candidates=[];this.pending=[];this.diagnostic='';this.nativeUnresolved=false;this.required=false;this.operation=null;}
  async initialize(){this.required=false;if(!this.supported)return;const saved=await this.store.read();if(saved){this.required=false;return;}if(await this.store.existingUser()){await this.store.save('legacy');return;}this.required=true;}
  snapshot(){return {supported:this.supported,needed:this.required,candidates:this.candidates,pendingDistributions:this.pending,nativeUnresolved:this.nativeUnresolved,discoveryPending:this.pending.length>0||this.nativeUnresolved,diagnostic:this.diagnostic,current:this.current()};}
  exclusive(fn){if(this.operation)throw fail('正在处理运行环境，请稍候');const job=Promise.resolve().then(fn);this.operation=job;return job.finally(()=>{this.operation=null;});}
  async inventory(){if(!this.supported||!this.required)return this.snapshot();return this.exclusive(async()=>{
   this.diagnostic='';this.candidates=[];this.pending=[];this.nativeUnresolved=false;
-  try{const c=await this.nativeCandidate();if(c)this.candidates.push({...c,id:'native',label:'Windows 本机',selection:{target:'native'}});}catch(e){this.nativeUnresolved=true;this.diagnostic=String(e.message);}
-  try{this.pending=await this.listDistributions();}catch(e){this.diagnostic+=' WSL 列表未能读取，请重试或到设置手动配置。';this.pending=['未知'];}
+  const native=Promise.resolve().then(()=>this.nativeCandidate()).then(c=>{
+   if(c)this.candidates.push({...c,id:'native',label:'Windows 本机',selection:{target:'native'}});
+  },error=>{this.nativeUnresolved=true;this.diagnostic=String(error.message);});
+  if(this.discoverRunning){
+   const [report]=await Promise.all([this.discoverRunning(),native]);
+   this.pending=report.discoveryIncomplete?['未知']:report.pendingDistributions;
+   this.candidates.push(...report.candidates.map(c=>this.wslCandidate(c.distribution,c)));
+   if(report.diagnostic)this.diagnostic=[this.diagnostic,report.diagnostic].filter(Boolean).join(' ');
+  }else{
+   await native;
+   try{this.pending=await this.listDistributions();}catch{this.diagnostic+=' WSL 列表未能读取，请重试或到设置手动配置。';this.pending=['未知'];}
+  }
   return this.snapshot();
  });}
+ wslCandidate(distribution,c){return {...c,id:`wsl:${distribution}`,label:`WSL · ${distribution}`,selection:{target:'wsl',distribution,...(c.user?{user:c.user}:{}),...(c.codexPath&&!c.passiveProbe?{codexPath:c.codexPath}:{})}};}
  async discover(){if(!this.required) return this.snapshot();return this.exclusive(async()=>{
   this.diagnostic='';let names;try{names=await this.listDistributions();}catch{this.pending=['unknown'];this.diagnostic='WSL 列表读取失败，未改变环境。';return this.snapshot();}
   this.candidates=this.candidates.filter(c=>c.id==='native');this.pending=[];
-  for(const distribution of names){try{const c=await this.probeDistribution(distribution);this.candidates.push({...c,id:`wsl:${distribution}`,label:`WSL · ${distribution}`,selection:{target:'wsl',distribution,...(c.user?{user:c.user}:{}),...(c.codexPath?{codexPath:c.codexPath}:{})}});}catch(e){this.pending.push(distribution);this.diagnostic='部分发行版检测未完成，不能据此判断未安装。可以重试或在设置中配置。';}}
+  for(const distribution of names){try{const c=await this.probeDistribution(distribution);this.candidates.push(this.wslCandidate(distribution,c));}catch(e){this.pending.push(distribution);this.diagnostic='部分发行版检测未完成，不能据此判断未安装。可以重试或在设置中配置。';}}
   return this.snapshot();
  });}
  async complete(input){return this.exclusive(async()=>{

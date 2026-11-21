@@ -16,7 +16,7 @@ export function mountEngineOnboarding(host,{read,discover,complete,isLocal=()=>t
  const guide=el('a','查看官方 Codex 安装说明','engine-setup-guide');guide.href='https://github.com/openai/codex#installation';guide.target='_blank';guide.rel='noopener noreferrer';
  const live=el('p','','engine-setup-status');live.setAttribute('role','status');live.setAttribute('aria-live','polite');
  const actions=el('div',undefined,'engine-setup-actions');
- const later=el('button','稍后配置','btn'),settings=el('button','安装与配置','btn'),retry=el('button','重新检测','btn'),scan=el('button','检测 WSL 环境','btn'),save=el('button','使用所选环境','btn primary');
+ const later=el('button','稍后配置','btn'),settings=el('button','安装与配置','btn'),retry=el('button','重新检测','btn'),scan=el('button','完整检测 WSL','btn'),save=el('button','使用所选环境','btn primary');
  for(const b of [later,settings,retry,scan,save])b.type='button';
  actions.append(later,settings,retry,scan,save);content.append(eyebrow,heading,intro,list,explanation,guide,live,actions);dialog.append(content);host.append(dialog);
  let snapshot=null,busy=false,selected=null,finished=false,started=false,uncertain=false,previousFocus=null;
@@ -32,7 +32,7 @@ export function mountEngineOnboarding(host,{read,discover,complete,isLocal=()=>t
    const copy=el('span',undefined,'engine-setup-copy');copy.append(el('strong',candidate.label),el('small',candidate.available?(candidate.version?`Codex ${candidate.version}`:'已检测到可用 Codex'):(candidate.diagnostic||'未检测到可用引擎，请检查安装与路径')));
    row.append(radio,copy);list.append(row);
   }
-  explanation.textContent=snapshot?.nativeUnresolved?'Windows 引擎检测未完成。请重新检测；不会将超时视为未安装，也不会自动选择其他环境。':snapshot?.discoveryPending?'WSL 尚未检测。点击检测会启动已安装的发行版，以默认用户进行只读检查，不调用模型。':decision.kind==='missing'?'可先安装官方 Codex CLI，或在设置中指定已有的 Windows / WSL 环境。安装后点击重新检测。':'之后可在「设置 → 通用 → Codex 运行环境」修改；选择不同环境需完全退出并重新打开，当前任务不会被切换。';
+  explanation.textContent=snapshot?.nativeUnresolved?'Windows 引擎检测未完成。请重新检测；不会将超时视为未安装，也不会自动选择其他环境。':snapshot?.discoveryPending?'已自动检查正在运行的 WSL。有发行版未运行或尚未确认；手动检测可能启动它们，不调用模型。':decision.kind==='missing'?'可先安装官方 Codex CLI，或在设置中指定已有的 Windows / WSL 环境。安装后点击重新检测。':'之后可在「设置 → 通用 → Codex 运行环境」修改；选择不同环境需完全退出并重新打开，当前任务不会被切换。';
   if(snapshot?.diagnostic)explanation.append(el('span',String(snapshot.diagnostic),'engine-setup-diagnostic'));
   for(const b of [later,settings,retry,scan,save])b.disabled=busy;
   settings.hidden=decision.kind!=='missing'&&!snapshot?.diagnostic;
@@ -46,7 +46,7 @@ export function mountEngineOnboarding(host,{read,discover,complete,isLocal=()=>t
   finally{busy=false;render();}
  }
  async function load(scanning=false){
-  if(busy||finished||!isLocal())return;busy=true;render();live.textContent=scanning?'正在检测 WSL 环境…':'正在检测可用环境…';
+  if(busy||finished||!isLocal())return;busy=true;render();live.textContent=scanning?'正在检测 WSL 环境…':'正在检测 Windows 和已运行的 WSL…';
   try{const next=await(scanning?discover():read());if(!next||typeof next.needed!=='boolean'||typeof next.supported!=='boolean')throw new Error('运行环境状态无效');snapshot=next;
    const decision=engineSetupDecision(snapshot);if(decision.kind==='done'){finished=true;close();return;}
    selected=null;render();

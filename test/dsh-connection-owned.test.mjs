@@ -24,8 +24,68 @@ test('unwritable config, expired plan, missing DSH and missing bundled dependenc
 test('clean synthetic DSH installation creates only its own profile and private bridge state',t=>{const root=fs.mkdtempSync(path.join(os.tmpdir(),'dsh-connect-owned-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const home=path.join(root,'user'),exeDir=path.join(root,'DSH'),exe=path.join(exeDir,'DeepSeek Harness.exe');fs.mkdirSync(path.join(exeDir,'resources'),{recursive:true});fs.writeFileSync(exe,'synthetic executable bytes');fs.writeFileSync(path.join(exeDir,'resources','app.asar'),'synthetic');const probes=[],bundle=new BundledDshBridge({home,stateRoot:path.join(root,'state'),env:{},spawnSyncFn:(command,args,options)=>{probes.push({command,args,options});return {status:0,stdout:JSON.stringify({name:'@deepseek-ai/dsh-desktop-host',version:'0.2.2-rc.1',node:'24.21.0',sqlite:true})};}});assert.equal(fs.existsSync(bundle.stateRoot),false);const probe=bundle.probe(exe);assert.equal(probes[0].options.env.ELECTRON_RUN_AS_NODE,'1');assert.equal(probes[0].options.windowsHide,true);assert.equal(probes[0].options.shell,false);bundle.prepare(probe);const record=JSON.parse(fs.readFileSync(path.join(bundle.configDir,'installation.json')));assert.equal(record.owner,'codex-light');assert.equal(record.backend,'background');assert.equal(record.env.DSH_BRIDGE_PROFILE,'codex-light-bridge');assert.ok(!('DSH_DEFAULT_PROVIDER' in record.env));assert.ok(!fs.existsSync(path.join(home,'.dsh','.credentials.yaml')));assert.equal(JSON.parse(fs.readFileSync(path.join(home,'.dsh','profiles','codex-light-bridge','package.json'))).codexLightBridgeProfile,1);assert.ok(!fs.existsSync(path.join(home,'.codex')));bundle.prepare(probe);});
 test('profile collision fails without overwriting its files',t=>{const root=fs.mkdtempSync(path.join(os.tmpdir(),'dsh-profile-collision-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const exe=path.join(root,'DeepSeek Harness.exe');fs.mkdirSync(path.join(root,'resources'));fs.writeFileSync(exe,'x');fs.writeFileSync(path.join(root,'resources','app.asar'),'x');const bundle=new BundledDshBridge({home:root,stateRoot:path.join(root,'state'),env:{},spawnSyncFn:()=>({status:0,stdout:JSON.stringify({name:'@deepseek-ai/dsh-desktop-host',version:'0.2.2-rc.1',node:'24.0.0',sqlite:true})})}),profile=path.join(root,'.dsh','profiles','codex-light-bridge');fs.mkdirSync(profile,{recursive:true});fs.writeFileSync(path.join(profile,'package.json'),'{}');assert.throws(()=>bundle.prepare(bundle.probe(exe)),{code:'DSH_PROFILE_CONFLICT'});assert.equal(fs.readFileSync(path.join(profile,'package.json'),'utf8'),'{}');});
 test('connection HTTP requires local Bearer, remains outside receipts, and demo never writes config',async t=>{const f=fixture(),app=await createServer({demo:true,dshConnectionService:f.service});await app.started;t.after(()=>app.close());const post=(route,data,auth=true)=>fetch(app.origin+route,{method:'POST',headers:{'Content-Type':'application/json',...(auth?{Authorization:'Bearer '+app.token}:{})},body:JSON.stringify(data)});assert.equal((await post('/api/dsh/connection/status',{},false)).status,401);const plan=await(await post('/api/dsh/connection/plan',{executablePath:'/synthetic/DSH.exe'})).json();assert.equal((await post('/api/dsh/connection/connect',{planId:plan.planId,confirmed:true})).status,200);assert.equal(app.operations.entries.size,0);const demo=new DshConnectionService({demo:true,rpc:{call(){throw Error('must not read config');}},bundle:f.bundle});assert.equal((await demo.status()).error.code,'DSH_DEMO_DISABLED');await assert.rejects(demo.plan({}),{code:'DSH_DEMO_DISABLED'});});
-test('LAN cannot inspect or invoke connection management',async t=>{let called=0;const factory=handler=>{const server=http.createServer(handler),listen=server.listen.bind(server);server.listen=(options,...rest)=>listen({...options,host:'127.0.0.1'},...rest);return server;};const app=await createServer({demo:true,dshConnectionService:{status(){called++;},plan(){called++;},connect(){called++;}},lanOptions:{networkInterfaces:()=>({fake:[{address:'192.168.77.19',family:'IPv4',internal:false}]}),serverFactory:factory}});await app.started;t.after(()=>app.close());const lan=await app.lan.enable({address:'192.168.77.19'}),token=new URL(lan.url).hash.slice(7);for(const action of ['status','plan','connect']){const r=await fetch(`http://127.0.0.1:${lan.port}/api/dsh/connection/${action}`,{method:'POST',headers:{Host:`192.168.77.19:${lan.port}`,Authorization:'Bearer '+token,'Content-Type':'application/json'},body:'{}'});assert.equal(r.status,403);}assert.equal(called,0);});
+test('LAN cannot inspect or invoke connection management',async t=>{let called=0;const factory=handler=>{const server=http.createServer(handler),listen=server.listen.bind(server);server.listen=(options,...rest)=>listen({...options,host:'127.0.0.1'},...rest);return server;};const app=await createServer({demo:true,dshConnectionService:{status(){called++;},plan(){called++;},connect(){called++;}},lanOptions:{networkInterfaces:()=>({fake:[{address:'192.168.77.19',family:'IPv4',internal:false}]}),serverFactory:factory}});await app.started;t.after(()=>app.close());const lan=await app.lan.enable({address:'192.168.77.19'}),token=new URL(lan.url).hash.slice(7);for(const action of ['status','plan','connect','testConnection']){const r=await fetch(`http://127.0.0.1:${lan.port}/api/dsh/connection/${action}`,{method:'POST',headers:{Host:`192.168.77.19:${lan.port}`,Authorization:'Bearer '+token,'Content-Type':'application/json'},body:'{}'});assert.equal(r.status,403);}assert.equal(called,0);});
 
 test('component corruption after plan prevents preparation or config mutation',async()=>{const f=fixture(),plan=await f.service.plan({executablePath:'/synthetic/DSH.exe'});f.bundle.bundled=()=>({available:false,dependenciesReady:false});await assert.rejects(f.service.connect({planId:plan.planId,confirmed:true}),{code:'DSH_COMPONENT_UNAVAILABLE'});assert.equal(f.prepared.length,0);assert.ok(!f.calls.some(row=>row[0]==='config/batchWrite'));});
 
 test('async bridge selection is explicit and bound to the confirmed plan',async()=>{const f=fixture(),events=[];const adapter=mode=>Object.fromEntries(Object.entries(f.bundle).map(([name,fn])=>[name,async(...args)=>{await Promise.resolve();events.push(mode+':'+name);return fn(...args);} ]));const service=new DshConnectionService({rpc:f.rpc,bundles:{'native-wsl':adapter('linux'),windows:adapter('windows')}});assert.deepEqual((await service.status()).modes,['native-wsl','windows']);assert.equal(events.length,0);await assert.rejects(service.plan({executablePath:'/fake'}),{code:'DSH_MODE_REQUIRED'});const status=await service.status({mode:'native-wsl'});assert.equal(status.registration.state,'none');const plan=await service.plan({mode:'native-wsl',executablePath:'/fake'});await assert.rejects(service.connect({planId:plan.planId,confirmed:true,mode:'windows'}),{code:'INVALID_INPUT'});const result=await service.connect({planId:plan.planId,confirmed:true});assert.equal(result.registered,true);assert.ok(events.includes('linux:prepare'));assert.ok(events.includes('linux:registration'));assert.ok(!events.some(e=>e.startsWith('windows:')));assert.equal(typeof f.calls.find(x=>x[0]==='config/batchWrite')[1].edits[0].value.command,'string');});
+
+
+test('status exposes bounded read-only observations without exposing raw tool errors or payloads', async()=>{
+ let reply={data:[]}, calls=[];
+ const rpc={call:async(method)=>{calls.push(method);if(reply instanceof Error)throw reply;return reply;}};
+ const s=new DshConnectionService({rpc,bundle:{}});
+ assert.deepEqual(await s.runtime(),{state:null,observation:'missing'});
+ reply=new Error('private endpoint');
+ assert.deepEqual(await s.runtime(),{state:null,observation:'unavailable'});
+ reply={data:[{name:'dsh_subagent',tools:[{name:'dsh_start',private:'secret'},{name:'dsh_wait'}]}]};
+ assert.deepEqual(await s.runtime(),{state:null,observation:'listed',tools:{count:2,subagent:true}});
+ reply.data[0]={...reply.data[0],runtimeStatus:'connected',toolsError:'private'};
+ assert.deepEqual(await s.runtime(),{state:'connected',tools:{count:2,subagent:true},toolsUnavailable:true});
+ assert.ok(calls.every(method=>method==='mcpServerStatus/list'));
+});
+
+test('WSL status identifies a registration owned by the other mode and can report a configured disabled bridge',async()=>{
+ const f=fixture();f.cfg.config.mcp_servers.dsh_subagent={owned:true,enabled:false};
+ const windows={...f.bundle,owns:()=>false};
+ const service=new DshConnectionService({rpc:f.rpc,bundle:f.bundle,bundles:{windows,'native-wsl':f.bundle},clock:()=>12345});
+ let status=await service.status({mode:'windows'});
+ assert.deepEqual(status.registration,{state:'otherMode',serverName:'dsh_subagent',mode:'native-wsl'});
+ assert.equal(status.checkedAt,12345);assert.equal(status.canConnect,false);
+ const call=f.rpc.call;f.rpc.call=async(method,params)=>method==='mcpServerStatus/list'?{data:[]}:call(method,params);
+ status=await service.status({mode:'native-wsl'});
+ assert.deepEqual(status.runtime,{state:'disabled'});
+});
+
+test('immediate connection test uses fresh real Codex route and verifies reported tools without invoking them',async()=>{
+ const f=fixture();f.cfg.config.mcp_servers.dsh_subagent={owned:true};
+ const call=f.rpc.call, states=[
+  {runtimeStatus:'connected',tools:{dsh_start:{},dsh_wait:{}}},
+  {runtimeStatus:'connected',tools:{dsh_start:{}}},
+  {runtimeStatus:'connected'},
+  {runtimeStatus:'starting',tools:{dsh_start:{},dsh_wait:{}}},
+  {runtimeStatus:'authenticationRequired'},
+ ];
+ f.rpc.call=async(method,params)=>{
+  if(method!=='mcpServerStatus/list')return call(method,params);
+  f.calls.push([method,params]);return {data:[{name:'dsh_subagent',...states.shift()}]};
+ };
+ for(const [outcome,reason] of [['passed','mcpAndTools'],['failed','missingTools'],['inconclusive','toolsUnreported'],['inconclusive','starting'],['failed','authenticationRequired']]){
+  const result=await f.service.testConnection();
+  assert.deepEqual([result.outcome,result.reason],[outcome,reason]);
+  assert.equal(f.calls.at(-1)[0],'mcpServerStatus/list',reason);
+ }
+ assert.deepEqual(f.calls.map(([method])=>method),Array(5).fill(['config/read','mcpServerStatus/list']).flat());
+ assert.equal(f.prepared.length,0);
+ f.cfg.config.mcp_servers.dsh_subagent.enabled=false;
+ assert.equal((await f.service.testConnection()).reason,'disabled');
+ assert.equal(f.calls.at(-1)[0],'config/read');
+ await assert.rejects(async()=>f.service.testConnection({tool:'dsh_start'}),{code:'INVALID_INPUT'});
+});
+
+test('immediate test does not inspect a runtime owned by another known bridge mode',async()=>{
+ const f=fixture();f.cfg.config.mcp_servers.dsh_subagent={owned:true};
+ const service=new DshConnectionService({rpc:f.rpc,bundle:f.bundle,bundles:{windows:{owns:()=>false},'native-wsl':f.bundle}});
+ assert.equal((await service.testConnection({mode:'windows'})).reason,'otherMode');
+ assert.deepEqual(f.calls.map(row=>row[0]),['config/read']);
+});

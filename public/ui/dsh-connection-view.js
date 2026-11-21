@@ -9,7 +9,6 @@ import { dshRuntimeStatusLabel } from '../dsh.js';
 const SETTLED = new Set(['connected', 'authenticationRequired', 'failed', 'cancelled', 'disabled']);
 // Errors the backend reports before any write; everything else from connect may have written.
 const NOT_EXECUTED = new Set(['INVALID_INPUT', 'CONFIRMATION_REQUIRED', 'PLAN_EXPIRED', 'CONNECTION_ALREADY_ATTEMPTED', 'CONNECTION_BUSY', 'MCP_ALREADY_CONFIGURED', 'REVISION_CONFLICT', 'CODEX_CONFIG_READONLY', 'DSH_COMPONENT_UNAVAILABLE', 'DSH_DEMO_DISABLED', 'TOO_MANY_PLANS', 'LOCAL_ONLY']);
-const runtimeTone = state => state === 'connected' ? 'ok' : ['failed', 'authenticationRequired', 'cancelled', 'disabled'].includes(state) ? 'fail' : 'warn';
 const modelKey = selection => selection ? JSON.stringify([selection.provider || '', selection.model]) : '';
 
 export function describeCallbackStatus(callback) {
@@ -26,51 +25,92 @@ export function describeCallbackStatus(callback) {
 export function describeConnection(status, result = null) {
   if (!status) return { tone: 'idle', label: '尚未读取', detail: '', action: null };
   if (status.selectionRequired) return { tone: 'idle', label: '选择 DSH 所在环境', detail: '先选择 WSL 原生 DSH 或 Windows DSH。仅检查状态，不会自动注册。', action: null };
-  const reg = status.registration?.state, runtime = status.runtime?.state ?? null, runtimeLabel = dshRuntimeStatusLabel(runtime);
-  if (status.error) return { tone: 'fail', label: '不可用', detail: `${status.error.message || status.error.code}。仅影响此连接功能，普通聊天不受影响。`, action: null };
-  if (reg === 'external') return { tone: runtime === 'connected' ? 'ok' : 'warn', label: '使用已有配置', detail: `Codex 中已有名为 ${status.registration.serverName} 的 MCP 配置，已保留并继续使用，不会改成随包桥。运行时：${runtimeLabel}。`, action: null };
-  if (reg === 'bundled') {
-    const label = runtime === 'connected' ? '已连接' : SETTLED.has(runtime) ? runtimeLabel : '已注册，尚未确认连接';
-    const pending = result && !result.reload?.queued ? '此客户端未完成 MCP 刷新，请重新打开会话后再检查。' : '已注册不等于已连接；连接状态以 Codex 实际返回为准。';
-    return { tone: runtimeTone(runtime), label, detail: runtime === 'connected' ? '随包桥已在 Codex 中注册并连接。' : `随包桥已注册到 Codex 用户配置。${pending}`, action: null };
+  const reg = status.registration?.state;
+  const runtime = status.runtime || {};
+  const registrationMode = ({desktop:'Windows DSH Desktop',windows:'Windows DSH（由 WSL 调用）','native-wsl':'WSL 原生 DSH'})[status.registration?.mode];
+  const info = (tone, label, detail, next = '') => ({tone,label,detail,next,action:null});
+  if (status.error) return info('fail','无法核对桥接', `${status.error.message || status.error.code}。仅影响此连接功能，普通聊天不受影响。`, '确认 Codex 已连接，再重新检查。');
+  if (reg === 'otherMode') return info('warn','已配置另一种桥接', `当前 Codex 注册的是 ${registrationMode || '另一种环境'}；所选环境没有自己的 MCP 注册。`, '切换上方的 DSH 所在环境，查看实际已注册的桥。');
+  if (reg === 'bundled' || reg === 'external') {
+    const source = reg === 'external' ? 'Codex 中的外部配置已保留。' : '码舱随包桥已注册到 Codex。';
+    const waiting = result && !result.reload?.queued ? '请重新打开会话后再检查。' : '若状态不变，重新打开会话后再检查。';
+    if (runtime.state === 'connected') {
+      const detail = `${source}Codex 报告 MCP 已连接；本次未运行子代理或验证模型额度。`;
+      if (runtime.toolsUnavailable || runtime.tools?.subagent === false) return info('warn','已连接 · 工具未就绪', `${detail} 未确认 dsh_start 和 dsh_wait 都可用。`, '重新打开会话后检查；若仍缺失，请核对桥接版本与配置。');
+      if(reg==='bundled'&&runtime.loadedVersion&&status.bundled?.version&&runtime.loadedVersion!==status.bundled.version) return info('warn','已连接 · 运行旧版桥',detail,'待当前任务结束后重启 DSH 桥，再重新检查。');
+      return info('ok',reg==='external'?'已连接 · 使用已有配置':'已连接',detail);
+    }
+    if (runtime.state==='disabled') return info('fail','已配置 · 已禁用',source,'在 Codex 的 MCP 设置中启用 dsh_subagent，再检查状态。');
+    if (runtime.state==='failed') return info('fail','已配置 · 启动失败',source,'核对下面的 DSH 检测结果和桥版本；修复后重新打开会话检查。');
+    if (runtime.state==='authenticationRequired') return info('fail','已配置 · MCP 需要认证',source,'在 Codex 的 MCP 设置完成认证，再检查。');
+    if (runtime.state==='cancelled') return info('warn','已配置 · 启动已取消',source,'重新打开会话后再检查。');
+    if (runtime.state==='starting') return info('warn','已配置 · 正在启动',source,waiting);
+    if (runtime.state==='notStarted') return info('warn','已配置 · 尚未启动',source,waiting);
+    if (runtime.observation==='listed') return info('warn','已发现工具目录 · 连接未确认',`${source}当前 Codex 没有报告运行时连接状态，工具出现在目录中不代表已连接。`,'可在当前对话的子代理面板复查。');
+    if (runtime.observation==='missing') return info('warn','已配置 · Codex 未报告此桥',source,'重新打开会话后检查；若仍未出现，请核对配置是否生效。');
+    return info('warn','已注册，尚未确认连接',`${source}${runtime.observation==='unavailable'?'无法读取 Codex 的 MCP 运行状态。':'已注册不等于已连接。'} ${waiting}`);
   }
-  if (reg === 'unknown') return { tone: 'fail', label: '状态未知', detail: '无法确认现有 MCP 配置，暂不提供连接。', action: null };
+  if (reg === 'unknown') return info('fail','状态未知','无法确认现有 MCP 配置，暂不提供连接。','确认 Codex 已连接，再重新检查。');
   const bundled = status.bundled || {};
   if (!bundled.available || !bundled.dependenciesReady) return { tone: 'fail', label: '随包桥不可用', detail: '随包 DSH 桥或其依赖未就绪。不会联网下载；普通聊天不受影响。', action: null };
   if (!status.canConnect) return { tone: 'fail', label: '暂不可连接', detail: 'Codex 用户配置当前不可写或不兼容。', action: null };
-  return { tone: 'idle', label: '未连接', detail: status.dsh?.diagnostic?.message ? String(status.dsh.diagnostic.message).slice(0,1000) : status.dsh?.installed ? '已检测到 DSH，可一键连接。' : '未检测到 DSH 本体。DSH 是可选组件，未安装不影响普通聊天；已安装在其他位置可填写其路径。', action: status.dsh?.installed ? 'connect' : 'connectWithPath' };
+  return { tone: status.dsh?.diagnostic ? 'warn' : 'idle', label: status.dsh?.installed ? '未连接 · 尚未配置' : status.dsh?.diagnostic ? '未连接 · 检查 DSH 环境' : '未连接 · 未检测到 DSH', detail: status.dsh?.diagnostic?.message ? String(status.dsh.diagnostic.message).slice(0,1000) : status.dsh?.installed ? '已检测到 DSH，可一键连接。' : '未检测到 DSH 本体。DSH 是可选组件，未安装不影响普通聊天；已安装在其他位置可填写其路径。', action: status.dsh?.installed ? 'connect' : 'connectWithPath' };
+}
+
+export function describeConnectionTest(test) {
+  if(test.outcome==='passed')return {title:'连接测试通过',detail:'Codex 报告 MCP 已连接，并列出 dsh_start 和 dsh_wait。未运行子代理，也未验证模型或额度。'};
+  const reasons={
+    demo:'演示模式不能测试真实桥接。',
+    codexDisconnected:'Codex 尚未连接；连接后再试。',
+    configUnavailable:'无法读取 Codex MCP 配置；重新连接 Codex 后再试。',
+    notConfigured:'当前 Codex 没有 dsh_subagent 注册，请先配置连接。',
+    disabled:'DSH MCP 已禁用，请在 Codex 的 MCP 设置启用后再试。',
+    otherMode:'已注册另一种 DSH 桥接，请切换到已配置的环境后再试。',
+    missingTools:'MCP 已连接，但 Codex 未列出两个必需工具，或报告工具目录读取失败。请重新打开会话后再试。',
+    toolsUnreported:'MCP 已连接，但 Codex 没有提供工具清单，无法确认启动和等待工具。',
+    failed:'Codex 报告 MCP 启动失败；检查程序位置和桥版本，再重新打开会话。',
+    cancelled:'Codex 报告 MCP 启动已取消；重新打开会话后再试。',
+    authenticationRequired:'Codex 报告 MCP 需要身份验证；完成 MCP 认证后再试。',
+    starting:'MCP 正在启动，稍后重试。',
+    notStarted:'Codex 尚未启动 MCP；重新打开会话后再试。',
+    listed:'只发现了工具目录，Codex 没有确认连接。',
+    missing:'Codex 没有报告此桥的运行状态；重新打开会话后再试。',
+    unavailable:'无法读取 Codex 的 MCP 运行状态；重新连接 Codex 后再试。',
+  };
+  return {title:test.outcome==='failed'?'连接测试未通过':'连接测试未能确认',detail:reasons[test.reason]||reasons.unavailable};
 }
 
 export function mountDshConnection(host, { api, wait = ms => new Promise(resolve => setTimeout(resolve, ms)), followUps = 5, followUpMs = 2000, onChange = () => {}, onModelSaved = () => {}, runtimeTarget = () => 'native' }) {
   const document = host.ownerDocument;
   let status = null, result = null, busy = false, connecting = false, generation = 0, pathDraft = '', message = { text: '', error: false };
   let savingModel = false, active = false, catalogGeneration = 0, catalogRefreshPending = false;
-  let mode = null, context = runtimeTarget();
+  let mode = null, context = runtimeTarget(), factsOpen = false, testing = false, testResult = null;
   const root = el(document, 'section', 'dshcfg dshconn');
   host.replaceChildren(root);
 
-  async function load(mine = ++generation) {
+  async function load(mine = ++generation, reloadCatalog = false) {
     busy = true; render();
-    try { const next = await api('/api/dsh/connection/status', mode ? { mode } : {}); if (mine !== generation) return; status = next; }
+    try { const next = await api('/api/dsh/connection/status', mode ? { mode } : {}); if (mine !== generation) return; if(next.modelStatusAvailable&&!next.modelDefaults&&status?.modelDefaults) next.modelDefaults=status.modelDefaults; status = next; if(next.modelStatusAvailable&&(!next.modelDefaults||reloadCatalog)) void refreshModels(reloadCatalog); }
     catch (error) { if (mine !== generation) return; status = null; message = { text: `无法读取连接状态：${error.message}`, error: true }; }
     finally { if (mine === generation) { busy = false; render(); } }
   }
-  async function refreshModels() {
-    if (!active || !status?.modelDefaults) return;
+  async function refreshModels(full = false) {
+    if (!active || !status || (!status.modelDefaults&&!status.modelStatusAvailable)) return;
     if (savingModel) { catalogRefreshPending = true; return; }
     catalogRefreshPending = false;
     const target = status, mine = ++catalogGeneration;
     let catalog;
     try {
       const next = await api('/api/dsh/connection/modelStatus', mode ? { mode } : {});
-      catalog = { models: next.models, catalogError: next.catalogError };
+      catalog = !full && target.modelDefaults ? { models: next.models, catalogError: next.catalogError } : next;
     } catch {
-      catalog = { models: [], catalogError: '无法更新模型目录。请重新检查连接。' };
+      catalog = { available:true, models: [], catalogError: '无法更新模型目录。请重新检查连接。' };
     }
     if (!active || target !== status || mine !== catalogGeneration) return;
     if (savingModel) { catalogRefreshPending = true; return; }
     target.modelDefaults = { ...target.modelDefaults, ...catalog };
-    root.querySelector('.dsh-default-model')?.replaceWith(modelSettings());
+    const editor=root.querySelector('.dsh-default-model');
+    if(editor) editor.replaceWith(modelSettings()); else render();
   }
   // After a registration, follow the real runtime status for a bounded time; never infer it.
   async function follow(mine) {
@@ -81,7 +121,7 @@ export function mountDshConnection(host, { api, wait = ms => new Promise(resolve
     }
   }
   async function connect() {
-    if (connecting || busy || savingModel || !describeConnection(status).action) return;
+    if (connecting || busy || testing || savingModel || !describeConnection(status).action) return;
     const executablePath = pathDraft.trim();
     const mine = ++generation; connecting = true; busy = true; result = null; message = { text: '正在注册…', error: false }; render();
     let planned = false;
@@ -102,22 +142,44 @@ export function mountDshConnection(host, { api, wait = ms => new Promise(resolve
     }
   }
 
+  async function testConnection() {
+    if (!active || busy || testing || connecting || savingModel || !status || status.selectionRequired) return;
+    testing = true;
+    testResult = null;
+    const mine = ++generation;
+    const focus = document.activeElement?.classList?.contains('dshconn-test');
+    render();
+    try {
+      const next = await api('/api/dsh/connection/testConnection', mode ? {mode} : {});
+      if (mine !== generation || !active) return;
+      testResult = next;
+    } catch {
+      if (mine === generation && active) testResult = {outcome:'inconclusive',reason:'unavailable'};
+    } finally {
+      if (mine === generation && active) {
+        testing = false;
+        render();
+        if(focus)root.querySelector('.dshconn-test')?.focus();
+      }
+    }
+  }
+
   function header() {
     const head = el(document, 'div', 'dshcfg-head');
     const titles = el(document, 'div');
     titles.append(el(document, 'h2', 'section-title', 'DSH MCP 连接'), el(document, 'p', 'fine', '码舱 CodeCang 自带 DSH MCP 桥。连接后 Codex 可调用 DSH 子代理；不连接也可以正常聊天。'));
-    const reload = el(document, 'button', 'btn icon-only ghost'); reload.type = 'button'; reload.setAttribute('aria-label', '重新检查连接'); reload.title = '重新检查连接';
-    reload.append(icon(document, 'refresh', { size: 16 })); reload.disabled = busy;
-    reload.addEventListener('click', () => { if (savingModel) return; message = { text: '', error: false }; load(); });
+    const reload = el(document, 'button', 'btn small ghost'); reload.type = 'button'; reload.setAttribute('aria-label', '重新检查连接');
+    reload.append(icon(document, 'refresh', { size: 16 }),el(document,'span','','重新检查')); reload.disabled = busy || testing;
+    reload.addEventListener('click', () => { if (savingModel || testing) return; testResult=null; message = { text: '', error: false }; load(undefined, true); });
     head.append(titles, reload);
     return head;
   }
   function modePicker() {
     const field = el(document, 'label', 'field', 'DSH 所在环境');
-    const picker = el(document, 'select');picker.setAttribute('aria-label', 'DSH 所在环境');picker.disabled = busy || connecting;
+    const picker = el(document, 'select');picker.setAttribute('aria-label', 'DSH 所在环境');picker.disabled = busy || connecting || testing;
     for(const [value,label] of [['','请选择'],['native-wsl','WSL 原生 DSH'],['windows','Windows DSH']]){const option=el(document,'option','',label);option.value=value;picker.append(option);}
     picker.value=mode||'';
-    picker.addEventListener('change',()=>{if(busy||connecting||savingModel){picker.value=mode||'';return;}mode=picker.value||null;status=null;result=null;pathDraft='';message={text:'',error:false};load();});
+    picker.addEventListener('change',()=>{if(busy||connecting||testing||savingModel){picker.value=mode||'';return;}mode=picker.value||null;status=null;testResult=null;result=null;pathDraft='';message={text:'',error:false};load();});
     field.append(picker,el(document,'small','','选择只用于检查和本次注册计划，不会覆盖已有 MCP 配置。'));
     return field;
   }
@@ -145,9 +207,13 @@ export function mountDshConnection(host, { api, wait = ms => new Promise(resolve
         fact('外部桥报告的版本', reportedVersion || '当前 Codex 未提供版本');
       }
     }
-    fact('注册', ({ none: '未注册', bundled: `已注册（随包桥 · ${status.registration?.serverName}）`, external: `已有外部配置（${status.registration?.serverName}，已保留）`, unknown: '未知' })[status.registration?.state] || '未知');
+    fact('注册', ({ none: '未注册', bundled: `已注册（随包桥 · ${status.registration?.serverName}）`, external: `已有外部配置（${status.registration?.serverName}，已保留）`, otherMode:'已配置另一种环境', unknown: '未知' })[status.registration?.state] || '未知');
     if (result) fact('MCP 刷新', result.reload?.queued ? '已排队（不等于已连接）' : `未完成：${result.reload?.error?.message || '客户端不支持'}`);
-    if (status.registration?.state === 'bundled' || status.registration?.state === 'external') fact('运行时', dshRuntimeStatusLabel(status.runtime?.state ?? null));
+    if (status.registration?.state === 'bundled' || status.registration?.state === 'external') {
+      fact('运行时', dshRuntimeStatusLabel(status.runtime?.state ?? null));
+      if(status.runtime?.tools)fact('工具目录',`${status.runtime.tools.count} 项 · ${status.runtime.tools.subagent?'包含启动和等待工具':'未同时列出启动和等待工具'}`);
+      else if(status.runtime?.state==='connected')fact('工具目录','Codex 尚未报告，未单独调用工具。');
+    }
     return list;
   }
   function actions(view) {
@@ -276,22 +342,43 @@ export function mountDshConnection(host, { api, wait = ms => new Promise(resolve
     if (!status) { root.append(el(document, 'p', 'empty-line', busy ? '正在检查…' : '尚未检查')); appendMessage(); return; }
     if(status.selectionRequired){root.append(el(document,'p','fine',describeConnection(status).detail));appendMessage();return;}
     const view = describeConnection(status, result);
-    if (status.modelDefaults) root.append(modelSettings());
     const box = el(document, 'div', 'dshcfg-activation'); box.dataset.tone = view.tone; box.setAttribute('role', 'status');
     const line = el(document, 'div', 'dshcfg-activation-line'); line.append(el(document, 'span', 'agent-state', view.label));
-    box.append(line, el(document, 'p', '', view.detail), facts(view));
+    const stamp = Number.isFinite(status.checkedAt) && Math.abs(status.checkedAt)<=8.64e15 ? new Date(status.checkedAt) : null;
+    if(stamp)line.append(el(document,'span','fine',busy?'正在复查…':`检查于 ${stamp.toLocaleTimeString()}`));
+    box.append(line, el(document, 'p', '', view.detail));
+    if(view.next)box.append(el(document,'p','dshconn-next',view.next));
+    const details=el(document,'details','dshconn-details');
+    details.open=factsOpen;
+    details.addEventListener('toggle',()=>{if(details.isConnected)factsOpen=details.open;});
+    details.append(el(document,'summary','','连接详情'),facts(view));
+    box.append(details);
+    const probe = el(document,'button','btn small dshconn-test',testing?'正在测试…':'立即测试');
+    probe.type='button';probe.disabled=testing||busy||connecting||savingModel;
+    probe.addEventListener('click',()=>{void testConnection();});
+    const testActions=el(document,'div','actions dshconn-test-actions');
+    testActions.append(probe,el(document,'span','fine','仅核对当前 MCP 连接和工具，不运行任务。'));
+    box.append(testActions);
+    if(testResult){
+      const checked=describeConnectionTest(testResult), feedback=el(document,'div','dshconn-test-result');
+      const testedAt = Number.isFinite(testResult.checkedAt) && Math.abs(testResult.checkedAt)<=8.64e15 ? new Date(testResult.checkedAt) : null;
+      feedback.append(el(document,'strong','',checked.title),el(document,'p','',checked.detail));
+      if(testedAt)feedback.append(el(document,'span','fine',`测试于 ${testedAt.toLocaleTimeString()}`));
+      box.append(feedback);
+    }
     root.append(box);
     for(const limitation of status.limitations||[])root.append(el(document,'p','runtime-blocked',String(limitation)));
     if (view.action) root.append(actions(view));
+    if (status.modelDefaults) root.append(modelSettings());
     appendMessage();
   }
   function appendMessage() { if (!message.text) return; const p = el(document, 'p', message.error ? 'inline-error' : 'fine', message.text); p.setAttribute('role', 'status'); root.append(p); }
   render();
   return {
-    activate() { active = true; if(context!==runtimeTarget()){context=runtimeTarget();mode=null;status=null;result=null;pathDraft='';} message = { text: '', error: false }; return load(); },
+    activate() { active = true; testing=false; testResult=null; if(context!==runtimeTarget()){context=runtimeTarget();mode=null;status=null;result=null;pathDraft='';} message = { text: '', error: false }; return load(); },
     refreshModels,
     // Leaving the page stops follow-ups; an in-flight connect still finishes server-side and is re-read on return.
-    deactivate() { active = false; generation++; catalogGeneration++; catalogRefreshPending = false; busy = connecting; },
+    deactivate() { active = false; testing=false; testResult=null; generation++; catalogGeneration++; catalogRefreshPending = false; busy = connecting; },
     snapshot: () => ({ status, result, busy, connecting }),
   };
 }

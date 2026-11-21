@@ -36,28 +36,28 @@ test('runtime values and expandable compatibility notes have separate hierarchy'
 });
 test('entry only reads; explicit discover never saves; save separates current and next launch',async()=>{
  const x=setup();assert.deepEqual(x.calls,[]);x.panel.setActive(true);await flush();assert.deepEqual(x.calls,['read']);
- await click(x,'发现 WSL 中的 Codex');choose(x);assert.equal(button(x.host,'保存环境').disabled,false);assert.equal(x.calls.length,2);
+ await click(x,'完整检测 WSL');choose(x);assert.equal(button(x.host,'保存环境').disabled,false);assert.equal(x.calls.length,2);
  await click(x,'保存环境');assert.deepEqual(x.calls[2],wsl);assert.match(text(x.host),/Windows 本机/);assert.match(text(x.host),/重启后生效/);assert.match(text(x.host),/Ubuntu/);
 });
 test('LAN never reads or offers mutation',async()=>{
- const x=setup({isLocal:()=>false});x.panel.setActive(true);await flush();await click(x,'发现 WSL 中的 Codex');assert.deepEqual(x.calls,[]);assert.equal(x.host.children[0].hidden,true);
+ const x=setup({isLocal:()=>false});x.panel.setActive(true);await flush();await click(x,'完整检测 WSL');assert.deepEqual(x.calls,[]);assert.equal(x.host.children[0].hidden,true);
 });
 test('save failure disables resubmission until explicit status reconciliation',async()=>{
- const x=setup({select:async()=>{throw Error('timeout');}});x.panel.setActive(true);await flush();await click(x,'发现 WSL 中的 Codex');choose(x);await click(x,'保存环境');assert.match(text(x.host),/保存结果未确认/);assert.equal(button(x.host,'保存环境').disabled,true);await click(x,'刷新状态');assert.equal(button(x.host,'发现 WSL 中的 Codex').disabled,false);
+ const x=setup({select:async()=>{throw Error('timeout');}});x.panel.setActive(true);await flush();await click(x,'完整检测 WSL');choose(x);await click(x,'保存环境');assert.match(text(x.host),/保存结果未确认/);assert.equal(button(x.host,'保存环境').disabled,true);await click(x,'刷新状态');assert.equal(button(x.host,'完整检测 WSL').disabled,false);
 });
 test('deactivated stale discovery cannot replace refreshed state',async()=>{
- let resolve;const x=setup({discover:()=>new Promise(r=>resolve=r)});x.panel.setActive(true);await flush();const pending=click(x,'发现 WSL 中的 Codex');x.panel.setActive(false);x.panel.setActive(true);await flush();resolve({...data(),selected:wsl,candidates:[]});await pending;assert.doesNotMatch(text(x.host),/Ubuntu/);
+ let resolve;const x=setup({discover:()=>new Promise(r=>resolve=r)});x.panel.setActive(true);await flush();const pending=click(x,'完整检测 WSL');x.panel.setActive(false);x.panel.setActive(true);await flush();resolve({...data(),selected:wsl,candidates:[]});await pending;assert.doesNotMatch(text(x.host),/Ubuntu/);
 });
 test('unavailable distributions require explicit absolute path',async()=>{
- const x=setup({discover:async()=>({...data(),candidates:[{distribution:'Debian',available:false,diagnostic:'未安装 Codex'}]})});x.panel.setActive(true);await flush();await click(x,'发现 WSL 中的 Codex');assert.match(text(x.host),/未安装 Codex/);assert.equal(all(x.host).find(x=>x.tag==='select').children.length,2);choose(x);assert.equal(button(x.host,'保存环境').disabled,true);const path=all(x.host).find(x=>x.tag==='input');path.value='/opt/codex/bin/codex';path.listeners.input();assert.equal(button(x.host,'保存环境').disabled,false);await click(x,'保存环境');assert.equal(x.calls.at(-1).codexPath,'/opt/codex/bin/codex');
+ const x=setup({discover:async()=>({...data(),candidates:[{distribution:'Debian',available:false,diagnostic:'未安装 Codex'}]})});x.panel.setActive(true);await flush();await click(x,'完整检测 WSL');assert.match(text(x.host),/未安装 Codex/);assert.equal(all(x.host).find(x=>x.tag==='select').children.length,2);choose(x);assert.equal(button(x.host,'保存环境').disabled,true);const path=all(x.host).find(x=>x.tag==='input');path.value='/opt/codex/bin/codex';path.listeners.input();assert.equal(button(x.host,'保存环境').disabled,false);await click(x,'保存环境');assert.equal(x.calls.at(-1).codexPath,'/opt/codex/bin/codex');
 });
 test('repeat saves while pending send once; navigation re-reads outcome without replay',async()=>{
- let resolve,count=0;const x=setup({select:()=>{count++;return new Promise(r=>resolve=r);}});x.panel.setActive(true);await flush();await click(x,'发现 WSL 中的 Codex');choose(x);const pending=click(x,'保存环境');await click(x,'保存环境');assert.equal(count,1);x.panel.setActive(false);x.panel.setActive(true);resolve({...data(),selected:wsl});await pending;await flush();assert.equal(count,1);assert.equal(x.calls.at(-1),'read');
+ let resolve,count=0;const x=setup({select:()=>{count++;return new Promise(r=>resolve=r);}});x.panel.setActive(true);await flush();await click(x,'完整检测 WSL');choose(x);const pending=click(x,'保存环境');await click(x,'保存环境');assert.equal(count,1);x.panel.setActive(false);x.panel.setActive(true);resolve({...data(),selected:wsl});await pending;await flush();assert.equal(count,1);assert.equal(x.calls.at(-1),'read');
 });
 test('labels show distribution and independent user',()=>{assert.equal(runtimeTargetLabel(wsl),'WSL · Ubuntu · lee');});
 test('manual discovery may resolve the default user without claiming save failed',async()=>{
  const x=setup({discover:async()=>({...data(),candidates:[{distribution:'Ubuntu',available:false,diagnostic:'需要指定路径'}]}),select:async target=>({...data(),selected:{...target,user:'lee'},restartRequired:true})});
- x.panel.setActive(true);await flush();await click(x,'发现 WSL 中的 Codex');choose(x);
+ x.panel.setActive(true);await flush();await click(x,'完整检测 WSL');choose(x);
  const path=all(x.host).find(x=>x.tag==='input');path.value='/opt/codex';path.listeners.input();await click(x,'保存环境');
  assert.doesNotMatch(text(x.host),/保存结果未确认/);assert.match(text(x.host),/已保存/);
 });
@@ -68,4 +68,16 @@ test('integration uses desktop-local access and hides unsupported Windows operat
  assert.match(app,/if\(state\.runtimeTarget!=='wsl'\)dshConfigView\.activate\(\)/);
  assert.match(app,/function runtimePanelShouldBeActive\(\)\{return state\.runtimeTarget!=='wsl'/);
  assert.match(app,/host\.inert=wsl/);
+});
+
+test('opening settings automatically discovers running WSL once without switching environments',async()=>{
+ let autoCalls=0;
+ const x=setup({discoverRunning:async()=>{autoCalls++;return {...data(),candidates:[{distribution:'Ubuntu',user:'lee',available:true,codexPath:'/bin/codex'},{distribution:'Debian',available:false,probePending:true,diagnostic:'发行版未运行'}]};}});
+ x.panel.setActive(true);await flush();assert.equal(autoCalls,1);
+ assert.match(text(x.host),/Ubuntu/);assert.match(text(x.host),/发行版未运行/);
+ assert.match(text(x.host),/当前运行 Windows 本机\s+下次启动 Windows 本机/);
+ assert.deepEqual(x.calls,[]);
+ x.panel.setActive(false);x.panel.setActive(true);await flush();assert.equal(autoCalls,1);
+ assert.deepEqual(x.calls,['read']);
+ await click(x,'刷新状态');assert.equal(autoCalls,2);
 });

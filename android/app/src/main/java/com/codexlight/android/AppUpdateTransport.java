@@ -21,7 +21,8 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 final class AppUpdateTransport {
-    private static final String API = "https://api.github.com/repos/k08255-lxm/codex-light/releases/latest";
+    private static final int RELEASE_LIMIT = 30;
+    private static final String API = "https://api.github.com/repos/k08255-lxm/codex-light/releases?per_page=" + RELEASE_LIMIT;
     private static final String RELEASES = "https://github.com/k08255-lxm/codex-light/releases/";
     private static final String CHECKSUMS = "SHA256SUMS.txt";
     private static final int MAX_RELEASE = 2 * 1024 * 1024;
@@ -58,18 +59,28 @@ final class AppUpdateTransport {
     }
 
     static Release check(String current) throws IOException, JSONException {
-        JSONObject document = new JSONObject(new String(read(API, MAX_RELEASE, -1, true), StandardCharsets.UTF_8));
-        String tag = document.getString("tag_name");
-        if (!tag.startsWith("v") || document.optBoolean("draft") || document.optBoolean("prerelease")) {
-            throw new Failure("发布信息不是稳定版本");
+        if (!VERSION.matcher(current == null ? "" : current).matches()) throw new Failure("应用版本格式无效");
+        JSONArray releases = new JSONArray(new String(read(API, MAX_RELEASE, -1, true), StandardCharsets.UTF_8));
+        if (releases.length() > RELEASE_LIMIT) throw new Failure("更新版本列表超出上限");
+        String version = current;
+        JSONObject selected = null;
+        Asset apk = null;
+        for (int i = 0; i < releases.length(); i++) {
+            JSONObject document = releases.getJSONObject(i);
+            String tag = document.optString("tag_name");
+            if (!tag.startsWith("v") || document.optBoolean("draft") || document.optBoolean("prerelease")) continue;
+            String candidate = tag.substring(1);
+            if (!VERSION.matcher(candidate).matches() || compareVersions(candidate, version) <= 0) continue;
+            // Only the standard APK name opts in to Android update notifications.
+            // A desktop-only release must not hide a previous eligible Android update.
+            Asset candidateApk = findAsset(document.getJSONArray("assets"), tag, "codex-light-" + candidate + ".apk", MAX_APK);
+            if (candidateApk == null) continue;
+            version = candidate;
+            selected = document;
+            apk = candidateApk;
         }
-        String version = tag.substring(1);
-        if (compareVersions(version, current) <= 0) return null;
-        JSONArray assets = document.getJSONArray("assets");
-        // The silent desktop-only release name deliberately does not prompt Android updates.
-        Asset apk = findAsset(assets, tag, "codex-light-" + version + ".apk", MAX_APK);
-        if (apk == null) return null;
-        Asset checksums = findAsset(assets, tag, CHECKSUMS, MAX_CHECKSUMS);
+        if (selected == null) return null;
+        Asset checksums = findAsset(selected.getJSONArray("assets"), "v" + version, CHECKSUMS, MAX_CHECKSUMS);
         if (checksums == null) throw new Failure("发布版本缺少 SHA256 校验文件");
         byte[] bytes = read(checksums.url, MAX_CHECKSUMS, checksums.size, false);
         String sha256 = publishedHash(new String(bytes, StandardCharsets.UTF_8), apk.name);

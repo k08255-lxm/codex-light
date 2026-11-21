@@ -100,6 +100,15 @@ export function lookupDecision(marker, response) {
   if (response.state === 'pending') return 'pending';
   return 'unknown';
 }
+// Explicitly releasing a skill marker never replays a write or proves the old write did not run.
+export function canReleaseUnknownSkill(marker, response) {
+  if (marker?.method !== 'skills/config/write' || marker.status !== 'unknown' ||
+      !response || response.serverInstance !== marker.serverInstance ||
+      (response.method && response.method !== marker.method)) return false;
+  return (response.state === 'notFound' && response.outcome === 'notExecuted' && !response.code)
+    || (response.state === 'unknown' && response.outcome === 'unknown' &&
+      (response.method === marker.method || response.code === 'REQUEST_EXPIRED'));
+}
 const SCOPE_METHODS = Object.freeze({
   terminal: new Set(['terminal/open']),
   git: new Set(['git/apply']),

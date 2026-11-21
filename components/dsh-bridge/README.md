@@ -6,6 +6,19 @@ Derived from `dsh-subagent-mcp` 0.8.0 under MIT (see LICENSE). The small desktop
 
 The component uses the user's installed DSH desktop executable in `ELECTRON_RUN_AS_NODE=1` mode. The supported DSH runtime is 0.2.2 with SQLite support (Node 22.15+); this does not raise the main application's Node.js 20 requirement. It does not open a desktop window. The independent `codex-light-bridge` profile and Light-owned state do not replace an external bridge or its running tasks.
 
+Native CLI discovery accepts both dependency layouts: the older
+`@deepseek-ai/dsh-agent-presets` module, or the newer pair
+`@deepseek-ai/dsh-agent-preset` and `@deepseek-ai/dsh-agent-preset-registry`.
+The bridge resolves these from the selected DSH CLI installation without
+changing it. If the split layout is present, the bridge supplies its existing
+standard/minimal preset overlay. The DSH Desktop path and provider settings
+are unchanged. The WSL-native helper still requires DSH 0.2.2.
+
+Isolated Linux validation with the published DSH CLI 0.2.2-rc.4 and rc.5
+covered discovery, SDK initialization, read-only session preparation with both
+presets, and shutdown. This did not test model execution, existing-session
+recovery, Windows desktop runtime, or WSL interop.
+
 For each release that changes bridge behavior, bump the `-light.N` revision in this component's `package.json` and sync its npm lock. The build generates both manifests from that version. The daemon captures it at startup for every MCP handshake and status response. `codexLightUpstreamVersion` identifies the original bridge release. The desktop app, DSH runtime and callback protocol have their own versions.
 
 Reproducible build:

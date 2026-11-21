@@ -5,6 +5,7 @@ import {locations, installation} from './platform.mjs';
 import {commandSpec} from './commands.mjs';
 import {desktopCli} from './runtime-launch.mjs';
 import {ProviderSources} from './provider-sources.mjs';
+import {resolvePresetLayout} from './preset-layout.mjs';
 
 // DeepSeek rejects a request when prompt plus reserved completion exceeds its
 // window. DSH compacts at a fraction of the window without that reservation, so
@@ -56,6 +57,15 @@ export function runtimeConfig(state=stateDirectory(),cli=resolveDshCli()) {
         defaultEffort:process.env.DSH_DEFAULT_EFFORT,
         workspaceIsolation:'shared',isolationRoot:join(state,'workspaces')};
   }
+  const split = resolvePresetLayout(cli) === 'split';
+  const legacyPresetRows = split ? '' : `    - id: agent-presets
+      name: '@deepseek-ai/dsh-agent-presets'
+      config:
+        default: standard
+`;
+  // Current CLI and Desktop share the same split registry and declarations.
+  // Compose them once, using the upstream preset overlay already shipped here.
+  const presetPatch = split ? readFileSync(join(projectRoot,'assets/desktop-0.2/presets.patch.yml'),'utf8') : '';
   const shared=`- id: sdk-jsonrpc-server
   disabled: true
 - id: llm-deepseek
@@ -64,11 +74,7 @@ export function runtimeConfig(state=stateDirectory(),cli=resolveDshCli()) {
 - insert:
     - id: workspace
       name: '@deepseek-ai/dsh-workspace'
-    - id: agent-presets
-      name: '@deepseek-ai/dsh-agent-presets'
-      config:
-        default: standard
-    - id: subagent-model-selection-settings
+${legacyPresetRows}    - id: subagent-model-selection-settings
       name: '@deepseek-ai/dsh-tool-subagent/model-selection-settings'
     - id: codex-subagent-rpc
       name: ${JSON.stringify(join(projectRoot,'src/dsh-plugin.mjs'))}
@@ -80,9 +86,10 @@ export function runtimeConfig(state=stateDirectory(),cli=resolveDshCli()) {
     'compaction-basic','command-compact','tool-result-pruner','tool-subagent-control',
     'tool-subagent-list-agents','tool-subagent','tool-subagent-fork','workflow-worker-thread',
     'tool-workflow','tool-ralph','agent-instructions','tool-todo','tool-web'];
-  writeFileSync(patch,agentRows.map(id=>`- id: ${id}\n  disabled: true\n`).join('')+shared,{mode:0o600});
-  // Existing conversations keep the tool composition under which they ran.
-  writeFileSync(legacyPatch,shared,{mode:0o600});
+  writeFileSync(patch,presetPatch+(split?'':agentRows.map(id=>`- id: ${id}\n  disabled: true\n`).join(''))+shared,{mode:0o600});
+  // Legacy packages keep their original host rows for old conversations.
+  // Split packages use the same preset-owned composition as DSH Desktop.
+  writeFileSync(legacyPatch,presetPatch+shared,{mode:0o600});
   const native=process.env.CODEX_LIGHT_DSH_TARGET==='wsl';
   return {database:join(state,'state.sqlite'),cli,patch,legacyPatch,...(native?{profile:process.env.DSH_BRIDGE_PROFILE||'codecang-wsl',workspaceIsolation:'shared',defaultProvider:process.env.DSH_DEFAULT_PROVIDER,defaultModel:process.env.DSH_DEFAULT_MODEL,defaultEffort:process.env.DSH_DEFAULT_EFFORT,...(process.env.DSH_NATIVE_PROVIDER_CONFIG?{providerSources:new ProviderSources({configDir:locations().config,stateDir:state,home:process.env.DSH_HOME,sourcePath:process.env.DSH_NATIVE_PROVIDER_CONFIG,cli})}:{})}:{})};
 }

@@ -264,6 +264,11 @@
 .dshcfg-activation[data-tone="warn"] { border-color: var(--warning-border); background: var(--warning-bg); }
 .dshcfg-activation[data-tone="fail"] { border-color: var(--error-border); background: var(--error-bg); }
 .dshcfg-activation p { margin: 6px 0 0; color: var(--secondary); }
+.dshconn-details { margin-top: 10px; }
+.dshconn-details > summary { cursor: pointer; min-height: 24px; }
+.dshconn-test-actions { margin-top: 12px; align-items: center; flex-wrap: wrap; }
+.dshconn-test-result { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.dshconn-next { font-weight: 550; }
 .dshcfg-activation-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .dshcfg-activation[data-tone="warn"] .agent-state { color: var(--warning); border-color: var(--warning-border); }
 .dshcfg-activation[data-tone="ok"] .agent-state { color: var(--success); border-color: var(--success-border); }

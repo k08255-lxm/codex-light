@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeMutation, PendingMutations, serializeMarkers, restoreMarkers, outcomeFromError, lookupDecision, pendingForScope, PendingReconciler } from '../public/submissions.js';
+import { makeMutation, PendingMutations, serializeMarkers, restoreMarkers, outcomeFromError, lookupDecision, canReleaseUnknownSkill, pendingForScope, PendingReconciler } from '../public/submissions.js';
 const INSTANCE='a'.repeat(32), OTHER='b'.repeat(32), NOW=1794400000000;
 const uuid=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
 class MemoryStorage {constructor(){this.map=new Map();}getItem(k){return this.map.get(k)||null;}setItem(k,v){this.map.set(k,v);}removeItem(k){this.map.delete(k);}}
@@ -155,4 +155,16 @@ test('steer and compact are durable chat mutations; steer carries the attachment
   assert.equal(pendingForScope(records, 'chat', { threadId: 't' }).length, 2);
   assert.equal(pendingForScope(records, 'chat', { threadId: null }).length, 0, 'a draft is not blocked by another thread');
   assert.deepEqual(restoreMarkers(serializeMarkers([steer.marker, compact.marker])).map(row => row.method), ['turn/steer', 'thread/compact/start']);
+});
+
+test('explicit skill release accepts only unknown markers with matching lookup, without changing normal reconciliation',()=>{
+  const response={serverInstance:INSTANCE,state:'notFound',outcome:'notExecuted'};
+  const marker=scopeMarker(51,'skills/config/write');
+  assert.equal(lookupDecision(marker,response),'unknown');
+  assert.equal(canReleaseUnknownSkill(marker,response),true);
+  assert.equal(canReleaseUnknownSkill(marker,{...response,state:'unknown',outcome:'unknown',code:'REQUEST_EXPIRED'}),true);
+  assert.equal(canReleaseUnknownSkill(marker,{...response,state:'unknown',outcome:'unknown',method:marker.method}),true);
+  for (const input of [{...response,state:'pending'}, {...response,method:'turn/start'}, {...response,serverInstance:OTHER}, {...response,code:'INVALID_REQUEST_ID'}]) assert.equal(canReleaseUnknownSkill(marker,input),false);
+  assert.equal(canReleaseUnknownSkill({...marker,status:'pending'},response),false);
+  assert.equal(canReleaseUnknownSkill({...marker,method:'turn/start'},response),false);
 });

@@ -130,3 +130,19 @@ test('QR redemption authenticates the real LAN application and preserves browser
  assert.equal((await request(lan,{pathname:'/api/pairing/redeem',method:'POST',token:null,body:{ticket}})).status,401);
  await owner(app,'rotate');assert.equal((await request(lan,{token})).status,401);
 });
+
+test('paired LAN and demo cannot open the native skill import picker',async t=>{
+ const fixtureState=await fixture(t),{app}=fixtureState;
+ const status=await fetch(app.origin+'/api/status',{headers:{Authorization:'Bearer '+app.token}});
+ assert.equal((await status.json()).canImportSkill,false);
+ const ownerPick=await fetch(app.origin+'/api/skills/import/pick',{
+  method:'POST',headers:{Authorization:'Bearer '+app.token,'Content-Type':'application/json'},body:'{}',
+ });
+ assert.equal(ownerPick.status,409);
+ const lan=(await owner(app,'enable',{address})).body;
+ for(const action of ['pick','install']){
+  const result=await request(lan,{pathname:'/api/skills/import/'+action,method:'POST',body:{}});
+  assert.equal(result.status,403);
+ }
+ assert.equal(fixtureState.pickers,0);
+});

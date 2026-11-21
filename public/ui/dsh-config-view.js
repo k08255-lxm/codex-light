@@ -130,7 +130,7 @@ export function mountDshConfig(host, { api, onSourcesChanged = () => {} }) {
   function render() {
     root.replaceChildren(header());
     if (!status) { root.append(el(document, 'p', 'empty-line', busy ? '正在读取…' : '尚未读取')); appendMessage(); return; }
-    if (!status.available) { root.append(el(document, 'p', 'empty-line', status.error?.message || '未检测到已安装的 DSH 桥。')); appendMessage(); return; }
+    if (!status.available) { root.append(el(document, 'p', 'empty-line', status.error?.message || '当前未读取到模型来源。MCP 连接状态见上方。')); appendMessage(); return; }
     root.append(activationBanner());
     const list = el(document, 'ul', 'dshcfg-sources');
     list.append(builtinRow());

@@ -74,3 +74,37 @@ test('WSL terminal selects Linux shell while validating Windows UNC workspace',a
  await terminal.open({cwd:'\\\\wsl.localhost\\Ubuntu\\home\\lee\\repo with spaces',size:{rows:24,cols:80}});await new Promise(resolve=>setImmediate(resolve));
  assert.deepEqual(calls[0].params.command,['/bin/sh']);assert.equal(calls[0].method,'command/exec');assert.ok(calls[0].params.cwd.endsWith('repo with spaces'));await terminal.close();
 });
+
+test('automatic discovery checks only running distributions without evaluating login profiles',async()=>{
+ const calls=[];
+ const runtime=new WslRuntime({platform:'win32',run:async(_exe,args,opts)=>{
+  calls.push({args,timeout:opts.timeout});
+  if(args[0]==='--list')return {stdout:Buffer.from(args.includes('--running')?'Ubuntu\r\n':'Ubuntu\r\nDebian\r\n','utf16le')};
+  return {stdout:'CODECANG_WSL\nlee\n/home/lee\n/home/lee/.codex\n/usr/bin/codex\nlinux\n'};
+ }});
+ const [a,b]=await Promise.all([runtime.discoverRunning(),runtime.discoverRunning()]);
+ assert.deepEqual(a,b);assert.deepEqual(a.pendingDistributions,['Debian']);assert.equal(a.candidates[0].available,true);
+ assert.equal(a.candidates[1].probePending,true);assert.match(a.candidates[1].diagnostic,/未运行/);
+ const opens=calls.filter(c=>c.args[0]==='--distribution');assert.equal(opens.length,1);
+ assert.equal(opens[0].args[1],'Ubuntu');assert.ok(opens[0].args.includes('-c'));assert.ok(!opens[0].args.includes('-lc'));
+ assert.ok(calls.every(c=>c.timeout===3000));
+});
+test('automatic discovery does not probe a distro that stopped after first inventory',async()=>{
+ let enumerations=0,opens=0;
+ const runtime=new WslRuntime({platform:'win32',run:async(_exe,args)=>{
+  if(args[0]!=='--list'){opens++;throw Error('should not launch');}
+  return {stdout:Buffer.from(args.includes('--running')&&++enumerations>1?'':'Ubuntu\n')};
+ }});
+ const result=await runtime.discoverRunning();
+ assert.equal(opens,0);assert.deepEqual(result.pendingDistributions,['Ubuntu']);
+});
+
+test('distinguishes an empty WSL inventory, a missing executable and an unknown error',async()=>{
+ const reports=await Promise.all([
+  new WslRuntime({platform:'win32',run:async()=>({stdout:Buffer.alloc(0)})}),
+  new WslRuntime({platform:'win32',run:async()=>{throw Object.assign(Error('missing'),{code:'ENOENT'});}}),
+  new WslRuntime({platform:'win32',run:async()=>{throw Error('timeout');}}),
+ ].map(runtime=>runtime.discoverRunning()));
+ assert.deepEqual(reports.map(r=>r.discoveryIncomplete),[false,false,true]);
+ assert.deepEqual(reports.flatMap(r=>r.candidates),[]);
+});

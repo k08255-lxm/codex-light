@@ -59,15 +59,15 @@ function isolatedWslEnvironment(source){
 }
 export class WslRuntime {
  constructor({platform=process.platform,env=process.env,run=exec}={}){Object.assign(this,{platform,env,run});this.command=wslExecutable(env);}
- async invoke(args,{encoding='utf8',maxBuffer=128*1024}={}){if(this.platform!=='win32')throw fail('WSL is available only on Windows','WSL_UNAVAILABLE');const result=await this.run(this.command,args,{encoding,env:isolatedWslEnvironment(this.env),windowsHide:true,shell:false,timeout:10000,maxBuffer});return result.stdout;}
- async distributions(){const raw=await this.invoke(['--list','--quiet'],{encoding:'buffer'});return [...new Set(decodeList(raw).replace(/^\uFEFF/,'').split(/\r?\n/).map(x=>x.trim()).filter(safeName))];}
- async probe(input){
+ async invoke(args,{encoding='utf8',maxBuffer=128*1024,timeout=10000}={}){if(this.platform!=='win32')throw fail('WSL is available only on Windows','WSL_UNAVAILABLE');const result=await this.run(this.command,args,{encoding,env:isolatedWslEnvironment(this.env),windowsHide:true,shell:false,timeout,maxBuffer});return result.stdout;}
+ async distributions({runningOnly=false,timeout=10000,strict=false}={}){const raw=await this.invoke(['--list',...(runningOnly?['--running']:[]),'--quiet'],{encoding:'buffer',timeout});const names=decodeList(raw).replace(/^\uFEFF/,'').split(/\r?\n/).map(x=>x.trim()).filter(Boolean);if(strict&&names.some(name=>!safeName(name)))throw fail('WSL 列表包含无法识别的条目','WSL_LIST_UNVERIFIED');return [...new Set(names.filter(safeName))];}
+ async probe(input,{runningOnly=false,timeout=10000}={}){
   const selection=validateWslSelection(input);if(!selection)throw fail('Select a WSL distribution');
-  if(!(await this.distributions()).includes(selection.distribution))throw fail('WSL distribution is not registered','WSL_NOT_FOUND');
+  if(!(await this.distributions({runningOnly,timeout})).includes(selection.distribution))throw fail(runningOnly?'发行版已停止，未自动启动':'WSL distribution is not registered',runningOnly?'WSL_NOT_RUNNING':'WSL_NOT_FOUND');
   // Windows' WSL filesystem share uses the distribution's default user. Keep
   // execution on that same identity; arbitrary --user would split permissions.
-  const args=['--distribution',selection.distribution,'--cd','~','--exec','/bin/sh','-lc',PROBE,'codecang-probe',selection.codexPath||''];
-  const lines=String(await this.invoke(args)).replace(/\r/g,'').split('\n');const start=lines.lastIndexOf('CODECANG_WSL');
+  const args=['--distribution',selection.distribution,'--cd','~','--exec','/bin/sh',runningOnly?'-c':'-lc',PROBE,'codecang-probe',selection.codexPath||''];
+  const lines=String(await this.invoke(args,{timeout})).replace(/\r/g,'').split('\n');const start=lines.lastIndexOf('CODECANG_WSL');
   if(start<0)throw fail('Could not read WSL environment','WSL_PROBE_FAILED');
   const [user,home,codexHome,codexPath,runtimeKind,nodeDirectory='']=lines.slice(start+1,start+7);
   if(!safeName(user)||![home,codexHome].every(v=>cleanPath(v)&&v.startsWith('/'))||(codexPath&&(!cleanPath(codexPath)||!codexPath.startsWith('/'))))throw fail('Invalid WSL environment','WSL_PROBE_FAILED');
@@ -80,6 +80,37 @@ export class WslRuntime {
   let names;try{names=await this.distributions();}catch{return {available:false,candidates:[],diagnostic:'WSL 不可用或无法查询，未更改系统设置'};}
   const candidates=[];for(const distribution of names){try{candidates.push(await this.probe({distribution}));}catch(error){candidates.push({distribution,available:false,diagnostic:error.code||'WSL_PROBE_FAILED'});}}
   return {available:true,candidates};
+ }
+ // Coalesce background requests. Probe only distributions observed running,
+ // and recheck that state before opening a Linux shell. Do not persist a choice.
+ discoverRunning(){
+  if(this.runningDiscovery)return this.runningDiscovery;
+  const job=this._discoverRunning();
+  this.runningDiscovery=job;
+  return job.finally(()=>{if(this.runningDiscovery===job)this.runningDiscovery=null;});
+ }
+ async _discoverRunning(){
+  const timeout=3000;
+  let names,running;try{[names,running]=await Promise.all([this.distributions({timeout,strict:true}),this.distributions({runningOnly:true,timeout,strict:true})]);}
+  catch(error){
+   // Distinguish a missing executable/disabled optional component from an
+   // unknown failure. Do not parse localized diagnostic prose.
+   const unavailable=error?.code==='ENOENT'||(Number.isInteger(error?.code)&&(error.code>>>0)===0x8007019e);
+   return {available:false,candidates:[],pendingDistributions:[],discoveryIncomplete:!unavailable,
+    diagnostic:unavailable?'此电脑未启用 WSL。':'无法读取 WSL 运行状态；不会据此判断未安装。'};
+  }
+  const runningNames=names.filter(name=>running.includes(name));
+  const checked=runningNames.slice(0,4);
+  const results=await Promise.all(checked.map(async distribution=>{
+   try{const {codexHome:_home,...candidate}=await this.probe({distribution},{runningOnly:true,timeout});return {...candidate,passiveProbe:true,...(!candidate.available?{probePending:true}:{})};}
+   catch{return {distribution,available:false,probePending:true,diagnostic:'自动检测未完成，可重新检测。'};}
+  }));
+  const detected=new Map(results.map(candidate=>[candidate.distribution,candidate]));
+  const candidates=names.map(distribution=>detected.get(distribution)??{
+   distribution,available:false,probePending:true,
+   diagnostic:runningNames.includes(distribution)?'超出单次自动检测数量，可手动检测。':'发行版未运行。未主动启动。',
+  });
+  return {available:true,candidates,pendingDistributions:candidates.filter(c=>c.probePending).map(c=>c.distribution),discoveryIncomplete:false};
  }
  async toLinux(value,candidate){
   if(!/^[A-Za-z]:[\\/]/.test(value))return hostPathToWsl(value,candidate.distribution);

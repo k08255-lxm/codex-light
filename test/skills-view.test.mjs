@@ -169,3 +169,103 @@ test('composer discards invalidated same-cwd requests and loads skills for a pro
   assert.equal(requests[2].cwd, '/wsl');
   assert.equal(slash.snapshot().entries.length, 0);
 });
+
+test('skill import confirms once, handles cancellation and refreshes both catalogs', async () => {
+  const id = 'opaque-plan';
+  const calls = [];
+  let accept = false;
+  const { document, view, host } = viewFixture({
+    read: async (_cwd, { forceReload }) => { calls.push(['read', forceReload]); return directory([]); },
+    pickImport: async () => { calls.push(['pick']); return { plan: { id, name:'example', fileCount:2 } }; },
+    confirmImport: async (message, options) => {
+      assert.match(message, /example.*不会覆盖/);
+      assert.match(message, /信任的技能/);
+      assert.equal(options.acceptText,'导入');
+      calls.push(['confirm']);
+      return accept;
+    },
+    installImport: async planId => { calls.push(['install', planId]); return {name:'example'}; },
+    onCatalogChanged: () => calls.push(['invalidate']),
+  });
+  const button = host.querySelectorAll('button').find(node => node.textContent === '导入技能');
+  assert.equal(button.hidden,true);
+  view.setContext(context('/project', {canImportSkill:true}));
+  await view.activate();
+  button.click();button.click();
+  await flush();
+  assert.deepEqual(calls,[['read',false],['pick'],['confirm']]);
+  assert.equal(document.activeElement,button);
+  accept = true;
+  button.click();
+  await flush();
+  assert.deepEqual(calls.slice(3),[['pick'],['confirm'],['install',id],['invalidate'],['read',true]]);
+  assert.match(visibleText(host), /已导入 example/);
+  view.setContext(context('/project',{runtimeTarget:'wsl'}));
+  assert.equal(button.hidden,true);
+  assert.match(visibleText(host), /暂不支持从 Windows 窗口导入到 WSL/);
+});
+
+test('closing skill settings before the picker resolves does not open a stale import confirmation', async () => {
+  let choose;
+  const {view,host} = viewFixture({
+    read: async () => directory([]),
+    pickImport: () => new Promise(resolve => {choose=resolve;}),
+    confirmImport: () => assert.fail('stale confirmation'),
+    installImport: () => assert.fail('stale install'),
+  });
+  view.setContext(context('/project',{canImportSkill:true}));
+  await view.activate();
+  host.querySelectorAll('button').find(node => node.textContent === '导入技能').click();
+  view.deactivate();
+  choose({plan:{id:'old',name:'old',fileCount:1}});
+  await flush();
+  await view.activate();
+  assert.doesNotMatch(visibleText(host), /请选择包含 SKILL.md/);
+});
+
+test('unknown skill recovery refreshes actual catalog before releasing one record and never replays a write', async () => {
+  const records = [{requestId:'pending',status:'pending',path:repoPath}];
+  const calls = [];
+  let rejectRefresh = false;
+  const {view, host, toggles} = viewFixture({
+    pending: () => records,
+    read: async (_cwd, {forceReload}) => {
+      calls.push(['read',forceReload]);
+      if (rejectRefresh) throw new Error('offline');
+      return directory([skill(repoPath),skill(userPath)]);
+    },
+    write: () => { throw new Error('must never resend'); },
+    releaseUnknown: async (id,current) => {
+      assert.ok(current());
+      calls.push(['release',id]);
+      records.splice(records.findIndex(row=>row.requestId===id),1);
+      return true;
+    },
+  });
+  view.setContext(context());
+  await view.activate();
+  const recovery = host.querySelectorAll('button').find(button => button.textContent.includes('解除锁定'));
+  assert.equal(recovery.hidden,true);
+  assert.equal(toggles()[1].getAttribute('aria-disabled'),'false');
+
+  records.unshift({requestId:'unknown',status:'unknown'});
+  view.syncPending();
+  assert.equal(recovery.hidden,false);
+  assert.ok(toggles().every(toggle=>toggle.getAttribute('aria-disabled')==='true'));
+  assert.match(visibleText(host),/结果未知/);
+
+  rejectRefresh = true;
+  recovery.click();
+  await flush();
+  assert.equal(records.length,2);
+  assert.deepEqual(calls,[['read',false],['read',true]]);
+
+  rejectRefresh = false;
+  recovery.click();
+  await flush();
+  assert.deepEqual(calls,[['read',false],['read',true],['read',true],['release','unknown']]);
+  assert.deepEqual(records.map(row=>row.requestId),['pending']);
+  assert.equal(toggles()[0].getAttribute('aria-disabled'),'true');
+  assert.equal(toggles()[1].getAttribute('aria-disabled'),'false');
+  assert.match(visibleText(host),/未重发原操作/);
+});

@@ -48,7 +48,7 @@ import { reasoningChoices, effortLabel, effortAccessibleLabel, restoredReasoning
 import { ItemStore, boundedText, itemText } from './store.js';
 import { DshTaskStore } from './dsh.js';
 import { DshLiveMonitor } from './dsh-live.js';
-import { PendingMutations, pendingForScope, PendingReconciler, outcomeFromError, lookupDecision, sendAvailability, ConnectionBootstrap, SessionDefaultsBridge } from './submissions.js';
+import { PendingMutations, pendingForScope, PendingReconciler, outcomeFromError, lookupDecision, canReleaseUnknownSkill, sendAvailability, ConnectionBootstrap, SessionDefaultsBridge } from './submissions.js';
 import { mountHistoryAutoLoad, mountThreadAutoLoad, captureHistoryAnchor, restoreHistoryAnchor } from './ui/history-auto-load.js';
 import { mountRuntimePanel } from './runtime-panel.js';
 import { mountWslRuntimePanel } from './wsl-runtime-panel.js';
@@ -367,7 +367,7 @@ function applyRuntimeTarget(){
  if(wsl){dshConfigView.deactivate();}
 }
 function createRuntimePanel(){return mountRuntimePanel($('runtime-panel'),{read:()=>api('/api/runtime/status',{}),check:()=>api('/api/runtime/check',{}),configure:params=>api('/api/runtime/preferences',params),upgrade:params=>performMutation('runtime/upgrade',params),queryPending:queryRuntimePending,onRecovered:clearRuntimePendingAfterRecovery});}
-const wslRuntimePanel=mountWslRuntimePanel($('wsl-runtime-panel'),{read:()=>api('/api/runtime/wsl/status',{}),discover:()=>api('/api/runtime/wsl/discover',{}),select:target=>api('/api/runtime/wsl/select',target),isLocal:()=>!state.lan&&state.desktop===true});
+const wslRuntimePanel=mountWslRuntimePanel($('wsl-runtime-panel'),{read:()=>api('/api/runtime/wsl/status',{}),discoverRunning:()=>api('/api/runtime/wsl/discover-running',{}),discover:()=>api('/api/runtime/wsl/discover',{}),select:target=>api('/api/runtime/wsl/select',target),isLocal:()=>!state.lan&&state.desktop===true});
 const engineOnboarding=mountEngineOnboarding(document.body,{read:()=>api('/api/runtime/onboarding/status',{}),discover:()=>api('/api/runtime/onboarding/discover',{}),complete:input=>api('/api/runtime/onboarding/complete',input),isLocal:()=>!state.lan&&state.desktop===true&&!state.demo,openSettings:()=>openSettings('general'),notice});
 runtimePanel=createRuntimePanel();
 runtimePanel.reset({pending:!!runtimePendingMarker()});
@@ -1180,7 +1180,7 @@ async function loadSavedContext(id,generation,rebind=false) {
 function skillContext() {
   const cwd = state.thread?.cwd || state.cwd;
   return { cwd, projectless: state.thread?.projectless === true || !cwd, connected: state.connected,
-    serverInstance: state.serverInstance, runtimeTarget: state.runtimeTarget };
+    serverInstance: state.serverInstance, runtimeTarget: state.runtimeTarget, canImportSkill: state.canImportSkill === true };
 }
 function readSkillDirectory(cwd, { forceReload = false, signal } = {}) {
   return api('/api/skills/list', { ...(cwd ? { cwd } : {}), ...(forceReload ? { forceReload } : {}) }, { signal });
@@ -1189,12 +1189,31 @@ const slashMenu = createSlashMenu({ document, prompt: $('prompt'), menu: $('slas
   context: () => ({ ...skillContext(), thread: !!state.thread, busy: state.busy, sending: state.sending }),
   commands: { new: newThread, compact: () => compactThread(), fork: () => forkCurrentThread(), rename: () => openRename(), model: () => openReasoning(), usage: () => route('usage'), account: () => route('account'), terminal: () => showTerminal() },
   onDraftChange: () => { autosizePrompt(); updateControls(); } });
+async function releaseUnknownSkill(requestId, current) {
+  const marker = scopedPending('skills').find(row => row.requestId === requestId);
+  if (!current() || !currentPendingMarker(marker) || marker.status !== 'unknown') return false;
+  const response = await api('/api/operations?requestId='+encodeURIComponent(requestId), undefined, {timeoutMs:15000});
+  const latest = scopedPending('skills').find(row => row.requestId === requestId);
+  if (!current() || !currentPendingMarker(latest)) return false;
+  if (!canReleaseUnknownSkill(latest,response)) {
+    await handlePendingReconcileResult(latest,response);
+    return false;
+  }
+  pendingMutations.settle(requestId);
+  pendingReconcileErrors.delete(requestId);
+  noteLedgerChanged();
+  return true;
+}
 const skillsView = mountSkillsView($('settings-skills'), {
   read: readSkillDirectory,
   write: params => performMutation('skills/config/write', params),
+  pickImport: () => api('/api/skills/import/pick', {}, { timeoutMs: 310000 }),
+  confirmImport: (message, options) => confirmApp(document, message, options),
+  installImport: planId => api('/api/skills/import/install', { planId, confirmed:true }),
   pending: () => scopedPending('skills')
     .filter(marker => marker.serverInstance === state.serverInstance)
-    .map(marker => ({ requestId: marker.requestId, path: pendingMutations.envelope(marker.requestId)?.params?.path })),
+    .map(marker => ({ requestId: marker.requestId, status:marker.status, path: pendingMutations.envelope(marker.requestId)?.params?.path })),
+  releaseUnknown: releaseUnknownSkill,
   onCatalogChanged: () => slashMenu.invalidateSkills(),
 });
 function syncSkillsContext() {
@@ -1414,7 +1433,7 @@ function applyThreadSessions(params) {
 }
 async function syncStatus() {
   const updateRevision=aboutView.revision;
-  const status = await api('/api/status'); applyAccessMode(state.lan || status.access === 'lan'); state.cliVersion = typeof status.version==='string'&&status.version ? boundedText(status.version,300) : null; state.desktop = status.desktop === true; state.runtimeTarget=status.runtimeTarget==='wsl'?'wsl':'native';applyRuntimeTarget(); if($('version-info'))$('version-info').textContent=state.cliVersion||'未知'; document.body.classList.toggle('native-desktop',state.desktop); $('runtime-close-info').textContent='停止服务会中断正在运行的本应用任务。'; $('reopen-info').textContent=state.desktop?'重新打开窗口可查看对话历史。':status.reopenAvailable===true?'可通过启动器重新打开本地界面。':status.reopenAvailable===false?'关闭后可能需要重新运行启动器。':''; if(!state.desktop&&status.reopenError)$('reopen-info').textContent+=' '+boundedText(status.reopenError,800); if(state.serverInstance !== (status.serverInstance || null)){resetContext();sessionControls.reset();deactivatePendingReconciler();historyCaps.unsupported.clear();pluginPanel.reset();configPanel.reset();resetUsage();resetRuntimePanel();dshLive.reset();remoteReset({statusMessage:'本地服务实例已变化，请重新读取远控状态。',pairMessage:'本地服务实例已变化，本机配对码显示已清除；不会撤销旧环境设备。',devicesMessage:'本地服务实例已变化，旧设备显示已清除；不会撤销旧环境设备。'});}state.serverInstance = status.serverInstance || null; state.demo = !!status.demo; setConnected(status.connected, status.demo ? '演示模式 · 不调用模型' : undefined); if(state.desktop){await loadDesktopState();preferencesView.syncHostTheme();} $('mode-info').textContent = status.demo ? '演示模式，不消耗额度' : '本地 Codex app-server';
+  const status = await api('/api/status'); applyAccessMode(state.lan || status.access === 'lan'); state.cliVersion = typeof status.version==='string'&&status.version ? boundedText(status.version,300) : null; state.desktop = status.desktop === true; state.canImportSkill = status.canImportSkill === true; state.runtimeTarget=status.runtimeTarget==='wsl'?'wsl':'native';applyRuntimeTarget(); if($('version-info'))$('version-info').textContent=state.cliVersion||'未知'; document.body.classList.toggle('native-desktop',state.desktop); $('runtime-close-info').textContent='停止服务会中断正在运行的本应用任务。'; $('reopen-info').textContent=state.desktop?'重新打开窗口可查看对话历史。':status.reopenAvailable===true?'可通过启动器重新打开本地界面。':status.reopenAvailable===false?'关闭后可能需要重新运行启动器。':''; if(!state.desktop&&status.reopenError)$('reopen-info').textContent+=' '+boundedText(status.reopenError,800); if(state.serverInstance !== (status.serverInstance || null)){resetContext();sessionControls.reset();deactivatePendingReconciler();historyCaps.unsupported.clear();pluginPanel.reset();configPanel.reset();resetUsage();resetRuntimePanel();dshLive.reset();remoteReset({statusMessage:'本地服务实例已变化，请重新读取远控状态。',pairMessage:'本地服务实例已变化，本机配对码显示已清除；不会撤销旧环境设备。',devicesMessage:'本地服务实例已变化，旧设备显示已清除；不会撤销旧环境设备。'});}state.serverInstance = status.serverInstance || null; state.demo = !!status.demo; setConnected(status.connected, status.demo ? '演示模式 · 不调用模型' : undefined); if(state.desktop){await loadDesktopState();preferencesView.syncHostTheme();} $('mode-info').textContent = status.demo ? '演示模式，不消耗额度' : '本地 Codex app-server';
   // Replace with the server's current set; unchanged instances keep their card and draft.
   if(status.appUpdate&&!state.lan&&aboutView.revision===updateRevision)applyAutomaticUpdate(status.appUpdate);
   applyThreadSessions(status.threadSessions); const pending = new Map(); for (const request of status.pendingRequests || []) if (validRequestId(request?.id)) { const key = requestKey(request.id), known = state.requests.get(key); pending.set(key, known && known.bridgeRequestToken === request.bridgeRequestToken ? known : request); } state.requests = pending; renderRequests();

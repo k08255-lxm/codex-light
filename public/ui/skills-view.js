@@ -40,7 +40,7 @@ export function skillCatalog(result) {
   return { cwd, rows, errors };
 }
 
-export function mountSkillsView(host, { read, write, pending, onCatalogChanged }) {
+export function mountSkillsView(host, { read, write, pending, onCatalogChanged, pickImport, confirmImport, installImport, releaseUnknown }) {
   const document = host.ownerDocument;
   const make = (tag, className, text) => el(document, tag, className, text);
   const heading = make('h1', '', '技能');
@@ -48,7 +48,16 @@ export function mountSkillsView(host, { read, write, pending, onCatalogChanged }
   refresh.append(icon(document, 'refresh', { size: 16 }), make('span', '', '刷新'));
   refresh.type = 'button';
   const header = make('div', 'section-head');
-  header.append(heading, refresh);
+  const actions = make('div', 'skills-header-actions');
+  const importButton = make('button', 'btn primary small', '导入技能');
+  importButton.type = 'button';
+  importButton.hidden = true;
+  actions.append(refresh, importButton);
+  header.append(heading, actions);
+  const importFeedback = make('p', 'fine skills-import-feedback');
+  importFeedback.setAttribute('role','status');
+  importFeedback.setAttribute('aria-live','polite');
+  importFeedback.hidden = true;
   const contextLine = make('p', 'skills-context');
   const contextLabel = make('span');
   const contextPath = make('span', 'mono');
@@ -62,6 +71,12 @@ export function mountSkillsView(host, { read, write, pending, onCatalogChanged }
   const guidance = make('p', 'fine skills-guidance', '按技能路径修改 Codex 的启用状态。相同路径出现在其他项目中时也会生效。');
   const status = make('p', 'fine skills-status');
   status.setAttribute('role', 'status');
+  const recovery = make('button', 'btn ghost small skills-recovery', '刷新并解除锁定');
+  recovery.type = 'button';
+  recovery.hidden = true;
+  const recoveryFeedback = make('p', 'fine skills-status');
+  recoveryFeedback.setAttribute('role', 'status');
+  recoveryFeedback.hidden = true;
   const warnings = make('details', 'skills-warnings');
   const warningsTitle = make('summary');
   const warningList = make('ul');
@@ -70,7 +85,7 @@ export function mountSkillsView(host, { read, write, pending, onCatalogChanged }
   const list = make('ul', 'skills-list');
   list.setAttribute('aria-label', '技能列表');
   host.classList.add('skills-settings');
-  host.append(header, contextLine, guidance, search, status, warnings, list);
+  host.append(header, contextLine, guidance, importFeedback, search, status, recovery, recoveryFeedback, warnings, list);
 
   const rendered = new Map();
   const saves = new Map();
@@ -84,7 +99,57 @@ export function mountSkillsView(host, { read, write, pending, onCatalogChanged }
   let loadError = '';
   let active = false;
   let pendingSignature = '';
+  let recovering = false;
+  let recoveryMessage = '';
   let nextId = 0;
+  let importAttempt = null;
+
+  function showImportFeedback(text, error = false) {
+    importFeedback.textContent = text;
+    importFeedback.classList.toggle('skills-error',error);
+    importFeedback.hidden = !text;
+  }
+
+  async function startImport() {
+    if (!active || !context.connected || !context.canImportSkill || importAttempt) return;
+    const attempt = new AbortController();
+    importAttempt = attempt;
+    const server = context.serverInstance;
+    const current = () => !attempt.signal.aborted && active && context.connected && context.canImportSkill && context.serverInstance === server;
+    let installing = false;
+    let notice = '';
+    render();
+    try {
+      showImportFeedback('请选择包含 SKILL.md 的技能文件夹。');
+      const {plan} = await pickImport();
+      if (!plan || !current()) return;
+      const accepted = await confirmImport(
+        `将 ${plan.name}（${plan.fileCount} 个文件）复制到本机 Codex 的个人技能目录。原文件不变，也不会覆盖现有技能。
+只导入你信任的技能。导入不会运行任何内容，但 Codex 之后可能自动选用它。`,
+        { titleText:'导入技能', acceptText:'导入', opener:importButton, signal:attempt.signal },
+      );
+      if (!accepted || !current()) return;
+      installing = true;
+      showImportFeedback('正在复制技能…');
+      const result = await installImport(plan.id);
+      notice = `已导入 ${result.name}。`;
+      onCatalogChanged();
+      void invalidate();
+    } catch (error) {
+      if (current()) {
+        notice = installing && outcomeFromError(error) === 'unknown'
+          ? '未能确认导入结果，个人技能目录中可能留下不完整的文件夹。请先刷新列表或检查目录。'
+          : `导入失败：${error.message || String(error)}`;
+        showImportFeedback(notice,true);
+      }
+    } finally {
+      if (importAttempt === attempt) importAttempt = null;
+      if (current() && !importFeedback.classList.contains('skills-error')) showImportFeedback(notice);
+      render();
+      if (current()) importButton.focus();
+    }
+  }
+  importButton.addEventListener('click', () => { void startImport(); });
 
   function renderWarnings() {
     const errors = catalog?.errors || [];
@@ -127,9 +192,20 @@ export function mountSkillsView(host, { read, write, pending, onCatalogChanged }
   }
 
   function render() {
+    importButton.hidden = !context.canImportSkill || !pickImport || !confirmImport || !installImport;
+    importButton.disabled = !context.connected || !!importAttempt;
+    guidance.textContent = context.runtimeTarget === 'wsl'
+      ? '可启用或停用 WSL 技能。暂不支持从 Windows 窗口导入到 WSL，请在 WSL 中使用个人技能目录。'
+      : '按技能路径修改 Codex 的启用状态。相同路径出现在其他项目中时也会生效。';
     const records = pending();
     const canWrite = context.connected && !!context.serverInstance && !loadError;
     const restored = records.some(record => !record.path);
+    const unknown = records.find(record => record.status === 'unknown');
+    recovery.hidden = !releaseUnknown || !unknown;
+    recovery.disabled = !context.connected || !!loading || recovering;
+    recovery.textContent = recovering ? '正在核对…' : '刷新并解除锁定';
+    recoveryFeedback.hidden = !recoveryMessage;
+    if (recoveryFeedback.textContent !== recoveryMessage) recoveryFeedback.textContent = recoveryMessage;
     const locked = new Set(records.map(record => record.path));
     const writing = new Set([...saves.keys(), ...locked]);
     const words = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -148,7 +224,7 @@ export function mountSkillsView(host, { read, write, pending, onCatalogChanged }
     const message = !context.connected ? 'Codex 连接已断开，无法读取技能目录。'
       : loadError ? `技能目录读取失败：${loadError}${rows.length ? '。下方为上次读取结果。' : ''}`
       : loading ? '正在读取技能…'
-      : restored ? '原技能操作正在核对。'
+      : restored ? (unknown ? '原技能操作结果未知。可刷新实际状态并解除锁定，不会重发原操作。' : '原技能操作正在核对，请等待。')
       : !rows.length ? (catalog?.errors.length ? '没有读到可用的技能。' : '未发现技能。')
       : !visible.length ? '没有匹配的技能。'
       : '';
@@ -214,6 +290,7 @@ export function mountSkillsView(host, { read, write, pending, onCatalogChanged }
         if (typeof message.enabled === 'boolean' && next.rows.get(path)?.enabled !== message.enabled) messages.delete(path);
       }
       renderWarnings();
+      return true;
     } catch (error) {
       if (mine !== generation) return;
       loadError = error.message || String(error);
@@ -272,13 +349,15 @@ export function mountSkillsView(host, { read, write, pending, onCatalogChanged }
 
   function setContext(next) {
     if (next.cwd === context.cwd && next.projectless === context.projectless && next.connected === context.connected &&
-        next.serverInstance === context.serverInstance && next.runtimeTarget === context.runtimeTarget) return;
+        next.serverInstance === context.serverInstance && next.runtimeTarget === context.runtimeTarget && next.canImportSkill === context.canImportSkill) return;
+    if (!next.connected || !next.canImportSkill || next.serverInstance !== context.serverInstance) { importAttempt?.abort(); showImportFeedback(''); }
     if (next.serverInstance !== context.serverInstance || next.runtimeTarget !== context.runtimeTarget) {
       saves.clear();
       messages.clear();
       forceNextRead = false;
     }
     context = next;
+    recoveryMessage = '';
     cancelRead();
     catalog = null;
     loadError = '';
@@ -293,6 +372,31 @@ export function mountSkillsView(host, { read, write, pending, onCatalogChanged }
     onCatalogChanged();
     void invalidate();
   });
+  recovery.addEventListener('click', async () => {
+    const marker = pending().find(record => record.status === 'unknown');
+    if (!active || recovery.disabled || !marker || !releaseUnknown) return;
+    const scope = context;
+    const focused = document.activeElement === recovery;
+    recovering = true;
+    recoveryMessage = '';
+    render();
+    try {
+      if (!await invalidate()) return;
+      const mine = generation;
+      const current = () => active && scope === context && mine === generation && !loadError;
+      const released = await releaseUnknown(marker.requestId, current);
+      if (!current()) return;
+      recoveryMessage = released ? '已刷新技能并解除这条锁定记录，未重发原操作。'
+        : '这条操作仍在核对或已完成，没有手动解除锁定。';
+      if (released) onCatalogChanged();
+    } catch (error) {
+      if (active && scope === context) recoveryMessage = `无法核对原操作：${error.message || String(error)}`;
+    } finally {
+      recovering = false;
+      render();
+      if (active && focused && recovery.hidden) refresh.focus({ preventScroll: true });
+    }
+  });
   search.addEventListener('input', render);
   return {
     setContext,
@@ -303,6 +407,8 @@ export function mountSkillsView(host, { read, write, pending, onCatalogChanged }
     },
     deactivate() {
       active = false;
+      importAttempt?.abort();
+      showImportFeedback('');
       if (loading) {
         cancelRead();
         invalidated = true;

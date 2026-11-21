@@ -40,6 +40,7 @@ test('public download instructions match the release asset/version contract', ()
   assert.equal(apkNames.length, 1, 'Current Android installation instructions must name one APK');
   assert.deepEqual([...new Set(releaseApks)], apkNames, 'Release notes and Android instructions must name the same APK');
   if (version === '0.4.12') assert.equal(apkNames[0], 'codex-light-android-0.4.12.apk');
+  if (version === '0.4.13') assert.equal(apkNames[0], 'codex-light-0.4.13.apk');
   assert.ok(android.includes(`versionCode 为 ${versionCode}`));
   assert.ok(readme.includes('SHA256SUMS.txt'));
   assert.ok(android.includes('SHA256SUMS.txt'));

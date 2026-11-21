@@ -52,7 +52,7 @@ async function largeFixture(t,{fetchExtra,updateTransport='msi',...options}={}){
   {name:'SHA256SUMS.txt',size:Buffer.byteLength(sums),browser_download_url:URL_BASE+'SHA256SUMS.txt'}
  ]});
  const result=await fixture(t,{raw,sums,updateTransport,launchFn:async()=>{},...options,
-  fetchExtra:async(url,request)=>await fetchExtra?.(url,request)||(url===URL_BASE+name?rangeResponse(request):null)
+  fetchExtra:async(url,request)=>await fetchExtra?.(url,request)||(url===URL_BASE+name?(request.headers.Range?rangeResponse(request):new Response(LARGE_SETUP)):null)
  });
  await result.service.check();
  return {...result,url:URL_BASE+name};
@@ -183,7 +183,7 @@ test('a server that ignores Range reuses the complete response and still verifie
   assert.deepEqual(calls.filter(call=>call.url===url).map(call=>call.request.headers.Range),[LARGE_RANGES[0]]);
  }
 });
-test('invalid range responses never stage an installer',async t=>{
+test('invalid ranges cannot stage unverified bytes, including after the ordinary GET fallback',async t=>{
  const cases=[
   ['wrong offsets',request=>rangeResponse(request,{headers:{'Content-Range':`bytes 0-1048575/${LARGE_SETUP.length}`}}),'APP_UPDATE_RANGE_INVALID'],
   ['wrong total',request=>rangeResponse(request,{headers:{'Content-Range':`bytes 1048576-2097152/${LARGE_SETUP.length+1}`}}),'APP_UPDATE_RANGE_INVALID'],
@@ -196,28 +196,77 @@ test('invalid range responses never stage an installer',async t=>{
   ['untrusted redirect',()=>new Response(null,{status:302,headers:{location:'https://example.com/update.exe'}}),'APP_UPDATE_SOURCE_INVALID']
  ];
  for(const [name,response,code] of cases)await t.test(name,async t=>{
-  const {service,root}=await largeFixture(t,{fetchExtra:(url,request)=>url.endsWith(VERSIONED_SETUP)&&request.headers.Range===LARGE_RANGES[1]?response(request):null});
-  await assert.rejects(service.download({version:'0.4.0'}),{code});
+  const {service,root,calls,url}=await largeFixture(t,{fetchExtra:(url,request)=>{
+   if(!url.endsWith(VERSIONED_SETUP))return;
+   if(request.headers.Range===LARGE_RANGES[1])return response(request);
+   if(request.headers.Range===undefined)return new Response(Buffer.alloc(LARGE_SETUP.length,99));
+  }});
+  const fallback=!['APP_UPDATE_SOURCE_INVALID','APP_UPDATE_HASH_MISMATCH'].includes(code);
+  await assert.rejects(service.download({version:'0.4.0'}),{code:fallback?'APP_UPDATE_HASH_MISMATCH':code});
+  assert.equal(calls.filter(call=>call.url===url&&call.request.headers.Range===undefined).length,fallback?1:0);
   assert.equal(service.status().phase,'failed');
   assert.equal(service.status().preparedVersion,null);
   for(const directory of await readdir(root))assert.deepEqual(await readdir(path.join(root,directory)),[]);
  });
 });
-test('an unsatisfiable range aborts outstanding requests, joins them, and allows retry',async t=>{
- let retry=false;let aborted=0;
- const {service,root}=await largeFixture(t,{fetchExtra:(url,request)=>{
-  if(retry||!url.endsWith(VERSIONED_SETUP)||request.headers.Range===LARGE_RANGES[0])return;
+test('a later unsatisfiable range aborts and joins peers before one verified ordinary GET',async t=>{
+ let aborted=0;
+ const {service,root,calls,url}=await largeFixture(t,{fetchExtra:(url,request)=>{
+  if(!url.endsWith(VERSIONED_SETUP)||request.headers.Range===LARGE_RANGES[0])return;
+  if(request.headers.Range===undefined){
+   assert.equal(aborted,2);
+   assert.equal(service.status().receivedBytes,0);
+   return new Response(LARGE_SETUP);
+  }
   if(request.headers.Range===LARGE_RANGES[1])return new Response(null,{status:416,headers:{'Content-Range':`bytes */${LARGE_SETUP.length}`}});
   return new Promise((_,reject)=>request.signal.addEventListener('abort',()=>setImmediate(()=>{
    aborted++;
    reject(request.signal.reason);
   }),{once:true}));
  }});
- await assert.rejects(service.download({version:'0.4.0'}),{code:'APP_UPDATE_HTTP_FAILED',message:/HTTP 416/});
- assert.equal(aborted,2);
- for(const directory of await readdir(root))assert.deepEqual(await readdir(path.join(root,directory)),[]);
- retry=true;
  assert.equal((await service.download({version:'0.4.0'})).phase,'ready');
+ assert.equal(aborted,2);
+ assert.equal(calls.filter(call=>call.url===url&&call.request.headers.Range===undefined).length,1);
+ const [directory]=await readdir(root);
+ const [file]=await readdir(path.join(root,directory));
+ assert.deepEqual(await readFile(path.join(root,directory,file)),LARGE_SETUP);
+});
+test('a later 200 after writing the first range retries from byte zero',async t=>{
+ const {service,root,calls,url}=await largeFixture(t,{downloadTimeoutMs:2000,fetchExtra:async(url,request)=>{
+  if(!url.endsWith(VERSIONED_SETUP))return;
+  if(request.headers.Range===LARGE_RANGES[1]){
+   // Keep one incorrect later response in flight until the first range
+   // has actually reached the shared handle.
+   while(service.status().receivedBytes===0){
+    request.signal.throwIfAborted();
+    await new Promise(resolve=>setImmediate(resolve));
+   }
+   return new Response(LARGE_SETUP);
+  }
+  if(request.headers.Range===undefined){
+   assert.equal(service.status().receivedBytes,0);
+   const [directory]=await readdir(root);
+   const [partial]=await readdir(path.join(root,directory));
+   assert.equal((await readFile(path.join(root,directory,partial))).length,0);
+   return new Response(LARGE_SETUP);
+  }
+ }});
+ assert.equal((await service.download({version:'0.4.0'})).phase,'ready');
+ assert.equal(service.status().receivedBytes,LARGE_SETUP.length);
+ assert.equal(calls.filter(call=>call.url===url&&call.request.headers.Range===undefined).length,1);
+});
+test('an initial range refusal falls back; a write error does not',async t=>{
+ await t.test('first range refused',async t=>{
+  const {service,calls,url}=await largeFixture(t,{fetchExtra:(url,request)=>url.endsWith(VERSIONED_SETUP)&&request.headers.Range?new Response(null,{status:416}):null});
+  assert.equal((await service.download({version:'0.4.0'})).phase,'ready');
+  assert.deepEqual(calls.filter(call=>call.url===url).map(call=>call.request.headers.Range),[LARGE_RANGES[0],undefined]);
+ });
+ await t.test('disk full',async t=>{
+  const {service,calls,url}=await largeFixture(t);
+  const diskError=Object.assign(new Error('disk full'),{code:'ENOSPC'});
+  await assert.rejects(service._downloadAsset(service.latest.setup,{async write(){throw diskError;},async truncate(){assert.fail('must not retry a disk error');}},new AbortController().signal),{code:'ENOSPC'});
+  assert.equal(calls.filter(call=>call.url===url&&call.request.headers.Range===undefined).length,0);
+ });
 });
 test('closing or timing out a parallel download aborts its active bodies and cleans up',async t=>{
  for(const mode of ['close','timeout'])await t.test(mode,async t=>{

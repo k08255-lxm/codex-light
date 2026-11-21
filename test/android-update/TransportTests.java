@@ -84,24 +84,64 @@ public final class TransportTests {
     }
 
     private static void jsonMetadata() throws Exception {
-        String api = "https://api.github.com/repos/k08255-lxm/codex-light/releases/latest";
-        String sums = APK_URL.replace(APK, "SHA256SUMS.txt");
-        String line = HASH + "  " + APK + "\n";
-        RESPONSES.put(sums, new Response(200, null, line.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
-        String apk = "{\"name\":\"" + APK + "\",\"size\":3,\"digest\":\"sha256:" + HASH + "\",\"browser_download_url\":\"" + APK_URL + "\"}";
-        String hashes = "{\"name\":\"SHA256SUMS.txt\",\"size\":" + line.length() + ",\"browser_download_url\":\"" + sums + "\"}";
-        String prefix = "{\"tag_name\":\"v0.4.9\",\"draft\":false,\"prerelease\":false,\"assets\":[";
-        fixtureJson(api, prefix + apk + "," + hashes + "]}");
-        var release = AppUpdateTransport.check("0.4.8");
-        require(release != null && release.version.equals("0.4.9") && release.sha256.equals(HASH), "Matched release and checksum");
-        require(AppUpdateTransport.check("0.4.9") == null, "No update for same version");
-        fixtureJson(api, prefix + apk.replace(APK, "codex-light-android-0.4.9.apk") + "," + hashes + "]}");
-        require(AppUpdateTransport.check("0.4.8") == null, "Silent release is not offered");
-        fixtureJson(api, prefix + apk + "," + apk + "," + hashes + "]}");
+        String api = "https://api.github.com/repos/k08255-lxm/codex-light/releases?per_page=30";
+        String mobile09 = notifyingRelease("0.4.9");
+        String mobile10 = notifyingRelease("0.4.10");
+        String mobile11 = notifyingRelease("0.4.11");
+        String silent12 = document("v0.4.12", false, false, apkAsset("0.4.12", true, HASH));
+        String draft13 = document("v0.4.13", true, false, apkAsset("0.4.13", false, HASH));
+        String rc13 = document("v0.4.13-rc.1", false, true, apkAsset("0.4.13", false, HASH));
+        String unrelatedTag = document("preview", false, false, "");
+
+        fixtureJson(api, "[" + silent12 + "," + mobile09 + "," + draft13 + "," + rc13 + "," +
+                unrelatedTag + "," + mobile11 + "," + mobile10 + "]");
+        var release = AppUpdateTransport.check("0.4.10");
+        require(release != null && release.version.equals("0.4.11") && release.sha256.equals(HASH),
+                "Desktop-only latest must not hide a previous eligible Android release");
+        release = AppUpdateTransport.check("0.4.8");
+        require(release != null && release.version.equals("0.4.11"), "Select newest eligible semantic version, not first listed");
+        require(AppUpdateTransport.check("0.4.11") == null, "Same mobile version plus newer silent release does not prompt");
+        require(AppUpdateTransport.check("0.4.12") == null, "Silent version already installed never downgrades");
+        require(AppUpdateTransport.check("0.4.13") == null, "No downgrade for newer installed build");
+
+        fixtureJson(api, "[" + silent12 + "]");
+        require(AppUpdateTransport.check("0.4.10") == null, "Silent release is not offered");
+        fixtureJson(api, "[]");
+        require(AppUpdateTransport.check("0.4.10") == null, "Empty release list has no update");
+        fixtureJson(api, "[" + String.join(",", java.util.Collections.nCopies(31, silent12)) + "]");
+        rejects(() -> AppUpdateTransport.check("0.4.10"), "Release scan bound");
+
+        String apk = apkAsset("0.4.9", false, HASH);
+        fixtureJson(api, "[" + document("v0.4.9", false, false, apk + "," + apk) + "]");
         rejects(() -> AppUpdateTransport.check("0.4.8"), "Duplicate APK asset");
-        fixtureJson(api, prefix + apk.replace(HASH, "0".repeat(64)) + "," + hashes + "]}");
-        rejects(() -> AppUpdateTransport.check("0.4.8"), "Inconsistent GitHub digest");
-        System.out.println("PASS: complete GitHub metadata and release checksum fixtures");
+        String invalid11 = mobile11.replace("sha256:" + HASH, "sha256:" + "0".repeat(64));
+        fixtureJson(api, "[" + invalid11 + "," + mobile09 + "]");
+        rejects(() -> AppUpdateTransport.check("0.4.8"), "Inconsistent GitHub digest must not offer an older update instead");
+        System.out.println("PASS: complete GitHub metadata, silent-release history, and release checksum fixtures");
+    }
+
+    private static String notifyingRelease(String version) {
+        String name = "codex-light-" + version + ".apk";
+        String sums = downloadUrl(version, "SHA256SUMS.txt");
+        String line = HASH + "  " + name + "\n";
+        fixtureJson(sums, line);
+        String hashes = "{\"name\":\"SHA256SUMS.txt\",\"size\":" + line.length() + ",\"browser_download_url\":\"" + sums + "\"}";
+        return document("v" + version, false, false, apkAsset(version, false, HASH) + "," + hashes);
+    }
+
+    private static String document(String tag, boolean draft, boolean prerelease, String assets) {
+        return "{\"tag_name\":\"" + tag + "\",\"draft\":" + draft + ",\"prerelease\":" + prerelease +
+            ",\"assets\":[" + assets + "]}";
+    }
+
+    private static String apkAsset(String version, boolean silent, String digest) {
+        String name = "codex-light-" + (silent ? "android-" : "") + version + ".apk";
+        return "{\"name\":\"" + name + "\",\"size\":3,\"digest\":\"sha256:" + digest +
+            "\",\"browser_download_url\":\"" + downloadUrl(version, name) + "\"}";
+    }
+
+    private static String downloadUrl(String version, String name) {
+        return "https://github.com/k08255-lxm/codex-light/releases/download/v" + version + "/" + name;
     }
 
     private static void fixtureJson(String url, String json) {

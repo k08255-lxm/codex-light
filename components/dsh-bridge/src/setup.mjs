@@ -6,6 +6,7 @@ import {parseArgs} from 'node:util';
 import {randomUUID} from 'node:crypto';
 import {createRequire} from 'node:module';
 import {projectRoot, resolveDshCli} from './config.mjs';
+import {resolvePresetLayout} from './preset-layout.mjs';
 import {locations, installation, installationFile, privateDirectory, readableProgramDirectory, writeJson, readJson} from './platform.mjs';
 import {commandSpec, packageEntry, runCommand} from './commands.mjs';
 import {installPackage} from './install-package.mjs';
@@ -44,7 +45,9 @@ function ensureDependencies(installMissing) {
     const usable = entry => {
       try {
         const require = createRequire(entry);
-        for (const name of ['@deepseek-ai/dsh-agent-presets','@deepseek-ai/dsh-sdk-jsonrpc-server','@deepseek-ai/dsh-sdk-protocol',
+        if (process.env.DSH_DESKTOP_EXECUTABLE) require.resolve('@deepseek-ai/dsh-agent-presets');
+        else resolvePresetLayout(entry, require);
+        for (const name of ['@deepseek-ai/dsh-sdk-jsonrpc-server','@deepseek-ai/dsh-sdk-protocol',
           '@deepseek-ai/dsh-workspace','@deepseek-ai/dsh-tool-subagent/model-selection-settings']) require.resolve(name);
         return true;
       } catch {return false;}
