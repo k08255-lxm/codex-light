@@ -79,7 +79,7 @@ namespace CodexLight.SetupWrapper {
   public Task<int> InstallNode()=>CodexLight.Bootstrap.DependencyInstaller.Install("node",Progress,cancellation.Token,AllowCancel,false);
   public async Task<NodeState> DetectCli(){Progress("正在检查 Codex CLI 版本，不会登录或调用模型。");return await Task.Run(()=>{var found=CodexLight.Prerequisites.CliPrerequisite.Detect();return found.State==CodexLight.Prerequisites.CliState.Ready?NodeState.Ready:found.State==CodexLight.Prerequisites.CliState.Missing?NodeState.Missing:NodeState.Uncertain;});}
   public CliChoice ChooseCli(){
-   var choice=MessageBox.Show(this,"未找到 Windows Codex CLI。请选择后续方式：\n\n是：从官方 registry.npmjs.org 安装固定版本 0.169.0 到本应用私有目录。下载约 178 MiB，展开约 492 MiB，不修改系统 PATH 或 Codex 配置。\n\n否：仅安装应用，稍后在设置中选择 WSL 或已有 Codex。当前尚未验证 WSL 中的 CLI；配置完成前不能发送消息。Windows Node.js 仍是应用后端的必需环境。\n\n取消：退出安装流程。不会自动登录或调用模型。","选择 Codex 运行环境",MessageBoxButtons.YesNoCancel,MessageBoxIcon.Question,MessageBoxDefaultButton.Button3);
+   var choice=MessageBox.Show(this,"未找到 Windows Codex CLI。请选择后续方式：\n\n是：从官方 registry.npmjs.org 安装固定版本 0.169.0 到本应用私有目录。下载约 178 MiB，展开约 492 MiB，不修改系统 PATH 或 Codex 配置。\n\n否：仅安装应用，稍后在设置中选择 WSL 或已有 Codex。向导不检测 WSL；安装后，码舱会自动检测运行中的发行版。检查已停止的发行版可在设置中点「完整检测 WSL」。配置完成前不能发送消息。Windows Node.js 仍是应用后端的必需环境。\n\n取消：退出安装流程。不会自动登录或调用模型。","选择 Codex 运行环境",MessageBoxButtons.YesNoCancel,MessageBoxIcon.Question,MessageBoxDefaultButton.Button3);
    return choice==DialogResult.Yes?CliChoice.InstallWindows:choice==DialogResult.No?CliChoice.ConfigureInApp:CliChoice.Cancel;
   }
   public async Task<int> InstallCli(){AllowCancel(true);try{return await CodexLight.Prerequisites.CliPrerequisite.InstallAsync(new Progress<string>(Progress),cancellation.Token);}finally{AllowCancel(false);}}

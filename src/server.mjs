@@ -492,13 +492,18 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      if(action==='apply'){const {requestId,...params}=input;json(res,200,await operations.execute(requestId,'config/apply',params,()=>configSettings.apply(params)));return;}
      throw new Error('未知配置操作');
     }
+    if(url.pathname==='/api/plugins/status'){
+     if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).length!==1||typeof input.handle!=='string'||!/^[a-f0-9-]{36}$/i.test(input.handle))throw new Error('插件状态核对参数无效');
+     if(demo)throw new Error('演示模式不读取真实插件状态');
+     json(res,200,await pluginActions.checkStatus(input.handle,{allowToggle:requestAccess==='local'}));return;
+    }
     if(url.pathname==='/api/plugins/plan'){
      if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(k=>!['handle','action'].includes(k)))throw new Error('插件计划参数无效');
-     if(demo)throw new Error('演示模式不安装真实插件');json(res,200,await pluginActions.plan(input.handle,input.action));return;
+     if(demo)throw new Error('演示模式不安装真实插件');json(res,200,await pluginActions.plan(input.handle,input.action,{allowToggle:requestAccess==='local'}));return;
     }
     if(url.pathname==='/api/plugins/apply'){
      if(!input||typeof input!=='object'||Array.isArray(input))throw new Error('插件参数无效');if(demo)throw new Error('演示模式不修改真实插件');
-     const {requestId,...params}=input;json(res,200,await operations.execute(requestId,'plugin/apply',params,()=>pluginActions.apply(params)));return;
+     const {requestId,...params}=input;json(res,200,await operations.execute(requestId,'plugin/apply',params,()=>pluginActions.apply(params,{allowToggle:requestAccess==='local'})));return;
     }
     if(url.pathname.startsWith('/api/account/')){
      const action=url.pathname.slice('/api/account/'.length);if(!['start','cancel','logout','snapshot'].includes(action))throw new Error('未知账号操作');
@@ -703,7 +708,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
         return run();
        })
        : await run();
-     if(input.method==='plugin/list')result.actionHandles=pluginActions.observeCatalog(params,result);
+     if(input.method==='plugin/list')result.actionHandles=pluginActions.observeCatalog(params,result,{allowToggle:requestAccess==='local'});
      if(dshGeneration===dsh.generation && input.method.startsWith('thread/'))dsh.bindThread(result?.thread);
      const historyThread=result?.thread?.id || params.threadId;
      if(input.method==='thread/items/list')for(const row of [...(result?.data||[])].reverse()){dsh.observe(historyThread,row.item||row,{older:true});artifacts.observe(historyThread,row.item||row);}
@@ -769,7 +774,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
   if(message.method==='account/updated'||(message.method==='bridge/status'&&message.params?.connected===false))clearStatisticsAccount();
   const threadId=message.params?.threadId||message.params?.thread?.id;
   if(threadId&&dsh.isReaderThread(threadId))return;
-  if(message.method==='account/login/completed'&&message.params?.success===true)resetThreadReads();
+  if(message.method==='account/login/completed'&&message.params?.success===true){resetThreadReads();pluginActions.clear();}
   threadReads.observe(message);
   mobileNotifications.observe(message);
   statistics.observe(message);sessions.observe(message);threadList.observe(message);

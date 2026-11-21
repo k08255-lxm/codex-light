@@ -43,7 +43,7 @@ test('catalog bounds/deduplication and partial load errors are explicit',()=>{
 class Node {
  constructor(tag,doc){this.tag=tag;this.ownerDocument=doc;this.children=[];this.listeners={};this.value='';this.checked=false;this.disabled=false;this.ownText='';this.classList={add(){}};}
  set textContent(v){this.ownText=String(v);this.children=[];}get textContent(){return this.ownText+this.children.map(x=>x.textContent).join('');}
- set innerHTML(_){throw new Error('Raw HTML is forbidden');}append(...nodes){this.children.push(...nodes.map(x=>typeof x==='string'?new Text(x,this.ownerDocument):x));}prepend(...nodes){this.children.unshift(...nodes);}replaceChildren(...nodes){this.ownText='';this.children=[];this.append(...nodes);}setAttribute(k,v){this[k]=v;}addEventListener(type,fn){(this.listeners[type]??=[]).push(fn);}focus(){this.ownerDocument.activeElement=this;}
+ set innerHTML(_){throw new Error('Raw HTML is forbidden');}append(...nodes){this.children.push(...nodes.map(x=>typeof x==='string'?new Text(x,this.ownerDocument):x));}prepend(...nodes){this.children.unshift(...nodes);}insertBefore(node,before){this.children.splice(this.children.indexOf(before),0,node);}replaceChildren(...nodes){this.ownText='';this.children=[];this.append(...nodes);}setAttribute(k,v){this[k]=v;}addEventListener(type,fn){(this.listeners[type]??=[]).push(fn);}focus(){this.ownerDocument.activeElement=this;}
  async fire(type,event={}){for(const fn of this.listeners[type]||[])await fn({stopPropagation(){},...event});}
 }
 class Text extends Node {constructor(value,doc){super('#text',doc);this.ownText=value;}}
@@ -76,9 +76,98 @@ test('action handles bind by market key; explicit plan/apply respects unknown ou
  const panel=mountPluginsPanel(container,{getContext:()=>context,requestId:()=> 'request-one',rpc:async method=>method==='plugin/list'?response:{plugin:{summary:summary(),marketplaceName:'b',skills:[],mcpServers:[]}},api:async(p,b)=>{calls.push([p,b]);return p.endsWith('/plan')?{status:'ready',planId:'p',expiresAt:Date.now()+120000,summary:{action:'uninstall',source:{type:'local'},consequences:[]}}:{outcome:'unknown'};}});
  await panel.activate();assert.equal(calls.length,0);
  await all(container).filter(n=>n.tag==='button'&&n.textContent==='查看详情')[1].fire('click');await tick();
- await all(container).find(n=>n.tag==='button'&&n.textContent==='准备卸载').fire('click');assert.equal(calls.length,0);
- await all(container).find(n=>n.tag==='button'&&n.textContent==='检查并准备确认').fire('click');assert.deepEqual(calls[0],['/api/plugins/plan',{handle:'hb',action:'uninstall'}]);
- const consent=all(container).find(n=>n.tag==='label'&&n.textContent.includes('我已阅读')).children[0];consent.checked=true;await consent.fire('change');
- await all(container).find(n=>n.tag==='button'&&n.textContent==='确认执行').fire('click');assert.deepEqual(calls[1],['/api/plugins/apply',{requestId:'request-one',planId:'p',confirmed:true}]);assert.match(container.textContent,/结果未知/);
- await panel.refresh();await all(container).filter(n=>n.tag==='button'&&n.textContent==='查看详情')[1].fire('click');await tick();assert.equal(all(container).find(n=>n.tag==='button'&&n.textContent==='准备卸载').disabled,true);panel.destroy();
+ await all(container).find(n=>n.tag==='button'&&n.textContent==='卸载').fire('click');await tick();assert.deepEqual(calls[0],['/api/plugins/plan',{handle:'hb',action:'uninstall'}]);
+ await all(container).find(n=>n.tag==='button'&&n.textContent==='确认卸载').fire('click');assert.deepEqual(calls[1],['/api/plugins/apply',{requestId:'request-one',planId:'p',confirmed:true}]);assert.match(container.textContent,/结果未知/);
+ await panel.refresh();await all(container).filter(n=>n.tag==='button'&&n.textContent==='查看详情')[1].fire('click');await tick();assert.equal(all(container).find(n=>n.tag==='button'&&n.textContent==='卸载').disabled,true);panel.destroy();
+});
+
+test('plugin manager starts with local installed entries; catalog and remote are deliberate and scoped',async()=>{
+ const doc=document(),container=new Node('section',doc),calls=[];
+ const response=catalog([summary(),summary({name:'uninstalled',id:'uninstalled',installed:false,enabled:false,interface:{displayName:'可安装示例'}}),summary({name:'unknown',id:'unknown',installed:null,enabled:null,interface:{displayName:'未知示例'}})]);
+ const panel=mountPluginsPanel(container,{getContext:()=>({connected:true,cwd:'/work',serverInstance:'one'}),rpc:async(method,params)=>{calls.push([method,params]);return response;}});
+ const find=(tag,label)=>all(container).find(n=>n.tag===tag&&n.textContent===label);
+ await panel.activate();
+ assert.equal(find('button','已安装')['aria-pressed'],'true');
+ assert.equal(all(container).filter(n=>n.tag==='article').length,1);
+ assert.ok(find('span','已启用'));assert.ok(!find('h3','可安装示例'));
+ assert.deepEqual(calls,[['plugin/list',{cwds:['/work'],marketplaceKinds:['local'],forceRefetch:false}]]);
+ await find('button','插件目录').fire('click');
+ assert.equal(find('button','插件目录')['aria-pressed'],'true');
+ assert.equal(all(container).filter(n=>n.tag==='article').length,3);
+ assert.ok(find('span','未安装'));assert.ok(find('span','安装状态未知'));
+ const remote=all(container).find(n=>n.className==='plugins-remote').children[0];remote.checked=true;await remote.fire('change');
+ assert.deepEqual(calls.at(-1),['plugin/list',{cwds:['/work'],forceRefetch:false}]);
+ await find('button','已安装').fire('click');
+ assert.deepEqual(calls.at(-1),['plugin/list',{cwds:['/work'],marketplaceKinds:['local'],forceRefetch:false}]);assert.equal(all(container).find(n=>n.className==='plugins-remote').hidden,true);
+});
+
+test('a confirmed installation refreshes once and only explicit pending auth survives the refresh',async()=>{
+ const doc=document(),container=new Node('section',doc),calls=[],context={connected:true,cwd:'/work',serverInstance:'one'};
+ let installed=false;
+ const p=()=>summary({installed,enabled:installed});
+ const panel=mountPluginsPanel(container,{getContext:()=>context,requestId:()=> 'request-one',
+  rpc:async(method,params)=>{calls.push([method,params]);return method==='plugin/list'?{...catalog([p()]),actionHandles:[{key:JSON.stringify(['C:\\plugins\\market.json','demo@local']),handle:'observed'}]}:{plugin:{summary:p(),marketplaceName:'local'}};},
+  api:async(path,body)=>{calls.push([path,body]);if(path.endsWith('/plan'))return {status:'ready',planId:'prepared',expiresAt:Date.now()+120000,summary:{action:'install',source:{type:'local'},consequences:[]}};installed=true;return {outcome:'succeeded',action:'install',appsNeedingAuth:['示例应用']};}
+ });
+ const find=(tag,label)=>all(container).find(n=>n.tag===tag&&n.textContent===label);
+ await panel.activate();await find('button','插件目录').fire('click');await find('button','查看详情').fire('click');
+ assert.ok(find('dd','未核实'));assert.ok(!find('span','待授权'));
+ await find('button','安装').fire('click');await tick();
+ await find('button','确认安装').fire('click');await tick();
+ assert.deepEqual(calls.slice(-2).map(x=>x[0]),['/api/plugins/apply','plugin/list']);
+ assert.equal(calls.filter(([name])=>name==='/api/plugins/apply').length,1);
+ assert.ok(find('span','待授权'));assert.match(container.textContent,/安装已返回成功/);
+ await find('button','查看详情').fire('click');assert.match(container.textContent,/待授权：示例应用/);
+ context.serverInstance='other';panel.reset();await panel.activate();assert.ok(!find('span','待授权'));assert.doesNotMatch(container.textContent,/安装已返回成功/);
+});
+
+test('quick enable and disable require advertised per-row capability, approval, and observed refresh',async()=>{
+ const doc=document(),container=new Node('section',doc),calls=[],context={connected:true,cwd:'/work',serverInstance:'one'};
+ let enabled=false,requested;
+ const p=()=>summary({enabled});
+ const other=summary({name:'no-toggle',id:'no-toggle',enabled:null,interface:{displayName:'未知状态'}});
+ const legacy=summary({name:'legacy',id:'legacy',enabled:true,interface:{displayName:'旧协议'}});
+ const response=()=>({...catalog([p(),other,legacy]),actionHandles:[
+  {key:JSON.stringify(['C:\\plugins\\market.json','demo@local']),handle:'observed',actions:[enabled?'disable':'enable','uninstall']},
+  {key:JSON.stringify(['C:\\plugins\\market.json','no-toggle']),handle:'other',actions:['disable','uninstall']},
+  {key:JSON.stringify(['C:\\plugins\\market.json','legacy']),handle:'legacy'}
+ ]});
+ const panel=mountPluginsPanel(container,{getContext:()=>context,requestId:()=>String(calls.length),
+  rpc:async(method,params)=>{calls.push([method,params]);return method==='plugin/list'?response():{plugin:{summary:p(),marketplaceName:'local'}};},
+  api:async(path,body)=>{calls.push([path,body]);if(path.endsWith('/plan')){requested=body.action;return {status:'ready',planId:'prepared',expiresAt:Date.now()+120000,summary:{action:requested,source:{type:'local'},consequences:[]}};}enabled=requested==='enable';return {outcome:'succeeded',action:requested};}
+ });
+ const find=(tag,label)=>all(container).find(n=>n.tag===tag&&n.textContent===label);
+ const applyCount=()=>calls.filter(([name])=>name==='/api/plugins/apply').length;
+ await panel.activate();
+ assert.equal(all(container).filter(n=>n.tag==='button'&&['启用','停用'].includes(n.textContent)).length,1);
+ assert.ok(find('span','已停用'));
+ await find('button','启用').fire('click');await tick();
+ assert.deepEqual(calls.at(-1),['/api/plugins/plan',{handle:'observed',action:'enable'}]);assert.equal(applyCount(),0);assert.ok(find('span','已停用'));
+ const confirm=find('button','确认启用');assert.equal(confirm.disabled,false);
+ assert.equal(all(container).filter(n=>n.tag==='input'&&n.type==='checkbox').length,1);
+ await confirm.fire('click');await tick();
+ assert.equal(applyCount(),1);assert.ok(find('button','停用'));assert.doesNotMatch(container.textContent,/有应用需要授权/);
+ await find('button','停用').fire('click');await tick();
+ assert.deepEqual(calls.at(-1),['/api/plugins/plan',{handle:'observed',action:'disable'}]);assert.equal(applyCount(),1);
+ await find('button','取消').fire('click');assert.equal(applyCount(),1);assert.ok(find('button','停用'));
+});
+
+test('unknown enabled state can explicitly check matching handle and never guesses a result',async()=>{
+ const doc=document(),container=new Node('section',doc),calls=[],context={connected:true,cwd:'/work',serverInstance:'one'};
+ const s=summary({enabled:null});
+ const key=JSON.stringify(['C:\\plugins\\market.json','demo@local']);
+ let observed={status:'unknown'};
+ const panel=mountPluginsPanel(container,{getContext:()=>context,
+  rpc:async()=>({...catalog([s]),actionHandles:[{key,handle:'obs',actions:['uninstall'],statusCheck:true}]}),
+  api:async(path,body)=>{calls.push([path,body]);return observed;}
+ });
+ const find=(tag,label)=>all(container).find(n=>n.tag===tag&&n.textContent===label);
+ await panel.activate();assert.ok(find('span','启停未知'));assert.ok(!find('button','启用'));assert.equal(calls.length,0);
+ await find('button','检查状态').fire('click');
+ assert.deepEqual(calls,[['/api/plugins/status',{handle:'obs'}]]);assert.ok(find('span','启停未知'));assert.match(container.textContent,/没返回明确/);
+ observed={status:'verified',key:'mismatch',handle:'fresh',installed:true,enabled:false,actions:['enable']};
+ await find('button','检查状态').fire('click');assert.ok(!find('button','启用'));
+ observed={...observed,key};
+ await find('button','检查状态').fire('click');assert.ok(!find('span','启停未知'));assert.ok(find('span','已停用'));assert.ok(find('button','启用'));assert.ok(!find('button','检查状态'));
+ assert.equal(calls.filter(([path])=>path!=='/api/plugins/status').length,0);
 });
