@@ -8,7 +8,9 @@ Codex 桌面与远程客户端（原 Codex Light）。英文名称为 **CodeCang
 
 ## WSL 运行环境
 
-可在设置中发现并选择 WSL 内的 Linux Codex，保存后重启使用，账户和数据按运行环境隔离。支持标准 nvm/fnm 候选检测及手动指定 Linux CLI 路径；Windows Git 面板及 Windows CLI 升级在 WSL 模式下禁用；DSH 可显式选择 Windows 或 WSL 原生桥。**WSL 支持已随 v0.4.6 发布，但尚未完成真实 WSL 端到端验收。** 安装条件、使用方式与限制见 [WSL 说明](docs/WSL.md)。
+v0.4.13 起，首次引导和打开「连接与运行」时会自动检测正在运行的 WSL 发行版，不会主动唤醒已停止的发行版，也不会切换已选引擎。发行版未运行，或 Codex 依赖登录脚本才能找到时，可点「完整检测 WSL」。选好 Linux Codex 后保存并重启，账户和数据按运行环境隔离。
+
+已在 Ubuntu WSL 2 实测 Linux Codex 的发现和技能启停。WSL 原生 DSH 和真实任务的自动唤醒不在该次实测范围内。安装条件、操作步骤和限制见 [WSL 说明](docs/WSL.md)。
 
 ## 界面预览
 

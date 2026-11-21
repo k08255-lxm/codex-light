@@ -5,7 +5,7 @@
 ## 选择运行环境
 
 1. Windows 桌面端仍需要 Windows Node.js 来运行界面后端。WSL 内的 Node 不代替这个依赖。
-2. 打开“连接和运行”设置时，码舱会自动查询已注册的发行版，并只读检查正在运行的 WSL，不主动启动已知停止的发行版。如果发行版已停止、自动检测未确认，或 Codex 路径需要登录脚本，请选择“完整检测 WSL”。完整检测可能启动发行版；两种检测都不会执行 Codex 推理、登录或修改 Codex 配置。
+2. 从 v0.4.13 起，首次引导和打开「连接与运行」设置时，码舱会自动查询已注册的发行版，并只读检查正在运行的 WSL，不主动启动已知停止的发行版。如果发行版已停止、自动检测未确认，或 Codex 路径需要登录脚本，请选择“完整检测 WSL”。完整检测可能启动发行版；两种检测都不会执行 Codex 推理、登录或修改 Codex 配置。
 3. 选择发行版，确认显示的默认 Linux 用户。必要时填写 Codex 的 **Linux 绝对路径**，例如 `/home/lee/.nvm/versions/node/v24.0.0/bin/codex`。不要填写 Windows 的 `codex.exe` 或 npm shim。
 4. 保存后完全退出并重新打开码舱。保存选择不会切换或中断正在运行的会话；设置页分别显示当前环境与下次启动环境。
 5. 要返回 Windows 原生 Codex，保存“Windows”并重新启动。
@@ -14,7 +14,7 @@
 
 ## nvm、fnm 和自定义安装
 
-探测首先使用非交互登录环境的 `PATH`。如果没有找到 Linux CLI，会检查标准 `~/.nvm/versions/node/*/bin` 和 `~/.local/share/fnm/node-versions/*/installation/bin`；仅在候选唯一时自动选择。
+自动检测使用非登录 shell，完整检测使用登录 shell；两者都会检查各自环境的 `PATH`。如果没有找到 Linux CLI，会检查标准 `~/.nvm/versions/node/*/bin` 和 `~/.local/share/fnm/node-versions/*/installation/bin`；仅在候选唯一时自动选择。
 
 多个版本、仅交互式 shell 初始化可见的安装、自定义 fnm/nvm 位置，应明确指定 CLI 的 Linux 绝对路径。程序会只读核查 Linux 可执行文件或脚本及其 Linux Node，将所需 Node 目录用于该进程的 `PATH`，不会修改 shell 初始化文件。探测失败表示当前环境未能确定可用 CLI，**不等于未安装 Codex**。
 
@@ -32,7 +32,7 @@
 
 ## 功能范围与限制
 
-设计上，模型、账户、聊天、历史、审批、插件配置及已在 WSL 内配置的 MCP 都由所选 Linux app-server 处理；终端使用 Linux `/bin/sh`，不会把 Windows PowerShell 命令发给 Linux。上述真实运行行为仍需 WSL 环境验收。
+WSL 模式下，模型、账户、聊天、历史、审批、插件配置及已在 WSL 内配置的 MCP 由所选 Linux app-server 处理；终端使用 Linux `/bin/sh`，不会把 Windows PowerShell 命令发给 Linux。已实测的项目与未覆盖的场景分别列在下方。
 
 WSL 模式支持通过所选发行版的 Linux Git 读取仓库状态和文件差异；不会使用 Windows Git 解释 Linux 仓库路径。以下写入或升级操作仍由对应环境处理：
 
@@ -47,13 +47,13 @@ Windows 桌面端的项目入口和“连接与运行 → 工作目录”均可�
 
 Android/网页远控不能更改宿主的 WSL 选择；它们连接的是桌面端当前运行环境。本功能不等于增加官方远控协议能力，也不保证官方仅在特定宿主开放的功能可在 WSL 使用。
 
-## 本次验证记录
+## 已验证的范围
 
 - 使用合成 app-server 测试 stdio 握手、请求路径往返、审批路径不变、进程退出和错误处理；没有调用真实模型。
 - 测试发行版名称与路径校验、默认用户限制、Windows shim 拒绝、配置持久化、延迟到重启生效、原生功能禁用和鉴权。
 - 测试 WSL 项目大小写、别名归一、历史图片原始 Linux 路径匹配，以及受信任本地链接范围。
 - 在 Windows WSL 3.0.5.0、Ubuntu WSL 2 和 Linux Codex 0.171.0 上，码舱发现了默认用户和原生 CLI。使用隔离的 Linux Codex 配置目录和临时技能，实际完成了技能发现、停用、启用及强制刷新回读，验证了桌面 UNC 路径和 Linux 技能路径的往返转换。
-- 实际 CLI 登录、真实历史加载和运行中会话切换不在这次实测范围内。
+- v0.4.13 的后台检测入口和停止状态处理已通过自动化测试；发布验收未在真实发行版上重跑此入口。实际 CLI 登录、真实历史加载不在上述 Ubuntu 实测范围内；切换引擎需重启，不支持在运行中热切换。
 
 ## DSH 环境选择
 
