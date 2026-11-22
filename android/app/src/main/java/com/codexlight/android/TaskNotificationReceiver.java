@@ -16,15 +16,17 @@ public final class TaskNotificationReceiver extends BroadcastReceiver {
         String threadId = intent.getStringExtra("threadId");
         String turnId = intent.getStringExtra("turnId");
         if (!TaskNotificationState.validId(threadId) || !TaskNotificationState.validId(turnId)) return;
-        suppress(context, threadId, turnId);
+        String origin = intent.getStringExtra("origin");
+        if (origin == null || !origin.equals(TaskNotificationController.get(context).origin())) return;
+        suppress(context, origin, threadId, turnId);
         NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager != null) manager.cancel(TaskNotificationController.TAG, intent.getIntExtra("notificationId", -1));
     }
 
-    static void suppress(Context context, String threadId, String turnId) {
+    static void suppress(Context context, String origin, String threadId, String turnId) {
         SharedPreferences prefs = context.getSharedPreferences(TaskNotificationController.PREFS, Context.MODE_PRIVATE);
         Set<String> dismissed = new LinkedHashSet<>(prefs.getStringSet("dismissed", new LinkedHashSet<>()));
-        dismissed.add(threadId + "\n" + turnId);
+        dismissed.add(origin + "\n" + threadId + "\n" + turnId);
         while (dismissed.size() > 32) dismissed.remove(dismissed.iterator().next());
         prefs.edit().putStringSet("dismissed", dismissed).apply();
     }

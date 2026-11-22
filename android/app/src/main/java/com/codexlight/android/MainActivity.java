@@ -29,11 +29,22 @@ public class MainActivity extends Activity {
     private Button btnErrorRetry;
     private Button btnErrorChangeServer;
 
-    private ServerConfig currentConfig;
+    private volatile ServerConfig currentConfig;
+    private volatile android.net.Network verifiedLanNetwork;
     private boolean isDemoMode = false;
     private LanConnectionClient connectionAttempt;
     private int connectionGeneration;
     private boolean connectionFailed;
+    private boolean preferPairedRoutes;
+    private boolean workbenchLoaded;
+    private boolean allowLegacySnapshot;
+    private LanConnectionClient networkProbe;
+    private android.net.ConnectivityManager connectivity;
+    private final android.net.ConnectivityManager.NetworkCallback networkCallback = new android.net.ConnectivityManager.NetworkCallback() {
+        @Override public void onAvailable(android.net.Network network) {
+            runOnUiThread(() -> checkCurrentRoute(network));
+        }
+    };
     private boolean authorizationFailed;
     private volatile boolean currentPageTrusted = false;
     private long lastBackPressTime = 0;
@@ -60,10 +71,13 @@ public class MainActivity extends Activity {
         initViews();
         taskNotifications = TaskNotificationController.get(this);
         questionNotifications = QuestionNotificationController.get(this);
-        acceptTaskNotificationIntent(getIntent());
-        if (QuestionNotificationController.ACTION_OPEN.equals(getIntent().getAction())) pendingQuestion = questionNotifications.consume(getIntent());
         resolveIntent();
-        MobileNotificationService.stopIfTargetChanged(this,isDemoMode ? null : currentConfig);
+        MobileNotificationService.stopIfTargetChanged(this, isDemoMode ? null : currentConfig);
+        taskNotifications.bindOrigin(isDemoMode || currentConfig == null ? "" : currentConfig.sourceKey());
+        acceptTaskNotificationIntent(getIntent());
+        if (QuestionNotificationController.ACTION_OPEN.equals(getIntent().getAction()) && notificationOriginMatches(getIntent())) {
+            pendingQuestion = questionNotifications.consume(getIntent());
+        }
         setupWebView();
         offlineSnapshots = new OfflineSnapshotController(this, this::captureOfflineSnapshot, () -> {
             errorOverlay.setVisibility(View.GONE);
@@ -111,7 +125,7 @@ public class MainActivity extends Activity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         if (QuestionNotificationController.ACTION_OPEN.equals(intent.getAction())) {
-            pendingQuestion = questionNotifications.consume(intent);
+            if (notificationOriginMatches(intent)) pendingQuestion = questionNotifications.consume(intent);
             deliverQuestionNotificationIntent();
             return;
         }
@@ -119,30 +133,44 @@ public class MainActivity extends Activity {
             deliverTaskNotificationIntent();
             return;
         }
+        currentPageTrusted = false;
         setIntent(intent);
-        resolveIntent();
-        MobileNotificationService.stopIfTargetChanged(this,isDemoMode ? null : currentConfig);
-        loadTargetUrl();
+        recreate(); // Destroy the previous document and its native bridge before switching targets.
+    }
+
+    static void putConnection(Intent intent, ServerConfig config, boolean automatic) {
+        intent.putExtra("automatic", automatic).putExtra("scheme", config.getScheme())
+            .putExtra("host", config.getHost()).putExtra("port", config.getPort())
+            .putExtra("remoteHostId", config.getRemoteHostId()).putExtra("token", config.getToken());
     }
 
     private void resolveIntent() {
         Intent intent = getIntent();
         isDemoMode = intent.getBooleanExtra("demo", false);
 
+        preferPairedRoutes = intent.getBooleanExtra("automatic", !intent.hasExtra("host"))
+            && !TaskNotificationController.ACTION_OPEN.equals(intent.getAction())
+            && !QuestionNotificationController.ACTION_OPEN.equals(intent.getAction());
+
         if (!isDemoMode) {
-            ServerConfigManager saved = new ServerConfigManager(this);
+            String scheme = intent.getStringExtra("scheme");
             String host = intent.getStringExtra("host");
             int port = intent.getIntExtra("port", 0);
             String token = intent.getStringExtra("token");
 
             if (host != null && !host.isEmpty()) {
-                currentConfig = new ServerConfig(host, port, token);
+                currentConfig = new ServerConfig(scheme == null ? "http" : scheme, host, port, token, intent.getStringExtra("remoteHostId"));
                 // Save only after authenticated contact with the paired server.
             } else {
                 ServerConfigManager mgr = new ServerConfigManager(this);
                 currentConfig = mgr.getCurrent();
             }
 
+            if (currentConfig != null && currentConfig.getRemoteHostId().isEmpty()) {
+                ServerConfig previous = new ServerConfigManager(this).getCurrent();
+                allowLegacySnapshot = previous != null && previous.sourceKey().equals(currentConfig.sourceKey())
+                    && previous.getToken().equals(currentConfig.getToken());
+            }
             if (currentConfig == null) {
                 openServerManager();
             }
@@ -160,15 +188,7 @@ public class MainActivity extends Activity {
             String path = uri.getPath();
             return "file".equalsIgnoreCase(scheme) && path != null && path.startsWith("/android_asset/");
         }
-        if (currentConfig == null || !"http".equalsIgnoreCase(scheme)) {
-            return false;
-        }
-        String host = uri.getHost();
-        int port = uri.getPort();
-        int effectivePort = port > 0 ? port : 80;
-        return host != null
-            && host.equalsIgnoreCase(currentConfig.getHost())
-            && effectivePort == currentConfig.getPort();
+        return currentConfig != null && currentConfig.matchesOrigin(uri.toString());
     }
 
     public void updatePageOrigin(String url) {
@@ -194,15 +214,20 @@ public class MainActivity extends Activity {
         updateToolbarVisibility();
     }
 
+    boolean lanNetworkVerified() {
+        ServerConfig config = currentConfig;
+        return config == null || !config.identifiedLan() || PairedNetwork.unchanged(this, verifiedLanNetwork);
+    }
+
     public String getCurrentToken() {
-        if (isDemoMode || !currentPageTrusted || currentConfig == null) {
+        if (isDemoMode || !currentPageTrusted || currentConfig == null || !lanNetworkVerified()) {
             return "";
         }
         return currentConfig.getToken();
     }
 
     public boolean trustedTaskNotificationPage() {
-        return !isDemoMode && currentPageTrusted && currentConfig != null && !isFinishing() && !isDestroyed();
+        return !isDemoMode && currentPageTrusted && currentConfig != null && lanNetworkVerified() && !isFinishing() && !isDestroyed();
     }
 
     public String getTaskNotificationStatus() {
@@ -284,11 +309,15 @@ public class MainActivity extends Activity {
         }
     }
 
+    private boolean notificationOriginMatches(Intent intent) {
+        return !isDemoMode && currentConfig != null && currentConfig.sourceKey().equals(intent.getStringExtra("origin"));
+    }
+
     private boolean acceptTaskNotificationIntent(Intent intent) {
         if (intent == null || !TaskNotificationController.ACTION_OPEN.equals(intent.getAction())) return false;
         String threadId = intent.getStringExtra("threadId");
         String turnId = intent.getStringExtra("turnId");
-        if (TaskNotificationState.validId(threadId) && TaskNotificationState.validId(turnId)) {
+        if (notificationOriginMatches(intent) && TaskNotificationState.validId(threadId) && TaskNotificationState.validId(turnId)) {
             pendingNotificationThread = threadId;
         }
         return true;
@@ -376,7 +405,7 @@ public class MainActivity extends Activity {
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
 
         String defaultUa = settings.getUserAgentString();
-        settings.setUserAgentString(defaultUa + " CodexLightMobile/0.4.14");
+        settings.setUserAgentString(defaultUa + " CodexLightMobile/0.4.15");
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             settings.setSafeBrowsingEnabled(false);
@@ -412,11 +441,13 @@ public class MainActivity extends Activity {
     }
 
     private void loadTargetUrl() {
+        cancelNetworkProbe();
         snapshotPageReady = false;
         requestedToolbarIntegrated = false;
         webView.setVisibility(View.INVISIBLE);
         errorOverlay.setVisibility(View.GONE);
-        if (offlineSnapshots != null) offlineSnapshots.beginConnection(isDemoMode ? null : currentConfig);
+        if (offlineSnapshots != null) offlineSnapshots.beginConnection(isDemoMode || currentConfig == null
+            || (currentConfig.getRemoteHostId().isEmpty() && !allowLegacySnapshot) ? null : currentConfig);
         updateToolbarVisibility();
         if (!MobileNotificationService.ownsNotifications()) {
             if (taskNotifications != null) taskNotifications.disconnected();
@@ -438,7 +469,7 @@ public class MainActivity extends Activity {
             webView.loadUrl("file:///android_asset/web/index.html");
         } else if (currentConfig != null) {
             // Follow Android's default route, including the user's VPN LAN exclusions.
-            // Legacy LAN transport is HTTP and does not authenticate the desktop cryptographically.
+            // An identified LAN endpoint must prove knowledge of its own token before bearer authentication.
             currentPageTrusted = false;
             tvServerTitle.setText("连接电脑");
             if (tvModeBadge != null) tvModeBadge.setText("LAN");
@@ -446,30 +477,117 @@ public class MainActivity extends Activity {
             tvModeBadge.setText("连接中");
             progressBar.setVisibility(View.VISIBLE);
             final int attemptId = connectionGeneration;
-            final ServerConfig target = currentConfig;
-            final LanConnectionClient attempt = new LanConnectionClient(url -> (java.net.HttpURLConnection) url.openConnection());
+            final ServerConfig requested = currentConfig;
+            final boolean preferLan = preferPairedRoutes;
+            final android.net.Network startingNetwork = PairedNetwork.current(this);
+            final LanConnectionClient attempt = PairedNetwork.client(this, startingNetwork);
             connectionAttempt = attempt;
             new Thread(() -> {
-                LanConnectionClient.Result result = attempt.check(target);
+                ServerConfigManager manager = new ServerConfigManager(this);
+                LanConnectionClient.Selection selection = attempt.select(requested,
+                    preferLan ? manager.getHistory() : java.util.Collections.emptyList(), preferLan);
                 runOnUiThread(() -> {
                     if (attemptId != connectionGeneration || isFinishing() || isDestroyed()) return;
                     connectionAttempt = null;
                     progressBar.setVisibility(View.GONE);
+                    LanConnectionClient.Result result = selection.result;
+                    ServerConfig target = selection.target;
                     if (result == LanConnectionClient.Result.READY) {
-                        ServerConfigManager manager = new ServerConfigManager(this);
+                        boolean changedOrigin = !target.origin().equals(requested.origin());
+                        if (changedOrigin && workbenchLoaded) {
+                            // The previous bridge and any pending uploads belong to the old origin.
+                            Intent next = new Intent(this, MainActivity.class);
+                            putConnection(next, target, false);
+                            startActivity(next);
+                            finish();
+                            return;
+                        }
+                        if (!target.sourceKey().equals(requested.sourceKey()) || (!allowLegacySnapshot && target.getRemoteHostId().isEmpty())) {
+                            pendingQuestion = null;
+                            pendingNotificationThread = null;
+                            MobileNotificationService.stopIfTargetChanged(this, target);
+                            taskNotifications.bindOrigin(target.sourceKey());
+                            offlineSnapshots.beginConnection(target);
+                        }
+                        currentConfig = target;
+                        allowLegacySnapshot = true;
+                        verifiedLanNetwork = target.identifiedLan() ? startingNetwork : null;
+                        preferPairedRoutes = true;
+                        if (!lanNetworkVerified()) {
+                            showConnectionError("网络已变化，请重新连接以验证局域网电脑。");
+                            return;
+                        }
                         manager.saveCurrent(target, "");
                         if (manager.hasStorageError()) Toast.makeText(this,
                             "本次已连接，但无法安全保存凭据；下次可能需要重新配对。", Toast.LENGTH_LONG).show();
-                        currentPageTrusted = true;
-                        tvModeBadge.setText("LAN");
-                        webView.loadUrl(target.toFullUrl());
+                        String route = "https".equals(target.getScheme()) ? "公网 HTTPS" : "局域网";
+                        tvModeBadge.setText(route);
+                        Toast.makeText(this, "已连接 · " + route, Toast.LENGTH_SHORT).show();
+                        workbenchLoaded = true;
+                        webView.loadUrl(target.origin() + "/");
                     } else {
-                        authorizationFailed = result == LanConnectionClient.Result.UNAUTHORIZED || result == LanConnectionClient.Result.INVALID;
-                        showConnectionError(authorizationFailed ? "配对已失效，请在电脑生成新二维码并重新配对。" : "暂时无法连接电脑。请确认电脑远控已开启，手机和电脑位于同一可信网络。若电脑地址变化，请重新配对。");
+                        reportRouteFailure(result, target);
                     }
                 });
             }, "lan-reconnect").start();
         }
+    }
+
+    private void reportRouteFailure(LanConnectionClient.Result result, ServerConfig target) {
+        authorizationFailed = result != LanConnectionClient.Result.UNAVAILABLE;
+        String message;
+        switch (result) {
+            case UNAUTHORIZED: message = "此线路拒绝令牌，请重新配对。"; break;
+            case WRONG_DEVICE: message = "电脑标识已改变，请核对电脑后重新配对。"; break;
+            case UNPROVEN: message = "未能验证局域网电脑的身份，未发送访问令牌。"; break;
+            case UNEXPECTED: message = "此线路未返回有效的码舱状态，请检查连接设置。"; break;
+            case INVALID: message = "配对地址或令牌无效，请重新配对。"; break;
+            default: message = "暂时无法连接电脑，请检查已配对的网络线路。";
+        }
+        showConnectionError(message + "\n" + target.origin());
+    }
+
+    void recheckEventStream(Uri uri) {
+        if (uri == null || networkProbe != null || !"/api/events".equals(uri.getPath()) || !isTrustedOrigin(uri)) return;
+        android.net.Network network = PairedNetwork.current(this);
+        if (network != null) checkCurrentRoute(network);
+    }
+
+    private void checkCurrentRoute(android.net.Network network) {
+        if (connectivity == null || !network.equals(connectivity.getActiveNetwork()) || isFinishing() || isDestroyed()
+                || isDemoMode || !preferPairedRoutes || currentConfig == null || currentConfig.getRemoteHostId().isEmpty()
+                || connectionAttempt != null) return;
+        if (connectionFailed) {
+            if (!authorizationFailed && new ServerConfigManager(this).isAutoConnectEnabled()) loadTargetUrl();
+            return;
+        }
+        if (!workbenchLoaded) return;
+        cancelNetworkProbe();
+        final ServerConfig target = currentConfig;
+        LanConnectionClient probe = PairedNetwork.client(this, network);
+        networkProbe = probe;
+        new Thread(() -> {
+            LanConnectionClient.Selection selection = probe.select(target, java.util.Collections.emptyList(), false);
+            runOnUiThread(() -> {
+                if (networkProbe != probe || currentConfig != target || isFinishing() || isDestroyed()) return;
+                networkProbe = null;
+                switch (selection.result) {
+                    case READY:
+                        if (target.identifiedLan() && PairedNetwork.unchanged(this, network)) verifiedLanNetwork = network;
+                        break;
+                    case UNAVAILABLE:
+                    case UNPROVEN:
+                        loadTargetUrl();
+                        break;
+                    default:
+                        reportRouteFailure(selection.result, target);
+                }
+            });
+        }, "paired-route-check").start();
+    }
+
+    private void cancelNetworkProbe() {
+        if (networkProbe != null) { networkProbe.cancel(); networkProbe = null; }
     }
 
     private void cancelConnectionAttempt() {
@@ -501,7 +619,7 @@ public class MainActivity extends Activity {
         if (statusDot != null) {
             statusDot.setBackgroundTintList(getColorStateList(R.color.status_error));
         }
-        tvErrorMessage.setText(detail + (currentConfig == null ? "" : "\n\n目标地址：" + currentConfig.toDisplayAddress()));
+        tvErrorMessage.setText(detail);
         btnErrorRetry.setVisibility(authorizationFailed ? View.GONE : View.VISIBLE);
         btnErrorChangeServer.setText(authorizationFailed ? "重新配对" : "连接设置");
         if (offlineSnapshots != null) offlineSnapshots.connectionFailed(detail);
@@ -537,7 +655,7 @@ public class MainActivity extends Activity {
         Uri page = Uri.parse(location);
         String path = page.getPath();
         return isTrustedOrigin(page) && ("/".equals(path) || "/index.html".equals(path))
-            && ReconnectPolicy.eligible(currentConfig.getHost(), currentConfig.getPort(), currentConfig.getToken())
+            && currentConfig.eligible()
             ? currentConfig : null;
     }
 
@@ -642,6 +760,8 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        connectivity = getSystemService(android.net.ConnectivityManager.class);
+        if (connectivity != null) connectivity.registerDefaultNetworkCallback(networkCallback);
         continueBackgroundPermission();
         AppUpdateChecker.start(this);
         if (webView != null) webView.onResume();
@@ -657,6 +777,8 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onPause() {
+        if (connectivity != null) { connectivity.unregisterNetworkCallback(networkCallback); connectivity = null; }
+        cancelNetworkProbe();
         if (offlineSnapshots != null) offlineSnapshots.pause();
         AppUpdateChecker.stop(this);
         if (connectionAttempt != null) {

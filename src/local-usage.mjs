@@ -102,8 +102,19 @@ export function parseLocalCodexUsage(input, {sourceId} = {}) {
   if (!metadataSeen) diagnose('session-meta-missing',0);
   // Ambiguity discovered late invalidates attribution for the whole supplied timeline.
   if (blocked && increments.length) { diagnose('timeline-attribution-deferred',0); increments.length = 0; }
+  const coveredTurns = new Set();
+  for (const increment of increments) {
+    const t = turns.get(increment.turnId);
+    if (!t?.startedAt || !t.completedAt) continue;
+    const time = Date.parse(increment.timestamp);
+    if (time >= Date.parse(t.startedAt) && time <= Date.parse(t.completedAt) && Object.values(increment.tokens).every(n => n !== null)) {
+      coveredTurns.add(t.turnId);
+    } else {
+      coverageGaps.add(t.turnId);
+    }
+  }
   return {source:'local-codex-jsonl',sourceId,threadId,declaredVersion,compatibilityNotice:counts.has('declared-version-cache-write-default')?'按会话声明的 0.157.1 协议，将缺失缓存写入字段按默认 0 兼容；恢复后的逐条写入版本未核实。':null,snapshot:counts.has('excluded-non-codex-source') ? null : snapshot,firstTimestamp,lastTimestamp,tokenEvents,duplicateEvents,increments,
-    provider,turns:identityBlocked||!threadId||counts.has('excluded-non-codex-source')?[]:[...turns.values()].map(t=>({...t,coverageComplete:!blocked&&coverageStarts.has(t.turnId)&&!coverageGaps.has(t.turnId)&&!!t.startedAt&&!!t.completedAt&&increments.some(i=>i.turnId===t.turnId)&&increments.filter(i=>i.turnId===t.turnId).every(i=>Object.values(i.tokens).every(n=>n!==null)&&!!instant(i.timestamp)&&Date.parse(i.timestamp)>=Date.parse(t.startedAt)&&Date.parse(i.timestamp)<=Date.parse(t.completedAt))})),turnAttribution:identityBlocked||!threadId?'deferred':'observed-turn-records',attribution:blocked || !threadId ? 'deferred' : 'observed-differences-only',
+    provider,turns:identityBlocked||!threadId||counts.has('excluded-non-codex-source')?[]:[...turns.values()].map(t=>({...t,coverageComplete:!blocked&&coverageStarts.has(t.turnId)&&!coverageGaps.has(t.turnId)&&coveredTurns.has(t.turnId)})),turnAttribution:identityBlocked||!threadId?'deferred':'observed-turn-records',attribution:blocked || !threadId ? 'deferred' : 'observed-differences-only',
     diagnostics,diagnosticCounts:Object.fromEntries(counts),
     notice:'仅传入本地记录的观察值；不是官方全局统计或账单，不与其他来源相加。首个累计快照不分摊到模型；缓存与推理不另加到总量。'};
 }

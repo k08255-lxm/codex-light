@@ -41,6 +41,7 @@ test('public download instructions match the release asset/version contract', ()
   assert.deepEqual([...new Set(releaseApks)], apkNames, 'Release notes and Android instructions must name the same APK');
   if (version === '0.4.12') assert.equal(apkNames[0], 'codex-light-android-0.4.12.apk');
   if (version === '0.4.13') assert.equal(apkNames[0], 'codex-light-0.4.13.apk');
+  if (version === '0.4.15') assert.equal(apkNames[0], 'codex-light-0.4.15.apk');
   assert.ok(android.includes(`versionCode 为 ${versionCode}`));
   assert.ok(readme.includes('SHA256SUMS.txt'));
   assert.ok(android.includes('SHA256SUMS.txt'));
@@ -48,11 +49,11 @@ test('public download instructions match the release asset/version contract', ()
   assert.ok(readme.includes('desktop/velopack/compat-router/README.md'));
 });
 
-test('the 0.4.11 client can reach the current Windows installer from the latest release notes', () => {
+test('clients can reach the current Windows installer from the latest release notes', () => {
   const version = JSON.parse(read('package.json')).version;
   const notes = read(`releases/${version}.md`).slice(0, 12000); // The shipped client truncates release bodies here.
   const installer = `https://github.com/k08255-lxm/codex-light/releases/download/v${version}/CodexLight-Setup-${version}-x64.exe`;
-  assert.ok(notes.includes('0.4.11') && notes.includes(`](${installer})`));
+  assert.ok(notes.includes(`](${installer})`));
 });
 
 // Historical entries are immutable release evidence, not current-version examples.

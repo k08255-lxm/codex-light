@@ -27,6 +27,7 @@ test('defaults projection marks missing, non-string, empty and overlong values n
 });
 
 test('permission and Fast defaults are projected without provider credentials',()=>{
+ assert.equal(projectSessionDefaults({config:{service_tier:'priority'}}).serviceTier,'fast');
  const result=projectSessionDefaults({config:{approval_policy:'on-request',approvals_reviewer:'auto_review',sandbox_mode:'workspace-write',sandbox_workspace_write:{writable_roots:[process.cwd()],network_access:true},service_tier:'fast',api_key:'PRIVATE'}});
  assert.equal(result.approvalPolicy,'on-request');assert.equal(result.approvalsReviewer,'auto_review');assert.equal(result.serviceTier,'fast');assert.deepEqual(result.sandboxPolicy,{type:'workspaceWrite',writableRoots:[process.cwd()],networkAccess:true});assert.ok(!JSON.stringify(result).includes('PRIVATE'));
  const invalid=projectSessionDefaults({config:{approval_policy:'invalid',approvals_reviewer:'invalid',sandbox_mode:'invalid',service_tier:'invalid'}});

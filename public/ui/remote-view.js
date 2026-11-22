@@ -7,7 +7,7 @@ import { remoteStatusLabel, safePairing, pairingQuery, remoteActionState, remote
 export function createRemoteView({ document, state, $, el, rpc, notice, confirm, performMutation, scopedPending, rowsNode }) {
   const remote = {busy:false,status:null,pair:null,timer:null,generation:0};
   function remoteActions(){return remoteActionState({connected:state.connected,busy:remote.busy,pending:scopedPending('remote').length>0,status:remote.status,pair:remote.pair});}
-  function remoteControls(){const actions=remoteActions();for(const [id,key] of [['remote-refresh','refresh'],['remote-enable','enable'],['remote-disable','disable'],['remote-pair','pair'],['remote-pair-check','pairCheck']])$(id).disabled=!actions[key];$('remote-pair-check').title=actions.pairCheck?'查询本机配对码是否已被领取':'需要已连接且有效的本机配对码';}
+  function remoteControls(){const actions=remoteActions();for(const [id,key] of [['remote-refresh','refresh'],['remote-enable','enable'],['remote-disable','disable'],['remote-pair','pair'],['remote-pair-check','pairCheck']])$(id).disabled=state.lan||!actions[key];$('remote-pair-check').title=actions.pairCheck?'查询本机配对码是否已被领取':'需要已连接且有效的本机配对码';}
   function remoteStatusRows(status){return rowsNode([['状态',remoteStatusLabel(status.status)],['服务名称',boundedText(status.serverName||'未知',200)],['安装标识',boundedText(status.installationId||'未知',200)]]);}
   function applyRemoteStatus(status){
    if(!state.connected)return;
@@ -22,6 +22,7 @@ export function createRemoteView({ document, state, $, el, rpc, notice, confirm,
   }
   function clearRemotePair(message='本机配对码显示已清除；这不会撤销已配对设备。'){clearTimeout(remote.timer);remote.timer=null;remote.pair=null;$('remote-pair-code').textContent='';$('remote-pair-expiry').textContent='';$('remote-pairing').classList.add('hidden');$('remote-pair-status').textContent=message;remoteControls();}
   async function refreshRemote(){
+   if(state.lan){remoteReset({statusMessage:'请在电脑上管理官方远控设备和配对。',pairMessage:'配对码仅在电脑上显示。',devicesMessage:'设备列表仅在电脑上显示。'});return;}
    if(remote.busy)return;
    if(!state.connected){notice('尚未连接 Codex，无法读取远控状态。',true);return;}
    const generation=++remote.generation,instance=state.serverInstance,previous=remote.status;

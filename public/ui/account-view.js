@@ -41,7 +41,7 @@ function usageFailureText(scope, failure) {
   return `${scope}：${descriptions[failure.kind]}${codes.length ? `（${codes.join('；')}）` : ''}。`;
 }
 
-export function mountAccount(host, { rpc, loginPanelHost, pendingHost, demo = () => false, getThreadId = () => null, onQuota = () => {} }) {
+export function mountAccount(host, { rpc, loginPanelHost, pendingHost, demo = () => false, readOnly = false, getThreadId = () => null, onQuota = () => {} }) {
   const document = host.ownerDocument;
   let generation = 0, accountEpoch = 0, active = false, quotaResult = null, attempt = null, selectedCredit = null, bucketId = null, usageTab = 'overview';
   let loadTask = null, creditSignature = null;
@@ -178,7 +178,7 @@ export function mountAccount(host, { rpc, loginPanelHost, pendingHost, demo = ()
         const choose = el(document, 'button', 'btn', selectedCredit?.id === credit.id ? '已选择' : '选择使用'); choose.type = 'button'; choose.disabled = !canUse;
         choose.dataset.focusKey = `credit:${credit.id}`;
         choose.addEventListener('click', () => { selectedCredit = credit; renderResetCredits(); resetCredits.querySelector('[data-focus-key="credit-confirm"]')?.focus(); });
-        row.append(info, choose); list.append(row);
+        row.append(info); if (!readOnly) row.append(choose); list.append(row);
       }
       details.append(list); body.append(details);
       if (credits.length < summary.availableCount) body.append(el(document, 'p', 'empty-line', '服务仅返回部分可用卡片。'));
@@ -197,7 +197,7 @@ export function mountAccount(host, { rpc, loginPanelHost, pendingHost, demo = ()
 
   async function consumeCredit() {
     const credit = selectedCredit;
-    if (!credit || demo() || ['pending', 'unknown'].includes(attempt?.state)) return;
+    if (!credit || readOnly || demo() || ['pending', 'unknown'].includes(attempt?.state)) return;
     if (credit.status !== 'available' || credit.resetType !== 'codexRateLimits' || (finite(credit.expiresAt) && credit.expiresAt * 1000 <= Date.now())) { selectedCredit = null; await load(); return; }
     const mine = accountEpoch;
     // This UUID belongs to one logical redemption. An uncertain result never creates a new attempt.

@@ -20,6 +20,7 @@ import java.util.Locale;
 
 public class ServerConnectActivity extends Activity {
     private boolean pairingBusy=false;
+    private ServerConfig filled;
     private EditText editHost;
     private EditText editPort;
     private EditText editToken;
@@ -67,9 +68,7 @@ public class ServerConnectActivity extends Activity {
         // Populate with last used config
         ServerConfig last = configManager.getCurrent();
         if (last != null) {
-            editHost.setText(last.getHost());
-            editPort.setText(String.valueOf(last.getPort()));
-            editToken.setText(last.getToken());
+            fill(last);
         }
 
         refreshHistoryUI();
@@ -78,7 +77,7 @@ public class ServerConnectActivity extends Activity {
             launchDemoMode();
         } else if (savedInstanceState == null && !getIntent().getBooleanExtra("manual", false)
                 && configManager.isAutoConnectEnabled() && last != null
-                && ReconnectPolicy.eligible(last.getHost(), last.getPort(), last.getToken())) {
+                && last.eligible()) {
             launchConnection(last, true);
         }
         if (configManager.hasStorageError()) Toast.makeText(this,
@@ -86,13 +85,54 @@ public class ServerConnectActivity extends Activity {
     }
 
     @Override protected void onResume(){super.onResume();AppUpdateChecker.start(this);}
-    @Override protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(request==42&&result==RESULT_OK&&data!=null)redeem(data.getStringExtra("pairing"));}
-    private void redeem(String link){
-        if(pairingBusy)return;
-        new android.app.AlertDialog.Builder(this).setTitle("连接这台电脑？").setMessage("只扫描你自己电脑上的二维码。配对会允许本手机使用该电脑的 码舱 CodeCang；HTTP 仅适用于可信局域网。").setNegativeButton("取消",null).setPositiveButton("配对",(dialog,which)->{
-         if(pairingBusy)return;pairingBusy=true;Toast.makeText(this,"正在配对…",Toast.LENGTH_SHORT).show();
-         new Thread(()->{try{ServerConfig cfg=PairingClient.redeem(link);runOnUiThread(()->{pairingBusy=false;if(isFinishing()||isDestroyed())return;editHost.setText(cfg.getHost());editPort.setText(String.valueOf(cfg.getPort()));editToken.setText(cfg.getToken());performConnect();});}catch(Exception e){runOnUiThread(()->{pairingBusy=false;if(!isFinishing())new android.app.AlertDialog.Builder(this).setTitle("配对失败").setMessage("请确认同一网络，并在电脑重新生成二维码后重试。也可粘贴手动连接链接。").setPositiveButton("知道了",null).show();});}},"pairing").start();
-        }).show();
+    @Override protected void onActivityResult(int request, int result, Intent data) {
+        super.onActivityResult(request, result, data);
+        if (request == 42 && result == RESULT_OK && data != null) acceptLink(data.getStringExtra("pairing"));
+    }
+
+    private void fill(ServerConfig config) {
+        editHost.setText("https".equals(config.getScheme()) ? "https://" + config.getHost() : config.getHost());
+        editPort.setText(String.valueOf(config.getPort()));
+        editToken.setText(config.getToken());
+        filled = config;
+    }
+
+    private boolean acceptLink(String text) {
+        java.net.URI ticket = ServerConfig.link(text, "pair");
+        if (ticket != null) { redeem(ticket); return true; }
+        ServerConfig config = ServerConfig.parse(text);
+        if (config == null) return false;
+        fill(config);
+        Toast.makeText(this, "已填入连接地址和令牌，请核对后连接。", Toast.LENGTH_SHORT).show();
+        return true;
+    }
+
+    private void redeem(java.net.URI link) {
+        if (pairingBusy) return;
+        String origin = ServerConfig.pairingTarget(link).origin();
+        new android.app.AlertDialog.Builder(this).setTitle("配对这台电脑？")
+            .setMessage(origin + "\n\n请核对电脑上显示的地址。配对后，这部手机可使用该电脑的码舱工作台。")
+            .setNegativeButton("取消", null).setPositiveButton("配对", (dialog, which) -> {
+                if (pairingBusy) return;
+                pairingBusy = true;
+                Toast.makeText(this, "正在配对…", Toast.LENGTH_SHORT).show();
+                new Thread(() -> {
+                    try {
+                        ServerConfig config = PairingClient.redeem(link);
+                        runOnUiThread(() -> {
+                            pairingBusy = false;
+                            if (!isFinishing() && !isDestroyed()) launchConnection(config, false);
+                        });
+                    } catch (Exception failure) {
+                        runOnUiThread(() -> {
+                            pairingBusy = false;
+                            if (!isFinishing() && !isDestroyed()) new android.app.AlertDialog.Builder(this)
+                                .setTitle("配对失败").setMessage("请确认地址可达，再用电脑重新生成的二维码配对。")
+                                .setPositiveButton("知道了", null).show();
+                        });
+                    }
+                }, "pairing").start();
+            }).show();
     }
     @Override protected void onPause(){AppUpdateChecker.stop(this);super.onPause();}
     private void pasteFromClipboard() {
@@ -100,19 +140,9 @@ public class ServerConnectActivity extends Activity {
             ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
             if (cm != null && cm.hasPrimaryClip() && cm.getPrimaryClip().getItemCount() > 0) {
                 CharSequence text = cm.getPrimaryClip().getItemAt(0).getText();
-                if (text != null) {
-                    if(PairingClient.isPairing(text.toString())){redeem(text.toString());return;}
-                    ServerConfig parsed = ServerConfig.parse(text.toString());
-                    if (parsed != null) {
-                        editHost.setText(parsed.getHost());
-                        editPort.setText(String.valueOf(parsed.getPort()));
-                        editToken.setText(parsed.getToken());
-                        Toast.makeText(this, "已成功解析链接并自动填充", Toast.LENGTH_SHORT).show();
-                        return;
-                    }
-                }
+                if (text != null && acceptLink(text.toString())) return;
             }
-            Toast.makeText(this, "剪贴板中未发现有效的 码舱 CodeCang 局域网链接", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "剪贴板中未发现有效的 码舱 CodeCang 配对或连接链接", Toast.LENGTH_SHORT).show();
         } catch (Exception e) {
             Toast.makeText(this, "读取剪贴板失败: " + e.getMessage(), Toast.LENGTH_SHORT).show();
         }
@@ -129,36 +159,28 @@ public class ServerConnectActivity extends Activity {
             return;
         }
 
-        int port = 80;
-        if (!portStr.isEmpty()) {
-            try {
-                port = Integer.parseInt(portStr);
-            } catch (Exception e) {
-                Toast.makeText(this, "端口号格式不正确", Toast.LENGTH_SHORT).show();
-                editPort.requestFocus();
-                return;
-            }
-        }
-
-        ServerConfig cfg = new ServerConfig(host, port, token);
-        if (!ReconnectPolicy.eligible(cfg.getHost(), cfg.getPort(), cfg.getToken())) {
-            Toast.makeText(this, "请输入电脑生成的私有 IPv4 地址、端口和完整访问令牌，或重新扫码配对。", Toast.LENGTH_LONG).show();
+        ServerConfig cfg = ServerConfig.fromFields(host, portStr, token);
+        if (cfg == null || !cfg.eligible()) {
+            Toast.makeText(this, "请输入私有 IPv4 或 https:// 固定域名、有效端口和完整访问令牌。", Toast.LENGTH_LONG).show();
             return;
         }
+        if (filled != null && token.equals(filled.getToken()) && !cfg.origin().equals(filled.origin())) {
+            Toast.makeText(this, "地址已改变，请粘贴新地址的连接链接或重新扫码配对。", Toast.LENGTH_LONG).show();
+            return;
+        }
+        ServerConfig chosen = filled != null && token.equals(filled.getToken()) && cfg.origin().equals(filled.origin())
+            ? filled : cfg;
         new android.app.AlertDialog.Builder(this)
             .setTitle("连接已配对的电脑？")
-            .setMessage("请确认地址属于你的电脑。连接遵循系统当前网络和 VPN 路由规则。HTTP 未加密，仅限可信网络；自动连接会尝试已保存的地址，可在连接页关闭。")
+            .setMessage(cfg.origin() + (chosen.getRemoteHostId().isEmpty() ? "" : "\n电脑 ID " + chosen.getRemoteHostId())
+                + "\n\n请确认地址属于你的电脑。自动连接会使用此地址，可在连接页关闭。")
             .setNegativeButton("取消", null)
-            .setPositiveButton("确认连接", (dialog, which) -> launchConnection(cfg, false)).show();
+            .setPositiveButton("确认连接", (dialog, which) -> launchConnection(chosen, false)).show();
     }
 
     private void launchConnection(ServerConfig cfg, boolean automatic) {
         Intent intent = workbenchIntent();
-        intent.putExtra("automatic", automatic);
-        intent.putExtra("host", cfg.getHost());
-        intent.putExtra("port", cfg.getPort());
-        intent.putExtra("token", cfg.getToken());
-        intent.putExtra("demo", false);
+        MainActivity.putConnection(intent, cfg, automatic);
         startActivity(intent);
         finish();
     }
@@ -195,13 +217,11 @@ public class ServerConnectActivity extends Activity {
             TextView tvDate = row.findViewById(R.id.tvHistoryDate);
             View btnConnect = row.findViewById(R.id.btnConnectHistory);
 
-            tvAddress.setText(item.toDisplayAddress());
-            tvDate.setText("最近连接: " + sdf.format(new Date(item.getLastConnectedAt())));
+            tvAddress.setText(item.origin());
+            tvDate.setText(ConnectionHistory.deviceLabel(item, history) + "\n最近连接 " + sdf.format(new Date(item.getLastConnectedAt())));
 
             View.OnClickListener clickListener = v -> {
-                editHost.setText(item.getHost());
-                editPort.setText(String.valueOf(item.getPort()));
-                editToken.setText(item.getToken());
+                fill(item);
                 performConnect();
             };
 

@@ -7,7 +7,7 @@ import {createServer} from '../src/server.mjs';
 import {DemoClient} from '../src/demo.mjs';
 const tick=()=>new Promise(resolve=>setTimeout(resolve,2));
 test('HTTP settings default off and future first-turn summaries exclude injected attachment metadata',async t=>{
- const root=await fs.mkdtemp(path.join(os.tmpdir(),'title-http-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));const client=new DemoClient(),base=client.call.bind(client),calls=[];let summaryInput=null;
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'title-http-'));const client=new DemoClient(),base=client.call.bind(client),calls=[];let summaryInput=null;
  client.call=async(method,params)=>{calls.push({method,params:structuredClone(params)});
   if(method==='config/read')return {config:{}};
   if(method==='thread/start'&&params.ephemeral)return {thread:{id:'title-reader',cwd:params.cwd,ephemeral:true},approvalPolicy:'never',sandbox:{type:'readOnly',networkAccess:false},instructionSources:[]};
@@ -17,7 +17,7 @@ test('HTTP settings default off and future first-turn summaries exclude injected
   if(method==='thread/unsubscribe'&&params.threadId==='title-reader')return {};
   return base(method,params);
  };
- const app=await createServer({client,statisticsRoot:root,fileAttachmentRoot:path.join(root,'uploads')});await app.started;t.after(()=>app.close());let sequence=0;
+ const app=await createServer({client,statisticsRoot:root,projectsRoot:path.join(root,'projects'),fileAttachmentRoot:path.join(root,'uploads')});await app.started;t.after(async()=>{await app.close();await fs.rm(root,{recursive:true,force:true});});let sequence=0;
  const post=(route,input={})=>fetch(app.origin+route,{method:'POST',headers:{Authorization:'Bearer '+app.token,'Content-Type':'application/json'},body:JSON.stringify(input)});
  const rpc=(method,params,extra={})=>post('/api/rpc',{method,params,...extra,requestId:`${app.operations.serverInstance}:${Date.now()}:title-http-${++sequence}`});
  assert.equal((await(await post('/api/title-summary/status')).json()).enabled,false);assert.equal(calls.length,0);assert.equal((await post('/api/title-summary/configure',{enabled:true,model:'demo'})).status,200);assert.equal(calls.filter(row=>row.method==='turn/start').length,0);
@@ -29,7 +29,6 @@ test('HTTP settings default off and future first-turn summaries exclude injected
 
 test('HTTP leaving an active first response and continuing after it preserves one first-message title',async t=>{
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'title-http-navigation-'));
- t.after(()=>fs.rm(root,{recursive:true,force:true}));
  const client=new DemoClient(),base=client.call.bind(client),calls=[];let firstId,summaryInput=null,turnCount=0;
  client.call=async(method,params)=>{
   calls.push({method,params:structuredClone(params)});
@@ -45,7 +44,7 @@ test('HTTP leaving an active first response and continuing after it preserves on
   return base(method,params);
  };
  const app=await createServer({client,statisticsRoot:root,projectsRoot:path.join(root,'projects'),fileAttachmentRoot:path.join(root,'uploads')});
- await app.started;t.after(()=>app.close());let sequence=0;
+ await app.started;t.after(async()=>{await app.close();await fs.rm(root,{recursive:true,force:true});});let sequence=0;
  const post=(route,input={})=>fetch(app.origin+route,{method:'POST',headers:{Authorization:'Bearer '+app.token,'Content-Type':'application/json'},body:JSON.stringify(input)});
  const rpc=(method,params)=>post('/api/rpc',{method,params,requestId:`${app.operations.serverInstance}:${Date.now()}:title-navigation-${++sequence}`});
  const completed=id=>client.emit('event',{method:'turn/completed',params:{threadId:firstId,turn:{id,status:'completed'}}});

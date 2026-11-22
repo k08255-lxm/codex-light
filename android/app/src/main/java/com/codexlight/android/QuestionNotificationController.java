@@ -113,6 +113,7 @@ final class QuestionNotificationController {
 
     private void post(Entry entry, String title) {
         Intent intent = new Intent(context, MainActivity.class).setAction(ACTION_OPEN)
+            .putExtra("origin", TaskNotificationController.get(context).origin())
             .setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP)
             .putExtra("questionId", entry.id).putExtra("threadId", entry.threadId)
             .putExtra("notificationId", entry.notificationId);

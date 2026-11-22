@@ -64,7 +64,7 @@ final class OfflineSnapshotController {
     void beginConnection(ServerConfig config) {
         live = false; displayed = null; saving = false; panel.setVisibility(View.GONE);
         connectionMessage = "正在连接电脑，先显示上次页面";
-        currentKey = config == null ? null : OfflineSnapshotData.key(config.getHost(), config.getPort());
+        currentKey = config == null ? null : OfflineSnapshotData.key(config.getScheme(), config.getHost(), config.getPort(), config.getRemoteHostId());
         loadLatest();
     }
 
@@ -105,7 +105,7 @@ final class OfflineSnapshotController {
         if (destroyed || saving || config == null || !stillValid.getAsBoolean()) return;
         saving = true;
         final int request = generation;
-        final String key = OfflineSnapshotData.key(config.getHost(), config.getPort());
+        final String key = OfflineSnapshotData.key(config.getScheme(), config.getHost(), config.getPort(), config.getRemoteHostId());
         final String token = config.getToken();
         view.evaluateJavascript("(() => { const api = window.CodexLightOfflineSnapshot; return api && typeof api.capture === 'function' ? api.capture() : null; })()", raw -> {
             saving = false;

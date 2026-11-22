@@ -56,7 +56,7 @@ import { mountEngineOnboarding } from './engine-onboarding.js';
 import { AttachmentDraft, FileAttachmentDraft, validateFileSelection, validateImageSelection } from './attachments.js';
 import { mountConversation, renderDiff } from './activity-feed.js';
 import { TurnLedger, buildTurns, FollowUpQueue, contextSnapshot, HistoryPager, historyCapabilities } from './state.js';
-import { projectPathKey, threadProjectPath } from './projects.js';
+import { projectPathKey, projectThreadGroups, threadProjectPath } from './projects.js';
 import { createSessionControls } from './session-controls.js';
 import { mountProjectNavigation } from './project-navigation.js';
 import { editProjectName } from './project-name-dialog.js';
@@ -83,13 +83,17 @@ const token = access.token;
 // LAN pages cannot use local management (shutdown, runtime, desktop, LAN links). Applied before any request.
 function applyAccessMode(lan) { state.lan = !!lan; document.documentElement.dataset.access = lan ? 'lan' : 'local'; }
 const pendingMutations = new PendingMutations(localSession);
-const sessionDefaults = new SessionDefaultsBridge(body => api('/api/session/defaults', body), {onChange:snapshot=>{renderReasoning();sessionControls.render();if(snapshot.error)notice('无法读取 Codex 配置默认模型/强度：'+snapshot.error+'。没有改用模型目录默认值；可打开模型列表显式重试，发送时不会强行写入默认值。',true);}});
+let draftModelChoice = readDraftModelChoice();
+let modelCatalogLoading = true;
+const sessionDefaults = new SessionDefaultsBridge(body => api('/api/session/defaults', body), {onChange:snapshot=>{populateEfforts();updateControls();if(snapshot.error)notice('无法读取 Codex 配置默认模型/强度：'+snapshot.error+'。没有改用模型目录默认值；可打开模型列表显式重试，发送时不会强行写入默认值。',true);}});
 const state = { connected: false, demo: false, desktop: false, reasoning: restoredReasoning(null), cwd: readSession('codex-light-cwd') || '', thread: null, threads: [], nextThreads: null, nextItems: null, models: [], modelGeneration: 0, turnId: null, sending: false, busy: false, openGeneration: 0, searchGeneration: 0, requests: new Map(), store: new ItemStore(Infinity, { preserveBodies: true }), nodes: new Map(), rendering: false, historyFallback: false, activeTurns: new Map(), terminalTurns: new Set(), shuttingDown: false, eventController: null, detailsTab: 'tools', dshConnection: null, dshRefreshing: false, serverInstance: null, pendingQueries: new Set(), interruptingTurns: new Set(), uploadingImages: false, loadingThread: false, dshReads: new Map(), dshReadErrors: new Map(), dshReadSequence: 0, dshReadGeneration: 0, dshOpenDetails: new Set(), settingsPage: 'general', archivedThreads: [], archivedCursor: null, archivedGeneration: 0, accountLoading: false, usageLoading: false, renameTarget: null, cliVersion: null, ledger: new TurnLedger(), nextTurns: null, contexts: new Map(), threadSessions: [] };
 // Follow-up messages typed while a task runs. Per thread, survives navigation, never persisted.
 const followUps = new FollowUpQueue();
+const nextTurnChoices = new Map();
+const liveSettingsUpdates = new Map();
 // Retain confirmed sends until native history catches up, including active background turns.
 const unindexedThreads = new Map();
-const sessionControls=createSessionControls({document,defaults:()=>sessionDefaults.snapshot().value,threadId:()=>state.thread?.id,notice:(...args)=>notice(...args),permissionStore:input=>api('/api/session/permission',input)});
+const sessionControls=createSessionControls({document,defaults:()=>sessionDefaults.snapshot().value,threadId:()=>state.thread?.id,model:()=>effectiveModel().model,onFastChange:tier=>queueLiveTurnSettings({serviceTier:tier}),notice:(...args)=>notice(...args),permissionStore:input=>api('/api/session/permission',input)});
 const queuedPreviews = new Map();
 let runtimePanel=null,pendingReconciler=null,pendingReconcilerSignature='',pendingReconcilerActive=false,pendingReconcileQueued=false;
 const projectsState={projects:[],selectedId:null,canPickFolder:false,busy:false,error:'',generation:0,dialogGeneration:0};
@@ -282,7 +286,13 @@ const projectNavigation=mountProjectNavigation($('thread-list'),{
   },
 });
 mountPanelResize({document,window});
-const connectionBootstrap=new ConnectionBootstrap(async current=>{const results=await Promise.allSettled([loadModels(current),loadThreads(false,current)]);if(!current())return;for(const result of results)if(result.status==='rejected')notice('连接已建立，但目录加载失败：'+result.reason.message+'。可点击重新检查连接重试读取，不会发送任务。',true);},error=>notice('连接目录加载失败：'+error.message,true));
+const connectionBootstrap=new ConnectionBootstrap(async current=>{
+ modelCatalogLoading=true;updateControls();
+ const models=loadModels(current).finally(()=>{if(current()){modelCatalogLoading=false;updateControls();}});
+ const results=await Promise.allSettled([models,loadThreads(false,current)]);
+ if(!current())return;
+ for(const result of results)if(result.status==='rejected')notice('连接已建立，但目录加载失败：'+result.reason.message+'。可点击重新检查连接重试读取，不会发送任务。',true);
+},error=>notice('连接目录加载失败：'+error.message,true));
 const notifications = createNotifications({targets: [$('notice'), $('settings-notice')], activeTarget: () => $('settings-dialog').classList.contains('hidden') ? $('notice') : $('settings-notice')});
 function notice(text, error = false) { notifications.show(text, error); }
 let taskNotifications=null;
@@ -291,7 +301,7 @@ let lastEventAt=0;
 let offlineSnapshot=null;
 function activity(text, running = false) { $('activity').textContent = text; $('activity').classList.toggle('running', running); }
 async function api(path, body, {timeoutMs=90000,signal}={}) {
-  if (!token) { const error = new Error(access.lan ? '缺少访问令牌：请在电脑的“局域网访问”中复制链接，在手机上重新打开。' : '缺少本地访问令牌，请使用启动器重新打开窗口。'); error.outcome = 'notExecuted'; throw error; }
+  if (!token) { const error = new Error(access.lan ? '请在电脑的“设置 → 远程控制”中生成局域网或公网配对码，再用手机扫码连接。' : '缺少本地访问令牌，请使用启动器重新打开窗口。'); error.outcome = 'notExecuted'; throw error; }
   const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const r = await fetch(path, { method: body === undefined ? 'GET' : 'POST', signal: signal?AbortSignal.any([controller.signal,signal]):controller.signal, headers: { Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
@@ -487,7 +497,7 @@ pendingReconciler.setActive(false);
 const eventSubscribers = new Set();
 // Activation also reads the login-operation snapshot. Only authoritative account events
 // invalidate account-scoped views; a read-only snapshot merely refreshes this page.
-const accountLoginPanel=mountAccountLoginPanel($('account-login-controls'),{api:accountApi,onAccountChanged:async()=>{if(currentRoute==='account')await refreshAccount();}});
+const accountLoginPanel=mountAccountLoginPanel($('account-login-controls'),{api:accountApi,readOnly:access.lan,onAccountChanged:async()=>{if(currentRoute==='account')await refreshAccount();}});
 const statsView = mountStatistics($('stats-root'), { api, notice, onPickFolder: async () => { if (!projectsState.canPickFolder) return null; const result = await api('/api/desktop/pick-folder', {}, { timeoutMs: 310000 }); return result.path || null; } });
 const accountQuota = mountAccountQuota($('account-quota'), { rpc, onOpen: () => route('account') });
 const accountIdentity = createAccountIdentityController({
@@ -503,7 +513,7 @@ const accountView = mountAccount($('account-root'), {
     if(pendingMutations.values().some(row=>row.method===method))throw Object.assign(new Error('上次重置结果仍待核实，请先刷新账户状态'),{outcome:'notExecuted'});
     return performMutation(method,params);
   },
-  loginPanelHost: $('account-login-controls'), pendingHost: $('account-pending'), demo: () => state.demo,
+  loginPanelHost: $('account-login-controls'), pendingHost: $('account-pending'), demo: () => state.demo, readOnly:access.lan,
   getThreadId: () => state.thread?.id, onQuota: result => accountQuota.update(result),
 });
 const lanView = mountLanAccess($('lan-root'), { api, notice });
@@ -537,6 +547,7 @@ $('dismiss-dsh-model').addEventListener('click', async () => {
 const dshConnectionView = mountDshConnection($('dsh-connection-root'), { api, runtimeTarget:()=>state.runtimeTarget, onChange: () => refreshDsh(), onModelSaved:() => { dshModelReminder.hidden = true; } });
 function resetUsage(){statsView.reset();accountView.reset();if(currentRoute==='usage')statsView.activate();if(currentRoute==='account')accountView.activate();}
 function resetAccountScopedViews(reason='账户已改变'){
+  nextTurnChoices.clear();
   resetContext();
   sessionControls.reset();
   if(state.connected&&state.thread?.id)sessionControls.load(state.thread.id).catch(error=>notice(error.message,true));
@@ -558,7 +569,13 @@ function currentSendAvailability(){
  const hasContent=!!($('prompt').value.trim()||attachmentDraft.values().length||fileAttachmentDraft.values().length);
  // While a task runs the composer offers steer/queue instead of being blocked.
  if(state.busy&&state.thread&&!state.sending&&!state.loadingThread&&state.connected&&state.serverInstance&&!state.uploadingImages)return{disabled:!hasContent,reason:'',action:null,running:true};
- return sendAvailability({...state,projectless:!state.thread||state.thread.projectless===true,pending:false,hasContent});
+ const availability=sendAvailability({...state,projectless:!state.thread||state.thread.projectless===true,pending:false,hasContent});
+ if(availability.disabled||state.thread)return availability;
+ const {model,effort}=draftModelChoice;
+ if(((model||effort)&&modelCatalogLoading)||(!model&&effort&&sessionDefaults.snapshot().loading)){
+   return {disabled:true,reason:'正在恢复新对话的模型和思考强度，请稍候。'};
+ }
+ return availability;
 }
 function updateControls() { syncSettingsFolderPicker();const availability=currentSendAvailability();const running=!!availability.running;const canSteer=running&&runningInputAvailable();
  $('send').disabled=availability.disabled||(running&&!canSteer);$('send').title=running?'立即补充到当前任务 (Enter)':availability.reason||'发送 (Enter)';$('send').setAttribute('aria-label',running?'立即补充到当前任务':'发送消息');$('send').dataset.mode=running?'steer':'send';
@@ -566,7 +583,7 @@ function updateControls() { syncSettingsFolderPicker();const availability=curren
  $('composer-hint').textContent=running?(canSteer?'Enter 立即补充 · Tab 排队到下一轮 · Shift Enter 换行':'该任务不在本窗口运行，结束后自动刷新 · Tab 排队'):'Enter 发送 · Shift Enter 换行 · / 命令';
  $('prompt').placeholder=running?'补充说明，或排队下一条消息':state.thread?'继续对话':'描述要完成的任务';
  const reason=running?'':availability.reason;$('send-state-text').textContent=reason;$('send-state').classList.toggle('hidden',!reason||(!availability.action&&reason==='输入消息，或添加图片 / 文件。'));const action=$('send-state-action');action.classList.toggle('hidden',running||!availability.action||availability.action==='stop');action.dataset.action=availability.action||'';action.textContent=({reconnect:'重新检查连接',cwd:'选择工作目录',pending:'查看消息状态'})[availability.action]||'';
- $('stop').classList.toggle('hidden', !state.busy); $('stop').disabled = state.loadingThread || !state.turnId || !state.connected || !state.serverInstance || state.interruptingTurns.has(state.turnId) || pendingMutations.has('turn/interrupt', state.thread?.id, state.turnId); $('new-thread').disabled = state.sending; $('add-project').disabled=state.sending||projectsState.busy; $('model').disabled = state.busy || state.sending || state.loadingThread; $('effort').disabled = state.busy || state.sending || state.loadingThread; $('model-trigger').disabled = $('effort').disabled; if ($('effort').disabled) closeReasoning(false); $('add-attachment').disabled = state.sending || state.uploadingImages || !state.connected; $('add-file').disabled = $('add-attachment').disabled; $('thread-menu-button').disabled = !state.thread || state.sending || state.loadingThread || state.busy || !!pendingMutations.storageError || threadPendingRecords().length>0;
+ $('stop').classList.toggle('hidden', !state.busy); $('stop').disabled = state.loadingThread || !state.turnId || !state.connected || !state.serverInstance || state.interruptingTurns.has(state.turnId) || pendingMutations.has('turn/interrupt', state.thread?.id, state.turnId); $('new-thread').disabled = state.sending; $('add-project').disabled=state.sending||projectsState.busy; $('model').disabled = state.sending || state.loadingThread; $('effort').disabled = $('model').disabled; $('model-trigger').disabled = $('effort').disabled; if ($('effort').disabled) closeReasoning(false); $('add-attachment').disabled = state.sending || state.uploadingImages || !state.connected; $('add-file').disabled = $('add-attachment').disabled; $('thread-menu-button').disabled = !state.thread || state.sending || state.loadingThread || state.busy || !!pendingMutations.storageError || threadPendingRecords().length>0;
  syncSkillsContext();
  void questionNotifications?.flushOpen();
 }
@@ -639,8 +656,8 @@ function newThread(cwd = '') {
   route('chat',{back:true}); sidebarController.closeForNavigation();
   const previous = state.thread?.id || null;
   // A new chat is only a draft; thread/start happens on first send.
-  state.openGeneration++; state.loadingThread = false; state.thread = null; state.reasoning = restoredReasoning(null); populateEfforts(); dshTasks.reset(); state.dshReadErrors.clear(); state.dshOpenDetails.clear(); state.dshConnection = null; renderDshConnection(); syncDshLiveContext(); renderDshTasks(); state.turnId = null; state.busy = false; resetThreadView(); $('tool-list').replaceChildren(el('p', 'muted', '暂无工具活动')); $('thread-title').textContent = '新对话'; $('welcome').classList.remove('hidden'); $('earlier').classList.add('hidden'); activity(''); renderContext(); renderQueue(); updateControls(); renderThreads(); renderRequests(); $('prompt').focus();
-  setCwd(cwd); releaseThread(previous);
+  state.openGeneration++; state.loadingThread = false; state.thread = null; dshTasks.reset(); state.dshReadErrors.clear(); state.dshOpenDetails.clear(); state.dshConnection = null; renderDshConnection(); syncDshLiveContext(); renderDshTasks(); state.turnId = null; state.busy = false; resetThreadView(); $('tool-list').replaceChildren(el('p', 'muted', '暂无工具活动')); $('thread-title').textContent = '新对话'; $('welcome').classList.remove('hidden'); $('earlier').classList.add('hidden'); activity(''); renderContext(); renderQueue(); updateControls(); renderThreads(); renderRequests(); $('prompt').focus();
+  setCwd(cwd); populateEfforts(); releaseThread(previous);
   recordNavigation();
 }
 function renderThreads() {
@@ -746,15 +763,23 @@ async function handleProjectAction(group,action) {
 function openProjectDialog() {
   if(projectsState.busy||state.sending)return;
   const list=$('project-choices');list.replaceChildren();
-  const noProject=el('button','project-choice');noProject.type='button';noProject.setAttribute('aria-pressed',String(!state.cwd));noProject.append(icon(document,'compose'),el('span','','无项目'));noProject.addEventListener('click',()=>selectProject({projectless:true}));list.append(noProject);
-  for(const project of projectsState.projects){const button=el('button','project-choice');button.type='button';button.title=project.path;button.append(icon(document,'folder'),el('span','',project.name));button.addEventListener('click',()=>selectProject({path:project.path,projectId:project.id}));list.append(button);}
+  const groups=projectThreadGroups(projectsState.projects,state.threads,{selectedPath:state.cwd})
+    .filter(group=>group.saved||group.projectless);
+  if(!groups.some(group=>group.projectless))groups.unshift({name:'无项目',projectless:true,selected:!state.cwd});
+  for(const group of groups){
+    const button=el('button','project-choice');button.type='button';
+    button.setAttribute('aria-pressed',String(group.selected));
+    if(group.path)button.title=group.path;
+    button.append(icon(document,group.projectless?'compose':'folder'),el('span','',group.name));
+    button.addEventListener('click',()=>selectProject(group));list.append(button);
+  }
   list.classList.remove('hidden');
   $('project-status').textContent=projectsState.error;
   $('project-path').value=state.cwd;
   $('project-browse').classList.toggle('hidden',!projectsState.canPickFolder);
   $('project-manual').open=!projectsState.canPickFolder;
   if(!$('project-dialog').open){projectsState.dialogGeneration++;$('project-dialog').showModal();}
-  noProject.focus();
+  (list.querySelector('[aria-pressed="true"]')||list.firstElementChild).focus();
 }
 async function addProject() {
   if(projectsState.busy||state.sending)return;
@@ -843,7 +868,7 @@ async function openThread(thread) {
     // History is read-only: never resume or subscribe just to look at a conversation.
     const [result] = await Promise.all([rpc('thread/read', { threadId: thread.id }),sessionControls.load(thread.id).catch(error=>notice('未能读取对话批准方式：'+error.message,true))]);
     if (generation !== state.openGeneration) return;
-    state.thread = withSubmittedActivity(result.thread || thread); dshTasks.reset(state.thread.id); state.dshReadErrors.clear(); state.dshOpenDetails.clear(); state.dshConnection = null; renderDshConnection(); syncDshLiveContext(); renderDshTasks(); restoreThreadReasoning({ model: state.thread.model, reasoningEffort: state.thread.reasoningEffort }); resetThreadView(); state.busy = false; state.turnId = null; renderRequests();
+    state.thread = withSubmittedActivity(result.thread || thread); dshTasks.reset(state.thread.id); state.dshReadErrors.clear(); state.dshOpenDetails.clear(); state.dshConnection = null; renderDshConnection(); syncDshLiveContext(); renderDshTasks(); restoreThreadReasoning({ model: state.thread.model, reasoningEffort: state.thread.reasoningEffort, serviceTier: Object.hasOwn(result,'serviceTier') ? result.serviceTier : state.thread.serviceTier }); resetThreadView(); state.busy = false; state.turnId = null; renderRequests();
     void loadSavedContext(state.thread.id,generation);
     setCwd(threadProjectPath(state.thread)); $('thread-title').textContent = state.thread.name || state.thread.preview || '对话'; $('welcome').classList.add('hidden'); renderThreads(); renderContext(); renderQueue();
     let running = null;
@@ -1099,6 +1124,10 @@ async function performMutation(method, params, extras = {}) {
       if(!marker||lookupDecision(marker,{serverInstance:state.serverInstance,method,state:'succeeded',result})!=='succeeded')throw Object.assign(new Error('应用更新结果尚未确认，请先核对已有操作。'),{outcome:'unknown'});
     }
     if(method==='thread/delete'&&result?.threadId!==envelope.params.threadId)throw Object.assign(new Error('删除结果缺少目标对话标识'),{outcome:'unknown'});
+    if(method==='turn/start'&&result?.turn?.id){
+      const choice=nextTurnChoices.get(params.threadId);
+      if(choice&&(params.model||'')===choice.model&&(params.effort||null)===(choice.effort||null))nextTurnChoices.delete(params.threadId);
+    }
     if(method==='thread/summary'&&!validSummaryResult(envelope.params.threadId,result))throw Object.assign(new Error('标题结果缺少目标对话标识或标题'),{outcome:'unknown'});
     if(['thread/archive','thread/delete'].includes(method))unindexedThreads.delete(envelope.params.threadId);
     if(method==='runtime/upgrade'){
@@ -1237,26 +1266,110 @@ function onPromptKey(e) {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
 }
 
-function restoreThreadReasoning(result, override) {
- sessionControls.restore(result.sessionPermission);
- const model=typeof result.model==='string'?result.model:'';
- if(model&&![...$('model').options].some(option=>option.value===model))$('model').append(new Option(model+'（目录外）',model));
- $('model').value=model;state.reasoning=restoredReasoning(result.reasoningEffort);if(override)state.reasoning.override=override;populateEfforts();
+function readDraftModelChoice() {
+  let model='';
+  try {
+    model=localStorage.getItem('codex-light-model')||'';
+    const saved=JSON.parse(localStorage.getItem('codex-light-draft-model'));
+    if(typeof saved?.model==='string')return saved;
+  }catch{}
+  return {model};
 }
-function populateEfforts(modelChanged = false) {
- const active=effectiveModel(),model=active.model;if(modelChanged){const configured=sessionDefaults.snapshot().value?.model||null;state.reasoning=switchedReasoning(model,state.reasoning,{configuredModel:configured,selectedModel:$('model').value});}
+function queueLiveTurnSettings(patch) {
+  const threadId=state.thread?.id, turnId=state.turnId, instance=state.serverInstance;
+  if(!state.busy||!threadId)return;
+  if(!turnId||!instance||!state.connected||sessionFor(threadId)?.activeTurnId!==turnId){
+    notice('当前任务由其他窗口运行，所选设置将在下一轮使用。');return;
+  }
+  const key=JSON.stringify([instance,threadId,turnId]);
+  let update=liveSettingsUpdates.get(key);
+  if(!update){update={fields:{},timer:null,pending:false,revision:0};liveSettingsUpdates.set(key,update);}
+  Object.assign(update.fields,patch);
+  update.revision++;
+  clearTimeout(update.timer);
+  update.timer=setTimeout(flush,140);
+  const visible=()=>state.thread?.id===threadId&&state.serverInstance===instance;
+  async function flush(){
+    if(update.pending)return;
+    const fields=update.fields, revision=update.revision;
+    update.fields={};
+    const feedback=message=>{if(visible()&&revision===update.revision)notice(message);};
+    try{
+      update.pending=true;
+      if(state.serverInstance!==instance||!state.connected||sessionFor(threadId)?.activeTurnId!==turnId){
+        feedback('本轮已结束或断开，所选设置将在下一轮使用。');return;
+      }
+      // A null model or effort is a no-op in the live protocol, including when a default is unknown.
+      if(!Object.keys(fields).some(name=>fields[name]!=null||name==='serviceTier')){
+        feedback('将在下一轮按 Codex 配置使用默认设置。');return;
+      }
+      const result=await performMutation('turn/settings/update',{threadId,turnId,...fields});
+      if(result?.status==='applied')feedback('已更新本轮设置，将用于后续步骤。');
+      else if(result?.status==='targetUnavailable')feedback('本轮已结束，所选设置将在下一轮使用。');
+      else feedback('引擎未确认本轮设置，所选设置将在下一轮使用。');
+    }catch(error){
+      feedback(Number(error.code)===-32601||error.code==='TURN_SETTINGS_DISABLED'?'当前引擎不支持运行中更改，所选设置将在下一轮使用。':'调整本轮设置未获确认：'+error.message+'。所选设置将在下一轮使用。');
+    }finally{
+      update.pending=false;
+      clearTimeout(update.timer);
+      if(Object.keys(update.fields).length)update.timer=setTimeout(flush,0);
+      else liveSettingsUpdates.delete(key);
+    }
+  }
+}
+function chooseEffort(effort, modelChanged=false) {
+  state.reasoning.override=effort;
+  draftModelChoice={model:$('model').value,effortModel:effectiveModel().id,effort};
+  try{localStorage.setItem('codex-light-draft-model',JSON.stringify(draftModelChoice));}
+  catch{notice('模型和思考强度已应用于当前窗口，重新打开后可能需要重新选择。',true);}
+  populateEfforts();
+  if(state.thread&&(state.busy||nextTurnChoices.has(state.thread.id))){
+    nextTurnChoices.set(state.thread.id,{model:$('model').value,effort:state.reasoning.override});
+  }
+  const active=effectiveModel();
+  const view=configuredReasoningView(active.model,state.reasoning,sessionDefaults.snapshot().value,active.id);
+  const patch=modelChanged?{model:active.id,effort:view.effective??null}:{effort:view.effective??null};
+  if(modelChanged&&active.id)patch.serviceTier=sessionControls.modelChangeTier();
+  queueLiveTurnSettings(patch);
+}
+function chooseModel(value) {
+  $('model').value=value;
+  state.reasoning=switchedReasoning(effectiveModel().model,state.reasoning,{
+    configuredModel:sessionDefaults.snapshot().value?.model,selectedModel:value
+  });
+  chooseEffort(state.reasoning.override,true);
+}
+function restoreThreadReasoning(result, override) {
+ sessionControls.restore(result.sessionPermission,result.serviceTier);
+ const choice=nextTurnChoices.get(result.thread?.id);
+ const model=choice?.model??(typeof result.model==='string'?result.model:'');
+ if(model&&![...$('model').options].some(option=>option.value===model))$('model').append(new Option(model+'（目录外）',model));
+ $('model').value=model;state.reasoning=restoredReasoning(choice?null:result.reasoningEffort);if(choice||override)state.reasoning.override=choice?choice.effort:override;populateEfforts();
+}
+function populateEfforts() {
+ if(!state.thread){
+   const saved=draftModelChoice.model;
+   $('model').value=state.models.some(row=>row.model===saved&&!row.hidden)?saved:'';
+   const active=effectiveModel();
+   state.reasoning=restoredReasoning(null);
+   if(saved===$('model').value&&active.id===draftModelChoice.effortModel&&reasoningChoices(active.model).includes(draftModelChoice.effort)){
+     state.reasoning.override=draftModelChoice.effort;
+   }
+ }
+ const model=effectiveModel().model;
  const select=$('effort');select.replaceChildren(new Option('默认 / 继承线程设置',''));
  for(const value of reasoningChoices(model))select.append(new Option(effortLabel(value),value));
  const explicit=reasoningParameter(state.reasoning);if(explicit&&![...select.options].some(option=>option.value===explicit))select.append(new Option(effortLabel(explicit),explicit));select.value=explicit||'';renderReasoning();
 }
 function renderReasoning() {
-  sessionControls.render();
   const defaults=sessionDefaults.snapshot(), active=effectiveModel(), view=configuredReasoningView(active.model,state.reasoning,defaults.value,active.id), modelView=defaultModelView(state.models,$('model').value,defaults.value);
   const name=formatModelDisplayName(modelView.displayName)||(defaults.loading?'正在读取模型…':'选择模型'), effortText=view.effective?effortLabel(view.effective):'';
   const label=view.effective?effortLabel(view.effective):(defaults.loading?'读取中…':'默认');
   const defaultLabel=defaults.value?.model?`自动 · ${formatModelDisplayName(defaults.value.model)}`:'自动（Codex 配置）';
-  $('model-trigger').replaceChildren(el('span','model-trigger-label',[name,effortText].filter(Boolean).join(' · ')),icon(document,'down',{size:14}));
-  $('model-trigger').title=modelView.source==='config'?`Codex 配置默认模型：${boundedText(modelView.id||'未知',512)}${modelView.outsideCatalog?'（不在当前模型目录）':''}`:name; $('reasoning-model-name').title=$('model-trigger').title; $('reasoning-model-name').textContent=name; $('reasoning-label').textContent=label;
+  $('model-trigger-name').textContent=name;
+  $('model-trigger-effort').textContent=effortText?' · '+effortText:'';
+  $('reasoning-model-name').title=modelView.source==='config'?`Codex 配置默认模型：${boundedText(modelView.id||'未知',512)}${modelView.outsideCatalog?'（不在当前模型目录）':''}`:name; $('reasoning-model-name').textContent=name; $('reasoning-label').textContent=label;
+  sessionControls.render();
   $('reasoning-label').title=view.source==='override'?'显式发送所选思考强度':view.source==='inherited'?'沿用服务端线程设置；不发送强度覆盖':view.configUnsupported?`Codex 配置默认强度 ${effortLabel(view.configured)} 不在当前模型支持范围；不会发送`:view.configSupport==='unknown'?`Codex 配置默认强度 ${effortLabel(view.configured)} 是否被当前模型支持未知；不会发送`:view.source==='config'?'Codex 配置默认强度；发送时不写入覆盖值':defaults.loading?'正在读取 Codex 配置默认值；尚未发送任何设置':defaults.error?'Codex 配置默认值读取失败；发送时不写入覆盖值，可打开模型列表重试':'未读取 Codex 配置默认值；发送时不写入覆盖值';
   const range=$('reasoning-range');range.max=String(Math.max(0,view.choices.length-1));range.value=String(Math.max(0,view.index));range.disabled=!view.choices.length||$('effort').disabled;
   range.setAttribute('aria-valuetext',view.effective?effortAccessibleLabel(view.effective)+(view.source==='config'?'（Codex 配置默认）':view.source==='inherited'?'（继承线程设置）':'（显式发送）'):view.configUnsupported?`配置强度 ${effortAccessibleLabel(view.configured)} 不被当前模型支持`:view.configSupport==='unknown'?`配置强度 ${effortAccessibleLabel(view.configured)} 是否被当前模型支持未知`:'默认强度未知');
@@ -1264,7 +1377,7 @@ function renderReasoning() {
   $('reasoning-track').style.setProperty('--effort-fill',`calc(14px + (100% - 28px) * ${ratio})`);$('reasoning-track').classList.toggle('unknown',view.index<0);
   const ticks=document.createDocumentFragment();for(let i=0;i<view.choices.length;i++){const tick=el('i');tick.style.left=`${100*i/Math.max(1,view.choices.length-1)}%`;ticks.append(tick);} $('reasoning-ticks').replaceChildren(ticks);
   const entries=[{model:'',displayName:defaultLabel},...state.models.filter(m=>!m.hidden)];if($('model').value&&!entries.some(entry=>entry.model===$('model').value))entries.push({model:$('model').value,displayName:$('model').value+'（目录外）'});
-  const options=document.createDocumentFragment();for(const entry of entries){const button=el('button','model-option');button.type='button';button.setAttribute('aria-pressed',String(entry.model===$('model').value));button.title=entry.model?`${formatModelDisplayName(entry.displayName||entry.model)} · ${entry.model}`:'使用 Codex 配置中的当前模型';button.append(el('span','',formatModelDisplayName(entry.displayName||entry.model)),entry.model===$('model').value?icon(document,'check',{size:15}):el('span'));button.addEventListener('click',()=>{$('model').value=entry.model;try{localStorage.setItem('codex-light-model',entry.model);}catch{}populateEfforts(true);showReasoningModels(false);$('reasoning-range').disabled?$('model-list-open').focus():$('reasoning-range').focus();});options.append(button);}
+  const options=document.createDocumentFragment();for(const entry of entries){const button=el('button','model-option');button.type='button';button.setAttribute('aria-pressed',String(entry.model===$('model').value));button.title=entry.model?`${formatModelDisplayName(entry.displayName||entry.model)} · ${entry.model}`:'使用 Codex 配置中的当前模型';button.append(el('span','',formatModelDisplayName(entry.displayName||entry.model)),entry.model===$('model').value?icon(document,'check',{size:15}):el('span'));button.addEventListener('click',()=>{chooseModel(entry.model);showReasoningModels(false);$('reasoning-range').disabled?$('model-list-open').focus():$('reasoning-range').focus();});options.append(button);}
   if(defaults.loading)options.append(el('p','model-option-note','正在读取 Codex 配置默认值…'));
   else if(defaults.error){const retry=el('button','model-option');retry.type='button';retry.append(el('span','','重新读取 Codex 配置默认值'));retry.title='上次读取失败：'+boundedText(defaults.error,300);retry.addEventListener('click',()=>{sessionDefaults.retry();});options.append(retry);}
   $('model-options').replaceChildren(options);
@@ -1273,19 +1386,20 @@ function showReasoningModels(show){$('reasoning-controls').classList.toggle('hid
 function closeReasoning(focus=true){if($('reasoning-popover').classList.contains('hidden'))return;$('reasoning-popover').classList.add('hidden');$('model-trigger').setAttribute('aria-expanded','false');if(focus)$('model-trigger').focus();}
 function openReasoning(){if($('model-trigger').disabled)return;renderReasoning();showReasoningModels(false);$('reasoning-popover').classList.remove('hidden');$('model-trigger').setAttribute('aria-expanded','true');($('reasoning-range').disabled?$('model-list-open'):$('reasoning-range')).focus();}
 $('model-trigger').addEventListener('click',()=>{$('reasoning-popover').classList.contains('hidden')?openReasoning():closeReasoning();});
-$('reasoning-range').addEventListener('input',()=>{const model=effectiveModel().model;state.reasoning.override=reasoningChoices(model)[Number($('reasoning-range').value)]||null;populateEfforts();});
-$('reasoning-range').addEventListener('click',()=>{if($('reasoning-track').classList.contains('unknown')&&!$('reasoning-range').disabled){const model=effectiveModel().model;state.reasoning.override=reasoningChoices(model)[Number($('reasoning-range').value)]||null;populateEfforts();}});
-$('reasoning-reset').addEventListener('click',()=>{const model=effectiveModel().model;state.reasoning=resetReasoning(model,state.reasoning);populateEfforts();if(!state.reasoning.override)notice('模型目录未提供默认强度，已取消本地覆盖；继续继承线程设置，不代表已清除服务端原强度。');});
+const chooseRangeEffort=()=>chooseEffort(reasoningChoices(effectiveModel().model)[Number($('reasoning-range').value)]||null);
+$('reasoning-range').addEventListener('input',chooseRangeEffort);
+$('reasoning-range').addEventListener('click',()=>{if($('reasoning-track').classList.contains('unknown')&&!$('reasoning-range').disabled)chooseRangeEffort();});
+$('reasoning-reset').addEventListener('click',()=>{chooseEffort(resetReasoning(effectiveModel().model,state.reasoning).override);if(!state.reasoning.override)notice('模型目录未提供默认强度，已取消本地覆盖；继续继承线程设置，不代表已清除服务端原强度。');});
 $('model-list-open').addEventListener('click',()=>{showReasoningModels(true);const active=$('model-options').querySelector('[aria-pressed="true"]');active?.focus();active?.scrollIntoView({block:'nearest',inline:'nearest'});});
 $('model-list-back').addEventListener('click',()=>{showReasoningModels(false);$('model-list-open').focus();});
-$('effort').addEventListener('change',()=>{state.reasoning.override=$('effort').value||null;renderReasoning();});
+$('effort').addEventListener('change',()=>chooseEffort($('effort').value||null));
 $('reasoning-popover').addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();event.stopPropagation();closeReasoning();}else if(['ArrowDown','ArrowUp'].includes(event.key)&&!$('reasoning-model-list').classList.contains('hidden')){const buttons=[...$('reasoning-model-list').querySelectorAll('button')];const index=buttons.indexOf(document.activeElement);event.preventDefault();const next=buttons[(index+(event.key==='ArrowDown'?1:buttons.length-1))%buttons.length];next?.focus();next?.scrollIntoView({block:'nearest',inline:'nearest'});}});
 document.addEventListener('pointerdown',event=>{if(!event.target.closest('.model-control'))closeReasoning(false);});
 document.addEventListener('focusin',event=>{if(!event.target.closest('.model-control'))closeReasoning(false);});
 document.addEventListener('keydown',event=>{if(event.ctrlKey&&event.shiftKey&&event.key.toLowerCase()==='m'){event.preventDefault();openReasoning();}});
 // model-loader:start
 async function loadModels(current=()=>true) {
-  const generation=++state.modelGeneration,rows=[],seenModels=new Set(),seenCursors=new Set();let cursor=null,selected=$('model').value;
+  const generation=++state.modelGeneration,rows=[],seenModels=new Set(),seenCursors=new Set();let cursor=null;
   for(let page=0;page<5;page++){
     const params={limit:100};if(cursor)params.cursor=cursor;
     const result=await rpc('model/list',params);
@@ -1297,8 +1411,8 @@ async function loadModels(current=()=>true) {
     seenCursors.add(next);cursor=next;
   }
   if(!current()||generation!==state.modelGeneration)return;
-  // Restore an explicit, still available choice; old conversations keep their own model.
-  if(!selected&&!state.thread){try{const saved=localStorage.getItem('codex-light-model');if(rows.some(row=>row.model===saved&&!row.hidden))selected=saved;}catch{}}
+  // Navigation can change the current selection while the catalog is loading.
+  const selected=$('model').value;
   state.models=rows;$('model').replaceChildren(new Option('使用 Codex 配置默认模型',''));for(const model of rows.filter(m=>!m.hidden))$('model').append(new Option(formatModelDisplayName(model.displayName||model.model),model.model));if(selected&&!Array.from($('model').options).some(option=>option.value===selected))$('model').append(new Option(selected+'（目录外）',selected));$('model').value=selected;populateEfforts();
 }
 // model-loader:end
@@ -1357,6 +1471,7 @@ function onEvent(message) {
     renderThreads();updateControls();return;
   }
   if(message.method==='account/updated')return accountIdentity.verify();
+  if(message.method==='bridge/statisticsRecovered'){statsView.recovered();return;}
   if(message.method==='bridge/accountLogin'){accountLoginPanel.update(message.params);if(['completed','loggedOut'].includes(message.params?.state)){accountIdentity.reset();resetAccountScopedViews('账户已改变');}return;}
   if(message.method==='thread/tokenUsage/updated'){if(!state.connected)return;const snapshot=contextSnapshot(message.params);if(snapshot){cacheContext(snapshot,'live');if(snapshot.threadId===state.thread?.id)renderContext();}return;}
   if(message.method==='bridge/threadReads'){
@@ -1523,7 +1638,7 @@ const historyAutoLoad = mountHistoryAutoLoad({
   load: () => loadItems(true),
 });
 $('shutdown').addEventListener('click', async () => { if (!await confirm(state.desktop ? '停止本窗口的 Codex app-server？Codex 任务可能中断，独立 DSH 任务可能继续。再次启动会重新连接官方历史，不会无缝恢复当前连接。' : '停止 GUI 本地服务？通过此 GUI 运行的任务可能会中断，独立 DSH 任务可能继续。')) return; state.shuttingDown = true; try { const result = await api('/api/shutdown', {}); if (result?.engineStopped !== true || result?.shutdownAccepted !== true) throw new Error('服务未确认引擎已停止，状态未知；请稍后检查连接状态。'); state.eventController?.abort(); setConnected(false, 'GUI 服务已停止'); activity(state.desktop ? '已停止服务。请关闭本窗口后重新启动应用；新连接会读取官方历史。' : '已停止服务。重新运行启动器即可打开。'); closeSettings(); } catch (e) { state.shuttingDown = false; notice(e.message, true); } });
-$('model').addEventListener('change', () => populateEfforts(true)); $('dismiss-notice').addEventListener('click', () => notifications.dismiss());
+$('model').addEventListener('change', () => chooseModel($('model').value)); $('dismiss-notice').addEventListener('click', () => notifications.dismiss());
 $('rail-sidebar').addEventListener('click', () => sidebarController.toggle()); $('sidebar-overlay').addEventListener('click', () => sidebarController.close()); for(const id of ['close-sidebar','settings-sidebar-close']) $(id).addEventListener('click', () => sidebarController.close());
 function showDetails(tab = state.detailsTab, force = false) {
   if (currentRoute !== 'chat') route('chat');
@@ -1791,6 +1906,7 @@ function updateThreadName(id, name) {
   renderThreads();
 }
 function removeListedThread(id, deleted) {
+  if(deleted)nextTurnChoices.delete(id);
   clearRunningTurn(id,state.activeTurns.get(id));
   state.contexts.delete(id);
   questionNotifications?.forgetThread(id);

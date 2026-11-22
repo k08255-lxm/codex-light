@@ -35,6 +35,9 @@ lines.on('line',line=>{
   if(p.input.some(i=>i.type==='text'&&i.text==='synthetic-timeout'))return;
   reply({turnId:e.active});return;
  }
+ if(m.method==='turn/settings/update'&&p.model!=='synthetic-legacy'){
+  reply({status:owned.get(p.threadId)?.active===p.turnId?'applied':'targetUnavailable'});return;
+ }
  if(m.method==='test/complete'){
   const e=owned.get(p.threadId);const turn={id:e?.active,status:'completed'};if(e)e.active=null;
   send({method:'turn/completed',params:{threadId:p.threadId,turn}});reply({});return;

@@ -58,6 +58,15 @@ final class TaskNotificationController {
         }
     }
 
+    void bindOrigin(String origin) {
+        if (origin.equals(prefs.getString("origin", null))) return;
+        clear();
+        QuestionNotificationController.get(context).clearAll();
+        prefs.edit().putString("origin", origin).apply();
+    }
+
+    String origin() { return prefs.getString("origin", ""); }
+
     String status() {
         boolean enabled = prefs.getBoolean("enabled", false);
         boolean permission = permissionGranted();
@@ -159,7 +168,7 @@ final class TaskNotificationController {
             String turnId = data.optString("turnId", "");
             String title = data.optString("title", "");
             if (!TaskNotificationState.validId(turnId) || !TaskNotificationState.validTitle(title)) return;
-            if (prefs.getStringSet("dismissed", Collections.emptySet()).contains(threadId + "\n" + turnId)) return;
+            if (prefs.getStringSet("dismissed", Collections.emptySet()).contains(origin() + "\n" + threadId + "\n" + turnId)) return;
             // Expire old entries before enforcing the three-task cap.
             expireTasks();
             TaskNotificationState.Entry old = tasks.entries.get(threadId);
@@ -192,14 +201,14 @@ final class TaskNotificationController {
     }
 
     private void post(TaskNotificationState.Entry entry) {
-        if (!permissionGranted() || prefs.getStringSet("dismissed", Collections.emptySet()).contains(entry.key())) return;
+        if (!permissionGranted() || prefs.getStringSet("dismissed", Collections.emptySet()).contains(origin() + "\n" + entry.key())) return;
         boolean running = "running".equals(entry.state);
         // API 24-25 cannot expire notifications after process death. Never pin live state there.
         if (running && Build.VERSION.SDK_INT < 26) return;
-        Intent open = new Intent(context, MainActivity.class).setAction(ACTION_OPEN)
+        Intent open = new Intent(context, MainActivity.class).setAction(ACTION_OPEN).putExtra("origin", origin())
             .setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP)
             .putExtra("threadId", entry.threadId).putExtra("turnId", entry.turnId);
-        Intent dismiss = new Intent(context, TaskNotificationReceiver.class).setAction(ACTION_DISMISS)
+        Intent dismiss = new Intent(context, TaskNotificationReceiver.class).setAction(ACTION_DISMISS).putExtra("origin", origin())
             .putExtra("threadId", entry.threadId).putExtra("turnId", entry.turnId)
             .putExtra("notificationId", entry.notificationId);
         int flags = PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE;
@@ -267,7 +276,7 @@ final class TaskNotificationController {
     private void expireTasks() {
         long now = SystemClock.elapsedRealtime();
         for (TaskNotificationState.Entry entry : new ArrayList<>(tasks.entries.values())) {
-            if (prefs.getStringSet("dismissed", Collections.emptySet()).contains(entry.key())
+            if (prefs.getStringSet("dismissed", Collections.emptySet()).contains(origin() + "\n" + entry.key())
                     || entry.expired(now)) {
                 tasks.entries.remove(entry.threadId);
                 manager.cancel(TAG, entry.notificationId);

@@ -398,12 +398,14 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
     if (data?.dsh && data.dsh.available === false) lines.push('DSH 子代理：' + (data.dsh.reason || '暂无可验证的用量数据'));
     for (const note of Array.isArray(c?.notes) ? c.notes.slice(0, 6) : []) lines.push(String(note));
     if (c?.persistenceWarning) lines.push(String(c.persistenceWarning));
+    if (c?.modelRecoveryError) lines.push('日志补全未完成：' + c.modelRecoveryError);
     scopeBody.replaceChildren(...lines.map(line => el(document, 'p', '', line)));
     scopeSummary.textContent = c?.partial ? '数据口径 · 部分覆盖' : '数据口径';
   }
 
   render();
   return {
+    recovered() { if (active && ui.scope === 'light' && !ui.cursor && !importing) return load(); },
     activate() {
       active = true;
       const initial = ui.scope === 'local' && !localImported ? discoverAndImport() : load();

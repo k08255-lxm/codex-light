@@ -1,4 +1,4 @@
-import test from 'node:test';import assert from 'node:assert/strict';import {readFile} from 'node:fs/promises';import {notifyConnectionLost,pendingForScope,sendAvailability} from '../public/submissions.js';import {createWorkbench} from '../public/ui/workbench-view.js';
+import test from 'node:test';import assert from 'node:assert/strict';import {readFile} from 'node:fs/promises';import {notifyConnectionLost,pendingForScope,sendAvailability,SessionDefaultsBridge} from '../public/submissions.js';import {createWorkbench} from '../public/ui/workbench-view.js';
 const html=await readFile(new URL('../public/index.html',import.meta.url),'utf8');const app=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
 function functionSource(name,nextName){const start=app.indexOf(`function ${name}(`),end=app.indexOf(`function ${nextName}(`,start);assert.ok(start>=0&&end>start,`${name} function boundary`);return app.slice(start,end);}
 
@@ -25,7 +25,11 @@ test('unrelated unknown operations leave chat and terminal available; each own s
  const state={thread:{id:'current'},connected:true,serverInstance:'a'.repeat(32),sending:false,loadingThread:false,busy:false,uploadingImages:false,cwd:'/project'};
  const pendingMutations={storageError:null};let records=[];const nodes=new Map();const $=id=>{if(!nodes.has(id))nodes.set(id,{value:'draft'});return nodes.get(id);};
  const scopedPending=(scope,options)=>pendingForScope(records,scope,options);
- const availability=new Function('state','pendingMutations','chatPendingRecords','sendAvailability','$','attachmentDraft','fileAttachmentDraft',`${functionSource('currentSendAvailability','updateControls')};return currentSendAvailability;`)(state,pendingMutations,()=>scopedPending('chat',{threadId:state.thread?.id}),sendAvailability,$,{values:()=>[]},{values:()=>[]});
+ const sessionDefaults=new SessionDefaultsBridge(async()=>({}));
+ const availability=new Function('state','pendingMutations','chatPendingRecords','sendAvailability','$','attachmentDraft','fileAttachmentDraft',
+  'draftModelChoice','modelCatalogLoading','sessionDefaults',`${functionSource('currentSendAvailability','updateControls')};return currentSendAvailability;`)(
+  state,pendingMutations,()=>scopedPending('chat',{threadId:state.thread?.id}),sendAvailability,$,{values:()=>[]},{values:()=>[]},
+  {model:'',effort:'high'},false,sessionDefaults);
  // Real workbench module with the same lookup; terminalControls derives Open from scoped terminal markers only.
  const wb=createWorkbench({document:{},state,$:id=>{const node=$(id);node.addEventListener??=()=>{};node.setAttribute??=()=>{};node.classList??={toggle(){},add(){},remove(){},contains:()=>false};return node;},el:()=>({}),api:async()=>{},notice(){},confirm:()=>false,performMutation:async()=>{},scopedPending,pendingMutations,pendingReconcileErrors:new Map(),eventSubscribers:new Set(),showTerminal(){},openSettings(){}});
  const terminal=wb.terminalControls;

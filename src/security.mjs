@@ -22,6 +22,7 @@ export function validSandboxPolicy(value){
 }
 const METHODS = new Set(['model/list','thread/list','thread/read','thread/items/list','thread/turns/list','thread/start','thread/resume','thread/unsubscribe','thread/loaded/list','thread/compact/start','skills/list','turn/start','turn/steer','turn/interrupt','mcpServerStatus/list','thread/name/set','thread/archive','thread/unarchive','thread/delete','thread/summary','thread/fork','account/read','account/rateLimits/read','review/start','plugin/list','plugin/read','account/usage/read']);
 METHODS.add('account/rateLimitResetCredit/consume');
+METHODS.add('turn/settings/update');
 const fields = {
  'account/rateLimitResetCredit/consume':['creditId','idempotencyKey'],
  'plugin/list':['cwds','marketplaceKinds','forceRefetch'],
@@ -49,6 +50,7 @@ const fields = {
  'review/start':['threadId','target','delivery'],
  'turn/start':['threadId','input','cwd','model','effort','approvalPolicy','approvalsReviewer','sandboxPolicy','serviceTier'],
  'turn/steer':['threadId','expectedTurnId','input'],
+ 'turn/settings/update':['threadId','turnId','model','effort','serviceTier'],
  'turn/interrupt':['threadId','turnId'],
 };
 export function validateRpc(method,params,{hasAttachments=false}={}) {
@@ -58,6 +60,16 @@ export function validateRpc(method,params,{hasAttachments=false}={}) {
  for(const key of ['threadId','turnId','expectedTurnId'])if(params[key]!==undefined && (typeof params[key]!=='string'||!params[key]||params[key].length>256||/[\x00-\x1f]/.test(params[key])))throw new Error('对话标识无效');
  if(method.startsWith('turn/') || ['thread/read','thread/items/list','thread/turns/list','thread/resume','thread/unsubscribe','thread/compact/start','thread/name/set','thread/archive','thread/unarchive','thread/delete','thread/summary','thread/fork','review/start'].includes(method))if(!params.threadId)throw new Error('缺少对话标识');
  if(method==='turn/steer'&&!params.expectedTurnId)throw new Error('立即发送需要明确的 expectedTurnId');
+ if(method==='turn/settings/update'){
+  if(!params.turnId)throw new Error('调整运行设置需要明确的 turnId');
+  const {model,effort,serviceTier}=params;
+  if(model==null&&effort==null&&serviceTier===undefined)throw new Error('请选择要调整的模型、思考强度或速度');
+  if(model!=null&&(typeof model!=='string'||!model.trim()||model!==model.trim()||/[\x00-\x1f\x7f]/.test(model)))throw new Error('模型标识无效');
+  if(serviceTier!==undefined&&![null,'fast','priority','default'].includes(serviceTier))throw new Error('服务速度无效');
+  // Null for model/effort preserves the value. Null for serviceTier clears it.
+  params={threadId:params.threadId,turnId:params.turnId,...(model!=null?{model}:{}),...(effort!=null?{effort}:{}),
+   ...(serviceTier!==undefined?{serviceTier:serviceTier==='fast'?'priority':serviceTier}:{})};
+ }
  if(params.cursor!==undefined&&params.cursor!==null&&(typeof params.cursor!=='string'||params.cursor.length>4096||params.cursor.includes('\0')))throw new Error('分页游标无效');
  if(method==='skills/list'){
   if(params.forceReload!==undefined&&params.forceReload!==false)throw new Error('技能目录只允许非强制只读查询');

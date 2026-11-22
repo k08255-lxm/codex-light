@@ -5,13 +5,13 @@ import {createDocument} from './mini-dom.mjs';
 
 const configured={model:'configured-model',approvalPolicy:'never',approvalsReviewer:'user',sandbox:'danger-full-access',sandboxPolicy:{type:'dangerFullAccess'},serviceTier:'fast'};
 const autoPermission={approvalPolicy:'on-request',approvalsReviewer:'auto_review',sandbox:'workspace-write',sandboxPolicy:{type:'workspaceWrite'}};
-function fixture({id=null,config=structuredClone(configured),permissionStore}={}){
+function fixture({id=null,config=structuredClone(configured),model,onFastChange,permissionStore}={}){
  const document=createDocument(),host=document.createElement('div');document.body.append(host);
  const chip=document.createElement('button');chip.id='permissions-info';const oldIcon=document.createElement('span');oldIcon.className='ui-icon';
  const label=document.createElement('span');label.className='label';chip.append(oldIcon,label);host.append(chip);
  const query=chip.querySelector.bind(chip);chip.querySelector=selector=>selector.startsWith(':scope')?oldIcon:query(selector);
- const fast=document.createElement('button');fast.id='fast-toggle';host.append(fast);document.defaultView.innerHeight=900;
- const notices=[];const controller=createSessionControls({document,defaults:()=>config,threadId:()=>id,permissionStore,notice:(...args)=>notices.push(args)});
+ const fast=document.createElement('input');fast.id='fast-toggle';fast.type='checkbox';host.append(fast);document.defaultView.innerHeight=900;
+ const notices=[];const controller=createSessionControls({document,defaults:()=>config,threadId:()=>id,model,onFastChange,permissionStore,notice:(...args)=>notices.push(args)});
  const choose=mode=>document.getElementById('permission-menu').querySelector(`[data-value="${mode}"]`).click();
  return {controller,notices,label,fast,choose,get config(){return config;},setConfig(value){config=value;},setId(value){id=value;controller.restore();}};
 }
@@ -22,8 +22,26 @@ test('a new draft defaults to auto review and sends its real approval fields wit
  const snapshot=h.controller.snapshot();assert.deepEqual(snapshot,{permission:autoPermission,serviceTier:null});
  assert.deepEqual(h.controller.params(snapshot,'thread'),{approvalPolicy:'on-request',approvalsReviewer:'auto_review',sandbox:'workspace-write'});
  assert.deepEqual(h.controller.params(snapshot,'turn'),{approvalPolicy:'on-request',approvalsReviewer:'auto_review',sandboxPolicy:{type:'workspaceWrite'}});
- assert.equal(h.fast.getAttribute('aria-pressed'),'true','Fast still follows its configured value');
+ assert.equal(h.fast.checked,true,'Fast still follows its configured value');
  assert.deepEqual(h.config,before,'configuration is read-only');
+});
+
+test('Fast follows the thread override and advertised model tiers, including legacy catalogs',()=>{
+ let model={serviceTiers:[{id:'priority'}]};
+ const changes=[],h=fixture({model:()=>model,onFastChange:tier=>changes.push(tier)});
+ assert.equal(h.fast.checked,true);
+ h.fast.click();assert.equal(h.fast.checked,false);assert.equal(h.controller.snapshot().serviceTier,'default');assert.equal(h.controller.modelChangeTier(),'default');
+ h.fast.click();assert.equal(h.controller.snapshot().serviceTier,'fast');
+ h.controller.adopt('first');h.setId('first');
+ model={serviceTiers:[],additionalSpeedTiers:[]};h.controller.render();
+ assert.equal(h.fast.checked,false);assert.equal(h.fast.disabled,true);assert.equal(h.controller.snapshot().serviceTier,null);assert.equal(h.controller.modelChangeTier(),null);
+ h.fast.click();assert.deepEqual(changes,['default','fast']);
+ model={additionalSpeedTiers:['fast']};h.controller.render();
+ assert.equal(h.fast.disabled,false);assert.equal(h.fast.checked,true);assert.equal(h.controller.snapshot().serviceTier,'fast');
+ h.setId('old');h.controller.restore(null,'default');assert.equal(h.fast.checked,false);
+ h.setId('first');assert.equal(h.fast.checked,true);
+ h.setId(null);h.setConfig({serviceTier:null});model={defaultServiceTier:'priority'};h.controller.render();
+ assert.equal(h.fast.checked,true);assert.equal(h.controller.snapshot().serviceTier,null);assert.equal(h.controller.modelChangeTier(),'fast');
 });
 
 test('an existing thread inherits configuration instead of gaining the new-draft permission override',()=>{

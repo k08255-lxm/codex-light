@@ -40,10 +40,10 @@ final class ProjectFileTransfer {
         if (connection != null) connection.disconnect();
     }
 
-    void download(String host, int port, String token, String body, OutputStream output) throws IOException {
-        if (!ReconnectPolicy.eligible(host, port, token)) throw new Failure("请先配对电脑。");
+    void download(ServerConfig server, String body, OutputStream output) throws IOException {
+        if (!server.eligible()) throw new Failure("请先配对电脑。");
         checkCancelled(this::cancelled);
-        String origin = "http://" + host + (port == 80 ? "" : ":" + port);
+        String origin = server.origin();
         HttpURLConnection connection = null;
         try {
             connection = connections.open(new URL(origin + ENDPOINT));
@@ -55,7 +55,7 @@ final class ProjectFileTransfer {
             connection.setReadTimeout(15_000);
             connection.setRequestMethod("POST");
             connection.setDoOutput(true);
-            connection.setRequestProperty("Authorization", "Bearer " + token);
+            connection.setRequestProperty("Authorization", "Bearer " + server.getToken());
             connection.setRequestProperty("Origin", origin);
             connection.setRequestProperty("Accept", MIME);
             connection.setRequestProperty("Accept-Encoding", "identity");

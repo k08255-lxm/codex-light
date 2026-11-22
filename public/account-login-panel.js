@@ -9,8 +9,12 @@ export function officialLoginUrl(value){
 const validId=value=>typeof value==='string'&&value.length>0&&value.length<=256&&!/[\x00-\x1f\x7f]/.test(value);
 const STATES=new Set(['idle','starting','waiting','completed','failed','canceling','canceled','loggingOut','loggedOut','unknown','closed']);
 const LABELS={idle:'尚未发起登录。',starting:'正在请求官方登录流程…',waiting:'等待官方确认登录；打开页面或输入设备码不代表已登录。',completed:'官方已确认此次登录完成。',failed:'官方未确认登录成功。',canceling:'正在取消当前登录…',canceled:'当前登录已取消。',loggingOut:'正在退出共享 Codex 账户…',loggedOut:'官方已返回退出完成。',unknown:'操作结果未知；已禁止重复发起。请只读刷新账号状态。',closed:'账户服务已关闭。'};
-export function mountAccountLoginPanel(container,{api,onAccountChanged=()=>{},confirmDialog=confirmApp}){
+export function mountAccountLoginPanel(container,{api,onAccountChanged=()=>{},confirmDialog=confirmApp,readOnly=false}){
  const doc=container.ownerDocument,make=(tag,text,className)=>{const node=doc.createElement(tag);if(text!==undefined)node.textContent=text;if(className)node.className=className;return node;};
+ if(readOnly){
+  container.append(make('p','登录、退出账号及使用额度重置卡请在电脑上操作。','account-login-note'));
+  return {activate(){},deactivate(){},update(){},destroy(){container.replaceChildren();}};
+ }
  const title=make('h2','登录与退出'),intro=make('p','使用本机 Codex 的官方登录流程。账户由共享 CODEX_HOME 使用，改变登录状态会影响使用同一配置的 CLI 与桌面端。','account-login-note');
  const actions=make('div',undefined,'actions'),web=make('button','网页登录','subtle'),device=make('button','设备码登录','subtle'),cancel=make('button','取消当前登录','subtle'),logout=make('button','退出共享账户','subtle'),refresh=make('button','只读刷新账号','subtle');
  for(const button of [web,device,cancel,logout,refresh]){button.type='button';actions.append(button);}

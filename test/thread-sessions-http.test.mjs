@@ -40,6 +40,23 @@ test('two synthetic clients: reads do not lock; active switch retains; completio
  await a.close();assert.ok(a.rpc.child.exitCode!==null||a.rpc.child.signalCode);assert.deepEqual((await readdir(root)).filter(f=>f.endsWith('.synthetic-lock')),[]);
 });
 
+test('HTTP current-turn settings forward only validated changes, coalesce retries, and preserve native unsupported outcomes',async t=>{
+ const {root,create}=await fixture(t),app=await create(),method='turn/settings/update';
+ const started=await post(app,'turn/start',{threadId:'t',cwd:root,input:[{type:'text',text:'fixture'}]});
+ const target={threadId:'t',turnId:started.body.turn.id};
+ const requestId=id(app),params={...target,effort:'high',serviceTier:'fast'};
+ const requests=await Promise.all([post(app,method,params,{requestId}),post(app,method,params,{requestId})]);
+ for(const response of requests)assert.deepEqual(response.body,{status:'applied'});
+ assert.equal((await post(app,method,{...params,sandboxPolicy:{type:'dangerFullAccess'}})).status,400);
+ const forwarded=(await app.rpc.call('test/stats')).calls.filter(c=>c.method===method);
+ assert.deepEqual(forwarded,[{method,params:{...target,effort:'high',serviceTier:'priority'}}]);
+ const legacy=await post(app,method,{...target,model:'synthetic-legacy'});
+ assert.equal(legacy.body.code,-32601);assert.equal(legacy.body.outcome,'notExecuted');
+ await app.rpc.call('test/complete',{threadId:'t'});
+ assert.deepEqual((await post(app,method,params)).body,{status:'targetUnavailable'});
+ assert.equal((await app.rpc.call('test/stats')).calls.filter(c=>c.method===method).length,2);
+});
+
 test('HTTP steer uses owned attachments, preserves turn, deduplicates, rejects stale turn and never resends unknown outcome',async t=>{
  const {root,create}=await fixture(t),app=await create();
  const started=await post(app,'turn/start',{threadId:'t',cwd:root,input:[{type:'text',text:'synthetic work'}]});assert.equal(started.status,200);const turnId=started.body.turn.id;

@@ -28,7 +28,7 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-/** A user-started, local-only notification session independent of WebView timers. */
+/** A user-started session with the paired desktop, independent of WebView timers. */
 public final class MobileNotificationService extends Service {
     private static final String STOP = "com.codexlight.android.STOP_MOBILE_MONITOR";
     private static final String CHANNEL = "lan_notification_sync";
@@ -37,8 +37,7 @@ public final class MobileNotificationService extends Service {
     private static volatile String state = "off";
     private static boolean started;
     private static MobileNotificationService currentService;
-    private static String targetHost, targetToken;
-    private static int targetPort;
+    private static String targetOrigin, targetToken;
     private static boolean backgroundQuestions = true;
 
     static String status() { return state; }
@@ -59,8 +58,7 @@ public final class MobileNotificationService extends Service {
     }
 
     static void stopIfTargetChanged(Context context, ServerConfig config) {
-        if (targetHost != null && (config == null || !targetHost.equals(config.getHost())
-                || targetPort != config.getPort() || !targetToken.equals(config.getToken()))) {
+        if (targetOrigin != null && (config == null || !targetOrigin.equals(config.sourceKey()) || !targetToken.equals(config.getToken()))) {
             setEnabled(context,null,false);
             TaskNotificationController.get(context).clear();
             QuestionNotificationController.get(context).clearAll();
@@ -70,13 +68,18 @@ public final class MobileNotificationService extends Service {
     static void setEnabled(Context context, ServerConfig config, boolean enabled) {
         Intent intent = new Intent(context, MobileNotificationService.class);
         if (!enabled) {
+            if (currentService != null) {
+                currentService.generation++;
+                currentService.handler.removeCallbacksAndMessages(null);
+            }
+            targetOrigin = null; targetToken = null;
             context.stopService(intent);
             state = "off";
             return;
         }
-        if (config == null || !ReconnectPolicy.eligible(config.getHost(),config.getPort(),config.getToken())) return;
-        targetHost = config.getHost(); targetPort = config.getPort(); targetToken = config.getToken();
-        intent.putExtra("host",config.getHost()).putExtra("port",config.getPort()).putExtra("token",config.getToken());
+        if (config == null || !config.eligible()) return;
+        targetOrigin = config.sourceKey(); targetToken = config.getToken();
+        intent.putExtra("remoteHostId",config.getRemoteHostId()).putExtra("scheme",config.getScheme()).putExtra("host",config.getHost()).putExtra("port",config.getPort()).putExtra("token",config.getToken());
         state = "connecting";
         try {
             if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent);
@@ -92,6 +95,8 @@ public final class MobileNotificationService extends Service {
     private final Runnable nextPoll = this::poll;
     private boolean polling, refreshPending, expedited;
     private ServerConfig target;
+    private ServerConfig verifiedTarget;
+    private android.net.Network verifiedNetwork;
     private String serverInstance;
     private TaskNotificationController tasks;
     private QuestionNotificationController questions;
@@ -110,7 +115,8 @@ public final class MobileNotificationService extends Service {
         }
         int port = intent.getIntExtra("port",0);
         String host = intent.getStringExtra("host"), token = intent.getStringExtra("token");
-        if (!ReconnectPolicy.eligible(host,port,token)) { state = "off"; stopSelf(); return START_NOT_STICKY; }
+        ServerConfig requested = new ServerConfig(intent.getStringExtra("scheme"), host, port, token, intent.getStringExtra("remoteHostId"));
+        if (!requested.eligible()) { state = "off"; stopSelf(); return START_NOT_STICKY; }
         questions = QuestionNotificationController.get(this);
         tasks = TaskNotificationController.get(this);
         try {
@@ -125,7 +131,7 @@ public final class MobileNotificationService extends Service {
         if (!tasks.permissionGranted()) { state = "permission_required"; stopSelf(); return START_NOT_STICKY; }
         started = true;
         currentService = this;
-        target = new ServerConfig(host,port,token);
+        target = requested;
         generation++;
         polling = false; refreshPending = false;
         handler.removeCallbacksAndMessages(null);
@@ -150,7 +156,7 @@ public final class MobileNotificationService extends Service {
         PendingIntent stop = PendingIntent.getService(this,NOTICE,new Intent(this,MobileNotificationService.class).setAction(STOP),flags);
         Notification.Builder notification = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this,CHANNEL) : new Notification.Builder(this);
         return notification.setSmallIcon(R.drawable.ic_launcher_foreground).setContentTitle("正在同步配对电脑的通知")
-            .setContentText("局域网内接收任务状态和等待处理请求").setOngoing(true).setOnlyAlertOnce(true)
+            .setContentText("接收任务状态和等待处理请求").setOngoing(true).setOnlyAlertOnce(true)
             .setVisibility(Notification.VISIBILITY_PRIVATE).setContentIntent(open)
             .addAction(new Notification.Action.Builder(android.graphics.drawable.Icon.createWithResource(this,R.drawable.ic_launcher_foreground),"停止同步",stop).build()).build();
     }
@@ -165,7 +171,16 @@ public final class MobileNotificationService extends Service {
             JSONObject snapshot = null;
             String outcome = "network_error";
             try {
-                HttpURLConnection connection = (HttpURLConnection) new URL("http://" + config.toDisplayAddress() + "/api/mobile/notification-state").openConnection();
+                if (config.identifiedLan()) {
+                    android.net.Network network = PairedNetwork.current(this);
+                    if (verifiedTarget != config || verifiedNetwork == null || !verifiedNetwork.equals(network)) {
+                        if (!PairedNetwork.client(this, network).verifyPeer(config, 1500)) throw new IOException("Peer unverified");
+                        verifiedNetwork = network;
+                        verifiedTarget = config;
+                    }
+                    if (!PairedNetwork.unchanged(this, network)) throw new IOException("Route changed");
+                }
+                HttpURLConnection connection = (HttpURLConnection) new URL(config.origin() + "/api/mobile/notification-state").openConnection();
                 active = connection;
                 if (session != generation) { connection.disconnect(); return; }
                 connection.setInstanceFollowRedirects(false);
@@ -273,7 +288,7 @@ public final class MobileNotificationService extends Service {
         generation++;
         started = false;
         currentService = null;
-        targetHost = null; targetToken = null; targetPort = 0;
+        targetOrigin = null; targetToken = null;
         if ("active".equals(state) || "connecting".equals(state) || "network_error".equals(state) || "engine_offline".equals(state)) state = "off";
         handler.removeCallbacksAndMessages(null);
         HttpURLConnection connection = active;

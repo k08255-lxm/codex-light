@@ -42,13 +42,16 @@ public final class OfflineSnapshotDataTest {
         String html = decoded.html();
         check(!html.contains("<script>") && !html.contains("<img "), "untrusted text cannot become markup");
         check(html.contains("&lt;script&gt;") && html.contains("default-src 'none'") && html.contains("仅供离线查看"), "inert readable offline document");
-        check(OfflineSnapshotData.key("192.168.1.2", 1234).matches("[a-f0-9]{64}"), "private hashed identity");
-        check(!OfflineSnapshotData.key("192.168.1.2", 1234).equals(OfflineSnapshotData.key("192.168.1.3", 1234)), "hosts isolated");
-        check(!OfflineSnapshotData.key("192.168.1.2", 1234).equals(OfflineSnapshotData.key("192.168.1.2", 1235)), "ports isolated");
+        check(OfflineSnapshotData.key("http", "192.168.1.2", 1234, "").matches("[a-f0-9]{64}"), "private hashed identity");
+        check(!OfflineSnapshotData.key("http", "192.168.1.2", 1234, "").equals(OfflineSnapshotData.key("http", "192.168.1.3", 1234, "")), "hosts isolated");
+        check(!OfflineSnapshotData.key("http", "192.168.1.2", 1234, "").equals(OfflineSnapshotData.key("http", "192.168.1.2", 1235, "")), "ports isolated");
         rejected(() -> new OfflineSnapshotData("a", "b", " ", 1, null), "empty capture cannot replace old snapshot");
         rejected(() -> new OfflineSnapshotData("a", "b", new String(new char[100001]), 1, null), "bounded text");
         rejected(() -> new OfflineSnapshotData(new String(new char[161]), "b", "content", 1, null), "bounded title");
-        rejected(() -> OfflineSnapshotData.key("host", -1), "invalid address refused");
+        check(!OfflineSnapshotData.key("https", "desk.example.com", 443, "").equals(OfflineSnapshotData.key("http", "desk.example.com", 443, "")), "schemes isolated");
+        check(!OfflineSnapshotData.key("http", "192.168.1.2", 1234, "a".repeat(32)).equals(OfflineSnapshotData.key("http", "192.168.1.2", 1234, "b".repeat(32))), "shared address isolated by computer");
+        check(!OfflineSnapshotData.key("http", "192.168.1.2", 1234, "").equals(OfflineSnapshotData.key("http", "192.168.1.2", 1234, "a".repeat(32))), "legacy snapshot is not claimed by a newly identified computer");
+        rejected(() -> OfflineSnapshotData.key("http", "host", -1, ""), "invalid address refused");
         try { OfflineSnapshotData.decode(Arrays.copyOf(encoded, encoded.length - 1)); throw new AssertionError("truncated record accepted"); }
         catch (IOException expected) {}
         byte[] extra = Arrays.copyOf(encoded, encoded.length + 1);

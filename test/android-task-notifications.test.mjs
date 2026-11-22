@@ -73,7 +73,12 @@ test('background notifications use a user-started, private dataSync service and 
   const manifest = readFileSync('android/app/src/main/AndroidManifest.xml', 'utf8');
   assert.match(manifest,/MobileNotificationService" android:exported="false" android:foregroundServiceType="dataSync"/);
   assert.match(activity,/setBackgroundNotifications\(boolean enabled, boolean questionsEnabled\)[\s\S]*?if \(!canOpenWorkbenchSettings\(\) \|\| !hasWindowFocus\(\)\) return/);
-  assert.match(service,/ReconnectPolicy\.eligible\(host,port,token\)/);
+  assert.match(service,/!requested\.eligible\(\)/);
+  assert.match(service,/!targetOrigin\.equals\(config\.sourceKey\(\)\)/);
+  assert.match(activity,/currentConfig\.sourceKey\(\)\.equals\(intent\.getStringExtra\("origin"\)\)/);
+  for (const controller of ['TaskNotificationController.java','QuestionNotificationController.java']) {
+    assert.match(read(controller),/putExtra\("origin",/);
+  }
   assert.match(service,/\/api\/mobile\/notification-state/);
   assert.match(service,/connection\.setInstanceFollowRedirects\(false\)/);
   assert.match(service,/"Authorization","Bearer " \+ config\.getToken\(\)/);

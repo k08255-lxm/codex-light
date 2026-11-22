@@ -17,11 +17,9 @@ export async function dpapi(bytes,mode){
  const text=await powershell(`$ErrorActionPreference='Stop';Add-Type -AssemblyName System.Security;$b=[Convert]::FromBase64String([Console]::In.ReadToEnd());$o=[Security.Cryptography.ProtectedData]::${method}($b,[Text.Encoding]::UTF8.GetBytes('CodexLight.Lan.v1'),[Security.Cryptography.DataProtectionScope]::CurrentUser);[Console]::Write([Convert]::ToBase64String($o))`,bytes.toString('base64'));
  if(!/^[A-Za-z0-9+/=]+$/.test(text))throw failure();return Buffer.from(text,'base64');
 }
-export async function windowsNetworkIdentity(name){
- if(process.platform!=='win32')throw failure();
- // NLM GUID retval values cannot be safely marshalled via PowerShell's dynamic
- // IDispatch binder. These typed slots follow Microsoft's netlistmgr.h vtable.
- const output=await powershell(`$ErrorActionPreference='Stop';
+// NLM GUID retval values cannot be safely marshalled via PowerShell's dynamic
+// IDispatch binder. These typed slots follow Microsoft's netlistmgr.h vtable.
+const nlmScript=`$ErrorActionPreference='Stop';
 Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
@@ -47,9 +45,54 @@ public static class NlmIdentity {
  public static Guid Adapter(object value) { return ((IConnectionIdentity)value).GetAdapterId(); }
 }
 "@
+$names=ConvertFrom-Json ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadToEnd())))
+$adapters=[Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()
+$manager=[Activator]::CreateInstance([type]::GetTypeFromCLSID([guid]'DCB00C01-570F-4A9B-8D69-199FDBA5723B'))
+$profiles=@{}
+foreach($network in $manager.GetNetworks(1)){
+ foreach($connection in $network.GetNetworkConnections()){
+  $adapterId=[NlmIdentity]::Adapter($connection).ToString('D')
+  $id=[NlmIdentity]::Network($network)
+  if($id -eq [guid]::Empty){throw 'network'}
+  $profiles[$adapterId]+=@([ordered]@{id=$id.ToString('D'); category=[int]$network.GetCategory()})
+ }
+}
+$results=@()
+foreach($name in $names){
+ $matches=@($adapters | Where-Object {$_.Name -ceq $name})
+ if($matches.Count -ne 1){throw 'adapter'}
+ $adapter=$matches[0]
+ $adapterId=([guid]$adapter.Id).ToString('D')
+ $networks=@()
+ if($profiles.ContainsKey($adapterId)){$networks=@($profiles[$adapterId] | Sort-Object { $_.id })}
+ if($networks.Count -eq 0){
+  # An isolated software adapter (e.g. WSL) may have no NLM profile.
+  # A physical link or an unidentified adapter with a gateway must be identified.
+  $virtual=@(Get-NetAdapter -IncludeHidden | Where-Object { $_.Name -ceq $name -and $_.Virtual -eq $true -and [guid]$_.InterfaceGuid -eq [guid]$adapter.Id })
+  if($virtual.Count -ne 1 -or $adapter.GetIPProperties().GatewayAddresses.Count -gt 0){throw 'unidentified network'}
+ }
+ $results+=@([ordered]@{adapter=$adapterId; networks=$networks})
+}
+[Console]::Write((ConvertTo-Json -InputObject $results -Depth 4 -Compress))`;
 
-$name=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadToEnd()));$adapter=@([Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces() | Where-Object {$_.Name -ceq $name});if($adapter.Count -ne 1){throw 'adapter'};$manager=[Activator]::CreateInstance([type]::GetTypeFromCLSID([guid]'DCB00C01-570F-4A9B-8D69-199FDBA5723B'));$found=@();foreach($network in $manager.GetNetworks(1)){foreach($connection in $network.GetNetworkConnections()){if([NlmIdentity]::Adapter($connection) -eq [guid]$adapter[0].Id){$category=$network.GetCategory();if($category -ne 1 -and $category -ne 2){throw 'untrusted network'};$id=[NlmIdentity]::Network($network);if($id -eq [guid]::Empty){throw 'network'};$found+=$id.ToString('D')}}};if($found.Count -ne 1){throw 'network'};[Console]::Write($found[0])`,Buffer.from(name).toString('base64'));
- if(!/^[a-f0-9-]{36}$/i.test(output))throw failure();return createHash('sha256').update(output.toLowerCase()).digest('hex');
+async function windowsProfiles(names){
+ if(process.platform!=='win32')throw failure();
+ const input=Buffer.from(JSON.stringify(names),'utf8').toString('base64');
+ const rows=JSON.parse(await powershell(nlmScript,input));
+ if(!Array.isArray(rows)||rows.length!==names.length||rows.some(row=>typeof row?.adapter!=='string'||!Array.isArray(row.networks)))throw failure();
+ return rows;
+}
+const hashNetwork=value=>createHash('sha256').update(value).digest('hex');
+export async function windowsNetworkIdentity(name){
+ const [row]=await windowsProfiles([name]);
+ const [network]=row.networks;
+ if(row.networks.length!==1||![1,2].includes(network.category)||!/^[a-f0-9-]{36}$/i.test(network.id))throw failure();
+ // Preserve the exact version 1 fingerprint for previously paired phones.
+ return hashNetwork(network.id.toLowerCase());
+}
+export async function windowsNetworkSnapshot(names){
+ const rows=await windowsProfiles(names);
+ return rows.map(row=>hashNetwork(JSON.stringify(row)));
 }
 export function validateLanPreference(v){
  if(v===null)return null;

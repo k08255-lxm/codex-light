@@ -16,10 +16,18 @@
 .permission-menu small{font-size:.75rem;color:var(--tertiary,#aaa3a9);line-height:1.5;overflow-wrap:anywhere}
 .permission-menu .permission-danger{color:#f0ac68}
 .permission-menu .permission-danger small{color:inherit}
-.fast-toggle[aria-pressed="true"]{color:#e9b567;background:#b37c2926}
-.reasoning-heading .fast-toggle{width:30px;height:30px;padding:5px;flex-shrink:0;border-radius:7px}
+.reasoning-heading output{grid-column:2}
+.reasoning-fast{display:flex;align-items:center;gap:7px;min-height:36px;margin-top:12px;padding-top:6px;border-top:1px solid var(--border);color:var(--text);font-size:.8125rem;cursor:pointer}
+.reasoning-fast>.ui-icon{width:15px;height:15px;color:var(--secondary)}
+.reasoning-fast .switch{margin-inline-start:auto}
+.reasoning-fast:has(:disabled){color:var(--tertiary);cursor:default}
+.reasoning-fast .switch:focus-visible{outline:2px solid var(--focus);outline-offset:3px}
+#model-trigger-fast:not(.hidden){display:inline-flex;flex:none;align-items:center;color:var(--secondary)}
+#model-trigger-fast .ui-icon{width:13px;height:13px;fill:currentColor;stroke-width:1}
+#model-trigger-effort{white-space:nowrap;flex:none}
+#model-trigger-effort:empty{display:none}
 @media(hover:hover){.permission-menu button:hover{background:var(--selected,#383538)}}
-@media(pointer:coarse){.permission-menu button{min-height:48px}.fast-toggle{min-width:44px;min-height:44px}}
+@media(pointer:coarse){.permission-menu button{min-height:48px}.reasoning-fast{min-height:44px}}
 .approval .actions{align-items:center}
 .approval .actions button{white-space:nowrap}
 .approval-scope-select{max-width:100%;min-width:0;min-height:32px;padding:5px 28px 5px 9px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font:inherit;font-size:.8125rem}

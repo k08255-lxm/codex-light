@@ -44,6 +44,9 @@ test('explicit import uses the existing bounded scanner and replaces local scope
  await fs.writeFile(path.join(root,'fixture.jsonl'),rows.slice(0,3).map(row=>JSON.stringify(row)).join('\n'));
  const scan=await post(app,'/api/local-usage/scan',{directory:root});assert.equal(scan.status,200);const updated=await(await post(app,'/api/statistics/query',{scope:'local'})).json();assert.equal(updated.totals.totalTokens,null,'re-import replaces, never adds snapshots');
  assert.equal((await post(app,'/api/statistics/import',{directory:'relative'})).status,400);
+ await fs.unlink(path.join(root,'fixture.jsonl'));
+ const empty=await (await post(app,'/api/statistics/import',{directory:root})).json();
+ assert.equal(empty.scan.filesRead,0);assert.equal(empty.statistics.details.total,0);
 });
 
 test('explicit statistics state persists sanitized metadata and reopens without live activity or prompt text',async t=>{
@@ -51,4 +54,40 @@ test('explicit statistics state persists sanitized metadata and reopens without 
  app.rpc.emit('event',{method:'turn/started',params:{threadId:'synthetic',turn:{id:'turn'}}});app.rpc.emit('event',{method:'item/agentMessage/delta',params:{threadId:'synthetic',turnId:'turn',itemId:'msg',delta:'PRIVATE_TEXT_NEVER_ON_DISK'}});
  await app.close();const saved=await fs.readFile(path.join(root,'live.json'),'utf8');assert.ok(!saved.includes('PRIVATE_TEXT'));assert.ok(!saved.includes('delta'));
  const restored=await fixture(t,{statisticsRoot:root});const data=await(await post(restored,'/api/statistics/query')).json();assert.equal(data.totals.turnCount,1);assert.equal(data.totals.unknownCount,1);assert.equal(data.totals.runningCount,0);
+});
+
+test('the first page returns observed usage before log recovery and refreshes after matching evidence arrives', {timeout:8000}, async t=>{
+ const root=await directory(t),sessions=path.join(root,'sessions');
+ await fs.mkdir(sessions);
+ const threadId='11111111-1111-4111-8111-111111111111',turnId='observed-turn';
+ await fs.writeFile(path.join(sessions,'history.jsonl'),[
+  {type:'session_meta',payload:{id:threadId,model_provider:'openai'}},
+  {type:'turn_context',payload:{turn_id:turnId,model:'recovered-model'}},
+ ].map(row=>JSON.stringify(row)).join('\n'));
+ const previous=process.env.CODEX_HOME;process.env.CODEX_HOME=root;
+ t.after(()=>{if(previous===undefined)delete process.env.CODEX_HOME;else process.env.CODEX_HOME=previous;});
+ const app=await fixture(t,{statisticsRoot:path.join(root,'statistics')});
+ app.rpc.emit('event',{method:'turn/started',params:{threadId,turn:{id:turnId}}});
+ let unblock,scanning;
+ const gate=new Promise(resolve=>{unblock=resolve;}), started=new Promise(resolve=>{scanning=resolve;});
+ const openDirectory=fs.opendir;
+ t.mock.method(fs,'opendir',async function(directory,...args){
+  if(path.resolve(directory)===sessions){scanning();await gate;}
+  return openDirectory.call(this,directory,...args);
+ });
+ const controller=new AbortController();
+ try{
+  const events=await fetch(app.origin+'/api/events',{headers:{Authorization:'Bearer '+app.token},signal:controller.signal});
+  const first=await (await post(app,'/api/statistics/query')).json();
+  assert.equal(first.totals.turnCount,1);assert.equal(first.coverage.unknownModelRows,1);
+  await started;unblock();
+  const reader=events.body.getReader();
+  let seen='';
+  while(!seen.includes('bridge/statisticsRecovered')){
+   const {done,value}=await reader.read();assert.equal(done,false);seen+=new TextDecoder().decode(value);
+  }
+  const updated=await (await post(app,'/api/statistics/query')).json();
+  assert.equal(updated.details.data[0].model,'recovered-model');
+  assert.equal((await (await post(app,'/api/statistics/query',{scope:'local'})).json()).details.total,0);
+ }finally{unblock();controller.abort();}
 });

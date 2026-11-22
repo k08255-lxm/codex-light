@@ -17,7 +17,7 @@ export function projectSessionDefaults(response){
   for(const [sourceKey,target] of [['writable_roots','writableRoots'],['network_access','networkAccess'],['exclude_slash_tmp','excludeSlashTmp'],['exclude_tmpdir_env_var','excludeTmpdirEnvVar']])if(source[sourceKey]!==undefined)sandboxPolicy[target]=source[sourceKey];
   if(!validSandboxPolicy(sandboxPolicy))sandboxPolicy=null;
  }
- return {model:bounded(config.model),modelProvider:bounded(config.model_provider),reasoningEffort:bounded(config.model_reasoning_effort),approvalPolicy:validApprovalPolicy(config.approval_policy)?structuredClone(config.approval_policy):null,approvalsReviewer:['user','auto_review','guardian_subagent'].includes(config.approvals_reviewer)?config.approvals_reviewer:null,sandbox,sandboxPolicy,serviceTier:['fast','default'].includes(config.service_tier)?config.service_tier:null};
+ return {model:bounded(config.model),modelProvider:bounded(config.model_provider),reasoningEffort:bounded(config.model_reasoning_effort),approvalPolicy:validApprovalPolicy(config.approval_policy)?structuredClone(config.approval_policy):null,approvalsReviewer:['user','auto_review','guardian_subagent'].includes(config.approvals_reviewer)?config.approvals_reviewer:null,sandbox,sandboxPolicy,serviceTier:config.service_tier==='priority'?'fast':['fast','default'].includes(config.service_tier)?config.service_tier:null};
 }
 
 export async function validateSessionDirectory(cwd){

@@ -1,125 +1,105 @@
 package com.codexlight.android;
 
-import android.net.Uri;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.net.URI;
+import java.util.Locale;
 
-/**
- * Represents connection parameters to a 码舱 CodeCang desktop server.
- */
-public class ServerConfig {
-    private String host;
-    private int port;
-    private String token;
-    private long lastConnectedAt;
+/** A paired desktop is identified by its canonical scheme, host and effective port. */
+public final class ServerConfig {
+    private final String scheme, host, token, remoteHostId;
+    private final int port;
+    private long lastConnectedAt = System.currentTimeMillis();
 
-    public ServerConfig() {
-        this.host = "192.168.1.100";
-        this.port = 54321;
-        this.token = "";
-        this.lastConnectedAt = System.currentTimeMillis();
+    public ServerConfig(String scheme, String host, int port, String token) {
+        this(scheme, host, port, token, "");
     }
 
-    public ServerConfig(String host, int port, String token) {
-        this.host = host != null ? host.trim() : "";
-        this.port = port > 0 ? port : 80;
-        this.token = token != null ? token.trim() : "";
-        this.lastConnectedAt = System.currentTimeMillis();
+    public ServerConfig(String scheme, String host, int port, String token, String remoteHostId) {
+        this.scheme = scheme == null ? "" : scheme.toLowerCase(Locale.ROOT);
+        this.host = host == null ? "" : host.toLowerCase(Locale.ROOT);
+        this.port = port;
+        this.token = token == null ? "" : token;
+        this.remoteHostId = validHostId(remoteHostId) ? remoteHostId : "";
     }
 
+    public String getScheme() { return scheme; }
     public String getHost() { return host; }
-    public void setHost(String host) { this.host = host != null ? host.trim() : ""; }
-
     public int getPort() { return port; }
-    public void setPort(int port) { this.port = port; }
-
     public String getToken() { return token; }
-    public void setToken(String token) { this.token = token != null ? token.trim() : ""; }
-
+    public String getRemoteHostId() { return remoteHostId; }
+    String sourceKey() { return remoteHostId.isEmpty() ? origin() : origin() + "#" + remoteHostId; }
+    static boolean validHostId(String value) { return value != null && value.matches("[a-f0-9]{32}"); }
+    ServerConfig identified(String id) { return new ServerConfig(scheme, host, port, token, id); }
     public long getLastConnectedAt() { return lastConnectedAt; }
-    public void setLastConnectedAt(long time) { this.lastConnectedAt = time; }
+    public void setLastConnectedAt(long time) { lastConnectedAt = time; }
 
-    /**
-     * Constructs the full web URL with the #token fragment, exactly matching 码舱 CodeCang LAN specs.
-     */
-    public String toFullUrl() {
-        StringBuilder sb = new StringBuilder();
-        sb.append("http://").append(host);
-        if (port > 0 && port != 80) {
-            sb.append(":").append(port);
-        }
-        sb.append("/");
-        if (token != null && !token.isEmpty()) {
-            sb.append("#token=").append(Uri.encode(token));
-        }
-        return sb.toString();
+    public String origin() {
+        return scheme + "://" + host + (port == defaultPort(scheme) ? "" : ":" + port);
     }
 
-    public String toDisplayAddress() {
-        if (port > 0 && port != 80) {
-            return host + ":" + port;
-        }
-        return host;
+    boolean validOrigin() {
+        if (port < 1 || port > 65535) return false;
+        if ("http".equals(scheme)) return ReconnectPolicy.privateIpv4(host);
+        if (!"https".equals(scheme) || host.length() > 253 || host.endsWith(".localhost")
+                || host.equals("trycloudflare.com") || host.endsWith(".trycloudflare.com")) return false;
+        // Canonical fixed DNS names have at least two labels and an alphabetic top-level suffix.
+        return host.matches("(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]");
     }
 
-    /**
-     * Parses a raw URL or connection string (e.g., http://192.168.1.5:49152/#token=a9f8...).
-     */
-    public static ServerConfig parse(String input) {
-        if (input == null || input.trim().isEmpty()) {
-            return null;
-        }
-        String raw = input.trim();
-        String host = "";
-        int port = 80;
-        String token = "";
+    boolean identifiedLan() { return "http".equals(scheme) && !remoteHostId.isEmpty(); }
 
-        // Extract fragment token (#token=...)
-        int hashIdx = raw.indexOf("#token=");
-        if (hashIdx != -1) {
-            token = raw.substring(hashIdx + 7);
-            raw = raw.substring(0, hashIdx);
-            int amp = token.indexOf("&");
-            if (amp != -1) token = token.substring(0, amp);
-        } else {
-            // Check query token (?token=...)
-            int qIdx = raw.indexOf("?token=");
-            if (qIdx != -1) {
-                token = raw.substring(qIdx + 7);
-                raw = raw.substring(0, qIdx);
-                int amp = token.indexOf("&");
-                if (amp != -1) token = token.substring(0, amp);
-            }
-        }
-
-        // Clean protocol prefix
-        if (raw.startsWith("http://")) {
-            raw = raw.substring(7);
-        } else if (raw.startsWith("https://")) {
-            raw = raw.substring(8);
-        }
-
-        // Strip any trailing path like /
-        int slashIdx = raw.indexOf("/");
-        if (slashIdx != -1) {
-            raw = raw.substring(0, slashIdx);
-        }
-
-        // Check host:port
-        int colonIdx = raw.lastIndexOf(":");
-        if (colonIdx != -1) {
-            host = raw.substring(0, colonIdx);
-            try {
-                port = Integer.parseInt(raw.substring(colonIdx + 1));
-            } catch (Exception e) {
-                port = 80;
-            }
-        } else {
-            host = raw;
-            port = 80;
-        }
-
-        if (host.isEmpty()) return null;
-        return new ServerConfig(host, port, token);
+    boolean eligible() {
+        return validOrigin() && token.matches("[a-f0-9]{64}");
     }
+
+    boolean matchesOrigin(String url) {
+        try {
+            ServerConfig other = fromUri(URI.create(url), "");
+            return other != null && origin().equals(other.origin());
+        } catch (IllegalArgumentException invalid) { return false; }
+    }
+
+    private static int defaultPort(String scheme) { return "https".equalsIgnoreCase(scheme) ? 443 : 80; }
+
+    private static ServerConfig fromUri(URI uri, String token) {
+        String host = uri.getHost(), authority = uri.getRawAuthority();
+        if (uri.getRawUserInfo() != null || host == null || authority == null || authority.endsWith(":")) return null;
+        int port = uri.getPort() == -1 ? defaultPort(uri.getScheme()) : uri.getPort();
+        ServerConfig config = new ServerConfig(uri.getScheme(), host, port, token);
+        return config.validOrigin() ? config : null;
+    }
+
+    static ServerConfig fromFields(String address, String port, String token) {
+        try {
+            URI uri = URI.create(address.contains("://") ? address : "http://" + address);
+            if (!rootOnly(uri) || uri.getRawFragment() != null) return null;
+            ServerConfig config = fromUri(uri, token);
+            if (config == null || port.isEmpty()) return config;
+            if (!port.matches("[0-9]{1,5}")) return null;
+            int requested = Integer.parseInt(port);
+            if (uri.getPort() != -1 && uri.getPort() != requested) return null;
+            ServerConfig result = new ServerConfig(config.scheme, config.host, requested, token);
+            return result.validOrigin() ? result : null;
+        } catch (IllegalArgumentException invalid) { return null; }
+    }
+
+    private static boolean rootOnly(URI uri) {
+        return uri.getRawQuery() == null && ("".equals(uri.getRawPath()) || "/".equals(uri.getRawPath()));
+    }
+
+    static URI link(String input, String parameter) {
+        if (input == null) return null;
+        try {
+            URI uri = URI.create(input.trim());
+            if (!rootOnly(uri) || fromUri(uri, "") == null || uri.getRawFragment() == null
+                    || !uri.getRawFragment().matches(parameter + "=[a-f0-9]{64}")) return null;
+            return uri;
+        } catch (IllegalArgumentException invalid) { return null; }
+    }
+
+    static ServerConfig parse(String input) {
+        URI uri = link(input, "token");
+        return uri == null ? null : fromUri(uri, uri.getRawFragment().substring(6));
+    }
+
+    static ServerConfig pairingTarget(URI link) { return fromUri(link, ""); }
 }

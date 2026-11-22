@@ -10,8 +10,5 @@ final class ReconnectPolicy {
         }} catch (Exception error) { return false; }
         return n[0]==10 || (n[0]==172 && n[1]>=16 && n[1]<=31) || (n[0]==192 && n[1]==168);
     }
-    static boolean eligible(String host, int port, String token) {
-        return privateIpv4(host) && port>0 && port<=65535 && token!=null && token.matches("[a-f0-9]{64}");
-    }
     static boolean unauthorized(int status) { return status == 401 || status == 403; }
 }

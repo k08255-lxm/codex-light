@@ -5,9 +5,10 @@ import { isDeepStrictEqual } from 'node:util';
 import {validServerRequestId,serverRequestKey,findServerRequest,removeServerRequest,serverRequestThread} from './server-requests.mjs';
 
 const appVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+export const APP_SERVER_ARGS = Object.freeze(['app-server','--listen','stdio://','-c','features.step_model_switching=true','-c','thread_unload_delay_secs=0']);
 const failure = (message, code) => Object.assign(new Error(message), { code });
 export class RpcClient extends EventEmitter {
-  constructor({ command = process.env.CODEX_LIGHT_CODEX || 'codex', args = ['app-server', '--listen', 'stdio://', '-c', 'thread_unload_delay_secs=0'], cwd = process.cwd(), timeout = 60000, closeTimeout = 1500, spawnProcess = spawn, env, mapRequest, mapResponse } = {}) {
+  constructor({ command = process.env.CODEX_LIGHT_CODEX || 'codex', args = [...APP_SERVER_ARGS], cwd = process.cwd(), timeout = 60000, closeTimeout = 1500, spawnProcess = spawn, env, mapRequest, mapResponse } = {}) {
     super(); Object.assign(this, {command,args,cwd,timeout,closeTimeout,spawnProcess,env,mapRequest,mapResponse});
     this.pending = new Map(); this.requests = new Map(); this.sequence = 0; this.connected = false; this.closed = false; this.buffer = ''; this.lastError = null;
   }

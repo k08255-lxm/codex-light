@@ -39,6 +39,20 @@ export class ThreadSessions {
   // Keep resume internal: legacy clients opening history cannot acquire locks.
   if(method==='thread/resume')return this.rpc.call('thread/read',{threadId:id,includeTurns:!params.excludeTurns});
   if(method==='thread/unsubscribe')return this.serial(id,()=>this.release(id));
+  if(method==='turn/settings/update')return this.serial(id,async()=>{
+   if(this.closed)throw fail('Light 正在关闭，此请求未发送','CLIENT_CLOSING');
+   const entry=this.entries.get(id);
+   if(!entry?.loaded||entry.unknown||!entry.activeTurnId||entry.activeTurnId!==params.turnId)return {status:'targetUnavailable'};
+   let result;
+   try{result=await this.rpc.call(method,params);}
+   catch(error){
+    if(error.code===-32601)throw fail('当前 Codex 版本不支持修改运行中任务的设置',-32601);
+    if(error.code===-32600&&error.message?.includes('step_model_switching'))throw fail('当前 Codex 未启用运行中调整模型的功能','TURN_SETTINGS_DISABLED');
+    throw error;
+   }
+   if(!['applied','targetUnavailable'].includes(result?.status))throw Object.assign(new Error('Codex 未确认本次运行设置的结果'),{code:'UNCONFIRMED_TURN_SETTINGS',outcome:'unknown'});
+   return result;
+  });
   if(method==='turn/steer')return this.serial(id,async()=>{
    if(this.closed)throw fail('Light 正在关闭，此请求未发送','CLIENT_CLOSING');
    const e=this.entries.get(id);

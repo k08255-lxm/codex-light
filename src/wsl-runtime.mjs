@@ -4,6 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {createHash,randomBytes} from 'node:crypto';
 import {mkdir,readFile,writeFile,rename,lstat,unlink} from 'node:fs/promises';
+import {APP_SERVER_ARGS} from './rpc.mjs';
 
 const exec=promisify(execFile);
 const fail=(message,code='WSL_RUNTIME_INVALID')=>Object.assign(new Error(message),{code,outcome:'notExecuted'});
@@ -149,7 +150,7 @@ exec "$g" --no-pager -c core.fsmonitor=false "$@"`;
   if(!candidate?.available||!candidate.codexPath)throw fail('Codex was not found in the selected WSL user environment','WSL_CODEX_NOT_FOUND');
   // Never forward a Windows account's configuration or API key into Linux.
   const env=isolatedWslEnvironment(this.env);
-  return {command:this.command,args:['--distribution',candidate.distribution,'--user',candidate.user,'--cd',candidate.home,'--exec','/bin/sh','-lc','if [ -n "$1" ]; then PATH="$1:$PATH"; export PATH; fi; shift; exec "$@"','codecang-wsl',candidate.nodeDirectory||'',candidate.codexPath,'app-server','--listen','stdio://','-c','thread_unload_delay_secs=0'],env,cwd:os.tmpdir()};
+  return {command:this.command,args:['--distribution',candidate.distribution,'--user',candidate.user,'--cd',candidate.home,'--exec','/bin/sh','-lc','if [ -n "$1" ]; then PATH="$1:$PATH"; export PATH; fi; shift; exec "$@"','codecang-wsl',candidate.nodeDirectory||'',candidate.codexPath,...APP_SERVER_ARGS],env,cwd:os.tmpdir()};
  }
 }
 

@@ -153,8 +153,15 @@ final class ProjectFileDownload {
             if (job.cancelled()) throw new ProjectFileTransfer.Failure("工作台已切换，请重新发起保存。");
             temporary = File.createTempFile("project-download-", ".part", activity.getCacheDir());
             ServerConfig server = operation.server;
+            if (server.identifiedLan()) {
+                android.net.Network network = PairedNetwork.current(activity);
+                if (!PairedNetwork.client(activity, network).verifyPeer(server, 1500)
+                        || !PairedNetwork.unchanged(activity, network)) {
+                    throw new ProjectFileTransfer.Failure("局域网电脑未通过验证，请重新连接。");
+                }
+            }
             try (OutputStream output = new FileOutputStream(temporary)) {
-                job.download(server.getHost(), server.getPort(), server.getToken(), operation.request.body, output);
+                job.download(server, operation.request.body, output);
             }
             try (InputStream input = new FileInputStream(temporary)) {
                 if (job.cancelled()) throw new ProjectFileTransfer.Failure("保存已取消。");

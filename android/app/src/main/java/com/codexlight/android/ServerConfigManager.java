@@ -9,6 +9,8 @@ import java.util.List;
 
 public class ServerConfigManager {
     private static final String PREFS_NAME = "codex_light_prefs";
+    private static final String KEY_CURRENT_HOST_ID = "current_remote_host_id";
+    private static final String KEY_CURRENT_SCHEME = "current_scheme";
     private static final String KEY_CURRENT_HOST = "current_host";
     private static final String KEY_CURRENT_PORT = "current_port";
     private static final String KEY_CURRENT_TOKEN = "current_token";
@@ -50,6 +52,8 @@ public class ServerConfigManager {
         try {
         String encrypted = CredentialCipher.seal(config.getToken());
         if (!prefs.edit()
+            .putString(KEY_CURRENT_HOST_ID, config.getRemoteHostId())
+            .putString(KEY_CURRENT_SCHEME, config.getScheme())
             .putString(KEY_CURRENT_HOST, config.getHost())
             .putInt(KEY_CURRENT_PORT, config.getPort())
             .putString(KEY_SECURE_TOKEN, encrypted).remove(KEY_CURRENT_TOKEN)
@@ -64,7 +68,7 @@ public class ServerConfigManager {
         int port = prefs.getInt(KEY_CURRENT_PORT, 0);
         String token = readSecret(KEY_SECURE_TOKEN, KEY_CURRENT_TOKEN, "");
         if (host.isEmpty()) return null;
-        return new ServerConfig(host, port, token);
+        return new ServerConfig(prefs.getString(KEY_CURRENT_SCHEME, "http"), host, port, token, prefs.getString(KEY_CURRENT_HOST_ID, ""));
     }
 
     public List<ServerConfig> getHistory() {
@@ -75,9 +79,9 @@ public class ServerConfigManager {
             for (int i = 0; i < arr.length(); i++) {
                 JSONObject obj = arr.getJSONObject(i);
                 ServerConfig cfg = new ServerConfig(
-                    obj.optString("host", ""),
+                    obj.optString("scheme", "http"), obj.optString("host", ""),
                     obj.optInt("port", 80),
-                    obj.optString("token", "")
+                    obj.optString("token", ""), obj.optString("remoteHostId", "")
                 );
                 cfg.setLastConnectedAt(obj.optLong("time", System.currentTimeMillis()));
                 list.add(cfg);
@@ -90,18 +94,13 @@ public class ServerConfigManager {
         if (newCfg == null || newCfg.getHost().isEmpty()) return;
         List<ServerConfig> current = getHistory();
         if (storageError) return; // Do not overwrite unreadable history.
-        List<ServerConfig> updated = new ArrayList<>();
-        updated.add(newCfg);
-        for (ServerConfig c : current) {
-            if (!c.getHost().equalsIgnoreCase(newCfg.getHost()) || c.getPort() != newCfg.getPort()) {
-                updated.add(c);
-            }
-            if (updated.size() >= 8) break;
-        }
+        List<ServerConfig> updated = ConnectionHistory.record(newCfg, current);
         try {
             JSONArray arr = new JSONArray();
             for (ServerConfig c : updated) {
                 JSONObject obj = new JSONObject();
+                obj.put("remoteHostId", c.getRemoteHostId());
+                obj.put("scheme", c.getScheme());
                 obj.put("host", c.getHost());
                 obj.put("port", c.getPort());
                 obj.put("token", c.getToken());

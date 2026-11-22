@@ -138,8 +138,18 @@
           </div>
           <div class="selectors native-model-selectors"><label><span class="sr-only">模型</span><select id="model"><option value="">使用 Codex 默认模型</option></select></label><label><span class="sr-only">思考强度</span><select id="effort"><option value="">默认思考强度</option></select></label></div>
           <button id="context-meter" type="button" class="context-meter hidden" data-known="false" aria-label="上下文未知" aria-haspopup="dialog" aria-expanded="false" aria-controls="context-details"><span class="context-ring" aria-hidden="true"></span><span id="context-label">—</span></button>
-          <button id="fast-toggle" type="button" class="tool fast-toggle" aria-label="Fast 模式" aria-pressed="false" title="Fast · 继承配置"><span data-icon="bolt"></span></button>
-          <div class="model-control"><button type="button" id="model-trigger" aria-haspopup="dialog" aria-expanded="false" aria-controls="reasoning-popover">默认模型<span data-icon="down"></span></button><section id="reasoning-popover" class="reasoning-popover hidden" role="dialog" aria-label="模型与思考强度"><div id="reasoning-controls"><div class="reasoning-heading"><span aria-hidden="true"><span data-icon="bolt"></span></span><output id="reasoning-label" for="reasoning-range">默认</output><button type="button" id="reasoning-reset" aria-label="恢复模型默认思考强度" title="恢复模型默认思考强度"><span data-icon="reset"></span></button></div><button type="button" id="model-list-open" aria-label="选择模型"><span id="reasoning-model-name">默认模型</span><span><span data-icon="right"></span></span></button><div id="reasoning-track" class="reasoning-track"><div id="reasoning-ticks" aria-hidden="true"></div><input id="reasoning-range" type="range" min="0" max="0" step="1" value="0" aria-label="思考强度"></div></div><div id="reasoning-model-list" class="reasoning-model-list hidden" role="group" aria-label="可用模型"><div class="model-list-head"><button type="button" id="model-list-back" aria-label="返回思考强度"><span data-icon="left"></span></button><strong>选择模型</strong></div><div id="model-options"></div></div></section></div>
+          <div class="model-control">
+            <button type="button" id="model-trigger" aria-haspopup="dialog" aria-expanded="false" aria-controls="reasoning-popover"><span id="model-trigger-name" class="model-trigger-label">默认模型</span><span id="model-trigger-fast" class="hidden" aria-hidden="true"><span data-icon="bolt"></span></span><span id="model-trigger-effort"></span><span data-icon="down"></span></button>
+            <section id="reasoning-popover" class="reasoning-popover hidden" role="dialog" aria-label="模型与思考强度">
+              <div id="reasoning-controls">
+                <div class="reasoning-heading"><output id="reasoning-label" for="reasoning-range">默认</output><button type="button" id="reasoning-reset" aria-label="恢复模型默认思考强度" title="恢复模型默认思考强度"><span data-icon="reset"></span></button></div>
+                <button type="button" id="model-list-open" aria-label="选择模型"><span id="reasoning-model-name">默认模型</span><span><span data-icon="right"></span></span></button>
+                <div id="reasoning-track" class="reasoning-track"><div id="reasoning-ticks" aria-hidden="true"></div><input id="reasoning-range" type="range" min="0" max="0" step="1" value="0" aria-label="思考强度"></div>
+                <label class="reasoning-fast"><span data-icon="bolt"></span>Fast 模式<input id="fast-toggle" class="switch" type="checkbox" role="switch"></label>
+              </div>
+              <div id="reasoning-model-list" class="reasoning-model-list hidden" role="group" aria-label="可用模型"><div class="model-list-head"><button type="button" id="model-list-back" aria-label="返回思考强度"><span data-icon="left"></span></button><strong>选择模型</strong></div><div id="model-options"></div></div>
+            </section>
+          </div>
           <button id="queue-send" type="button" class="queue-send hidden" title="排队到当前任务完成后发送 (Tab)"><span data-icon="queue"></span><span>排队</span></button>
           <button id="stop" type="button" class="stop hidden" title="停止当前任务" aria-label="停止当前任务"><span data-icon="stop"></span></button>
           <button id="send" type="submit" class="send" aria-label="发送消息" title="发送 (Enter)"><span data-icon="up"></span></button>
@@ -285,7 +295,7 @@
         <h2 class="section-title">设备</h2><div id="remote-devices" class="panel list-panel"><p class="fine">尚未读取。</p></div>
         <h2 class="section-title">配对</h2>
         <div class="panel"><p class="fine">配对码到期只结束本次配对流程，已授权设备不会自动撤销。</p><button id="remote-pair" type="button" class="btn">创建配对码</button><div id="remote-pairing" class="hidden"><code id="remote-pair-code"></code><p id="remote-pair-expiry" class="fine"></p><div class="work-row"><button id="remote-pair-check" type="button" class="btn">查询状态</button><button id="remote-pair-hide" type="button" class="btn">隐藏</button></div></div><p id="remote-pair-status" class="fine" role="status"></p></div>
-        <section id="settings-lan" class="local-only remote-lan-section"><h2 class="section-title">局域网访问</h2><div id="lan-root"></div></section>
+        <section id="settings-lan" class="local-only remote-lan-section"><h2 class="section-title">连接此电脑</h2><div id="lan-root"></div></section>
       </section>
       <section id="settings-skills" class="settings-section hidden"></section>
       <section id="settings-plugins" class="settings-section hidden"></section>

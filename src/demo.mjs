@@ -43,6 +43,13 @@ export class DemoClient extends EventEmitter {
     const timers=new Set();this.timers.set(turn.id,timers);
     chunks.forEach((delta,index)=>{const timer=setTimeout(()=>{timers.delete(timer);item.text+=delta;emit('item/agentMessage/delta',{itemId:item.id,delta});if(index===chunks.length-1){turn.status='completed';this.timers.delete(turn.id);emit('item/completed',{item});emit('turn/completed',{turn});}},200*(index+1));timers.add(timer);});return {turn};
    }
+   case 'turn/settings/update':{
+    const turn=this.turns.get(p.threadId)?.find(t=>t.id===p.turnId&&t.status==='inProgress');
+    if(!turn)return {status:'targetUnavailable'};
+    turn.settings={...turn.settings,...(p.model!=null?{model:p.model}:{}),...(p.effort!=null?{effort:p.effort}:{}),
+     ...(Object.hasOwn(p,'serviceTier')?{serviceTier:p.serviceTier}:{})};
+    return {status:'applied'};
+   }
    case 'turn/steer':{
     const turn=this.turns.get(p.threadId)?.find(t=>t.status==='inProgress');
     if(!turn||turn.id!==p.expectedTurnId)throw Object.assign(new Error('运行任务已变化'),{code:-32602});

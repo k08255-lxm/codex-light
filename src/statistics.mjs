@@ -51,9 +51,13 @@ function turnThroughput(row){
  const duration=row.performance.durationMs,output=n(row.tokens.outputTokens);
  return row.kind==='turn'&&row.status==='completed'&&row.outputTokensComplete===true&&output!==null&&metric(duration)!==null&&duration>0?output/(duration/1000):null;
 }
-function cost(row,pricing){
+function cost(row,pricing,references){
  let estimate=null,reference=null;
- if(row.provider&&row.model&&row.model.length<=200){try{reference=pricing.get(row.model,row.provider);estimate=estimateTokenCost({...row.tokens,model:row.model,provider:row.provider},reference);}catch{/* Invalid model/provider or schema cannot be priced. */}}
+ if(row.provider&&row.model&&row.model.length<=200){try{
+  const key=JSON.stringify([row.provider,row.model]);
+  if(!references.has(key))references.set(key,pricing.get(row.model,row.provider));
+  reference=references.get(key);estimate=estimateTokenCost({...row.tokens,model:row.model,provider:row.provider},reference);
+ }catch{/* Invalid model/provider or schema cannot be priced. */}}
  return {kind:'reference-estimate',currency:'USD',usd:estimate?.complete?estimate.usd:estimate?.knownUsd??null,complete:estimate?.complete===true&&row.tokensComplete===true,tokenSource:row.tokenSource||'observed',components:estimate?.components||[],pricingComplete:estimate?.complete===true,usageComplete:row.tokensComplete===true,reason:estimate?.reason||(estimate?.complete&&!row.tokensComplete?'计价分项已齐全，但观察记录未确认覆盖整个回合':null)||(!row.model||!row.provider?'模型或路由未知':null),reference:reference?{source:reference.source,catalogProvider:reference.catalogProvider||null,catalogModel:reference.catalogModel||null,matchedBy:reference.matchedBy,referenceTier:reference.referenceTier||null,fetchedAt:reference.fetchedAt||null}:null};
 }
 function aggregate(rows){
@@ -188,7 +192,7 @@ export class StatisticsService {
   if(updatedRows)this.changed();
   return {updatedRows,modelRows,providerRows,ambiguousRows};
  }
- importLocal(scan){
+ importLocal(scan,{publishLocal=true}={}){
   const recovered=this.recoverLocalModels(scan);
   const overlap=new Set(scan.overlappingThreadIds||[]),out=new Map();let excluded=0;
   for(const session of scan.sessions||[]){
@@ -206,7 +210,10 @@ export class StatisticsService {
   const proofs=new Map();for(const session of scan.sessions||[]){if(overlap.has(session.threadId)||session.attribution!=='observed-differences-only')continue;for(const turn of session.turns||[]){if(turn.coverageComplete!==true)continue;const key=keyFor(session.threadId,turn.turnId);proofs.set(key,(proofs.get(key)||0)+1);}}
   let tokenRows=0;for(const row of out.values()){if(proofs.get(row.id)!==1||row.unknownTokenFields.length||row.kind!=='turn')continue;row.tokensComplete=true;row.outputTokensComplete=true;row.tokenSource='verified-local-turn';const live=this.rows.get(row.id);if(!live||live.tokensComplete||live.status==='inProgress'||live.model!==row.model||live.provider!==row.provider)continue;if(TOKEN_KEYS.some(k=>n(live.tokens[k])!==null&&live.tokens[k]>row.tokens[k]))continue;live.tokens={...row.tokens};live.tokensComplete=true;live.outputTokensComplete=true;live.unknownTokenFields=[];live.tokenSource='verified-local-turn';tokenRows++;}if(tokenRows)this.changed();recovered.tokenRows=tokenRows;
 
-  this.localRows=[...out.values()].sort((a,b)=>(b.timestamp||'').localeCompare(a.timestamp||'')).slice(0,this.limit);this.localCoverage={partial:scan.partial||out.size>this.limit||excluded>0||overlap.size>0,excludedOverlappingThreads:overlap.size,excludedAmbiguousSessions:excluded};this.revision++;return {recovered};
+  if(publishLocal){
+   this.localRows=[...out.values()].sort((a,b)=>(b.timestamp||'').localeCompare(a.timestamp||'')).slice(0,this.limit);this.localCoverage={partial:scan.partial||out.size>this.limit||excluded>0||overlap.size>0,excludedOverlappingThreads:overlap.size,excludedAmbiguousSessions:excluded};this.revision++;
+  }
+  return {recovered};
  }
  query(input={}){
   if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['scope','from','to','bucket','model','provider','account','cursor','limit'].includes(key)))throw error('统计查询参数无效');
@@ -219,7 +226,8 @@ export class StatisticsService {
    if(!cursor||typeof cursor!=='object'||Array.isArray(cursor)||Object.keys(cursor).sort().join(',')!=='id,offset'||typeof cursor.id!=='string')throw error('统计分页游标无效');
    snapshot=this.snapshots.get(cursor.id);if(!snapshot||snapshot.signature!==signature||!Number.isSafeInteger(cursor.offset)||cursor.offset<0||cursor.offset>snapshot.rows.length||this.now()-snapshot.created>300000)throw error('统计分页已过期，请刷新统计');offset=cursor.offset;
   }else{
-   const rows=(scope==='light'?[...this.rows.values()]:this.localRows).filter(row=>(!from||row.timestamp&&row.timestamp>=from)&&(!to||row.timestamp&&row.timestamp<to)&&(!input.model||row.model===input.model)&&(!input.provider||row.provider===input.provider)&&(!input.account||(row.account?.id||'unknown')===input.account)).map(row=>({...structuredClone(row),performance:{...row.performance,turnOutputTokensPerSecond:turnThroughput(row)},estimatedCost:cost(row,this.pricing)})).sort((a,b)=>(b.timestamp||'').localeCompare(a.timestamp||'')||a.id.localeCompare(b.id));
+   const references=new Map();
+   const rows=(scope==='light'?[...this.rows.values()]:this.localRows).filter(row=>(!from||row.timestamp&&row.timestamp>=from)&&(!to||row.timestamp&&row.timestamp<to)&&(!input.model||row.model===input.model)&&(!input.provider||row.provider===input.provider)&&(!input.account||(row.account?.id||'unknown')===input.account)).map(row=>({...structuredClone(row),performance:{...row.performance,turnOutputTokensPerSecond:turnThroughput(row)},estimatedCost:cost(row,this.pricing,references)})).sort((a,b)=>(b.timestamp||'').localeCompare(a.timestamp||'')||a.id.localeCompare(b.id));
    const identity=randomBytes(12).toString('hex');snapshot={id:identity,signature,created:this.now(),rows,pricing:this.pricing.status()};this.snapshots.set(identity,snapshot);while(this.snapshots.size>8)this.snapshots.delete(this.snapshots.keys().next().value);
   }
   const rows=snapshot.rows,group=(field)=>{const groups=new Map();for(const row of rows){const key=row[field];if(!groups.has(key))groups.set(key,[]);groups.get(key).push(row);}return [...groups].map(([key,items])=>({[field]:key,...aggregate(items)})).sort((a,b)=>b.rowCount-a.rowCount);};

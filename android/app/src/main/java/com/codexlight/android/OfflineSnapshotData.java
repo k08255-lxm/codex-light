@@ -33,10 +33,14 @@ final class OfflineSnapshotData {
         this.savedAt = savedAt;
     }
 
-    static String key(String host, int port) {
+    static String key(String scheme, String host, int port, String remoteHostId) {
         if (host == null || host.isEmpty() || port < 1 || port > 65535) throw new IllegalArgumentException("Invalid server");
         try {
-            byte[] digest = MessageDigest.getInstance("SHA-256").digest((host.toLowerCase(Locale.ROOT) + ":" + port).getBytes(StandardCharsets.UTF_8));
+            // Preserve the keys used by existing HTTP snapshots after upgrade.
+            String prefix = "http".equals(scheme) ? "" : scheme + "://";
+            String identity = prefix + host.toLowerCase(Locale.ROOT) + ":" + port;
+            if (!remoteHostId.isEmpty()) identity += "#" + remoteHostId;
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(identity.getBytes(StandardCharsets.UTF_8));
             StringBuilder key = new StringBuilder();
             for (byte value : digest) key.append(String.format(Locale.ROOT, "%02x", value & 255));
             return key.toString();

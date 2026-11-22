@@ -43,7 +43,7 @@ test('only internal command exec may disable timeout; disconnect rejects long pe
 });
 
 test('default app-server unload override is process-local and termination requires observed exit',async()=>{
- const defaults=new RpcClient();assert.deepEqual(defaults.args,['app-server','--listen','stdio://','-c','thread_unload_delay_secs=0']);
+ const defaults=new RpcClient();assert.deepEqual(defaults.args,['app-server','--listen','stdio://','-c','features.step_model_switching=true','-c','thread_unload_delay_secs=0']);
  const client=new RpcClient({closeTimeout:5});const signals=[];
  client.child=Object.assign(new EventEmitter(),{pid:123,exitCode:null,signalCode:null,stdin:{end(){}},kill(signal){signals.push(signal||'SIGTERM');return true;}});
  await assert.rejects(client.close(),e=>e.code==='CHILD_CLOSE_FAILED');assert.deepEqual(signals,['SIGTERM','SIGKILL']);

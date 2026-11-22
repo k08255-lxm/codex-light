@@ -58,7 +58,7 @@ public final class ProjectFileTransferTest {
     public static void main(String[] args) throws Exception {
         Response accepted = new Response("http://192.168.0.42:57529/api/files/download");
         ByteArrayOutputStream data = new ByteArrayOutputStream();
-        client(accepted, 57529).download("192.168.0.42", 57529, TOKEN, BODY, data);
+        client(accepted, 57529).download(new ServerConfig("http", "192.168.0.42", 57529, TOKEN), BODY, data);
         require(Arrays.equals(data.toByteArray(), CONTENT), "Changed binary file");
         require("POST".equals(accepted.getRequestMethod()), "Expected POST");
         require(("Bearer " + TOKEN).equals(accepted.getRequestProperty("Authorization")), "Missing local authentication");
@@ -66,25 +66,32 @@ public final class ProjectFileTransferTest {
         require(BODY.equals(accepted.request.toString(StandardCharsets.UTF_8)), "Changed UTF-8 JSON");
         require(!accepted.getInstanceFollowRedirects() && accepted.disconnected, "Connection lifecycle");
 
+        ServerConfig remote = new ServerConfig("https", "desk.example.com", 8443, TOKEN);
+        Response https = new Response(remote.origin() + "/api/files/download");
+        new ProjectFileTransfer(url -> {
+            require(url.toString().equals(https.getURL().toString()), "Wrong HTTPS target");
+            return https;
+        }).download(remote, BODY, data);
+        require(remote.origin().equals(https.getRequestProperty("Origin")) && !https.getInstanceFollowRedirects(), "HTTPS origin");
         Response refused = new Response("http://192.168.0.42/api/files/download");
         ProjectFileTransfer client = client(refused, 80);
         for (int code : new int[]{301,302,303,307,308}) {
             refused.status = code;
-            reject(() -> client.download("192.168.0.42", 80, TOKEN, BODY, data), "跳转");
+            reject(() -> client.download(new ServerConfig("http", "192.168.0.42", 80, TOKEN), BODY, data), "跳转");
         }
         refused.status = 200;
         refused.mime = "text/html";
-        reject(() -> client.download("192.168.0.42", 80, TOKEN, BODY, data), "文件格式");
+        reject(() -> client.download(new ServerConfig("http", "192.168.0.42", 80, TOKEN), BODY, data), "文件格式");
         refused.mime = ProjectFileTransfer.MIME;
         refused.encoding = "gzip";
-        reject(() -> client.download("192.168.0.42", 80, TOKEN, BODY, data), "文件格式");
+        reject(() -> client.download(new ServerConfig("http", "192.168.0.42", 80, TOKEN), BODY, data), "文件格式");
         refused.encoding = null;
         refused.size = ProjectFileTransfer.MAX_BYTES + 1;
-        reject(() -> client.download("192.168.0.42", 80, TOKEN, BODY, data), "64 MiB");
+        reject(() -> client.download(new ServerConfig("http", "192.168.0.42", 80, TOKEN), BODY, data), "64 MiB");
         require(refused.fileReads == 0, "Read a rejected response");
-        reject(() -> client.download("203.0.113.1", 80, TOKEN, BODY, data), "配对");
+        reject(() -> client.download(new ServerConfig("http", "203.0.113.1", 80, TOKEN), BODY, data), "配对");
         client.cancel();
-        reject(() -> client.download("192.168.0.42", 80, TOKEN, BODY, data), "取消");
+        reject(() -> client.download(new ServerConfig("http", "192.168.0.42", 80, TOKEN), BODY, data), "取消");
 
         for (long expected : new long[]{-1, CONTENT.length}) {
             ByteArrayOutputStream output = new ByteArrayOutputStream();
