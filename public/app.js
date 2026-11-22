@@ -763,9 +763,10 @@ async function handleProjectAction(group,action) {
 function openProjectDialog() {
   if(projectsState.busy||state.sending)return;
   const list=$('project-choices');list.replaceChildren();
-  const groups=projectThreadGroups(projectsState.projects,state.threads,{selectedPath:state.cwd})
-    .filter(group=>group.saved||group.projectless);
-  if(!groups.some(group=>group.projectless))groups.unshift({name:'无项目',projectless:true,selected:!state.cwd});
+  const groups=[
+    {name:'无项目',projectless:true,selected:!state.cwd},
+    ...projectThreadGroups(projectsState.projects,state.threads,{selectedPath:state.cwd}).filter(group=>group.saved)
+  ];
   for(const group of groups){
     const button=el('button','project-choice');button.type='button';
     button.setAttribute('aria-pressed',String(group.selected));

@@ -187,15 +187,14 @@ test('a saved effort no longer supported by the same model is omitted on first s
   assert.equal(Object.hasOwn(sent, 'effort'), false);
 });
 
-test('project picker matches the pinned and active order in the conversation sidebar', async t => {
+test('project picker keeps No project first, including after a projectless conversation', async t => {
   const page = await open(t);
   await page.getByRole('button', { name: 'Historical conversation', exact: true }).waitFor();
-  const sidebar = await page.locator('.project-group-select:visible').allTextContents();
+  const sidebar = (await page.locator('.project-group-select:visible').allTextContents()).filter(name => name !== '无项目');
   assert.deepEqual(sidebar, ['Pinned', 'Active', 'Older']);
   await page.locator('#cwd-button').click();
   const choices = await page.locator('#project-choices button').allTextContents();
-  assert.deepEqual(choices.filter(name => name !== '无项目'), sidebar);
-  assert.ok(choices.includes('无项目'));
+  assert.deepEqual(choices, ['无项目', ...sidebar]);
   const older = page.locator('#project-choices').getByRole('button', { name: 'Older', exact: true });
   await older.click();
   await page.locator('#project-dialog').waitFor({ state: 'hidden' });
@@ -203,6 +202,15 @@ test('project picker matches the pinned and active order in the conversation sid
   assert.equal(await older.getAttribute('aria-pressed'), 'true');
   assert.equal(await older.evaluate(button => button === document.activeElement), true);
   assert.deepEqual(await page.locator('#project-choices button').allTextContents(), choices);
+  await page.locator('#project-choices').getByRole('button', { name: '无项目', exact: true }).click();
+  await page.locator('#project-dialog').waitFor({ state: 'hidden' });
+  await sendDraft(page, 'Projectless picker regression');
+  await page.getByRole('region', { name: '无项目', exact: true }).waitFor();
+  await page.locator('#cwd-button').press('Enter');
+  assert.deepEqual(await page.locator('#project-choices button').allTextContents(), choices);
+  const first = page.locator('#project-choices button').first();
+  assert.equal(await first.getAttribute('aria-pressed'), 'true');
+  assert.equal(await first.evaluate(button => button === document.activeElement), true);
 });
 
 test('usage loading and data share their horizontal bounds and responsive column count', async t => {
