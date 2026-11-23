@@ -10,9 +10,9 @@ import {createServer} from '../src/server.mjs';
 const address='192.168.74.19';
 const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jF1sAAAAASUVORK5CYII=','base64');
 const capability=state=>new URLSearchParams(new URL(state.url).hash.slice(1)).get('token');
-async function fixture(t){
+async function fixture(t,overrides={}){
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'lan-server-fixture-'));await fs.writeFile(path.join(root,'icon.png'),png);let listeners=0,pickers=0;
- const app=await createServer({demo:true,desktop:true,onDesktopPickFolder:()=>{pickers++;return root;},projectStore:{list:async()=>({projects:[{id:'p',path:root}],selectedId:'p'}),queue:Promise.resolve()},lanOptions:{networkInterfaces:()=>({Synthetic:[{address,family:'IPv4',internal:false}]}),serverFactory:handler=>{
+ const app=await createServer({demo:true,desktop:true,...overrides,onDesktopPickFolder:()=>{pickers++;return root;},projectStore:{list:async()=>({projects:[{id:'p',path:root}],selectedId:'p'}),queue:Promise.resolve()},lanOptions:{networkInterfaces:()=>({Synthetic:[{address,family:'IPv4',internal:false}]}),serverFactory:handler=>{
   const server=http.createServer(handler),listen=server.listen.bind(server);server.listen=options=>{listeners++;assert.equal(options.host,address);return listen({...options,host:'127.0.0.1'});};return server;
  }}});
  await app.started;t.after(async()=>{await app.close();await fs.rm(root,{recursive:true,force:true});});return {app,root,get listeners(){return listeners;},get pickers(){return pickers;}};
@@ -129,6 +129,45 @@ test('QR redemption authenticates the real LAN application and preserves browser
  assert.equal((await request(lan,{pathname:'/api/lan/pairing',method:'POST',token,body:{}})).status,403);
  assert.equal((await request(lan,{pathname:'/api/pairing/redeem',method:'POST',token:null,body:{ticket}})).status,401);
  await owner(app,'rotate');assert.equal((await request(lan,{token})).status,401);
+});
+
+test('sleep preferences follow overlapping authenticated sessions, turns, preference edits and shutdown',async t=>{
+ const actions=[];let released;
+ const {app}=await fixture(t,{onDesktopKeepAwake:active=>{actions.push(active);if(!active)released?.();}});
+ const headers={Authorization:'Bearer '+app.token,'Content-Type':'application/json'};
+ let {preferences}=await (await fetch(app.origin+'/api/desktop/preferences',{headers})).json();
+ async function settings(changes){
+  const response=await fetch(app.origin+'/api/desktop/preferences',{method:'POST',headers,body:JSON.stringify({preferences:{...preferences,...changes}})});
+  assert.equal(response.status,200);({preferences}=await response.json());
+ }
+ const lan=(await owner(app,'enable',{address})).body;
+ const a=await sse(lan),b=await sse(lan);
+ const local=new AbortController();t.after(()=>local.abort());
+ await desktopEvents(app,local.signal);
+ assert.deepEqual(actions,[],'both switches default off');
+ await settings({keepAwakeDuringRemote:true});assert.deepEqual(actions,[true]);
+ a.res.destroy();await bounded(a.closed);
+ await settings({keepAwakeDuringTask:true});
+ assert.deepEqual(actions,[true],'second remote stream keeps the request');
+ const first=(await app.sessions.call('thread/start',{cwd:process.cwd()})).thread;
+ const second=(await app.sessions.call('thread/start',{cwd:process.cwd()})).thread;
+ const start=threadId=>app.sessions.call('turn/start',{threadId,input:[{type:'text',text:'test'}]});
+ const turn1=(await start(first.id)).turn,turn2=(await start(second.id)).turn;
+ const rotated=(await owner(app,'rotate')).body;await bounded(b.closed);
+ await app.sessions.call('turn/interrupt',{threadId:first.id,turnId:turn1.id});
+ assert.deepEqual(actions,[true],'the second task still owns the request');
+ const release=new Promise(resolve=>{released=resolve;});
+ await app.sessions.call('turn/interrupt',{threadId:second.id,turnId:turn2.id});
+ await bounded(release);
+ assert.deepEqual(actions,[true,false]);
+ await request(rotated,{pathname:'/api/mobile/notification-state'});
+ assert.deepEqual(actions,[true,false],'background notification polling and local event streams do not count');
+ const reconnect=await sse(rotated);
+ assert.deepEqual(actions,[true,false,true]);
+ await settings({keepAwakeDuringRemote:false});assert.deepEqual(actions,[true,false,true,false]);
+ await settings({keepAwakeDuringRemote:true});
+ await app.close();await bounded(reconnect.closed);
+ assert.deepEqual(actions,[true,false,true,false,true,false]);
 });
 
 test('paired LAN and demo cannot open the native skill import picker',async t=>{

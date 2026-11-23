@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {once} from 'node:events';
+import {createInterface} from 'node:readline';
 const entry=fileURLToPath(new URL('../src/desktop-backend.mjs',import.meta.url));
 function launch(t,{fastFolderTimeout=false}={}){
  // Child-only timer injection exercises the real stdio/HTTP timeout path without
@@ -19,6 +20,23 @@ function hostMessage(p){return new Promise((resolve,reject)=>{
  p.stdout.on('data',data);p.once('exit',exited);
 });}
 const post=(url,route,value={})=>{const u=new URL(url);return fetch(u.origin+route,{method:'POST',headers:{Authorization:'Bearer '+u.hash.slice(7),'Content-Type':'application/json'},body:JSON.stringify(value)});};
+test('desktop backend reports actual task lifetime over private host stdio after handshake',{timeout:10000},async t=>{
+ const p=launch(t),lines=createInterface({input:p.stdout})[Symbol.asyncIterator]();
+ const next=async()=>JSON.parse((await lines.next()).value);
+ p.stdin.write('{"action":"start"}\n');
+ const {url,serverInstance}=await next(),u=new URL(url);
+ const {preferences}=await (await fetch(u.origin+'/api/desktop/preferences',{headers:{Authorization:'Bearer '+u.hash.slice(7)}})).json();
+ assert.equal((await post(url,'/api/desktop/preferences',{preferences:{...preferences,keepAwakeDuringTask:true}})).status,200);
+ async function rpc(method,params,nonce){
+  const response=await post(url,'/api/rpc',{method,params,requestId:serverInstance+':'+Date.now()+':'+nonce});
+  const body=await response.json();assert.equal(response.status,200,body.error);return body;
+ }
+ const {thread}=await rpc('thread/start',{cwd:process.cwd()},'power-thread');
+ await rpc('turn/start',{threadId:thread.id,cwd:process.cwd(),input:[{type:'text',text:'power fixture'}]},'power-turn');
+ assert.deepEqual(await next(),{type:'systemSleep',keepAwake:true});
+ assert.deepEqual(await next(),{type:'systemSleep',keepAwake:false});
+ const exited=once(p,'exit');p.stdin.end();assert.equal((await exited)[0],0);
+});
 test('desktop host handshake gates startup and exposes private URL only on stdout',async t=>{
  const p=launch(t);let bytes=0;p.stdout.on('data',c=>bytes+=c.length);await new Promise(r=>setTimeout(r,100));assert.equal(bytes,0);
  const started=ready(p);p.stdin.write('{"action":"start"}\n');const data=await started;const u=new URL(data.url);assert.equal(u.hostname,'127.0.0.1');assert.match(u.hash,/^#token=[a-f0-9]{64}$/);
@@ -87,6 +105,7 @@ test('desktop timed-out native selection ignores its late reply and keeps the ba
 test('desktop theme supports the fixed visual-style enum',async t=>{
  const p=launch(t),started=ready(p);p.stdin.write('{"action":"start"}\n');const {url}=await started;
  const next=hostMessage(p);assert.equal((await post(url,'/api/desktop/theme',{theme:'light',visualStyle:'claude'})).status,200);assert.deepEqual(await next,{type:'theme',theme:'light',visualStyle:'claude'});
+ const dsh=hostMessage(p);assert.equal((await post(url,'/api/desktop/theme',{theme:'dark',visualStyle:'dsh'})).status,200);assert.deepEqual(await dsh,{type:'theme',theme:'dark',visualStyle:'dsh'});
  assert.equal((await post(url,'/api/desktop/theme',{theme:'dark',visualStyle:'#ff0000'})).ok,false);
  const exited=once(p,'exit');p.stdin.end();assert.equal((await exited)[0],0);
 });

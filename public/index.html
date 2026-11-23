@@ -18,6 +18,7 @@
 <link rel="stylesheet" href="/project-navigation.css">
 <link rel="stylesheet" href="/ui/shell-polish.css">
 <link rel="stylesheet" href="/ui/file-preview.css">
+<link rel="stylesheet" href="/ui/dsh-theme.css">
 <link rel="stylesheet" href="/vendor/xterm.css">
 </head>
 <body>
@@ -100,7 +101,7 @@
   <!-- ===== Chat ===== -->
   <main id="chat-page" class="stage chat">
     <header class="stage-bar">
-      <div class="crumbs"><span id="project-name" class="crumb-project">工作区</span><span class="crumb-sep" aria-hidden="true">/</span><strong id="thread-title">新对话</strong></div>
+      <div class="crumbs"><span id="project-name" class="crumb-project">工作区</span><span class="crumb-sep" aria-hidden="true">/</span><strong id="thread-title">新对话</strong><span id="thread-load-indicator" aria-hidden="true"></span><span id="thread-open-status" class="sr-only" role="status"></span></div>
       <div class="stage-actions">
         <button id="toggle-details" class="btn ghost small" aria-pressed="false" aria-controls="details" aria-label="工具活动" title="工具活动"><span data-icon="activity"></span><span class="label">活动</span></button>
         <button id="thread-menu-button" class="btn icon-only ghost" aria-label="对话操作" aria-haspopup="menu" aria-expanded="false" title="对话操作"><span data-icon="more"></span></button>
@@ -127,6 +128,7 @@
         <div id="attachment-tray" class="attachment-tray hidden" aria-label="待发送附件（图片和文件合计最多 5 个）"></div>
       </div>
       <form id="compose" class="composer">
+        <span class="attachment-drop-hint">松开以添加附件</span>
         <div id="slash-menu" class="slash-menu hidden" role="listbox" aria-label="命令与技能"></div>
         <textarea id="prompt" rows="1" placeholder="描述要完成的任务" aria-label="消息" maxlength="100000" role="combobox" aria-autocomplete="list" aria-controls="slash-menu" aria-expanded="false"></textarea>
         <div class="composer-row">
@@ -235,6 +237,10 @@
                 <label class="pref-row" for="desktop-close-behavior"><div><strong>关闭窗口时</strong><small class="fine">转入托盘可让任务继续运行。</small></div><select id="desktop-close-behavior" disabled><option value="ask">每次询问</option><option value="tray">转入系统托盘</option><option value="exit">完全退出</option></select></label>
                 <p id="desktop-close-status" class="fine" role="status" aria-live="polite"></p>
               </div>
+              <div id="desktop-power-preferences" hidden>
+                <label class="pref-row" for="preference-awake-task"><span class="setting-copy"><strong>任务运行时阻止休眠</strong><small class="fine" id="awake-task-description">码舱对话或其 DSH 子任务运行时，让电脑保持唤醒。屏幕仍可按时关闭。</small></span><input id="preference-awake-task" class="switch" type="checkbox" aria-describedby="awake-task-description"></label>
+                <label class="pref-row" for="preference-awake-remote"><span class="setting-copy"><strong>远控连接时阻止休眠</strong><small class="fine" id="awake-remote-description">设备正通过局域网或隧道连接码舱时，让电脑保持唤醒。</small></span><input id="preference-awake-remote" class="switch" type="checkbox" aria-describedby="awake-remote-description"></label>
+              </div>
               <div class="pref-row"><div><strong>后台服务</strong><small id="runtime-close-info" class="fine">停止后会中断运行中的任务。</small></div><button id="shutdown" type="button" class="btn danger">停止服务</button></div>
             </div>
           </div>
@@ -249,7 +255,13 @@
       <section id="settings-appearance" class="settings-section hidden">
         <h1>外观</h1>
         <div class="panel">
-          <div class="pref-row"><div><strong>界面风格</strong><small class="fine">只影响本应用</small></div><div class="style-cards" role="group" aria-label="界面风格"><button type="button" data-style-choice="codex" aria-pressed="true"><span class="style-preview style-preview-codex" aria-hidden="true"></span><span class="style-choice-copy"><strong>Codex</strong><small>中性、克制</small></span></button><button type="button" data-style-choice="claude" aria-pressed="false"><span class="style-preview style-preview-claude" aria-hidden="true"></span><span class="style-choice-copy"><strong>Claude</strong><small>暖白、沉稳</small></span></button></div></div>
+          <div class="pref-row"><div><strong>界面风格</strong><small class="fine">只影响本应用</small></div>
+            <div class="style-cards" role="group" aria-label="界面风格">
+              <button type="button" data-style-choice="codex" aria-pressed="true"><span class="style-preview style-preview-codex" aria-hidden="true"></span><span class="style-choice-copy"><strong>Codex</strong><small>中性、克制</small></span></button>
+              <button type="button" data-style-choice="claude" aria-pressed="false"><span class="style-preview style-preview-claude" aria-hidden="true"></span><span class="style-choice-copy"><strong>Claude</strong><small>暖白、沉稳</small></span></button>
+              <button type="button" data-style-choice="dsh" aria-pressed="false"><span class="style-preview style-preview-dsh" aria-hidden="true"></span><span class="style-choice-copy"><strong>DSH</strong><small>DeepSeek 蓝灰</small></span></button>
+            </div>
+          </div>
           <div class="pref-row"><div><strong>主题</strong></div><div class="theme-cards segmented" role="group" aria-label="主题"><button type="button" data-theme-choice="system">系统</button><button type="button" data-theme-choice="light">浅色</button><button type="button" data-theme-choice="dark">深色</button></div></div>
           <label class="pref-row" for="preference-font"><div><strong>文字大小</strong><small class="fine">不影响系统缩放</small></div><select id="preference-font"><option value="90">90%</option><option value="100">100%</option><option value="110">110%</option><option value="125">125%</option></select></label>
           <label class="pref-row" for="preference-motion"><div><strong>减少动画</strong></div><select id="preference-motion"><option value="system">跟随系统</option><option value="on">开启</option><option value="off">关闭</option></select></label>

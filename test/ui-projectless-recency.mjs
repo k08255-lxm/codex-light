@@ -45,6 +45,11 @@ try{
   throw new Error(`Expected ${key}, got ${JSON.stringify(order)}; activity=${JSON.stringify(await app.projectStore.submitted())}; recent=${JSON.stringify(engine.map(row=>[row.method,row.params.threadId,row.params.cwd,row.params.input?.[0]?.text]))}; errors=${errors.join(', ')}: ${error.message}`);
  });
  const waitLabel=(current,name)=>current.locator('#cwd-label').filter({hasText:name}).waitFor();
+ const browseGroup=async key=>{
+  const region=group(page,key),toggle=region.locator('.project-group-toggle');
+  if(await toggle.getAttribute('aria-expanded')==='false')await toggle.click();
+  await region.locator('.project-group-thread').first().click();
+ };
  const choose=async(current,name)=>{await current.locator('#cwd-button').click();await current.locator('#project-dialog').getByRole('button',{name,exact:true}).click();await current.locator('#project-dialog').waitFor({state:'hidden'});await waitLabel(current,name);};
  const send=async(current,text)=>{
   await current.locator('#prompt').fill(text);
@@ -78,18 +83,34 @@ try{
  await expectFirst(page,aKey);
  console.log('PASS: project and conversation opening remain stable, submissions and dispatched queue entries update recency');
 
+ await browseGroup(bKey);
+ await waitLabel(page,'Beta');
  await page.locator('#new-thread').click();
- await waitLabel(page,'无项目');
- await send(page,'global new without a project');
- const first=engine.filter(row=>row.method==='thread/start').at(-1).result.thread;
- assert.equal(path.dirname(first.cwd),path.join(root,'state','projectless-threads'));
- await group(page,'@projectless').locator('.project-group-thread').filter({hasText:'global new without a project'}).waitFor();
+ await waitLabel(page,'Alpha');
+ await send(page,'global new in the last chosen project');
+ assert.equal(engine.filter(row=>row.method==='thread/start').at(-1).params.cwd,await realpath(aPath));
+ await browseGroup(bKey);
+ await waitLabel(page,'Beta');await page.reload();await waitLabel(page,'Alpha');
+ await browseGroup(bKey);await waitLabel(page,'Beta');
+ await page.locator('#menu-app').click();
+ await page.getByRole('menuitem',{name:/新对话/}).click();await waitLabel(page,'Alpha');
+ await browseGroup(bKey);await waitLabel(page,'Beta');
+ await page.locator('#prompt').fill('/new');
+ await page.locator('#slash-menu [role=option]').filter({hasText:'/new'}).first().click();
+ await waitLabel(page,'Alpha');
  await group(page,bKey).getByRole('button',{name:'新建聊天',exact:true}).click();
  await waitLabel(page,'Beta');
  await send(page,'project new stays in Beta');
  assert.equal(engine.filter(row=>row.method==='thread/start').at(-1).params.cwd,await realpath(bPath));
+ await browseGroup(aKey);
+ await waitLabel(page,'Alpha');
  await page.keyboard.press('Control+n');
- await waitLabel(page,'无项目');
+ await waitLabel(page,'Beta');
+ await choose(page,'无项目');
+ await send(page,'global new without a project');
+ const first=engine.filter(row=>row.method==='thread/start').at(-1).result.thread;
+ assert.equal(path.dirname(first.cwd),path.join(root,'state','projectless-threads'));
+ await page.keyboard.press('Control+n');await waitLabel(page,'无项目');
  await send(page,'shortcut new without a project');
  const second=engine.filter(row=>row.method==='thread/start').at(-1).result.thread;
  assert.notEqual(first.cwd,second.cwd);
@@ -107,11 +128,28 @@ try{
  mobile.on('pageerror',error=>errors.push(error.message));
  await mobile.addInitScript(()=>{window.CodexLightNative={isNativeApp:()=>true,getAppVersion:()=> '0.4.9'};});
  await mobile.goto(app.url);
- await waitLabel(mobile,'Beta');
+ await waitLabel(mobile,'无项目');
  await choose(mobile,'无项目');
  await send(mobile,'Android shell no-project draft');
  const mobileThread=engine.filter(row=>row.method==='thread/start').at(-1).result.thread;
  assert.equal(path.dirname(mobileThread.cwd),path.join(root,'state','projectless-threads'));
+ await choose(page,'Beta');
+ await group(page,bKey).getByRole('button',{name:'项目操作',exact:true}).click();
+ await page.getByRole('menuitem',{name:'移除项目'}).click();
+ await waitLabel(page,'无项目');await page.keyboard.press('Control+n');await waitLabel(page,'无项目');
+ await page.reload();await waitLabel(page,'无项目');
+ assert.equal((await app.projectStore.list()).selectedId,null);
+ await page.close();await mobile.close();await app.close();
+ const restarted=await createServer({demo:true,cwd:bPath,projectsRoot:path.join(root,'state')});
+ try {
+   await restarted.started;
+   const fresh=await browser.newPage();
+   await fresh.goto(restarted.url);await waitLabel(fresh,'无项目');
+   await fresh.waitForFunction(()=>document.querySelector('#connection-text').textContent.includes('演示'));
+   await fresh.locator('#new-thread').click();await waitLabel(fresh,'无项目');
+   assert.equal((await restarted.projectStore.list()).selectedId,null);
+   await fresh.close();
+ } finally {await restarted.close();}
  assert.deepEqual(errors,[]);
  console.log('PASS: narrow Android bridge layout uses the same projectless draft flow');
 }finally{await browser?.close();await app.close();await rm(root,{recursive:true,force:true});}

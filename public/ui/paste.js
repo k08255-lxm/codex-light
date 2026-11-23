@@ -1,9 +1,10 @@
 // Composer paste: turn a user's paste event into attachment candidates. Pure logic, no network.
 // Only the event's own clipboardData is used; the live clipboard is never read.
+import { IMAGE_LIMITS } from '../attachments.js';
 export const PASTE_LIMIT = 5;
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 const IMAGE_EXT = /\.(png|jpe?g|webp|gif)$/i;
-const IMAGE_BYTES = 10 * 1024 * 1024, FILE_BYTES = 20 * 1024 * 1024;
+const FILE_BYTES = 20 * 1024 * 1024;
 
 /** True for supported raster images, including an empty MIME with an allowed extension. */
 export function isImageFile(file) { return IMAGE_TYPES.has(file.type) || (!file.type && IMAGE_EXT.test(file.name || '')); }
@@ -34,9 +35,9 @@ export function classifyPaste(files, existingCount, now = new Date()) {
     const label = String(file.name || name).slice(0, 120);
     if (!(file.size > 0)) { errors.push(`${label}：文件为空`); return; }
     if (isImageFile(file)) {
-      if (file.size > IMAGE_BYTES) errors.push(`${label}：图片超过 10 MiB`);
+      if (file.size > IMAGE_LIMITS.bytes) errors.push(`${label}：图片超过 6 MiB`);
       else images.push({ file, name });
-    } else if (file.type.startsWith('image/')) errors.push(`${label}：不支持的图片格式 ${file.type}，请作为文件添加`);
+    } else if (file.type.startsWith('image/')) errors.push(`${label}：不支持的图片格式 ${file.type}，请选择 PNG、JPEG、WebP 或 GIF`);
     else if (file.size > FILE_BYTES) errors.push(`${label}：文件超过 20 MiB`);
     else others.push({ file, name: file.name || `粘贴的文件-${index + 1}` });
   });

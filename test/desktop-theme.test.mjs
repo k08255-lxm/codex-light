@@ -15,5 +15,6 @@ test('native theme forwards only the fixed theme/visual-style enum, keeping the 
  assert.deepEqual(await (await post(a,{theme:'dark'})).json(),{theme:'dark'});
  assert.deepEqual(await (await post(a,{theme:'light',visualStyle:'claude'})).json(),{theme:'light',visualStyle:'claude'});
  assert.equal((await post(a,{theme:'dark',visualStyle:'codex'})).status,200);
- assert.deepEqual(calls,[['dark'],['light','claude'],['dark','codex']]);
+ assert.equal((await post(a,{theme:'light',visualStyle:'dsh'})).status,200);
+ assert.deepEqual(calls,[['dark'],['light','claude'],['dark','codex'],['light','dsh']]);
 });

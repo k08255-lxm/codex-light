@@ -26,7 +26,7 @@ const request = (app, url, data, {auth = true, origin} = {}) => fetch(app.origin
 
 test('project and folder routes retain authentication and Origin gates', async t => {
   const app = await fixture(t, {desktop: true, onDesktopPickFolder: async () => null});
-  for (const [url, data] of [['/api/projects', undefined], ['/api/projects/add', {path: process.cwd()}], ['/api/projects/select', {id: 'a'}], ['/api/projects/remove', {id: 'a'}], ['/api/desktop/pick-folder', {}]]) {
+  for (const [url, data] of [['/api/projects', undefined], ['/api/projects/add', {path: process.cwd()}], ['/api/projects/open', {path: process.cwd()}], ['/api/projects/select', {id: 'a'}], ['/api/projects/remove', {id: 'a'}], ['/api/desktop/pick-folder', {}]]) {
     assert.equal((await request(app, url, data, {auth: false})).status, 401, url);
     assert.equal((await request(app, url, data, {origin: 'https://evil.example'})).status, 403, url);
   }
@@ -70,6 +70,31 @@ test('add deduplicates; selection and remove preserve project files, chats and c
   assert.ok(app.rpc.threads.has(thread.id));
   assert.equal(app.operations.entries.size, beforeOperations);
   assert.deepEqual(await (await request(app, '/api/config')).json(), initial);
+});
+
+test('open resolves saved and historical folders without saving or selecting and propagates shell errors', async t => {
+  const root = await directory(t), history = path.join(root, '历史 [project], 1');
+  await mkdir(history);
+  const opened = [];
+  let fail = false;
+  const app = await fixture(t, {openProjectFolder: async folder => {
+    if (fail) throw new Error('资源管理器未响应');
+    opened.push(folder);
+  }});
+  const saved = await (await request(app, '/api/projects/add', {path: root})).json();
+  for (const input of [{id:saved.selectedId}, {path:history}]) {
+    assert.deepEqual(await (await request(app, '/api/projects/open', input)).json(), {opened:true});
+  }
+  assert.deepEqual(opened, [await app.projectStore.directory(root), await app.projectStore.directory(history)]);
+  assert.deepEqual(await app.projectStore.list({initialCwd:''}), saved);
+  for (const input of [{id:'unknown'}, {path:path.join(root, 'missing')}, {id:saved.selectedId,path:history}, {}]) {
+    assert.equal((await request(app, '/api/projects/open', input)).status, 400);
+  }
+  assert.equal(opened.length, 2);
+  fail = true;
+  const response = await request(app, '/api/projects/open', {id:saved.selectedId});
+  assert.equal(response.status, 400);
+  assert.match((await response.json()).error, /资源管理器未响应/);
 });
 
 test('default demo project roots are isolated and removed at close', async t => {

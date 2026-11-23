@@ -4,6 +4,8 @@ import {constants} from 'node:fs';
 import {homedir} from 'node:os';
 import path from 'node:path';
 import {randomBytes} from 'node:crypto';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
 import {projectName} from '../public/projects.js';
 
 const MAX_BYTES = 384 * 1024;
@@ -13,6 +15,36 @@ const stateError = () => new Error('项目列表无法安全读取或保存；�
 const keysAre = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join(',') === keys;
 const activityAt = value => Number.isSafeInteger(value) && value > 0;
 const validThread = value => typeof value === 'string' && /^[\w.:-]{1,128}$/.test(value);
+
+export function projectListSnapshot({submissions, awaitingSelection, ...snapshot}, initialCwd) {
+  // Legacy registries use null for "no project". Only a fresh registry with no
+  // explicit choice inherits the launch directory, even after recording activity.
+  if (initialCwd !== undefined) snapshot.draftCwd = awaitingSelection ? initialCwd : snapshot.projects.find(project=>project.id===snapshot.selectedId)?.path || '';
+  return snapshot;
+}
+
+// Ask the running Windows shell to explore a folder object. explorer.exe can
+// exit successfully or with code 1 merely for handing off to another process.
+const exploreFolderScript = [
+  "$ErrorActionPreference='Stop'",
+  '$shell=New-Object -ComObject Shell.Application',
+  '$folder=$shell.NameSpace($env:CODECANG_EXPLORER_DIRECTORY)',
+  "if($null -eq $folder){throw 'Folder is unavailable'}",
+  '$shell.Explore($folder.Self)',
+].join(';');
+
+export async function openProjectDirectory(directory) {
+  if (process.platform !== 'win32') throw new Error('当前系统不支持 Windows 资源管理器。');
+  const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  try {
+    await promisify(execFile)(powershell, ['-NoProfile', '-NonInteractive', '-Command', exploreFolderScript], {
+      env: {...process.env, CODECANG_EXPLORER_DIRECTORY: directory}, windowsHide: true, timeout: 15000,
+    });
+  } catch (error) {
+    if (error.killed) throw new Error('Windows 资源管理器响应超时。', {cause: error});
+    throw new Error('Windows 无法通过资源管理器打开此文件夹。', {cause: error});
+  }
+}
 
 async function noLinks(file) {
   for (let current = path.resolve(file);; current = path.dirname(current)) {
@@ -48,7 +80,9 @@ export class ProjectStore {
   }
 
   validate(value) {
-    if ((!keysAre(value, 'projects,selectedId,version') && !keysAre(value, 'projects,selectedId,submissions,version')) || value.version !== 1 || !Array.isArray(value.projects) || value.projects.length > MAX_PROJECTS) throw stateError();
+    const {awaitingSelection, ...fields} = value ?? {};
+    if ((awaitingSelection !== undefined && (awaitingSelection !== true || fields.selectedId !== null)) ||
+      (!keysAre(fields, 'projects,selectedId,version') && !keysAre(fields, 'projects,selectedId,submissions,version')) || value.version !== 1 || !Array.isArray(value.projects) || value.projects.length > MAX_PROJECTS) throw stateError();
     if (value.submissions !== undefined && (!value.submissions || typeof value.submissions !== 'object' || Array.isArray(value.submissions) || Object.keys(value.submissions).length > MAX_SUBMISSIONS || Object.entries(value.submissions).some(([id, at]) => !validThread(id) || !activityAt(at)))) throw stateError();
     const ids = new Set(), paths = new Set();
     for (const project of value.projects) {
@@ -78,7 +112,7 @@ export class ProjectStore {
       if (count > MAX_BYTES) throw stateError();
       return this.validate(JSON.parse(bytes.subarray(0, count).toString('utf8')));
     } catch (error) {
-      if (error.code === 'ENOENT') return {version: 1, projects: [], selectedId: null};
+      if (error.code === 'ENOENT') return {version: 1, projects: [], selectedId: null, awaitingSelection:true};
       throw stateError();
     } finally { await handle?.close(); }
   }
@@ -122,10 +156,13 @@ export class ProjectStore {
     return job;
   }
 
-  async list() { await this.queue; const {submissions, ...snapshot} = await this.read(); return snapshot; }
+  async list({initialCwd} = {}) {
+    await this.queue;
+    return projectListSnapshot(await this.read(), initialCwd);
+  }
   async submitted() { await this.queue; return (await this.read()).submissions || {}; }
 
-  add(value, recent = true) {
+  add(value, recent = true, select = true) {
     return this.update(async snapshot => {
       const canonical = await this.directory(value);
       let project = snapshot.projects.find(item => this.key(item.path) === this.key(canonical));
@@ -134,12 +171,13 @@ export class ProjectStore {
         project = {id: randomBytes(16).toString('hex'), path: canonical, name: projectName(canonical), ...(recent ? {addedAt: Date.now()} : {})};
         snapshot.projects.push(project);
       }
-      snapshot.selectedId = project.id;
+      if(select){delete snapshot.awaitingSelection;snapshot.selectedId = project.id;}
     });
   }
 
   select(id) {
     return this.update(async snapshot => {
+      delete snapshot.awaitingSelection;
       if (id === null) { snapshot.selectedId = null; return; }
       const project = snapshot.projects.find(item => item.id === id);
       if (!project) throw new Error('找不到该项目，请刷新项目列表。');

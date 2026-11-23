@@ -45,8 +45,7 @@ function ensureDependencies(installMissing) {
     const usable = entry => {
       try {
         const require = createRequire(entry);
-        if (process.env.DSH_DESKTOP_EXECUTABLE) require.resolve('@deepseek-ai/dsh-agent-presets');
-        else resolvePresetLayout(entry, require);
+        resolvePresetLayout(entry, require);
         for (const name of ['@deepseek-ai/dsh-sdk-jsonrpc-server','@deepseek-ai/dsh-sdk-protocol',
           '@deepseek-ai/dsh-workspace','@deepseek-ai/dsh-tool-subagent/model-selection-settings']) require.resolve(name);
         return true;

@@ -1,8 +1,8 @@
 {
   "version": 1,
-  "bridgeVersion": "0.8.0-light.3",
+  "bridgeVersion": "0.8.0-light.4",
   "files": {
-    "config.mjs": "1c011f57ff61110cfecda5be7952b0741a1601b3d3e7483c141d9bef0a212a12",
+    "config.mjs": "5841527844db6fcaadc2851bbfa76f00baf1fd1b1de04552cea691ed2215c2f8",
     "manager.mjs": "a299e49d99d835558c7c60072858755193c8cbc271fbb10c4da7a609dabee3fb",
     "server.mjs": "16310bf4454ed65caf3c3faf9c50ce2391cc0dcfd8c9fe6567b0e14619b1532a",
     "provider-sources.mjs": "4bfa08673cc1fe850c0eb6db01bea94b7dffa93cee52ff7f437389ae9a37ef8c"

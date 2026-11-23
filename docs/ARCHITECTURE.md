@@ -11,7 +11,7 @@ Windows 原生窗口（WinForms + WebView2）
 
 客户端复用用户已有 Codex 登录与配置，不额外要求模型密钥，也不修改模型服务地址。客户端身份为 `codex_light_local` / `码舱 CodeCang (unofficial)`。模型调用使用所选引擎及其提供商的额度。
 
-`components/dsh-bridge` 是默认分发的 MCP 桥；DSH 本体不随包，缺失不影响普通聊天。桥使用用户安装的 DSH 0.2.2 自带 Node/SQLite 运行环境，Light 主应用仍支持 Node.js 20+。显式确认注册只写用户层 `mcp_servers.dsh_subagent`，带配置版本冲突检查，保留已存在的外部同名配置；安装、启动、状态读取不自动注册。MCP reload 仅表示请求排队，连接状态以实际 `mcpServerStatus/list` 返回为准。
+`components/dsh-bridge` 是默认分发的 MCP 桥。DSH 本体缺失时仍可普通聊天。桥复用所选 DSH 的 Node/SQLite，按 DSH 版本检查 Node 要求。0.2.3 的标准和最简预设直接来自该安装包，0.2.2 使用对应的兼容预设。Light 主应用仍支持 Node.js 20+。显式确认注册只写用户层 `mcp_servers.dsh_subagent`，带配置版本冲突检查，保留已存在的外部同名配置；安装、启动、状态读取不自动注册。MCP reload 仅表示请求排队，连接状态以实际 `mcpServerStatus/list` 返回为准。
 
 DSH 配置来源只导入 provider 声明，原文件保持不变。自动跟随在新 runtime 创建前重新校验；现有任务继续使用已加载版本。来源与连接管理接口仅本机可用，局域网请求拒绝；原始配置与凭据不返回前端，也不进入操作收据。
 

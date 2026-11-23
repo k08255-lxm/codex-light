@@ -31,7 +31,7 @@ test('paste batch is validated as a whole: mixed classes, empty MIME, zero size,
   assert.equal(isImageFile(file('x.webp', '')), true); assert.equal(isImageFile(file('x.bmp', '')), false);
   assert.match(classifyPaste([file('empty.png', 'image/png', 0)], 0).errors[0], /为空/);
   assert.match(classifyPaste([file('x.tiff', 'image/tiff')], 0).errors[0], /不支持的图片格式/);
-  assert.match(classifyPaste([file('big.png', 'image/png', 11 * 1024 * 1024)], 0).errors[0], /10 MiB/);
+  assert.match(classifyPaste([file('big.png', 'image/png', 6 * 1024 * 1024 + 1)], 0).errors[0], /6 MiB/);
   const over = classifyPaste([file('a.png', 'image/png'), file('b.txt', 'text/plain')], 4);
   assert.match(over.errors[0], /合计最多 5 个/, 'limit counts existing attachments and the whole batch');
 });

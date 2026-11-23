@@ -55,7 +55,7 @@ export function createDshView({ document, state, $, dshLive, dshTasks, api, rpc,
   }
   function syncDshLiveContext() {
     dshLive.setContext({
-      threadId: state.thread?.id || null,
+      threadId: state.demo ? null : state.thread?.id || null,
       connected: state.connected,
       visible: document.visibilityState !== 'hidden' && !$('chat-page').classList.contains('hidden'),
       serverInstance: state.serverInstance,
@@ -87,7 +87,7 @@ export function createDshView({ document, state, $, dshLive, dshTasks, api, rpc,
   }
   function renderDshLiveMeta(snapshot = dshLive.snapshot()) {
     if (!$('dsh-live-state')) return;
-    const stateLabel = !snapshot.context.threadId ? '等待对话'
+    const stateLabel = state.demo ? '演示模式' : !snapshot.context.threadId ? '等待对话'
       : !snapshot.context.connected ? '自动刷新暂停：未连接'
         : !snapshot.context.visible ? '自动刷新暂停：不可见'
           : snapshot.list.loading ? '正在刷新…'
@@ -96,7 +96,9 @@ export function createDshView({ document, state, $, dshLive, dshTasks, api, rpc,
     $('dsh-live-state').textContent = stateLabel;
     $('dsh-live-state').classList.toggle('paused', !snapshot.actionable || !!snapshot.list.nextRetryAt);
     const parts = [];
-    if (!snapshot.context.threadId) {
+    if (state.demo) {
+      parts.push('演示模式不读取本机 DSH 任务');
+    } else if (!snapshot.context.threadId) {
       parts.push('打开对话后查看子代理');
     } else {
       parts.push(`最后检查：${snapshot.list.checkedAt ? formatDshTime(snapshot.list.checkedAt) : '尚未检查'}`);

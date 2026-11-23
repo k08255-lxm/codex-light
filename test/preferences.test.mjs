@@ -1,17 +1,21 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {DEFAULT_PREFERENCES,PREFERENCE_KEY,validatePreferences,readPreferences,savePreferences,effectiveAppearance,receiptDisplay} from '../public/preferences.js';
 import {createDocument} from './mini-dom.mjs';import {createPreferences} from '../public/ui/preferences-view.js';
 const memory=(raw=null)=>({raw,getItem(){return this.raw;},setItem(key,value){assert.equal(key,PREFERENCE_KEY);this.raw=value;}});
-const {visualStyle:_omit,...LEGACY}=DEFAULT_PREFERENCES;
+const {visualStyle:_omit,keepAwakeDuringTask:_task,keepAwakeDuringRemote:_remote,...LEGACY}=DEFAULT_PREFERENCES;
 
 test('strict non-sensitive preference schema rejects unknown, invalid and mixed legacy data',()=>{
  for(const change of [{token:'secret'},{theme:'invert'},{fontScale:99},{motion:'yes'},{approvalNotice:'true'},{version:2},{visualStyle:'neon'},{visualStyle:null}])assert.throws(()=>validatePreferences({...DEFAULT_PREFERENCES,...change}),JSON.stringify(change));
  for(const change of [{token:'secret'},{fontScale:undefined},{theme:undefined},{motion:'yes'},{version:2},{extra:true}])assert.throws(()=>validatePreferences({...LEGACY,...change}),JSON.stringify(change));
  assert.deepEqual([DEFAULT_PREFERENCES.theme,DEFAULT_PREFERENCES.motion,DEFAULT_PREFERENCES.visualStyle],['dark','system','codex']);
+ for(const key of ['keepAwakeDuringTask','keepAwakeDuringRemote']){
+  assert.equal(validatePreferences(LEGACY)[key],false);
+  assert.throws(()=>validatePreferences({...DEFAULT_PREFERENCES,[key]:1}));
+ }
 });
 
 test('storage roundtrips only known preferences; corrupt data is reported and left untouched',()=>{
  const storage=memory();
- for(const visualStyle of ['codex','claude']){assert.equal(savePreferences(storage,{...DEFAULT_PREFERENCES,visualStyle,fontScale:125}).visualStyle,visualStyle);assert.deepEqual(readPreferences(storage),{preferences:{...DEFAULT_PREFERENCES,visualStyle,fontScale:125},error:null});}
+ for(const visualStyle of ['codex','claude','dsh']){assert.equal(savePreferences(storage,{...DEFAULT_PREFERENCES,visualStyle,fontScale:125}).visualStyle,visualStyle);assert.deepEqual(readPreferences(storage),{preferences:{...DEFAULT_PREFERENCES,visualStyle,fontScale:125},error:null});}
  storage.raw='{"token":"no"}';const corrupt=readPreferences(storage);assert.ok(corrupt.error);assert.deepEqual(corrupt.preferences,DEFAULT_PREFERENCES);assert.equal(storage.raw,'{"token":"no"}');
  assert.throws(()=>savePreferences({setItem(){throw new Error('blocked');}},DEFAULT_PREFERENCES));
 });
@@ -40,7 +44,7 @@ async function view({desktop=false,storage=memory(),api=async()=>{throw new Erro
  const document=createDocument();document.documentElement=document.createElement('html');
  const nodes=new Map(),calls=[],notices=[];
  const $=id=>{if(!nodes.has(id)){const node=document.createElement(id.startsWith('preference-')&&!['preference-status','preference-native-reload'].includes(id)?'input':'div');node.id=id;nodes.set(id,node);}return nodes.get(id);};
- const choices=[...['system','light','dark'].map(theme=>{const b=document.createElement('button');b.dataset.themeChoice=theme;return b;}),...['codex','claude'].map(style=>{const b=document.createElement('button');b.dataset.styleChoice=style;return b;})];
+ const choices=[...['system','light','dark'].map(theme=>{const b=document.createElement('button');b.dataset.themeChoice=theme;return b;}),...['codex','claude','dsh'].map(style=>{const b=document.createElement('button');b.dataset.styleChoice=style;return b;})];
  document.querySelectorAll=selector=>choices.filter(button=>selector==='[data-theme-choice]'?button.dataset.themeChoice:button.dataset.styleChoice);
  const media={matches:false,addEventListener(){}};
  const prefs=createPreferences({document,window:{localStorage:storage,matchMedia:()=>media},state:{desktop,serverInstance:'i'},$,el:(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n;},
@@ -51,11 +55,11 @@ async function view({desktop=false,storage=memory(),api=async()=>{throw new Erro
 
 test('browser appearance choices apply to the root, persist locally and never touch desktop APIs',async()=>{
  const h=await view();const root=h.document.documentElement.dataset;
- assert.deepEqual([root.theme,root.visualStyle,root.fontScale],['dark','codex','100']);assert.deepEqual(h.pressed(),['false','false','true','true','false']);
- await h.click('claude');await h.click('light');
- assert.deepEqual([root.theme,root.visualStyle],['light','claude']);assert.deepEqual(h.pressed(),['false','true','false','false','true']);
- assert.deepEqual(JSON.parse(h.storage.raw),{...DEFAULT_PREFERENCES,theme:'light',visualStyle:'claude'});h.prefs.syncHostTheme();await h.settle();assert.deepEqual(h.calls,[]);
- const reloaded=await view({storage:h.storage});assert.equal(reloaded.document.documentElement.dataset.visualStyle,'claude','choice restores independently of theme');
+ assert.deepEqual([root.theme,root.visualStyle,root.fontScale],['dark','codex','100']);assert.deepEqual(h.pressed(),['false','false','true','true','false','false']);
+ await h.click('dsh');await h.click('light');
+ assert.deepEqual([root.theme,root.visualStyle],['light','dsh']);assert.deepEqual(h.pressed(),['false','true','false','false','false','true']);
+ assert.deepEqual(JSON.parse(h.storage.raw),{...DEFAULT_PREFERENCES,theme:'light',visualStyle:'dsh'});h.prefs.syncHostTheme();await h.settle();assert.deepEqual(h.calls,[]);
+ const reloaded=await view({storage:h.storage});assert.equal(reloaded.document.documentElement.dataset.visualStyle,'dsh','choice restores independently of theme');
 });
 
 test('desktop preferences load from and save to the native state API and sync the caption theme',async()=>{
@@ -74,4 +78,23 @@ test('a failed desktop preference read uses defaults explicitly instead of brows
  const h=await view({desktop:true,storage,api:async path=>{if(path==='/api/desktop/receipts')return {receipts:[]};if(path==='/api/desktop/theme')return {};throw new Error('state unavailable');}});
  await h.prefs.loadDesktopState();
  assert.equal(h.document.documentElement.dataset.theme,'dark');assert.match(h.$('preference-status').textContent,/无法读取本机偏好.*默认外观/);assert.equal(h.notices.at(-1)[1],true);
+});
+
+test('system sleep switches are desktop-only and persist each choice independently',async()=>{
+ const browser=await view();
+ assert.equal(browser.$('desktop-power-preferences').hidden,true);
+ let saved={...DEFAULT_PREFERENCES,keepAwakeDuringRemote:true};
+ const desktop=await view({desktop:true,api:async(path,data)=>{
+  if(path==='/api/desktop/preferences'){if(data)saved=data.preferences;return {preferences:saved};}
+  if(path==='/api/desktop/theme')return {};
+  throw new Error(path);
+ }});
+ await desktop.prefs.loadDesktopState();
+ assert.equal(desktop.$('desktop-power-preferences').hidden,false);
+ const task=desktop.$('preference-awake-task'),remote=desktop.$('preference-awake-remote');
+ assert.equal(task.checked,false);assert.equal(remote.checked,true);
+ task.checked=true;task.dispatch('change');await desktop.settle();
+ remote.checked=false;remote.dispatch('change');await desktop.settle();
+ assert.deepEqual([saved.keepAwakeDuringTask,saved.keepAwakeDuringRemote],[true,false]);
+ assert.equal(desktop.storage.raw,null);
 });

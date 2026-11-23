@@ -517,6 +517,7 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
       const native=item.type==='subAgentActivity'?item.agentThreadId:item.type==='collabAgentToolCall'?item.receiverThreadIds?.[0]:null;
       const dsh=item.type==='mcpToolCall'&&/dsh/i.test(item.server||'')?(item.arguments?.agent_id||dshToolResultAgentId(item.result)):null;
       if(onOpenAgent&&(native||dsh)){event.preventDefault();onOpenAgent(native||dsh,native?'native':'dsh');}
+      else if(!event.defaultPrevented) scrollController?.pause(summary);
     });
     node.addEventListener('toggle', () => renderRowDetail(view));
     return view;
@@ -591,7 +592,11 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     // between the click and that event must never re-apply an older choice (that undid a collapse whenever
     // the shorter content clamped the scroll position and re-rendered). The click records the intent first.
     const view = { key, node, summary, label, latest, list, rows: new Map(), notes: new Map(), applied: false };
-    summary.addEventListener('click', event => { if (!event.defaultPrevented) userOpen.set(key, !node.open); });
+    summary.addEventListener('click', event => {
+      if (event.defaultPrevented) return;
+      scrollController?.pause(summary);
+      userOpen.set(key, !node.open);
+    });
     node.addEventListener('toggle', () => {
       userOpen.set(key, node.open);
       if (node.open) for (const row of view.rows.values()) renderRowDetail(row);
@@ -714,12 +719,12 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     const closeWork = el(document, 'button', 'turn-work-close', '收起本轮过程');
     closeWork.type = 'button'; closeWork.append(icon(document, 'up', {size: 14}));
     work.append(closeWork);
-    summary.addEventListener('click', () => scrollController?.pause());
+    summary.addEventListener('click', () => scrollController?.pause(summary));
     closeWork.addEventListener('click', () => {
+      scrollController?.pause(summary);
       work.open = false;
       summary.focus({preventScroll: true});
-      summary.scrollIntoView({block: 'nearest'});
-      scrollController?.pause();
+      if(!scrollController)summary.scrollIntoView({block: 'nearest'});
     });
     return { node, footer, work, workLabel, workBody, segments: new Map(), messages: new Map(), compactions: new Map(), events: new Map(), agentReplies: new Map(), files: null, agents: null, agentsSig: null, art: null, artSig: null };
   }

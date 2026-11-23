@@ -5,14 +5,18 @@ import { pathToFileURL } from 'node:url';
 import { resolvePreset } from './preset-compat.mjs';
 const requireDsh = createRequire(process.env.DSH_CLI);
 const pkg = name => import(pathToFileURL(requireDsh.resolve(name)).href);
-const { HarnessSdkJsonRpcServer } = await pkg('@deepseek-ai/dsh-sdk-jsonrpc-server');
+const { HarnessSdkJsonRpcServer, inject: sdkInject } = await pkg('@deepseek-ai/dsh-sdk-jsonrpc-server');
 const { JsonRpcLineTransport } = await pkg('@deepseek-ai/dsh-sdk-protocol');
 const { createUserMessage } = await pkg('@deepseek-ai/dsh-llm');
+const { Context } = await pkg('@deepseek-ai/cordis');
 export const name = 'codex-subagent-rpc';
 export const inject = ['agents', 'sessions', 'permissionPresets', 'sdkAppStartup', 'loader', 'workspaceRegistry', 'agentPresets', 'sessionQuery', 'sessionProjections', 'sessionTitle'];
-if (process.env.DSH_DESKTOP_EXECUTABLE) inject.push('workingDirectory');
+// The current SDK requires this service in both Desktop and CLI profiles.
+const usesWorkingDirectory = sdkInject?.includes('workingDirectory') || Boolean(process.env.DSH_DESKTOP_EXECUTABLE);
+if (usesWorkingDirectory) inject.push('workingDirectory');
 
 export function apply(ctx) {
+  const rootFiber=(Context.root ? ctx[Context.root] : ctx.root).fiber;
   // Bridge sessions hang under one virtual parent per workspace instead of
   // sitting beside the user's own sessions: DSH Web hides a session whose
   // header says origin 'subagent' and lists it under its parent's catalog.
@@ -45,6 +49,24 @@ export function apply(ctx) {
   };
   const transport = new JsonRpcLineTransport(process.stdin, process.stdout);
   class Bridge extends HarnessSdkJsonRpcServer {
+    shutdown() {
+      return this.bridgeShutdown ??= this.closeOwnedSessions();
+    }
+    async closeOwnedSessions() {
+      this.shuttingDown = true;
+      await Promise.allSettled(this.sessionCreations?.values() ?? []);
+      // These children have durable DSH lineage, but their live owner is this
+      // bridge process. SDK root teardown drains locally registered trees only.
+      const owned = [...this.sessions].filter(([,rec]) => rec.handle.agent.session.header.origin === 'subagent');
+      const cleanup = await Promise.allSettled(owned.map(async ([id,rec]) => {
+        this.sessions.delete(id);
+        await rec.handle.dispose();
+      }));
+      const result = await super.shutdown();
+      const failed = cleanup.find(row => row.status === 'rejected');
+      if (failed) throw failed.reason;
+      return result;
+    }
     async createSession(id, resume = false) {
       const agentOptions = {
         provider: this.provider, model: this.model, reasoningEffort: this.reasoningEffort,
@@ -126,8 +148,13 @@ export function apply(ctx) {
     }
     if (method === 'session/prepare') {
       const rec = await bridge.getOrCreateSession(params.sessionId);
-      const workspace = await ctx.workspaceRegistry.resolveByPath(rec.handle.agent.session.header.cwd);
-      return {cwd: rec.handle.agent.session.header.cwd, preset: rec.handle.agent.session.header.agentPreset ?? null, permission: ctx.permissionPresets.current(rec.handle.agent.session), title: ctx.sessionTitle.get(rec.handle.agent.session)?.title ?? null, workspace_id: workspace.id, session_ids: [...workspace.sessionIds]};
+      const agent = rec.handle.agent;
+      // A restored 0.2.3 session can have moved to a worktree while retaining
+      // its original header. Check the directory that governs workspace-write.
+      const cwd = usesWorkingDirectory ? await ctx.workingDirectory.ensure(agent) : agent.session.header.cwd;
+      if (cwd !== bridge.cwd) throw new Error('Active session cwd differs from requested cwd');
+      const workspace = await ctx.workspaceRegistry.resolveByPath(cwd);
+      return {cwd, preset: agent.session.header.agentPreset ?? null, permission: ctx.permissionPresets.current(agent.session), title: ctx.sessionTitle.get(agent.session)?.title ?? null, workspace_id: workspace.id, session_ids: [...workspace.sessionIds]};
     }
     if (method === 'session/cancel') {
       const rec = bridge.sessions.get(params.sessionId);
@@ -153,7 +180,7 @@ export function apply(ctx) {
     const result = await bridge.handleRequest(method, params);
     if (method === 'shutdown') setImmediate(async () => {
       await transport.flush();
-      await ctx.root.fiber.dispose();
+      await rootFiber.dispose();
       process.exit(0);
     });
     return result;

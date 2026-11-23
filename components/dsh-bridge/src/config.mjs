@@ -1,6 +1,7 @@
 import {existsSync,realpathSync,mkdirSync,writeFileSync,readFileSync} from 'node:fs';
 import {join,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {createRequire} from 'node:module';
 import {locations, installation} from './platform.mjs';
 import {commandSpec} from './commands.mjs';
 import {desktopCli} from './runtime-launch.mjs';
@@ -28,6 +29,24 @@ export function runtimeConfig(state=stateDirectory(),cli=resolveDshCli()) {
   mkdirSync(state,{recursive:true,mode:0o700});
   const patch=join(state,'bridge.patch.yml');
   const legacyPatch=join(state,'bridge-legacy.patch.yml');
+  const desktop=Boolean(process.env.DSH_DESKTOP_EXECUTABLE);
+  const split=desktop || resolvePresetLayout(cli)==='split';
+  const manifest=JSON.parse(readFileSync(join(dirname(dirname(cli)),'package.json'),'utf8'));
+  const currentPresets=/^0\.2\.3-/.test(manifest.version);
+  const installedPresetPatches=currentPresets ? ['standard','minimal'].map(id=>
+    createRequire(cli).resolve(`@deepseek-ai/dsh-web-app/presets/${id}.patch.yml`)) : [];
+  const assets=join(projectRoot,'assets/desktop-0.2');
+  const presetPatch=split ? readFileSync(join(assets,'preset-host.patch.yml'),'utf8')+
+    (currentPresets?'':readFileSync(join(assets,'presets.patch.yml'),'utf8')) : '';
+  // 0.2.3's SDK bundle provides workspace. The bridge owns schedule activation;
+  // keep it disabled when replacing the SDK server that normally provides it.
+  const hostRows=currentPresets ? `    - id: cordis-host-runner
+      name: '@deepseek-ai/dsh-cordis-host-runner'
+    - id: cordis-inspect-providers
+      name: '@deepseek-ai/dsh-tool-cordis/host'
+` : `    - id: workspace
+      name: '@deepseek-ai/dsh-workspace'
+`;
   if (process.env.DSH_DESKTOP_EXECUTABLE) {
     const shared = `- id: sdk-jsonrpc-server
   disabled: true
@@ -39,25 +58,21 @@ export function runtimeConfig(state=stateDirectory(),cli=resolveDshCli()) {
 - id: tool-schedule
   disabled: true
 - insert:
-    - id: workspace
-      name: '@deepseek-ai/dsh-workspace'
-    - id: subagent-model-selection-settings
+${hostRows}    - id: subagent-model-selection-settings
       name: '@deepseek-ai/dsh-tool-subagent/model-selection-settings'
     - id: codex-subagent-rpc
       name: ${JSON.stringify(join(projectRoot,'src/dsh-plugin.mjs'))}
 `;
-    const presets = readFileSync(join(projectRoot,'assets/desktop-0.2/presets.patch.yml'),'utf8');
     // Provider files are read at each NEW runtime boundary, never hot-reloaded into live tasks.
     const providerSources=new ProviderSources({configDir:locations().config,stateDir:state,home:process.env.DSH_HOME,sourcePath:process.env.DSH_DESKTOP_PROVIDER_CONFIG,cli});
-    writeFileSync(patch,presets+shared,{mode:0o600});
-    writeFileSync(legacyPatch,presets+shared,{mode:0o600});
-    return {database:join(state,'state.sqlite'),cli,patch,legacyPatch,providerSources,profile:process.env.DSH_BRIDGE_PROFILE||'codex-light-bridge',
+    writeFileSync(patch,presetPatch+shared,{mode:0o600});
+    writeFileSync(legacyPatch,presetPatch+shared,{mode:0o600});
+    return {database:join(state,'state.sqlite'),cli,patch,legacyPatch,installedPresetPatches,providerSources,profile:process.env.DSH_BRIDGE_PROFILE||'codex-light-bridge',
         revalidateParents:true,
         defaultProvider:process.env.DSH_DEFAULT_PROVIDER,defaultModel:process.env.DSH_DEFAULT_MODEL,
         defaultEffort:process.env.DSH_DEFAULT_EFFORT,
         workspaceIsolation:'shared',isolationRoot:join(state,'workspaces')};
   }
-  const split = resolvePresetLayout(cli) === 'split';
   const legacyPresetRows = split ? '' : `    - id: agent-presets
       name: '@deepseek-ai/dsh-agent-presets'
       config:
@@ -65,16 +80,13 @@ export function runtimeConfig(state=stateDirectory(),cli=resolveDshCli()) {
 `;
   // Current CLI and Desktop share the same split registry and declarations.
   // Compose them once, using the upstream preset overlay already shipped here.
-  const presetPatch = split ? readFileSync(join(projectRoot,'assets/desktop-0.2/presets.patch.yml'),'utf8') : '';
   const shared=`- id: sdk-jsonrpc-server
   disabled: true
 - id: llm-deepseek
   config:
     maxTokens: ${MAX_OUTPUT_TOKENS}
 - insert:
-    - id: workspace
-      name: '@deepseek-ai/dsh-workspace'
-${legacyPresetRows}    - id: subagent-model-selection-settings
+${hostRows}${legacyPresetRows}    - id: subagent-model-selection-settings
       name: '@deepseek-ai/dsh-tool-subagent/model-selection-settings'
     - id: codex-subagent-rpc
       name: ${JSON.stringify(join(projectRoot,'src/dsh-plugin.mjs'))}
@@ -91,5 +103,5 @@ ${legacyPresetRows}    - id: subagent-model-selection-settings
   // Split packages use the same preset-owned composition as DSH Desktop.
   writeFileSync(legacyPatch,presetPatch+shared,{mode:0o600});
   const native=process.env.CODEX_LIGHT_DSH_TARGET==='wsl';
-  return {database:join(state,'state.sqlite'),cli,patch,legacyPatch,...(native?{profile:process.env.DSH_BRIDGE_PROFILE||'codecang-wsl',workspaceIsolation:'shared',defaultProvider:process.env.DSH_DEFAULT_PROVIDER,defaultModel:process.env.DSH_DEFAULT_MODEL,defaultEffort:process.env.DSH_DEFAULT_EFFORT,...(process.env.DSH_NATIVE_PROVIDER_CONFIG?{providerSources:new ProviderSources({configDir:locations().config,stateDir:state,home:process.env.DSH_HOME,sourcePath:process.env.DSH_NATIVE_PROVIDER_CONFIG,cli})}:{})}:{})};
+  return {database:join(state,'state.sqlite'),cli,patch,legacyPatch,installedPresetPatches,...(native?{profile:process.env.DSH_BRIDGE_PROFILE||'codecang-wsl',workspaceIsolation:'shared',defaultProvider:process.env.DSH_DEFAULT_PROVIDER,defaultModel:process.env.DSH_DEFAULT_MODEL,defaultEffort:process.env.DSH_DEFAULT_EFFORT,...(process.env.DSH_NATIVE_PROVIDER_CONFIG?{providerSources:new ProviderSources({configDir:locations().config,stateDir:state,home:process.env.DSH_HOME,sourcePath:process.env.DSH_NATIVE_PROVIDER_CONFIG,cli})}:{})}:{})};
 }

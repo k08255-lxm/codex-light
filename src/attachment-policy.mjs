@@ -32,10 +32,13 @@ function rule(category, ...mimeTypes) {
 // A known extension is emitted only when the declared MIME type is in the
 // extension's explicit compatibility set. Generic or absent MIME types do
 // not prove a format and therefore produce "unknown".
+const jsonLinesRule = rule("text", "application/jsonl", "application/x-jsonl", "application/x-jsonlines", "application/jsonlines", "application/x-ndjson", "application/ndjson", "application/json", "text/jsonl", "text/plain");
 const EXTENSION_RULES = new Map([
   ["txt", rule("text", "text/plain")],
   ["md", rule("text", "text/markdown", "text/x-markdown")],
   ["csv", rule("text", "text/csv")],
+  ["jsonl", jsonLinesRule],
+  ["ndjson", jsonLinesRule],
 
   ["py", rule("code", "text/x-python", "application/x-python")],
   ["rs", rule("code", "text/x-rust", "application/x-rust")],
@@ -207,6 +210,34 @@ function classify(name, mime) {
   return ruleForExtension.mimeTypes.has(normalizeMime(mime))
     ? ruleForExtension.category
     : "unknown";
+}
+
+// Windows file choosers often omit the MIME for JSON Lines. Check the bytes for
+// both compatible and generic MIME declarations; conflicting types stay unknown.
+export function needsJsonLinesCheck(name, mime) {
+  const type = normalizeMime(mime);
+  return EXTENSION_RULES.get(extensionOf(name)) === jsonLinesRule &&
+    (type === "" || type === "application/octet-stream" || jsonLinesRule.mimeTypes.has(type));
+}
+
+export async function isJsonLinesContent(bytes) {
+  let source;
+  try { source = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+  catch (error) { if (error instanceof TypeError) return false; throw error; }
+  let foundRecord = false;
+  for (let start = 0, lines = 0; start < source.length; lines++) {
+    if (lines && lines % 8192 === 0) await new Promise(resolve => setImmediate(resolve));
+    const newline = source.indexOf("\n", start);
+    const line = source.slice(start, newline === -1 ? source.length : newline);
+    if (!/^[ \t\r]*$/.test(line)) {
+      try { JSON.parse(line); }
+      catch (error) { if (error instanceof SyntaxError) return false; throw error; }
+      foundRecord = true;
+    }
+    if (newline === -1) break;
+    start = newline + 1;
+  }
+  return foundRecord;
 }
 
 /**

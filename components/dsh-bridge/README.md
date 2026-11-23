@@ -4,20 +4,25 @@ This bridge ships with Codex Light by default. DSH itself is optional and is **n
 
 Derived from `dsh-subagent-mcp` 0.8.0 under MIT (see LICENSE). The small desktop preset compatibility overlay derives from DeepSeek's MIT-licensed DSH; its notice is in `assets/DeepSeek-MIT-LICENSE`. No user configuration, sessions, credentials, private providers, or DSH binaries are included.
 
-The component uses the user's installed DSH desktop executable in `ELECTRON_RUN_AS_NODE=1` mode. The supported DSH runtime is 0.2.2 with SQLite support (Node 22.15+); this does not raise the main application's Node.js 20 requirement. It does not open a desktop window. The independent `codex-light-bridge` profile and Light-owned state do not replace an external bridge or its running tasks.
+The component uses the installed DSH desktop executable in `ELECTRON_RUN_AS_NODE=1` mode with SQLite and an independent `codex-light-bridge` profile. The validator accepts 0.2.2, 0.2.3-alpha.1 and 0.2.3-alpha.2. It checks each runtime's Node version. The main application supports Node.js 20+.
 
 Native CLI discovery accepts both dependency layouts: the older
 `@deepseek-ai/dsh-agent-presets` module, or the newer pair
 `@deepseek-ai/dsh-agent-preset` and `@deepseek-ai/dsh-agent-preset-registry`.
 The bridge resolves these from the selected DSH CLI installation without
-changing it. If the split layout is present, the bridge supplies its existing
-standard/minimal preset overlay. The DSH Desktop path and provider settings
-are unchanged. The WSL-native helper still requires DSH 0.2.2.
+changing it. For 0.2.2 the bridge supplies its compatibility overlay. For
+0.2.3 it loads the selected installation's standard/minimal patch files
+through DSH's repeatable `--patch` option, preserving plugin resolution from
+the package that owns each declaration.
 
 Isolated Linux validation with the published DSH CLI 0.2.2-rc.4 and rc.5
 covered discovery, SDK initialization, read-only session preparation with both
 presets, and shutdown. This did not test model execution, existing-session
-recovery, Windows desktop runtime, or WSL interop.
+recovery, Windows desktop runtime, or WSL interop on those Linux runs.
+
+The [alpha.1 release](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.1) moved Cordis root access to `Context.root`, added the standard preset's `cordisInspect` dependency, and made active session directories independently mutable. The bridge checks the effective session directory on prepare/resume and disposes its externally owned children before the SDK drains local roots. SDK prompts inherit the runtime time zone by default. The npm alpha.1 package tested with Node 24.13.0 and 24.22.3 resolved a loader missing `EntryValidationError`. The WSL probe reports that import failure before registration.
+
+The [alpha.2 release](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2) requires Node `^24.22.3 || >=26.13.1`. Isolated Windows checks covered its official desktop distribution and npm CLI, plus the earlier rc.3 desktop and rc.5 CLI. The checks created a parent and read-only child sessions with both presets, reopened them from disk, checkpointed, and shut the SDK down. They sent zero model requests. Reproduce using the chosen runtime's Node with `test/dsh-installed-runtime.mjs <absolute-cli-entry>` or its Electron executable in Node mode with `--expose-internals test/dsh-installed-runtime.mjs --desktop`.
 
 For each release that changes bridge behavior, bump the `-light.N` revision in this component's `package.json` and sync its npm lock. The build generates both manifests from that version. The daemon captures it at startup for every MCP handshake and status response. `codexLightUpstreamVersion` identifies the original bridge release. The desktop app, DSH runtime and callback protocol have their own versions.
 

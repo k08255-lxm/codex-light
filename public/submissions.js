@@ -251,7 +251,7 @@ export function sendAvailability({connected,serverInstance,sending,loadingThread
  if(!connected)return{disabled:true,reason:'尚未连接 Codex，消息没有发送。',action:'reconnect'};
  if(!serverInstance)return{disabled:true,reason:'正在核对本地服务身份，消息没有发送。',action:'reconnect'};
  if(sending)return{disabled:true,reason:'正在提交这条消息，请勿重复发送。'};
- if(loadingThread)return{disabled:true,reason:'正在恢复对话，请稍候。'};
+ if(loadingThread)return{disabled:true,reason:'正在打开对话',quiet:true};
  if(pending)return{disabled:true,reason:'这条消息的发送状态正在同步…',action:'pending'};
  if(busy)return{disabled:true,reason:'当前任务正在运行；结束或停止后可继续发送。',action:'stop'};
  if(uploadingImages)return{disabled:true,reason:'正在本地准备附件，完成后可发送。'};

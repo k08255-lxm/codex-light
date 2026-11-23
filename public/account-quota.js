@@ -46,11 +46,13 @@ function quotaRing(document, view) {
   return svg;
 }
 
+const startupRetryDelays = [1500, 5000, 15000];
+
 /** Start/stop are driven by connection state. Background reads never fetch credit details. */
 export function mountAccountQuota(host, { rpc, onOpen = () => {}, pollMs = 300000 }) {
   const document = host.ownerDocument;
-  let epoch = 0, active = false, timer = null, inFlight = null, snapshot = null;
-  let button = null;
+  let epoch = 0, active = false, timer = null, inFlight = null, snapshot = null, startupAttempts = 0;
+  let button = null, serverInstance = null;
   const rows = new Map();
   host.classList.add('account-quota-mini'); host.hidden = true;
   function update(result) {
@@ -59,6 +61,7 @@ export function mountAccountQuota(host, { rpc, onOpen = () => {}, pollMs = 30000
     host.hidden = !windows.length;
     host.removeAttribute('data-stale');
     if (!windows.length) { host.replaceChildren(); button = null; rows.clear(); return; }
+    startupAttempts = startupRetryDelays.length;
     if (!button) {
       button = el(document, 'button', 'account-quota-open'); button.type = 'button';
       button.addEventListener('click', onOpen); host.append(button);
@@ -85,23 +88,46 @@ export function mountAccountQuota(host, { rpc, onOpen = () => {}, pollMs = 30000
       if (button.children[index] !== row) button.insertBefore(row, button.children[index] || null);
     }
   }
-  async function refresh() {
+  function scheduleRead() {
+    clearTimeout(timer);
+    const delay = startupAttempts < startupRetryDelays.length
+      ? startupRetryDelays[startupAttempts++]
+      : Math.max(120000, pollMs);
+    timer = setTimeout(refresh, delay);
+  }
+  function refresh() {
     if (!active) return;
     if (inFlight) return inFlight;
-    const mine = epoch;
-    const task = (async () => {
-      try { const result = await rpc('account/rateLimits/read', { excludeResetCreditDetails: true }); if (active && mine === epoch) update(result); }
-      catch { if (active && mine === epoch && button) {
-        if (!host.getAttribute('data-stale')) button.setAttribute('aria-label', `${button.getAttribute('aria-label')}；刷新失败，显示上次读取结果`);
-        host.setAttribute('data-stale', 'true'); button.title = '额度刷新失败，显示上次读取结果';
-      } }
-      finally { if (mine === epoch) inFlight = null; }
-    })();
-    inFlight = task; return task;
+    clearTimeout(timer);
+    const mine = epoch, previous = snapshot;
+    async function read() {
+      try {
+        const result = await rpc('account/rateLimits/read', { excludeResetCreditDetails: true });
+        // A complete account-page read or a push update may have won this race.
+        if (active && mine === epoch && previous === snapshot) update(result);
+      } catch {
+        if (active && mine === epoch && previous === snapshot && button) {
+          if (!host.getAttribute('data-stale')) button.setAttribute('aria-label', `${button.getAttribute('aria-label')}；刷新失败，显示上次读取结果`);
+          host.setAttribute('data-stale', 'true'); button.title = '额度刷新失败，显示上次读取结果';
+        }
+      }
+    }
+    inFlight = read().finally(() => {
+      if (mine !== epoch) return;
+      inFlight = null;
+      if (active) scheduleRead();
+    });
+    return inFlight;
   }
-  function reset() { epoch++; inFlight = null; snapshot = null; button = null; rows.clear(); host.hidden = true; host.replaceChildren(); host.removeAttribute('data-stale'); }
-  function stop() { active = false; clearInterval(timer); timer = null; reset(); }
-  function start() { if (active) return; active = true; refresh(); timer = setInterval(refresh, Math.max(120000, pollMs)); }
+  function reset() { epoch++; clearTimeout(timer); startupAttempts = 0; inFlight = null; snapshot = null; button = null; rows.clear(); host.hidden = true; host.replaceChildren(); host.removeAttribute('data-stale'); }
+  function stop() { active = false; reset(); }
+  function start(instance = null) {
+    if (active && serverInstance === instance) return;
+    if (active) reset();
+    serverInstance = instance;
+    active = true;
+    return refresh();
+  }
   function handleEvent(message) {
     if (message.method === 'account/rateLimits/updated') {
       if (active) {

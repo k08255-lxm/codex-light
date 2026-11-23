@@ -65,12 +65,14 @@ Android/网页远控不能更改宿主的 WSL 选择；它们连接的是桌面�
 
 已在真实 Ubuntu 中通过码舱的 Windows DSH 探测入口，核验 Windows 桌面 DSH 0.2.2-rc.3 的宿主身份、Node 24.21.0 和 SQLite 支持。使用隔离的 Linux Codex 配置完成注册与刷新后，在 Windows 盘符项目中通过 Linux Codex 的 `mcpServer/tool/call` 调用 `dsh_list` 和 `dsh_start` 成功。Windows DSH 接受了只读任务，工作目录映射正确。`dsh_wait` 将同一任务的最终错误 `TRANSPORT: Connection error.` 返回给 Linux Codex，本次没有收到模型回答。
 
-### 本轮合成验证
+Ubuntu WSL 原生环境已用 Linux Node 24.22.3 和 DSH 0.2.3-alpha.2 完成随包桥探测。标准与最简预设均能创建只读子会话、落盘、恢复和正常退出。会话切换到其他工作目录后，桥会在再次准备任务时阻止使用原目录继续执行。这组检查使用临时配置，模型调用为零。
+
+### 合成验证
 
 - 已覆盖 DSH adapter、HTTP 模式绑定、连接服务、签名队列、回调恢复、账户隔离和安装身份。测试均使用合成数据，不代表真实 WSL 端到端验证。
 - 新 bridge bundle 完整性、篡改拒绝、工具分发、鉴权与 stdio 合成测试通过；没有发出模型请求。
 - 锁定的构建依赖安装遇权限限制；采用已安装、同 lock 哈希的 esbuild 0.25.12 只读复用，临时构建脚本仅替换构建器 import。此为替代构建验证，不宣称原构建脚本全流程运行通过。
-- 开发阶段的 Windows 桌面编译通过（0 警告、0 错误）。WSL 原生 Linux DSH 和真实自动唤醒尚待验收。
+- 开发阶段的 Windows 桌面编译通过（0 警告、0 错误）。WSL 原生 Linux DSH 经 Linux Codex 的完整模型调用和真实自动唤醒仍待验收。
 
 ## 自动唤醒的约束
 

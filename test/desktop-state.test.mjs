@@ -62,12 +62,15 @@ test('legacy desktop preferences migrate to codex without dropping receipts',asy
  const requestId='a'.repeat(32)+':'+Date.now()+':legacy-op';
  const legacy={version:1,theme:'light',fontScale:110,motion:'off',completionNotice:false,approvalNotice:true};
  await writeFile(s.file,JSON.stringify({version:1,preferences:legacy,receipts:[{requestId,method:'turn/start',createdAt:Date.now(),state:'succeeded',outcome:'succeeded'}]}));
- const second=new DesktopState({root:s.root});assert.deepEqual(await second.preferences(),{...legacy,visualStyle:'codex'});
+ const second=new DesktopState({root:s.root});assert.deepEqual(await second.preferences(),{...DEFAULT_PREFERENCES,...legacy});
  assert.deepEqual((await second.list()).map(receipt=>receipt.requestId),[requestId]);
  await second.preferences({...legacy,visualStyle:'claude'});
  const third=new DesktopState({root:s.root});assert.equal((await third.preferences()).visualStyle,'claude');
  assert.deepEqual((await third.list()).map(receipt=>receipt.requestId),[requestId]);
  const data=JSON.parse(await readFile(s.file,'utf8'));assert.equal(data.preferences.visualStyle,'claude');assert.equal(data.receipts[0].requestId,requestId);
+ await third.preferences({...legacy,keepAwakeDuringTask:true});
+ await second.preferences({...legacy,theme:'dark'});
+ assert.equal((await third.preferences()).keepAwakeDuringTask,true,'an older UI saving appearance preserves sleep settings');
 });
 test('runtime upgrade receipts are durable and minimal across desktop-state reload',async t=>{
  const s=await fixture(t),op=store(s),key=id(op),params={version:'0.167.1',confirmed:true},result={outcome:'succeeded',installedVersion:'0.167.1',restartRequired:true};

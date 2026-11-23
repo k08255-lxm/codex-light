@@ -18,7 +18,7 @@ export class WslNativeDshBridge {
   validateWslSelection({distribution:candidate?.distribution,user:candidate?.user});if(!runtime||!candidate?.user||!linuxPath(candidate.home))throw fail('Select a validated WSL user first');
   Object.assign(this,{runtime,candidate,root:componentRoot,bundle:bundle||new BundledDshBridge({componentRoot})});this.lastProbe=null;this.queueDescriptor=queueDescriptor;
  }
- capabilities(){return {mode:'native-wsl',transport:'stdio',sharedWorkspace:true,requires:'Linux Node with node:sqlite and DSH CLI 0.2.2 in the selected distribution',providerScope:'Linux user only; Windows provider credentials are never imported',verifiedOnWsl:false,completionMode:this.queueDescriptor?'gui-queue':'dsh_wait',automaticWakeup:!!this.queueDescriptor};}
+ capabilities(){return {mode:'native-wsl',transport:'stdio',sharedWorkspace:true,requires:'DSH CLI 0.2.2 or 0.2.3-alpha.1/2 and a matching Linux Node with node:sqlite in the selected distribution',providerScope:'Linux user only; Windows provider credentials are never imported',verifiedOnWsl:false,completionMode:this.queueDescriptor?'gui-queue':'dsh_wait',automaticWakeup:!!this.queueDescriptor};}
  bundled(){return this.bundle.bundled();}
  async modelStatus(){return (await this.invoke('model-status')).settings;}
  async saveModel(selection){return (await this.invoke('model-save','',{selection})).settings;}

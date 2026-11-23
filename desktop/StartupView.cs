@@ -16,7 +16,7 @@ internal sealed class StartupView : Control {
  internal StartupView(Func<bool>? animationPreference=null){
   this.animationPreference=animationPreference??SystemAnimationAllowed;
   SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,true);
-  Dock=DockStyle.Fill;BackColor=Color.FromArgb(24,24,24);ForeColor=Color.FromArgb(236,236,236);AccessibleRole=AccessibleRole.Pane;TabStop=false;
+  Dock=DockStyle.Fill;BackColor=Color.FromArgb(26,29,34);ForeColor=Color.FromArgb(228,232,238);AccessibleRole=AccessibleRole.Pane;TabStop=false;
   Controls.Add(failureDetails);UpdateAccessibility();animation.Tick+=(_,_)=>Invalidate(ContentBounds());
  }
  internal void SetProgress(StartupPhase next,string message){if(failure)return;phase=next;detail=message;UpdateAccessibility();Invalidate(ContentBounds());}

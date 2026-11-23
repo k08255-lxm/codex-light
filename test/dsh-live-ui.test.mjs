@@ -117,6 +117,15 @@ test('context sync forwards thread, connection, visibility and instance to the m
   ]);
 });
 
+test('demo conversations do not poll the local DSH monitor', () => {
+  const h = harness();
+  h.state.demo = true;
+  h.view.syncDshLiveContext();
+  assert.equal(h.calls.contexts.at(-1).threadId, null);
+  h.view.renderDshTasks();
+  assert.equal(h.$('dsh-live-state').textContent, '演示模式');
+});
+
 test('static shell mounts one inspector scroll surface rather than nested event scrollers', () => {
   for (const id of ['toggle-details', 'dsh-panel', 'dsh-live-state', 'dsh-live-meta', 'dsh-live-warning', 'dsh-live-refresh', 'dsh-tasks']) {
     assert.equal((html.match(new RegExp(`id="${id}"`, 'g')) || []).length, 1, `${id} mounted once`);

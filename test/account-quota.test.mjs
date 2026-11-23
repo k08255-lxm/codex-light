@@ -81,3 +81,39 @@ test('background failure keeps the last quota visibly stale, while account reset
   fail = false; const stale = view.refresh(); view.reset(); resolve(limits(99)); await stale;
   assert.equal(host.children.length, 0); assert.equal(host.hidden, true);
 });
+
+test('cold start recovers from an empty response and a transient failure without opening the account page', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const doc = createDocument(), host = doc.createElement('div');
+  let reads = 0;
+  const view = mountAccountQuota(host, { rpc: async (method, params) => {
+    assert.equal(method, 'account/rateLimits/read');
+    assert.deepEqual(params, { excludeResetCreditDetails: true });
+    reads++;
+    if (reads === 1) return {};
+    if (reads === 2) throw new Error('temporarily unavailable');
+    return limits(12);
+  } });
+  t.after(() => view.stop());
+  await view.start('first');
+  assert.equal(host.hidden, true);
+  t.mock.timers.tick(1500);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(reads, 2);
+  t.mock.timers.tick(5000);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(host.querySelector('.account-quota-value').textContent, '88%');
+  t.mock.timers.tick(20000);
+  assert.equal(reads, 3);
+});
+
+test('new server instance bypasses the old request; a slower read cannot hide fresh account-page data', async t => {
+  const doc = createDocument(), host = doc.createElement('div'), pending = [];
+  const view = mountAccountQuota(host, { rpc: () => new Promise(resolve => pending.push(resolve)) });
+  t.after(() => view.stop());
+  const oldRead = view.start('one'), newRead = view.start('two');
+  view.update(limits(8));
+  pending[1]({}); await newRead;
+  pending[0](limits(90)); await oldRead;
+  assert.equal(host.querySelector('.account-quota-value').textContent, '92%');
+});

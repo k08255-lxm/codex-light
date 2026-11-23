@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import {randomUUID} from 'node:crypto';
-import {validateAttachmentMetadata} from './attachment-policy.mjs';
+import {validateAttachmentMetadata, needsJsonLinesCheck, isJsonLinesContent} from './attachment-policy.mjs';
 
 export const FILE_ATTACHMENT_LIMITS=Object.freeze({fileBytes:20*1024*1024,cacheBytes:200*1024*1024,instanceFiles:20,resolveFiles:5});
 export const FILE_ATTACHMENT_REFERENCE_PREFIX='用户选择的本地附件（仅路径引用，内容尚未读取；请按当前权限读取，不执行或自动解包）：';
@@ -40,6 +40,18 @@ async function cacheSize(root){
  }
  await walk(root,0);return bytes;
 }
+async function checkJsonLines(handle,size){
+ // Read only the bytes just written through this handle. The upload limit bounds
+ // the buffer even if an HTTP client sends the file in many tiny chunks.
+ const bytes=Buffer.allocUnsafe(size);
+ let offset=0;
+ while(offset<size){
+  const {bytesRead}=await handle.read(bytes,offset,size-offset,offset);
+  if(!bytesRead)throw new Error('Attachment read incomplete');
+  offset+=bytesRead;
+ }
+ return isJsonLinesContent(bytes);
+}
 export class FileAttachmentStore {
  constructor({root=defaultAttachmentRoot()}={}){
   if(typeof root!=='string'||!path.isAbsolute(root))throw new TypeError('Attachment root must be absolute');
@@ -61,7 +73,8 @@ export class FileAttachmentStore {
    const used=await cacheSize(root),id=randomUUID();directory=path.join(root,id);await fs.mkdir(directory,{mode:0o700});identity=await fs.lstat(directory);
    const ext=/\.([a-zA-Z0-9]{1,12})$/.exec(filename)?.[1]?.toLowerCase();
    target=path.join(directory,`attachment${ext?'.'+ext:'.bin'}`);const temporary=path.join(directory,'.upload.tmp');
-   handle=await fs.open(temporary,'wx',0o600);let size=0;
+   const checkContents=needsJsonLinesCheck(filename,mime);
+   handle=await fs.open(temporary,checkContents?'wx+':'wx',0o600);let size=0;
    for await(const chunk of stream){
     if(this.closed)throw new Error('Attachment store closed');
     if(!(chunk instanceof Uint8Array))throw new TypeError('Attachment chunks must be bytes');
@@ -69,12 +82,15 @@ export class FileAttachmentStore {
     if(used+size>FILE_ATTACHMENT_LIMITS.cacheBytes)throw new Error('Attachment cache exceeds 200 MiB');
     let offset=0;while(offset<chunk.length){const {bytesWritten}=await handle.write(chunk,offset,chunk.length-offset);if(!bytesWritten)throw new Error('Attachment write incomplete');offset+=bytesWritten;}
    }
+   let category=initial.category;
+   if(checkContents)category=await checkJsonLines(handle,size)?'text':'unknown';
    await handle.sync();await handle.close();handle=null;
    if(this.closed)throw new Error('Attachment store closed');
    await this.ensureRoot();const dirStat=await fs.lstat(directory);if(dirStat.isSymbolicLink()||dirStat.dev!==identity.dev||dirStat.ino!==identity.ino||await fs.realpath(directory)!==directory)throw new Error('Attachment upload directory changed');
    await fs.rename(temporary,target);
-   const metadata={...validateAttachmentMetadata({name:initial.name,size,mime}),id,path:target,
-    warning:initial.riskWarning?'Archive or unverified format: not executed, unpacked or parsed.':'Stored as a file reference; content is not automatically parsed or uploaded to a model.'};
+   const riskWarning=category==='archive'||category==='unknown';
+   const warning=category==='archive'?'压缩文件，仅发送本地路径。':category==='unknown'?'无法确认文件格式，仅发送本地路径。':'仅发送本地路径，Codex 可按当前权限读取文件。';
+   const metadata={...initial,size,category,riskWarning,warning,id,path:target};
    const stat=await fs.lstat(target);if(!stat.isFile()||stat.isSymbolicLink()||stat.size!==size)throw new Error('Attachment file changed');
    this.owned.set(id,{metadata,dev:stat.dev,ino:stat.ino,mtimeMs:stat.mtimeMs,ctimeMs:stat.ctimeMs});return {...metadata};
   }catch(error){

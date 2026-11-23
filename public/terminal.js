@@ -4,7 +4,25 @@ import {FitAddon} from './vendor/addon-fit.mjs';
 // Host owns visual layout. api(path,body), subscribe(handler)->unsubscribe are supplied.
 // No web links addon, clipboard bridge, external scripts, or automatically executed input.
 export function mountTerminal({container,status,api,subscribe,cwd}){
- const terminal=new Terminal({allowProposedApi:false,allowTransparency:false,scrollback:2000,convertEol:false,fontSize:13,fontFamily:'Consolas, monospace',theme:{background:'#181818',foreground:'#e5e5e5'},disableStdin:true,linkHandler:{allowNonHttpProtocols:false,async activate(event,uri){let url;try{url=new URL(uri);}catch{return;}if(!['https:','http:'].includes(url.protocol)||url.username||url.password)return;const doc=container.ownerDocument;if(!await confirmApp(doc,'打开终端中的外部链接？\n'+url.href))return;if(disposed)return;doc.defaultView.open(url.href,'_blank','noopener,noreferrer');}}});
+ function terminalTheme(){
+  const style=getComputedStyle(container);
+  const background=style.getPropertyValue('--terminal-background').trim()||'#181818';
+  const foreground=style.getPropertyValue('--terminal-foreground').trim()||'#e5e5e5';
+  if(container.ownerDocument.documentElement.dataset.visualStyle==='dsh'){
+   return {background,foreground,cursor:foreground,cursorAccent:background,selectionBackground:foreground,selectionForeground:background,selectionInactiveBackground:foreground};
+  }
+  if(container.ownerDocument.documentElement.dataset.visualStyle==='codex'){
+   const color=name=>style.getPropertyValue(name).trim();
+   return {background,foreground,cursor:foreground,cursorAccent:background,
+    selectionBackground:color('--selected'),selectionForeground:foreground,
+    red:color('--error'),green:color('--success'),yellow:color('--warning'),
+    blue:color('--brand'),magenta:color('--syntax-keyword'),cyan:color('--link')};
+  }
+  return {background,foreground};
+ }
+ const terminal=new Terminal({allowProposedApi:false,allowTransparency:false,scrollback:2000,convertEol:false,fontSize:13,fontFamily:'Consolas, monospace',theme:terminalTheme(),disableStdin:true,linkHandler:{allowNonHttpProtocols:false,async activate(event,uri){let url;try{url=new URL(uri);}catch{return;}if(!['https:','http:'].includes(url.protocol)||url.username||url.password)return;const doc=container.ownerDocument;if(!await confirmApp(doc,'打开终端中的外部链接？\n'+url.href))return;if(disposed)return;doc.defaultView.open(url.href,'_blank','noopener,noreferrer');}}});
+ const appearanceObserver=new MutationObserver(()=>{terminal.options.theme=terminalTheme();});
+ appearanceObserver.observe(container.ownerDocument.documentElement,{attributes:true,attributeFilter:['data-theme','data-visual-style']});
  const fit=new FitAddon();terminal.loadAddon(fit);terminal.open(container);fit.fit();
  let id=null,disposed=false,lastSequence=0,opening=false,attempted=false,terminationRequested=false,connectionGeneration=0,writeChain=Promise.resolve(),resizeTimer;
  const report=value=>{status.textContent=value;};
@@ -26,6 +44,6 @@ export function mountTerminal({container,status,api,subscribe,cwd}){
   connectionLost(){connectionGeneration++;terminal.options.disableStdin=true;report('连接中断；已停用输入，不会重发命令');},
   async interrupt(){if(id&&!terminal.options.disableStdin)await api('/api/terminal/write',{processId:id,text:'\u0003'});},
   async close(){terminal.options.disableStdin=true;if(id&&!terminationRequested){terminationRequested=true;await api('/api/terminal/terminate',{processId:id});}},
-  dispose(){disposed=true;clearTimeout(resizeTimer);observer.disconnect();input.dispose();unsubscribe?.();terminal.dispose();if(id&&!terminationRequested){terminationRequested=true;void api('/api/terminal/terminate',{processId:id}).catch(()=>{});}},
+  dispose(){disposed=true;clearTimeout(resizeTimer);observer.disconnect();appearanceObserver.disconnect();input.dispose();unsubscribe?.();terminal.dispose();if(id&&!terminationRequested){terminationRequested=true;void api('/api/terminal/terminate',{processId:id}).catch(()=>{});}},
  };
 }

@@ -41,17 +41,20 @@ export function mountProjectNavigation(host, { onSelect, onOpenThread, onRemove,
     owner?.more.setAttribute('aria-expanded', 'false');
     if (restore) (owner?.opener || owner?.more)?.focus({ preventScroll: true });
   }
-  function openMenu(view) {
-    if (menuOwner === view) { closeMenu(true); return; }
+  function openMenu(view, opener, point) {
+    if (busy) return;
+    if (menuOwner === view && !opener) { closeMenu(true); return; }
     closeMenu(); menuOwner = view; menu.replaceChildren();
+    view.opener = opener || view.more;
     for (const [action, label, glyph] of [['pin',view.group.pinned?'取消置顶':'置顶','up'],['rename','编辑名称','compose'],['open','在资源管理器中打开','folder'],['archive',`归档已加载聊天（${view.group.threads.length}）`,'archive'],['remove','移除项目','close']]) {
       const item = element(document, 'button', 'project-menu-item'); item.type = 'button'; item.setAttribute('role','menuitem');
+      item.tabIndex = -1;
       item.append(icon(document,glyph,{size:18}), document.createTextNode(label));
       item.disabled = busy || (action === 'remove' && !view.group.saved) || (['pin','rename','open'].includes(action) && !view.group.path) || (action === 'archive' && !view.group.threads.length);
       item.addEventListener('click', () => { const group=view.group; closeMenu(true); if(action==='remove')onRemove(group);else onAction?.(group, action); });
       menu.append(item);
     }
-    showMenu(view, '项目操作', 'project');
+    showMenu(view, '项目操作', 'project', point);
   }
   function showMenu(owner, label, kind, point) {
     owner.more.setAttribute('aria-expanded', 'true');
@@ -59,8 +62,13 @@ export function mountProjectNavigation(host, { onSelect, onOpenThread, onRemove,
     menu.dataset.kind = kind;
     menu.hidden = false;
     const rect = (owner.opener || owner.more).getBoundingClientRect();
-    menu.style.left = `${Math.max(8, Math.min(point?.x ?? rect.left, document.documentElement.clientWidth - menu.offsetWidth - 8))}px`;
-    menu.style.top = `${Math.max(8, Math.min(point?.y ?? (rect.bottom + 4), document.documentElement.clientHeight - menu.offsetHeight - 8))}px`;
+    const maxLeft = document.documentElement.clientWidth - menu.offsetWidth - 8;
+    const maxTop = document.documentElement.clientHeight - menu.offsetHeight - 8;
+    const left = point && point.x > maxLeft ? point.x - menu.offsetWidth : point?.x ?? rect.left;
+    const below = point?.y ?? rect.bottom + 4;
+    const above = (point?.y ?? rect.top - 4) - menu.offsetHeight;
+    menu.style.left = `${Math.max(8, Math.min(left, maxLeft))}px`;
+    menu.style.top = `${Math.max(8, Math.min(below > maxTop && above >= 8 ? above : below, maxTop))}px`;
     (menu.querySelector('button:not(:disabled)') || menu).focus({ preventScroll: true });
   }
   function openThreadMenu(row, opener, point) {
@@ -143,6 +151,17 @@ export function mountProjectNavigation(host, { onSelect, onOpenThread, onRemove,
     node.append(header, threads);
     const view = { node, toggle, select, unknown, more, compose, threads, group, threadViews: new Map() };
     more.addEventListener('click',()=>openMenu(view));
+    header.addEventListener('contextmenu', event => {
+      event.preventDefault();
+      const opener = event.target.closest('button') || (select.hidden ? more : select);
+      const point = event.button === 2 || event.clientX || event.clientY ? { x: event.clientX, y: event.clientY } : undefined;
+      openMenu(view, opener, point);
+    });
+    header.addEventListener('keydown', event => {
+      if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
+      event.preventDefault();
+      openMenu(view, event.target);
+    });
     compose.addEventListener('click',()=>{if(!busy&&(view.group.path||view.group.projectless))onAction?.(view.group,'new');});
     toggle.addEventListener('click', () => setOpen(view, !view.open));
     select.addEventListener('click', () => {
@@ -282,7 +301,8 @@ export function mountProjectNavigation(host, { onSelect, onOpenThread, onRemove,
     const status = typeof searchStatus === 'string' ? { text: searchStatus, busy: false } : searchStatus || { text: '', busy: false };
     setText(statusText, status.text || ''); statusNode.hidden = !status.text; statusNode.dataset.busy = String(!!status.busy);
     setText(empty, searching ? '无搜索结果' : '添加项目，或打开已有对话。');
-    empty.hidden = groups.length > 0 || (searching && !!status.busy);
+    list.setAttribute('aria-busy', String(!!status.busy));
+    empty.hidden = groups.length > 0 || !!status.busy;
     if (keepFocus && host.contains(focused) && document.activeElement !== focused) focused.focus({ preventScroll: true });
     if (host.scrollTop !== scrollTop) host.scrollTop = scrollTop;
   }

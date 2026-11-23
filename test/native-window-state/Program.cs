@@ -4,13 +4,30 @@ using CodexLight.Desktop;
 internal static class NativeWindowTests {
  static int assertions;
  static void Check(bool value,string name){assertions++;if(!value)throw new InvalidOperationException(name);}
- [STAThread] static void Main(){
+ [STAThread] static void Main(string[] args){
+  if(args is ["--system-sleep"]){
+   SystemSleep();Console.WriteLine($"PASS {assertions} Windows system sleep assertions.");return;
+  }
   System.Diagnostics.Trace.Listeners.Add(new System.Diagnostics.ConsoleTraceListener());
   Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
   var foreground=GetForegroundWindow();
-  Geometry();Persistence();SessionEnd();Frame(foreground);
+  Geometry();Persistence();SessionEnd();SystemSleep();Frame(foreground);
   Check(GetForegroundWindow()==foreground,"tests leave foreground unchanged");
-  Console.WriteLine($"PASS {assertions} assertions; pure geometry/store and never-shown HWND messages only; no physical display/screenshot validation.");
+  Console.WriteLine($"PASS {assertions} assertions for window state, system sleep requests and never-shown HWND messages.");
+ }
+ [DllImport("kernel32.dll")]static extern uint SetThreadExecutionState(uint flags);
+ static void SystemSleep(){
+  const uint continuous=0x80000000,system=1,display=2,away=0x40;
+  var initial=SetThreadExecutionState(continuous);
+  Check(initial!=0,"read and reset this test thread's execution state");
+  try{
+   var request=new SystemSleepRequest();
+   Check(request.Set(true)&&request.Set(true),"request automatic system sleep prevention");
+   uint held=SetThreadExecutionState(continuous|system);
+   Check((held&(system|display|away))==system,"Windows registered system-only prevention");
+   Check(request.Set(false)&&request.Set(false),"release execution request");
+   Check((SetThreadExecutionState(continuous)&(system|display|away))==0,"Windows released the final request");
+  }finally{SetThreadExecutionState(initial);}
  }
  static void SessionEnd(){
   var state=new WindowSessionEnd();int resourcesDisposed=0;
@@ -91,25 +108,44 @@ internal static class NativeWindowTests {
   using var window=new FrameProbe{Bounds=new Rectangle(-2000,-2000,1100,800),MinimumSize=new Size(800,600)};
   var handle=window.Handle;Check(!window.Visible,"HWND remains unshown");Check(GetForegroundWindow()==foreground,"creating HWND does not activate");
   AssertCornerPreference(handle);
-  AssertClientIsWholeWindow(handle);
   var windowRect=GetWindowRectangle(handle);
-  foreach(bool light in new[]{false,true})foreach(string style in new[]{"codex","claude"}){
+  foreach(var (style,light,background,foregroundColor) in new[]{
+   ("codex",true,0xfcfcfd,0x232931),("codex",false,0x1a1d22,0xe4e8ee),
+   ("claude",true,0xfaf9f5,0x202020),("claude",false,0x262624,0xffffff),
+   ("dsh",true,0xffffff,0x0f1115),("dsh",false,0x151517,0xf9fafb),
+  }){
+   window.Theme(light,style);
+   var surface=SystemInformation.HighContrast?SystemColors.Window:Color.FromArgb(background|unchecked((int)0xff000000));
+   var text=SystemInformation.HighContrast?SystemColors.WindowText:Color.FromArgb(foregroundColor|unchecked((int)0xff000000));
+   Check(window.BackColor.ToArgb()==surface.ToArgb()&&window.ForeColor.ToArgb()==text.ToArgb(),$"{style} caption palette (light={light})");
+  }
+  // Startup keeps the system caption. Once the WebView is ready its title bar
+  // takes the caption's place, while Windows still owns the three resize edges.
+  var nativeClient=window.RectangleToScreen(window.ClientRectangle);
+  Check(nativeClient.Left>windowRect.Left&&nativeClient.Right<windowRect.Right&&nativeClient.Bottom<windowRect.Bottom,"startup retains system resize frame");
+  Check(nativeClient.Top-windowRect.Top>nativeClient.Left-windowRect.Left,"startup reserves system caption height");
+  Check(Hit(handle,windowRect.Left+windowRect.Width/2,nativeClient.Top-3)==2,"startup caption drag hit");
+  window.UseWebCaption();
+  var webClient=window.RectangleToScreen(window.ClientRectangle);
+  Check(webClient.Left==nativeClient.Left&&webClient.Right==nativeClient.Right&&webClient.Bottom==nativeClient.Bottom,"web caption preserves side and bottom frame");
+  Check(webClient.Top==windowRect.Top+1&&webClient.Top<nativeClient.Top,"web caption occupies title bar below one-pixel frame");
+  foreach(bool light in new[]{false,true})foreach(string style in new[]{"codex","claude","dsh"}){
    window.Theme(light,style);
    for(int i=0;i<6;i++){
     Check(SendMessage(handle,0x0086,(IntPtr)(i%2),IntPtr.Zero)!=(IntPtr)0,"activation transition accepted");
-    Check(SendMessage(handle,0x0085,(IntPtr)1,IntPtr.Zero)==IntPtr.Zero,"NC paint owned by client frame");
+    Check(SendMessage(handle,0x0085,(IntPtr)1,IntPtr.Zero)==IntPtr.Zero,"native frame repaint handled");
     SendMessage(handle,0x031E,IntPtr.Zero,IntPtr.Zero); // composition change on this HWND only
     SendMessage(handle,0x031A,IntPtr.Zero,IntPtr.Zero); // theme rebuild on this HWND only
     AssertCornerPreference(handle);
-    AssertClientIsWholeWindow(handle);
+    Check(window.RectangleToScreen(window.ClientRectangle)==webClient,"web caption preserves client geometry");
     Check(GetWindowRectangle(handle)==windowRect,"frame lifecycle preserves geometry");
     Check(!window.Visible&&GetForegroundWindow()==foreground,"message cycle stays hidden and inactive");
    }
    using var image=new Bitmap(window.Width,window.Height);window.DrawToBitmap(image,window.ClientRectangle);
-   Check(image.GetPixel(0,image.Height/2).ToArgb()==window.BackColor.ToArgb(),"client edge paints caption theme offscreen");
+   Check(image.GetPixel(image.Width/2,image.Height/2).ToArgb()==window.BackColor.ToArgb(),"client paints caption theme offscreen");
    Check(Hit(handle,windowRect.Left+1,windowRect.Top+1)==13,"top-left resize hit");
+   Check(Hit(handle,webClient.Left+webClient.Width/2,webClient.Top+2)==12,"web caption top resize hit");
    Check(Hit(handle,windowRect.Right-1,windowRect.Bottom-1)==17,"bottom-right resize hit");
-   Check(Hit(handle,windowRect.Left+windowRect.Width/2,windowRect.Top+window.DeviceDpi/4)==2,"caption drag hit");
    Check(Hit(handle,windowRect.Left+windowRect.Width/2,windowRect.Top+windowRect.Height/2)==1,"content hit");
   }
  }
@@ -120,9 +156,11 @@ internal static class NativeWindowTests {
   Check(preference==2,"DWM retains round-corner preference on unshown HWND");
  }
  static int Hit(IntPtr hwnd,int x,int y)=>SendMessage(hwnd,0x0084,IntPtr.Zero,(IntPtr)((y<<16)|(x&0xffff))).ToInt32();
- static void AssertClientIsWholeWindow(IntPtr hwnd){GetClientRect(hwnd,out var client);var full=GetWindowRectangle(hwnd);Check(client.Right==full.Width&&client.Bottom==full.Height,"no system frame inset");}
  static Rectangle GetWindowRectangle(IntPtr hwnd){GetWindowRect(hwnd,out var rect);return Rectangle.FromLTRB(rect.Left,rect.Top,rect.Right,rect.Bottom);}
- sealed class FrameProbe:CaptionWindow {internal void Theme(bool light,string style)=>SetCaptionTheme(light,style);}
+ sealed class FrameProbe:CaptionWindow {
+  internal void Theme(bool light,string style)=>SetCaptionTheme(light,style);
+  internal void UseWebCaption()=>EnableWebCaption();
+ }
  sealed class SessionProbe:Form {
   readonly WindowSessionEnd session=new();internal int ReleaseCount;
   protected override void WndProc(ref Message message){session.Observe(message.Msg,message.WParam);base.WndProc(ref message);}
@@ -134,5 +172,4 @@ internal static class NativeWindowTests {
  [DllImport("user32.dll")]static extern IntPtr GetForegroundWindow();
  [DllImport("user32.dll")]static extern IntPtr SendMessage(IntPtr hwnd,int message,IntPtr wp,IntPtr lp);
  [DllImport("user32.dll")]static extern bool GetWindowRect(IntPtr hwnd,out NativeRect rect);
- [DllImport("user32.dll")]static extern bool GetClientRect(IntPtr hwnd,out NativeRect rect);
 }

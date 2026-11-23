@@ -95,7 +95,7 @@ remote.example.com {
 
 ### Windows 桌面客户端
 
-从本仓库 Release 下载 **`CodexLight-Setup-<version>-x64.exe`**（如 `CodexLight-Setup-0.4.15-x64.exe`），这是唯一需要手动下载的 Windows 安装入口。v0.4.6 起新安装内容已内嵌，不需要另下 ZIP；`full.nupkg` 和 `releases.win.json` 供应用自动更新使用。
+从本仓库 Release 下载 **`CodexLight-Setup-<version>-x64.exe`**（如 `CodexLight-Setup-0.4.16-x64.exe`），这是唯一需要手动下载的 Windows 安装入口。v0.4.6 起新安装内容已内嵌，不需要另下 ZIP；`full.nupkg` 和 `releases.win.json` 供应用自动更新使用。
 
 0.4.4 起使用 Velopack。已有 Velopack 安装优先使用应用内更新；旧 MSI 安装先经固定的 0.4.4 迁移桥，再按提示更新到新版。首次安装复用兼容运行环境，缺失依赖须确认后才安装；完整应用的安装检查要求 Windows Node.js 22.15+（仅核心后端支持 Node.js 20+），WSL 内的 Node 不替代它。未检测到 Windows Codex CLI 时可选择稍后在应用中配置 WSL 或其他已有引擎。
 
@@ -103,7 +103,7 @@ remote.example.com {
 
 ### DSH 集成（可选）
 
-安装包默认携带 `components/dsh-bridge` MCP 桥，无需另找桥程序。DSH 本体由用户自行安装，缺失时普通 Codex 聊天照常工作。当前兼容 DSH 0.2.2，已核验 0.2.2-rc.1；桥使用 DSH 自带的 Node.js 22.15+ 与 SQLite，主应用仍只需 Node.js 20+。
+安装包默认携带 `components/dsh-bridge` MCP 桥。DSH 本体由用户自行安装，普通 Codex 聊天可以独立使用。已核验 Windows 桌面版 DSH 0.2.2-rc.3、0.2.3-alpha.2 和独立 CLI 0.2.2-rc.5、0.2.3-alpha.2。桌面桥复用 DSH 自带的 Node.js 与 SQLite。WSL 使用 0.2.3-alpha.2 CLI 时，需要 Node 24.x 的 24.22.3 及以上版本，或 Node 26.13.1 及以上版本。0.2.3-alpha.1 npm 包的 Cordis 依赖可能阻止启动，遇到此问题请升级至 alpha.2。码舱主应用仍支持 Node.js 20+。
 
 连接步骤：
 

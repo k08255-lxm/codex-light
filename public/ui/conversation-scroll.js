@@ -13,10 +13,15 @@ export function mountConversationScroll(container) {
   const document = container.ownerDocument, window = document.defaultView;
   const originalAnchor = container.style.overflowAnchor; container.style.overflowAnchor = 'none';
   let following = true, saved = null, frame = null, writing = null, lastTop = container.scrollTop;
+  let disclosure = null;
   let userUntil = 0, userDirection = 0, touchY = null, layoutPending = false, smoothUntil = 0, destroyed = false;
   const gap = () => container.scrollHeight - container.scrollTop - container.clientHeight;
   function capture() {
     const top = container.getBoundingClientRect().top;
+    if (disclosure && container.contains(disclosure.node)) {
+      return {following:false, top:container.scrollTop, node:disclosure.node, offset:disclosure.offset};
+    }
+    disclosure = null;
     const item = [...container.querySelectorAll('[data-item-id]')].find(node => visible(node, top, container.clientHeight));
     const turn = item?.closest('[data-turn-id]') || [...container.querySelectorAll('[data-turn-id],[data-virtual-turn-id]')].find(node => visible(node, top, container.clientHeight));
     const leaf = item && [...item.querySelectorAll(blocks)].find(node => visible(node, top, container.clientHeight));
@@ -55,28 +60,49 @@ export function mountConversationScroll(container) {
     layoutPending = true;
     if (frame === null) frame = window.requestAnimationFrame(() => { frame = null; restore(saved); });
   }
-  function pause() { following = false; smoothUntil = 0; saved = capture(); }
-  function intent(up) { userUntil = Date.now() + 600; userDirection = up ? -1 : 1; if (up) pause(); }
+  function pause(summary) {
+    following = false; smoothUntil = 0; userUntil = 0; disclosure = null;
+    if (summary) {
+      // The paragraph below the summary moves when its details change height. Keep the
+      // chosen summary at its current viewport position, including a sticky turn header.
+      const offset = summary.getBoundingClientRect().top - container.getBoundingClientRect().top;
+      disclosure = {node:summary, offset:Math.max(0, Math.min(container.clientHeight - summary.offsetHeight, offset))};
+    }
+    saved = capture();
+  }
+  function intent(up) {
+    disclosure = null;
+    if (up) pause();
+    userUntil = Date.now() + 600; userDirection = up ? -1 : 1;
+  }
   const wheel = event => { if (event.deltaY) intent(event.deltaY < 0); };
   const keydown = event => {
-    if (event.target?.closest?.('input,textarea,select,[contenteditable="true"]')) return;
+    if (event.key === 'Tab' && disclosure) pause();
+    if (event.target?.closest?.('input,textarea,select,[contenteditable="true"]') || event.key === ' ' && event.target?.closest?.('summary,button')) return;
     if (['ArrowUp', 'PageUp', 'Home'].includes(event.key) || event.key === ' ' && event.shiftKey) intent(true);
     else if (['ArrowDown', 'PageDown', 'End', ' '].includes(event.key)) intent(false);
   };
   const touchstart = event => { touchY = event.touches?.[0]?.clientY ?? null; };
   const touchmove = event => { const next = event.touches?.[0]?.clientY; if (touchY !== null && Number.isFinite(next)) { intent(next > touchY); touchY = next; } };
-  const pointerdown = () => { userUntil = Date.now() + 600; userDirection = 0; };
+  const pointerdown = event => {
+    // Clicking a disclosure can clamp scrollTop during collapse. Only an actual
+    // scrollbar gesture (or middle-button autoscroll) counts as scrolling intent.
+    if (event.button !== 1 && !(event.target === container && event.offsetX >= container.clientWidth)) return;
+    disclosure = null; userUntil = Date.now() + 600; userDirection = 0;
+  };
   function scroll() {
     const top = container.scrollTop, user = Date.now() < userUntil;
     if (writing !== null && Math.abs(top - writing) < EPSILON) { writing = null; lastTop = top; return; }
     if (!user && Date.now() < smoothUntil) { lastTop = top; if (gap() <= EPSILON) { smoothUntil = 0; saved = capture(); } return; }
     if (user || !layoutPending && Math.abs(top - lastTop) >= EPSILON) {
-      following = !(user && userDirection < 0) && gap() <= EPSILON; saved = capture(); writing = null;
+      if (user && userDirection >= 0 && gap() <= EPSILON && top >= lastTop) following = true;
+      else if (gap() > EPSILON || user && userDirection < 0) following = false;
+      saved = capture(); writing = null;
     }
     lastTop = top;
   }
   function toBottom({ behavior = 'auto' } = {}) {
-    following = true; userUntil = 0; smoothUntil = behavior === 'smooth' ? Date.now() + 1200 : 0;
+    disclosure = null; following = true; userUntil = 0; smoothUntil = behavior === 'smooth' ? Date.now() + 1200 : 0;
     if (behavior === 'smooth') container.scrollTo({ top: container.scrollHeight, behavior });
     else write(container.scrollHeight);
     saved = capture();

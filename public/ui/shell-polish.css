@@ -10,6 +10,54 @@
 .window-controls button{width:46px;border-radius:0;display:flex;align-items:center;justify-content:center;font-size:16px;font-family:system-ui}
 .window-controls button:hover{background:var(--selected)}
 .window-controls [data-window-command="close"]:hover{background:#c42b1c;color:white}
+
+/* In the Codex style the rail and project list share one navigation surface. */
+:root[data-visual-style="codex"] {
+  --terminal-background: var(--code-bg);
+  --terminal-foreground: var(--text);
+  --composer-bg: var(--surface);
+  --composer-focus: #697f9b;
+  --composer-shadow: 0 2px 8px rgb(5 10 18 / .16);
+  --syntax-keyword:#c6b4e9; --syntax-string:#a2cbb4; --syntax-number:#dbb997; --syntax-comment:#a1aab7;
+}
+:root[data-visual-style="codex"][data-theme="light"] {
+  --composer-bg: var(--raised);
+  --composer-focus: #7691b1;
+  --composer-shadow: 0 2px 8px rgb(29 46 65 / .05);
+  --syntax-keyword:#705488; --syntax-string:#38694f; --syntax-number:#815831; --syntax-comment:#606c7c;
+}
+:root[data-visual-style="codex"] .rail { border-right-color: transparent; }
+:root[data-visual-style="codex"] .rail-btn.active { color: var(--brand); }
+:root[data-visual-style="codex"] .composer {
+  background: var(--composer-bg);
+  box-shadow: var(--composer-shadow);
+}
+:root[data-visual-style="codex"] .composer:has(textarea:focus-visible) {
+  border-color: var(--composer-focus);
+  box-shadow: 0 0 0 2px var(--chart-soft), var(--composer-shadow);
+}
+:root[data-visual-style="codex"] .composer textarea { caret-color: var(--brand); }
+:root[data-visual-style="codex"] .terminal-container,
+:root[data-visual-style="codex"] .terminal-container .xterm-viewport { background: var(--terminal-background); }
+:root[data-visual-style="codex"] .reasoning-popover {
+  --reasoning-blue: var(--brand);
+  --reasoning-empty: var(--selected);
+  box-shadow: var(--shadow-popover);
+}
+:root[data-visual-style="codex"] .style-cards button[aria-pressed="true"]:not(:focus-visible) {
+  background: var(--chart-soft);
+  border-color: color-mix(in srgb, var(--brand) 55%, transparent);
+  outline: none;
+}
+:root[data-visual-style="codex"] :is(.permission-menu .permission-danger, #permissions-info[data-warning="true"]) { color: var(--warning); }
+:root[data-visual-style="codex"] :is(.send[data-mode="steer"]:not(:disabled), .update-indicator-badge) { background: var(--accent); color: var(--accent-contrast); }
+:root[data-visual-style="codex"] .update-indicator:hover .update-indicator-badge { background: var(--accent-hover); }
+:root[data-visual-style="codex"] .async-input-card .approval-choice input { accent-color: var(--accent); }
+:root[data-visual-style="codex"] :is(#context-details, .engine-setup)::backdrop { background: var(--overlay); }
+@media (forced-colors: active) {
+  :root[data-visual-style="codex"] .composer:has(textarea:focus-visible) { outline: 2px solid Highlight; }
+  :root[data-visual-style="codex"] .style-cards button[aria-pressed="true"] { border: 2px solid Highlight; }
+}
 body .app{height:calc(100dvh - 38px)}
 .native-web-caption .rail .app-menu-trigger{display:inline-flex!important}
 @media(max-width:760px){.app-titlebar-name{padding-right:0;text-align:left}.app-titlebar{height:36px}body .app{height:calc(100dvh - 36px)}}

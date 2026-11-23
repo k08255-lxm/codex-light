@@ -8,12 +8,12 @@ export function mountHistoryAutoLoad({container, button, status, canLoad, load, 
     change();
     restoreHistoryAnchor(container, anchor);
   }
-  function reset() { epoch++; pending = null; failed = false; button.disabled = false; button.textContent = label; status.textContent = ''; lastTop = container.scrollTop; }
+  function reset() { epoch++; pending = null; failed = false; button.disabled = false; button.ariaBusy = 'false'; button.textContent = label; status.textContent = ''; lastTop = container.scrollTop; }
   async function request(manual = false) {
     if (pending || (!manual && failed) || !canLoad()) return;
     const key = getKey(), version = epoch;
     const ticket = {}; pending = ticket; failed = false; button.disabled = true;
-    feedback(() => { button.textContent = '正在加载…'; status.textContent = '正在加载更早的内容…'; });
+    feedback(() => { button.ariaBusy = 'true'; button.textContent = label; status.textContent = ''; });
     try {
       await load();
       if (key !== getKey() || version !== epoch) return;
@@ -22,7 +22,7 @@ export function mountHistoryAutoLoad({container, button, status, canLoad, load, 
       if (key !== getKey() || version !== epoch) return;
       failed = true; feedback(() => { button.textContent = '重试'+label; status.textContent = '加载失败：' + (error?.message || '请重试'); });
     } finally {
-      if (pending === ticket) { pending = null; button.disabled = false; lastTop = container.scrollTop; }
+      if (pending === ticket) { pending = null; button.disabled = false; button.ariaBusy = 'false'; lastTop = container.scrollTop; }
     }
   }
   const nearTop = () => container.scrollTop <= 180;
@@ -48,13 +48,13 @@ export function restoreHistoryAnchor(container,anchor) {
 /** Downward list paging with a manual fallback. Status belongs to the scroll content, not the dock. */
 export function mountThreadAutoLoad({container,button,status,canLoad,load,getKey}) {
   let pending=null, failed=false, epoch=0, lastTop=container.scrollTop;
-  function reset(){epoch++;pending=null;failed=false;status.textContent='';button.disabled=false;button.textContent='加载更多对话';lastTop=container.scrollTop;}
+  function reset(){epoch++;pending=null;failed=false;status.textContent='';button.disabled=false;button.ariaBusy='false';button.textContent='加载更多对话';lastTop=container.scrollTop;}
   async function request(manual=false){
     if(pending||(!manual&&failed)||!canLoad())return;
-    const ticket={},version=epoch,key=getKey();pending=ticket;button.disabled=true;button.textContent='正在加载…';status.textContent='正在加载更多对话…';
+    const ticket={},version=epoch,key=getKey();pending=ticket;button.disabled=true;button.ariaBusy='true';button.textContent='加载更多对话';status.textContent='';
     try{await load();if(version!==epoch||key!==getKey())return;failed=false;button.textContent='加载更多对话';status.textContent=canLoad()?'':'已加载全部对话';}
     catch(e){if(version!==epoch||key!==getKey())return;failed=true;button.textContent='重试加载对话';status.textContent='加载失败：'+(e?.message||'请重试');}
-    finally{if(pending===ticket){pending=null;button.disabled=false;lastTop=container.scrollTop;}}
+    finally{if(pending===ticket){pending=null;button.disabled=false;button.ariaBusy='false';lastTop=container.scrollTop;}}
   }
   const bottom=()=>container.scrollHeight-container.clientHeight-container.scrollTop<=180;
   container.addEventListener('scroll',()=>{const top=container.scrollTop,down=top>lastTop;lastTop=top;if(down&&bottom())void request();},{passive:true});

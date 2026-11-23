@@ -82,6 +82,16 @@ test('WSL desktop keeps its native folder chooser and reports cancellation witho
  assert.equal(picks,2);assert.deepEqual(await store.read(),{distribution:'Ubuntu',user:'lee'});
 });
 
+test('opening a WSL project uses its selected distribution and preserves Linux path case',async t=>{
+ const checked=[],opened=[];
+ const projectStore={directory:async folder=>{checked.push(folder);return folder;}};
+ const {app}=await fixture(t,{distribution:'Ubuntu',user:'lee'},candidate,{projectStore,openProjectFolder:async folder=>opened.push(folder)});
+ const result=await post(app,'/api/projects/open',{path:'/home/lee/Repo'});
+ assert.equal(result.status,200,await result.text());
+ assert.deepEqual(checked,['\\\\wsl.localhost\\Ubuntu\\home\\lee\\Repo']);
+ assert.deepEqual(opened,checked);
+});
+
 test('WSL Git filter confirmation remains per read and failure never becomes empty diff',async t=>{
  const {app,service}=await fixture(t,{distribution:'Ubuntu',user:'lee'});const calls=[];
  service.toLinux=async()=>'/home/lee/Repo';

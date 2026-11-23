@@ -2,6 +2,12 @@ import test from 'node:test';import assert from 'node:assert/strict';
 import {mountHistoryAutoLoad,captureHistoryAnchor,restoreHistoryAnchor} from '../public/ui/history-auto-load.js';
 function fixture(){const listeners={};const container={scrollTop:0,getBoundingClientRect:()=>({top:0}),querySelectorAll:()=>[],addEventListener(k,v){listeners[k]=v}};const button={addEventListener(k,v){this[k]=v}};const status={textContent:''};let key='a',hasMore=true,calls=0,resolve,reject;const ctrl=mountHistoryAutoLoad({container,button,status,getKey:()=>key,canLoad:()=>hasMore,load:()=>{calls++;return new Promise((a,b)=>{resolve=a;reject=b})}});return {ctrl,container,button,status,listeners,get calls(){return calls},resolve:()=>resolve(),reject:()=>reject(Error('offline')),key:v=>key=v,more:v=>hasMore=v};}
 const settle=()=>new Promise(r=>setImmediate(r));
+test('paging keeps one stable action with busy state and leaves the status line for results',async()=>{
+ const f=fixture();
+ f.listeners.wheel({deltaY:-1});
+ assert.equal(f.button.textContent,'加载更早的内容');assert.equal(f.button.ariaBusy,'true');assert.equal(f.status.textContent,'');
+ f.resolve();await settle();assert.equal(f.button.ariaBusy,'false');
+});
 test('upward intention loads one page; repeated input dedupes and programmatic downward shift cannot cascade',async()=>{const f=fixture();f.listeners.wheel({deltaY:-2});f.listeners.wheel({deltaY:-2});assert.equal(f.calls,1);assert.equal(f.button.disabled,true);f.container.scrollTop=800;f.resolve();await settle();f.listeners.scroll();assert.equal(f.calls,1);f.container.scrollTop=50;f.listeners.scroll();assert.equal(f.calls,2);f.resolve();await settle();});
 test('error suspends auto retry, manual retry works; exhausted history cannot request',async()=>{const f=fixture();f.listeners.wheel({deltaY:-1});f.reject();await settle();assert.match(f.status.textContent,/offline/);f.listeners.wheel({deltaY:-1});assert.equal(f.calls,1);f.button.click();assert.equal(f.calls,2);f.more(false);f.resolve();await settle();assert.equal(f.status.textContent,'已到对话开头');f.button.click();assert.equal(f.calls,2);});
 test('thread switch releases old request ownership and ignores its stale error',async()=>{const f=fixture();f.listeners.wheel({deltaY:-1});const rejectOld=f.reject;f.key('b');f.ctrl.reset();rejectOld();await settle();assert.equal(f.status.textContent,'');assert.equal(f.button.disabled,false);});

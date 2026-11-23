@@ -7,7 +7,8 @@ import {builtinModel,builtinProvider,modelChoices,modelSelection,readModelDefaul
 import {loadInstalledModelCatalog} from './model-catalog.mjs';
 import {createRequire} from 'node:module';
 import {resolvePresetLayout} from './preset-layout.mjs';
-import {fileURLToPath} from 'node:url';
+import runtimeVersions from './runtime-versions.cjs';
+import {fileURLToPath,pathToFileURL} from 'node:url';
 const root=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const fail=(code,message)=>{throw Object.assign(new Error(message),{code});};
 const fileIdentity=file=>{const s=fs.statSync(file);if(!s.isFile())fail('DSH_PATH_INVALID','Expected a regular Linux runtime file');return {size:s.size,mtimeMs:s.mtimeMs};};
@@ -57,18 +58,30 @@ export function nativeProbe({cli='',home=os.homedir(),env=process.env,platform=p
  if(/\.(exe|cmd|bat)$/i.test(cli)||/^\/mnt\/[a-z]\//i.test(cli))fail('DSH_NATIVE_LINUX_REQUIRED','Windows DSH cannot be used as a Linux CLI');
  let packageRoot=path.dirname(cli),pkg;
  for(let i=0;i<8;i++){try{const p=readJson(path.join(packageRoot,'package.json'));if(p.name==='@deepseek-ai/dsh'){pkg=p;break;}}catch{}const next=path.dirname(packageRoot);if(next===packageRoot)break;packageRoot=next;}
- if(!pkg||!/^0\.2\.2(?:-|$)/.test(pkg.version))fail('DSH_RUNTIME_UNSUPPORTED','Requires Linux @deepseek-ai/dsh 0.2.2');
+ if(!pkg||!runtimeVersions.nodeRequirement(pkg.version))fail('DSH_RUNTIME_UNSUPPORTED','Supported Linux @deepseek-ai/dsh versions: '+runtimeVersions.supported);
+ if(!runtimeVersions.supportsNode(pkg.version,process.versions.node))fail('DSH_RUNTIME_UNSUPPORTED',`DSH ${pkg.version} requires Node ${runtimeVersions.nodeRequirement(pkg.version)} with SQLite; found ${process.versions.node}`);
  const bin=typeof pkg.bin==='string'?pkg.bin:pkg.bin?.dsh;if(!bin||fs.realpathSync(path.resolve(packageRoot,bin))!==cli)fail('DSH_RUNTIME_UNSUPPORTED','DSH path is not the package CLI entry');
  const req=createRequire(path.join(packageRoot,'package.json'));
  for(const name of ['@deepseek-ai/dsh-base','@deepseek-ai/dsh-sdk-app','@deepseek-ai/dsh-sdk-jsonrpc-server','@deepseek-ai/dsh-workspace','@deepseek-ai/dsh-tool-subagent/model-selection-settings'])req.resolve(name);
  resolvePresetLayout(cli,req);
- const major=Number(process.versions.node.split('.')[0]);if(major<22)fail('DSH_RUNTIME_UNSUPPORTED','Linux Node 22 or newer with node:sqlite required');
  if(env.DSH_HOME&&(!path.isAbsolute(env.DSH_HOME)||/^\/mnt\/[a-z]\//i.test(env.DSH_HOME)))fail('DSH_PATH_INVALID','DSH_HOME must be a native Linux directory');
  const stateRoot=path.join(home,'.local/share/codecang/dsh-native');
  const selected=readModelDefaults(path.join(stateRoot,'config')).selection;
  const providers=nativeProviders({home:env.DSH_HOME||path.join(home,'.dsh'),cli,env,selection:selected,stateRoot});
  verifyNativeProviderDependency(providers,req);
  return {...providers,ok:true,root,node,executablePath:cli,version:pkg.version,identity:{cli:fileIdentity(cli),node:fileIdentity(node)},stateRoot,configDir:path.join(stateRoot,'config'),stateDir:path.join(stateRoot,'state'),dshHome:env.DSH_HOME||path.join(home,'.dsh')};
+}
+// Some published alpha.1 CLI packages resolve a Cordis loader that lacks
+// exports needed by app-boot. Import the real dependency without booting DSH.
+export async function verifyNativeBoot({version,executablePath}) {
+ if(!version.startsWith('0.2.3-'))return;
+ try {
+  const requireDsh=createRequire(executablePath);
+  await import(pathToFileURL(requireDsh.resolve('@deepseek-ai/dsh-app-boot')).href);
+ } catch(error) {
+  const detail=error.message.includes('EntryValidationError')?'Cordis loader lacks EntryValidationError':error.code||error.name;
+  fail('DSH_RUNTIME_UNSUPPORTED',`DSH ${version} CLI cannot load its startup dependencies (${detail}). Install the complete 0.2.3-alpha.2 CLI with matching Node and probe again.`);
+ }
 }
 function ownedDirectory(dir){let parent=path.dirname(dir);while(parent!==path.dirname(parent)){if(fs.existsSync(parent)&&fs.lstatSync(parent).isSymbolicLink())fail('DSH_STATE_CONFLICT','Symlink ancestors are not accepted for bridge state');parent=path.dirname(parent);}if(fs.existsSync(dir)){const s=fs.lstatSync(dir);if(s.isSymbolicLink()||!s.isDirectory()||(typeof process.getuid==='function'&&s.uid!==process.getuid())||(s.mode&0o077))fail('DSH_STATE_CONFLICT','Bridge directory must be private and owned by this Linux user');}else fs.mkdirSync(dir,{recursive:true,mode:0o700});}
 export function prepareNative(p,expected){
@@ -102,7 +115,9 @@ if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.ur
   }else{
    if(!['probe','prepare'].includes(action))fail('INVALID_INPUT','Invalid action');
    const sqlite=await import('node:sqlite');if(!sqlite.DatabaseSync)fail('DSH_RUNTIME_UNSUPPORTED','node:sqlite unavailable');
-   result=nativeProbe({cli:process.argv[3]});if(action==='prepare')prepareNative(result,JSON.parse(process.argv[4]));
+   result=nativeProbe({cli:process.argv[3]});
+   await verifyNativeBoot(result);
+   if(action==='prepare')prepareNative(result,JSON.parse(process.argv[4]));
   }
   process.stdout.write(JSON.stringify(result)+'\n');
  }

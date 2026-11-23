@@ -33,7 +33,7 @@ function harness(options = {}) {
     return nodes.get(id);
   };
   $('project-dialog').open = options.dialogOpen === true;
-  const functions = runInNewContext(`${app.slice(start, end)}\n({loadProjects, saveProjectSelection, selectProject, addProject});`, {
+  const functions = runInNewContext(`${app.slice(start, end)}\n({loadProjects, saveProjectSelection, selectProject, addProject, handleProjectAction});`, {
     state, projectsState, $, projectPathKey,
     api: async (...args) => {
       calls.api.push(args);
@@ -53,6 +53,25 @@ function harness(options = {}) {
   }, { filename: 'app-project-functions.js' });
   return { ...functions, state, projectsState, originalThread, calls, $ };
 }
+
+test('opening a historical or saved folder leaves the active project intact and surfaces launch failures', async () => {
+  const history = {name:'History',path:'/history'}, h = harness();
+  await h.handleProjectAction(history, 'open');
+  await h.handleProjectAction({...history,projectId:'saved'}, 'open');
+  assert.deepEqual(JSON.parse(JSON.stringify(h.calls.api)), [
+    ['/api/projects/open',{path:'/history'}], ['/api/projects/open',{id:'saved'}],
+  ]);
+  assert.equal(h.projectsState.selectedId, null);
+  assert.deepEqual(h.calls.navigation, []);
+  assert.equal(h.calls.notices.length, 2);
+  const unavailable = harness({api:async()=>{throw new Error('目录不存在');}});
+  await unavailable.handleProjectAction(history, 'open');
+  assert.match(unavailable.calls.notices[0][0], /目录不存在/);
+  assert.equal(unavailable.calls.notices[0][1], true);
+  const remote = harness({state:{lan:true}});
+  await remote.handleProjectAction(history, 'open');
+  assert.equal(remote.calls.api.length, 0);
+});
 
 test('saving a different project creates a fresh page before setting its canonical cwd', async () => {
   const h = harness({ dialogOpen: true });

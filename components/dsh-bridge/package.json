@@ -1,6 +1,6 @@
 {
   "name": "dsh-subagent-mcp",
-  "version": "0.8.0-light.3",
+  "version": "0.8.0-light.4",
   "type": "module",
   "scripts": {
     "build": "node build.mjs"

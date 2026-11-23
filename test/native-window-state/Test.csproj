@@ -8,5 +8,6 @@
   <Compile Include="../../desktop/WindowPlacement.cs" Link="WindowPlacement.cs" />
   <Compile Include="../../desktop/CaptionWindow.cs" Link="CaptionWindow.cs" />
   <Compile Include="../../desktop/WindowSessionEnd.cs" Link="WindowSessionEnd.cs" />
+  <Compile Include="../../desktop/SystemSleepRequest.cs" Link="SystemSleepRequest.cs" />
  </ItemGroup>
 </Project>

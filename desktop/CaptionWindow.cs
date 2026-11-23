@@ -27,7 +27,12 @@ internal class CaptionWindow : Form {
   startBounds==endBounds&&Math.Abs(after.X-before.X)<Math.Max(1,drag.Width/2)&&Math.Abs(after.Y-before.Y)<Math.Max(1,drag.Height/2);
  [DllImport("user32.dll")]static extern IntPtr LoadCursor(IntPtr instance,IntPtr name);
  [DllImport("user32.dll")]static extern IntPtr SetCursor(IntPtr cursor);
- Color CaptionSurface=>SystemInformation.HighContrast?SystemColors.Window:visualStyle=="claude"?(lightTheme?Color.FromArgb(250,249,245):Color.FromArgb(38,38,36)):(lightTheme?Color.White:Color.FromArgb(24,24,24));
+ protected static bool IsCaptionStyle(string? style)=>style is "codex" or "claude" or "dsh";
+ Color CaptionSurface=>SystemInformation.HighContrast?SystemColors.Window:visualStyle switch {
+  "claude"=>lightTheme?Color.FromArgb(250,249,245):Color.FromArgb(38,38,36),
+  "dsh"=>lightTheme?Color.White:Color.FromArgb(21,21,23),
+  _=>lightTheme?Color.FromArgb(252,252,253):Color.FromArgb(26,29,34),
+ };
  protected bool HasIntegratedCaption=>true;
  protected void RefreshCaptionLayout(){
   // F10/Alt menus are temporary client content, never placed on the glass.
@@ -42,9 +47,13 @@ internal class CaptionWindow : Form {
   SetCaptionTheme(false);
  }
  protected void SetCaptionTheme(bool light,string style="codex"){
-  if(style!="codex"&&style!="claude")throw new ArgumentException("Invalid caption style",nameof(style));
+  if(!IsCaptionStyle(style))throw new ArgumentException("Invalid caption style",nameof(style));
   lightTheme=light;visualStyle=style;BackColor=CaptionSurface;
-  ForeColor=SystemInformation.HighContrast?SystemColors.WindowText:light?Color.FromArgb(32,32,32):Color.White;
+  ForeColor=SystemInformation.HighContrast?SystemColors.WindowText:style switch {
+   "codex"=>light?Color.FromArgb(35,41,49):Color.FromArgb(228,232,238),
+   "dsh"=>light?Color.FromArgb(15,17,21):Color.FromArgb(249,250,251),
+   _=>light?Color.FromArgb(32,32,32):Color.White,
+  };
   CaptionMenu.BackColor=BackColor;CaptionMenu.ForeColor=ForeColor;
   CaptionMenu.Renderer=SystemInformation.HighContrast?new ToolStripSystemRenderer():new ToolStripProfessionalRenderer(new CaptionColors(light,BackColor));
   void UpdateItems(ToolStripItemCollection items){foreach(ToolStripItem item in items){item.ForeColor=ForeColor;if(item is ToolStripMenuItem menu){menu.DropDown.BackColor=SystemInformation.HighContrast?SystemColors.Window:light?Color.White:Color.FromArgb(36,36,36);menu.DropDown.ForeColor=ForeColor;UpdateItems(menu.DropDownItems);}}}
@@ -75,7 +84,10 @@ internal class CaptionWindow : Form {
   if(webCaption){
    base.WndProc(ref m);
    if(m.Msg==0x0084&&m.Result==(IntPtr)1&&!IsZoomed(Handle)){
-    var point=PointToClient(Cursor.Position);
+    // WM_NCHITTEST supplies the screen point being queried, including negative
+    // coordinates on monitors to the left or above the primary display.
+    long packed=m.LParam.ToInt64();
+    var point=PointToClient(new Point(unchecked((short)packed),unchecked((short)(packed>>16))));
     int edge=Math.Max(4,(int)Math.Round(6*DeviceDpi/96d));
     if(point.Y<edge)m.Result=(IntPtr)(point.X<edge?13:point.X>=ClientSize.Width-edge?14:12);
    }

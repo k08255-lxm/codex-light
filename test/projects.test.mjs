@@ -43,6 +43,25 @@ test('canonical duplicate directory selects existing project and concurrent adds
   }
 });
 
+test('new drafts restore the explicit selection across restarts, including no project and removal', async t => {
+  const {store,first,second} = await fixture(t);
+  const restoredCwd = async () => (await new ProjectStore({root:store.root}).list({initialCwd:first})).draftCwd;
+  assert.equal(await restoredCwd(),first);
+  await store.recordSubmission('history',1);
+  const saved = await store.add(second,false,false);
+  await store.updateMetadata(saved.projects[0].id,{pinned:true});
+  assert.equal(await restoredCwd(),first);
+  await store.select(saved.projects[0].id);
+  assert.equal(await restoredCwd(),await realpath(second));
+  await store.select(null);
+  assert.equal(await restoredCwd(),'');
+  await store.select(saved.projects[0].id);
+  await store.remove(saved.projects[0].id);
+  assert.equal(await restoredCwd(),'');
+  await store.add(first,false,false);
+  assert.equal(await restoredCwd(),'');
+});
+
 test('invalid directory inputs cannot change selection or persisted registry', async t => {
   const {root, first, store} = await fixture(t);
   const original = await store.add(first), bytes = await readFile(store.file, 'utf8');

@@ -210,6 +210,25 @@ div.step-detail.step-files { max-height: none; overflow: visible; padding: 0; ba
 .agent-reply-author { display:inline-flex; align-items:center; min-height:28px; border-radius:5px; font-size:.8125rem; color:var(--secondary); }
 .turn-work:not([open]) > .turn-work-body { display:none; }
 .turn-work-body { display:flex; flex-direction:column; gap:8px; padding:4px 0 12px; }
+/* Native disclosures keep focus and open state while their actual content height changes. */
+@supports selector(details::details-content) and (interpolate-size: allow-keywords) {
+  #messages :is(.turn-work, .turn-process, .step) { --disclosure-duration: 180ms; }
+  #messages .step { --disclosure-duration: 150ms; }
+  #messages :is(.turn-work, .turn-process, .step)::details-content {
+    interpolate-size: allow-keywords;
+    block-size: 0;
+    overflow: clip;
+    transition: block-size var(--disclosure-duration) ease-out,
+      content-visibility var(--disclosure-duration) allow-discrete;
+  }
+  #messages :is(.turn-work, .turn-process, .step)[open]::details-content { block-size: auto; }
+  #messages .turn-work > .turn-work-body, #messages .turn-process > .turn-process-items { display: flex; }
+  #messages :is(.turn-work, .turn-process) > summary > .ui-icon { transition: transform var(--disclosure-duration) ease-out; }
+  :root[data-reduced-motion="true"] #messages :is(.turn-work, .turn-process, .step) { --disclosure-duration: 0s; }
+  @media (prefers-reduced-motion: reduce) {
+    :root:not([data-reduced-motion="false"]) #messages :is(.turn-work, .turn-process, .step) { --disclosure-duration: 0s; }
+  }
+}
 .turn-work[data-kind="failed"] > summary { color:var(--error); }
 .turn-footer { padding-bottom:10px; border-bottom:1px solid var(--border); }
 

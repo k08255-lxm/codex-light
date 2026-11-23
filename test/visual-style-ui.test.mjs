@@ -7,9 +7,14 @@ const block=selector=>{const start=css.indexOf(selector);assert.ok(start>=0,`mis
 const rule=(selector,...patterns)=>{for(const pattern of patterns)assert.match(css,new RegExp(selector+'\\s*\\{[^}]*'+pattern,'s'),`${selector} ${pattern}`);};
 
 test('all four codex/claude light/dark token sets use the fixed palette',()=>{
- const sets=[[':root {',['#181818','#202020','#1b1b1b','#252525','#2b2b2b','#333333','#ececec','#b8b8b8','#a2a2a2','#e8e8e8'],'#202020'],[':root[data-visual-style="claude"]',['#262624','#2d2c29','#232320','#32312d','#383730','#403c32','#eceae2','#c2beb1','#aaa597','#d99b79'],'#252420'],[':root[data-theme="light"]',['#ffffff','#f7f7f7','#f2f2f2','#f5f5f5','#e9e9e9','#202020','#525252','#6b6b6b','#282828'],'#ffffff'],[':root[data-theme="light"][data-visual-style="claude"]',['#faf9f5','#f0eee6','#e9e6dc','#f4f2eb','#ffffff','#e7e3d7','#30302b','#5c5a51','#716e62','#a24c31'],'#ffffff']];
+ const sets=[
+  [':root {',['#1a1d22','#171a1e','#22262c','#2a2f36','#303944','#e4e8ee','#bdc4ce','#a1abb9','#aac4e7'],'#17283c'],
+  [':root[data-visual-style="claude"]',['#262624','#2d2c29','#232320','#32312d','#383730','#403c32','#eceae2','#c2beb1','#aaa597','#d99b79'],'#252420'],
+  [':root[data-theme="light"]',['#fcfcfd','#f3f5f7','#f5f6f8','#ffffff','#e3e9ef','#232931','#4f5865','#606b78','#435e80'],'#ffffff'],
+  [':root[data-theme="light"][data-visual-style="claude"]',['#faf9f5','#f0eee6','#e9e6dc','#f4f2eb','#ffffff','#e7e3d7','#30302b','#5c5a51','#716e62','#a24c31'],'#ffffff'],
+ ];
  for(const [selector,values,contrast] of sets){const source=block(selector);for(const value of values)assert.ok(source.includes(value),`${value} missing from ${selector}`);assert.ok(source.includes(`--accent-contrast:${contrast}`),selector);}
- assert.match(css,/--canvas:#ffffff; --sidebar:#f7f7f7/);
+ for(const selector of [':root {', ':root[data-theme="light"]']) assert.ok(block(selector).includes('--rail:var(--sidebar)'));
 });
 
 test('frame, typography and geometry follow the fixed scale with a Chinese font fallback',()=>{
@@ -74,8 +79,8 @@ test('PR surface wraps filters, keeps entries focusable and scrolls patches inde
  for(const pattern of [/\.pr-review-toolbar\s*\{[^}]*flex-wrap:\s*wrap/s,/\.pr-review-toolbar>label[^{}]*\{[^}]*min-width:\s*0/s,/\.pr-review-card:focus-within/,/@media\s*\(hover:hover\)[\s\S]*?\.pr-review-card:hover/,/\.pr-review-card>button\s*\{[^}]*overflow-wrap:\s*anywhere/s,/\.pr-review-patch\s*\{[^}]*white-space:\s*pre[^}]*overflow-x:\s*auto/s,/\.pr-review-list>p,\s*\.pr-review-section>p\s*\{[^}]*border:\s*1px dashed/s,/@media\s*\(forced-colors:\s*active\)/])assert.match(pr,pattern);
 });
 
-test('static shell: two pressed-state style choices, hidden text menus with one named entry, CLI version slot',()=>{
- assert.deepEqual([...html.matchAll(/data-style-choice="([^"]+)" aria-pressed="(true|false)"/g)].map(match=>[match[1],match[2]]),[['codex','true'],['claude','false']]);
+test('static shell: pressed-state style choices, hidden text menus with one named entry, CLI version slot',()=>{
+ assert.deepEqual([...html.matchAll(/data-style-choice="([^"]+)" aria-pressed="(true|false)"/g)].map(match=>[match[1],match[2]]),[['codex','true'],['claude','false'],['dsh','false']]);
  assert.match(html,/class="style-cards" role="group" aria-label="界面风格"/);
  assert.match(html,/class="window-bar hidden" aria-hidden="true"/);assert.match(css,/\.window-bar\s*\{\s*display:\s*none/);assert.match(html,/id="menu-app"[^>]*aria-label="应用菜单"/);
  assert.match(html,/<dt>CLI 版本<\/dt><dd id="version-info">未知<\/dd>/);assert.match(app,/\$\('version-info'\)\.textContent=state\.cliVersion\|\|'未知'/);

@@ -69,8 +69,7 @@ export function createComposer({ document, session, drafts, ledger, thread, view
   function hasDraft() { const d = draftSnapshot(); return !!(d.text || d.images.length || d.files.length); }
   function threadBusy(threadId) {
     if (!threadId) return false;
-    if (threadId === state.thread?.id) return state.busy;
-    return state.activeTurns.has(threadId) || !!sessionFor(threadId)?.activeTurnId;
+    return (threadId === state.thread?.id && state.busy) || state.activeTurns.has(threadId) || !!sessionFor(threadId)?.activeTurnId;
   }
   /** Running-task input is possible only with a known active turn on a connected, idle-sending client. */
   function runningInputAvailable() {
@@ -81,7 +80,7 @@ export function createComposer({ document, session, drafts, ledger, thread, view
   async function confirmRiskyFiles(files) {
     const risky = files.filter(file => file.riskWarning);
     if (!risky.length) return [];
-    if (!await confirm('以下文件属于归档或未验证格式：\n' + risky.map(file => file.name + (file.warning ? '：' + file.warning : '')).join('\n') + '\n\n只将本地文件引用交给 Codex，可能按现有权限读取；不会自动解包或执行。确认随本次消息发送？')) return null;
+    if (!await confirm('确认随本次消息发送以下文件引用？\n' + risky.map(file => file.name + (file.warning ? '：' + file.warning : '')).join('\n') + '\n\nCodex 可按当前权限读取文件。添加附件时不会执行文件或解压。')) return null;
     return risky.map(file => file.id);
   }
   function imageCapabilityError(images) {

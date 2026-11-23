@@ -22,6 +22,12 @@ const page = browser.pages()[0] || await browser.newPage();
 const frontendRpc = [];
 page.on('request', request => { if (request.url().endsWith('/api/rpc') && request.method() === 'POST') { try { frontendRpc.push(JSON.parse(request.postData() || '{}').method); } catch {} } });
 const errors = []; page.on('pageerror', e => errors.push(e.message)); page.on('console', m => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
+page.on('response', async response => {
+  if (response.status() < 400 || !response.url().startsWith(app.origin + '/api/')) return;
+  const route = new URL(response.url()).pathname, body = route === '/api/rpc' ? response.request().postDataJSON() : null;
+  const result = await response.json().catch(()=>({}));
+  errors.push(`${response.status()} ${route} ${body?.method || ''}: ${JSON.stringify(result.error)}`);
+});
 const checks = []; const ok = text => { checks.push(text); console.log('✔', text); };
 
 // Instrument the demo backend: record calls and optionally keep the next turn running.
@@ -46,7 +52,7 @@ try {
   await page.locator('#prompt').click(); await page.keyboard.type('/');
   await page.locator('#slash-menu .slash-option').first().waitFor();
   const labels = await page.locator('#slash-menu .slash-label').allTextContents();
-  assert.deepEqual(labels.slice(0, 6), ['/new', '/compact', '/review', '/fork', '/rename', '/model']);
+  assert.deepEqual(labels.slice(0, 8), ['/new', '/compact', '/fork', '/rename', '/model', '/usage', '/account', '/terminal']);
   assert.equal(await page.locator('#slash-menu [aria-disabled="true"]').filter({ hasText: '/compact' }).count(), 1, 'compact disabled on draft');
   const selected = () => page.locator('#slash-menu [aria-selected="true"] .slash-label').textContent();
   assert.equal(await selected(), '/new'); await page.keyboard.press('ArrowDown');
@@ -80,7 +86,7 @@ try {
   await page.locator('#stop').waitFor({ state: 'visible' });
   assert.equal(count('thread/resume'), backendResumeBeforeWork + 1, 'sending to a released thread lazily resumes the backend exactly once');
   const turn = client.turns.get(threadId).at(-1); assert.equal(turn.status, 'inProgress');
-  assert.equal(await page.locator('#send').getAttribute('data-mode'), 'steer');
+  await page.locator('#send[data-mode="steer"]').waitFor();
   await page.locator('#prompt').fill('顺便更新 README'); assert.equal(await page.locator('#queue-send').isVisible(), true);
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => document.getElementById('prompt').value === '');
@@ -90,7 +96,8 @@ try {
   ok('Steer sends only threadId/expectedTurnId/input, clears draft after ack, shows steer in the running turn');
 
   const starts = count('turn/start');
-  await page.locator('#prompt').fill('排队：再跑一次测试'); await page.keyboard.press('Tab');
+  await page.locator('#prompt').fill('排队：再跑一次测试');
+  await page.locator('#queue-send:enabled:not(.hidden)').waitFor(); await page.keyboard.press('Tab');
   await page.locator('#queue .queue-item').waitFor(); assert.equal(count('turn/start'), starts, 'queue does not send');
   assert.equal(await page.locator('#prompt').inputValue(), '');
   await page.locator('#queue .queue-item .queue-action').filter({ hasText: '编辑' }).click();
@@ -108,12 +115,14 @@ try {
     { path: path.join(root, 'docs', '设计 说明.md'), kind: { type: 'update', move_path: null }, diff: '@@ -3 +3 @@\n-x\n+y\n' },
     { path: path.join(root, 'test', 'a.test.mjs'), kind: { type: 'update', move_path: null }, diff: '@@ -1 +1 @@\n-1\n+2\n' } ] } });
   emit('thread/tokenUsage/updated', { threadId, turnId: t, tokenUsage: { total: { totalTokens: 5000000, inputTokens: 1, cachedInputTokens: 0, outputTokens: 1, reasoningOutputTokens: 0 }, last: { totalTokens: 64000, inputTokens: 1, cachedInputTokens: 0, outputTokens: 1, reasoningOutputTokens: 0 }, modelContextWindow: 256000 } });
-  await page.locator('.files-card').waitFor();
-  assert.match(await page.locator('.files-title').textContent(), /正在编辑 4 个文件/);
-  assert.match(await page.locator('.turn-process.first .turn-process-label').last().textContent(), /正在工作/);
-  assert.equal(await page.locator('#context-label').textContent(), '75%');
+  await page.locator('#live-changes .pill-text').filter({hasText:'4 个文件正在更改'}).waitFor();
+  const currentTurn = page.locator(`.turn[data-turn-id="${t}"]`);
+  await currentTurn.locator('.turn-working').filter({hasText:'正在工作'}).waitFor();
+  await currentTurn.locator('.turn-process-label').filter({hasText:'运行中'}).waitFor();
+  await page.locator('#context-label').filter({hasText:'25%'}).waitFor();
+  assert.match(await page.locator('#context-meter').getAttribute('aria-label'), /已使用约 25%/);
   await shot('02-running-wide-dark-codex');
-  ok('Running turn: live elapsed label, steps, live edited-file count, context 75% from last/window');
+  ok('Running turn: live elapsed label, steps, live edited-file count, context 25% used from last/window');
 
   // Complete the turn: process collapses, final answer + Markdown local link, queue drains once.
   emit('item/completed', { threadId, turnId: t, item: { id: 'f1', type: 'fileChange', status: 'completed', changes: [
@@ -124,12 +133,15 @@ try {
   const answer = '已整理到 [sample.md](C:/Users/TestUser/demo-project/sample.md)，并更新 [app.js](public/app.js#L12)。\n\n- 链接 [官网](https://example.com)\n- 危险链接 [x](javascript:alert(1)) 保持文本';
   emit('item/completed', { threadId, turnId: t, item: { id: 'final1', type: 'agentMessage', phase: 'final_answer', text: answer } });
   turn.status = 'completed'; emit('turn/completed', { threadId, turn: { ...turn, items: [], durationMs: 18000 } });
-  await page.waitForFunction(() => [...document.querySelectorAll('.turn-process-label')].some(n => n.textContent === '用时 18s'));
+  await currentTurn.locator('.turn-work-label').filter({hasText:'用时 18s'}).waitFor();
   await page.waitForFunction(() => !document.querySelector('#queue .queue-item'), null, { timeout: 5000 });
   const drained = calls.filter(r => r.method === 'turn/start').at(-1);
   assert.equal(count('turn/start'), starts + 1); assert.match(drained.params.input[0].text, /已编辑/);
-  assert.equal(await page.locator('.turn-process.first[open]').count() >= 0, true);
-  const collapsed = await page.evaluate(() => { const done = [...document.querySelectorAll('.turn')].find(n => n.textContent.includes('用时 18s')); return { open: done.querySelector('.turn-process').open, link: done.querySelector('.md-file-link')?.textContent, raw: done.textContent.includes('](C:'), anchors: [...done.querySelectorAll('a')].map(a => a.href) }; });
+  const collapsed = await currentTurn.evaluate(done => {
+    const answer=done.querySelector(':scope > .agentMessage .markdown-body');
+    return {open:done.querySelector('.turn-work').open,link:answer.querySelector('.md-file-link')?.textContent,
+      raw:answer.textContent.includes('](C:'),anchors:[...answer.querySelectorAll('a')].map(a=>a.href)};
+  });
   assert.equal(collapsed.open, false); assert.equal(collapsed.link, 'sample.md'); assert.equal(collapsed.raw, false); assert.deepEqual(collapsed.anchors, ['https://example.com/']);
   assert.match(await page.locator('.files-title').first().textContent(), /已编辑 4 个文件/);
   assert.equal(await page.locator('.files-card .file-row').first().locator('xpath=..').locator('.file-row').count(), 3);
@@ -160,6 +172,7 @@ try {
   const backendResumeBefore = count('thread/resume'); const frontendBefore = frontendRpc.length;
   await page.locator('.project-group-thread').first().click();
   await page.waitForFunction(() => document.querySelectorAll('#messages .turn').length >= 2);
+  await page.locator('#conversation[aria-busy="false"]').waitFor();
   assert.equal(frontendRpc.includes('thread/resume'), false, 'the browser never sends thread/resume');
   assert.equal(count('thread/resume'), backendResumeBefore, 'opening history causes no new backend resume');
   const historyRpc = frontendRpc.slice(frontendBefore);
@@ -170,10 +183,13 @@ try {
   // Interruption pauses the queue; nothing is auto-sent.
   holdNext = true; await page.locator('#prompt').fill('会被停止的任务'); await page.keyboard.press('Enter');
   await page.locator('#stop').waitFor({ state: 'visible' });
+  await page.locator('#send[data-mode="steer"]').waitFor();
   await page.locator('#prompt').fill('不应自动发送'); await page.keyboard.press('Tab'); await page.locator('#queue .queue-item').waitFor();
   const before = count('turn/start'); await page.locator('#stop').click();
   await page.locator('#queue .queue-note').filter({ hasText: '已暂停' }).waitFor();
-  await page.waitForTimeout(300); assert.equal(count('turn/start'), before, 'interrupted turn does not drain the queue');
+  assert.match(await page.locator('#queue .queue-text').innerText(), /不应自动发送/);
+  await page.waitForTimeout(300);
+  assert.deepEqual(calls.filter(r => r.method === 'turn/start').slice(before).map(row => row.params.input), [], 'interrupted turn does not drain the queue');
   await shot('08-queue-paused-dark-codex');
   ok('Stop pauses the queue with a visible reason; no automatic submission');
 

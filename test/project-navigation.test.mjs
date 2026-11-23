@@ -80,6 +80,34 @@ test('separate buttons dispatch latest group/thread data and busy only blocks pr
   assert.equal(menu.hidden,true,'menu closes after the explicit remove action');
 });
 
+test('project right-click and keyboard open the same menu with the correct target and focus', () => {
+  const view = setup();
+  view.render({ projects, threads });
+  const group = groups(view.host)[0], header = find(group, 'project-group-header');
+  const project = find(group, 'project-group-select'), more = find(group, 'project-group-action');
+  const menu = view.document.querySelector('.project-actions-menu');
+  menu.offsetWidth = 248; menu.offsetHeight = 200;
+  more.click();
+  const labels = menu.children.map(item => item.textContent);
+  more.click();
+  assert.equal(menu.hidden, true);
+  const event = header.dispatch('contextmenu', {target: project, button: 2, clientX: 100, clientY: 150});
+  assert.ok(event.defaultPrevented);
+  assert.equal(menu.style.left, '100px'); assert.equal(menu.style.top, '150px');
+  assert.deepEqual(menu.children.map(item => item.textContent), labels);
+  header.dispatch('contextmenu', {target: project, button: 2, clientX: 1279, clientY: 899});
+  assert.equal(menu.hidden, false);
+  assert.equal(menu.style.left, '1024px'); assert.equal(menu.style.top, '692px');
+  menu.children.find(item => item.textContent === '在资源管理器中打开').click();
+  assert.deepEqual(view.calls.map(([action, group]) => [action, group.projectId]), [['open', 'a']]);
+  assert.equal(view.document.activeElement, project);
+  header.dispatch('keydown', {target: project, key: 'F10', shiftKey: true});
+  assert.equal(view.document.activeElement, menu.children[0]);
+  menu.dispatch('keydown', {key: 'Escape'});
+  assert.equal(view.document.activeElement, project);
+  assert.equal(menu.hidden, true);
+});
+
 test('refresh reuses focused thread buttons, preserves scroll and renders all untrusted text literally', () => {
   const view = setup();
   view.render({ projects, threads, selectedPath: 'C:\\Work\\A' });

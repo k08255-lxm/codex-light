@@ -17,6 +17,7 @@ internal sealed class MainWindow : CaptionWindow {
  StorageNativeService? nativeStorage;
  Process? backend;ChildJob? job;Uri? origin;bool closing,allowClose,exitRequested,choosingClose,resourcesDisposed,failed,updateShutdownAttempted;
  readonly WindowSessionEnd sessionEnd=new();
+ readonly SystemSleepRequest systemSleep=new();
  readonly TaskbarBadge taskbarBadge;
  readonly CloseBehaviorStore closeBehavior=CloseBehaviorStore.ForCurrentUser();
  readonly string closeBehaviorNonce=Guid.NewGuid().ToString("N");
@@ -24,7 +25,7 @@ internal sealed class MainWindow : CaptionWindow {
  Task? stopTask;
  string startupStage="检测运行环境";
  readonly WindowPlacementController placement;
- public MainWindow(bool demo){this.demo=demo;taskbarBadge=new(this);Text="码舱 CodeCang";Icon=Icon.ExtractAssociatedIcon(Application.ExecutablePath);Size=new Size(1257,945);MinimumSize=new Size(800,600);BackColor=Color.FromArgb(24,24,24);Controls.Add(view);Controls.Add(loading);BuildCaptionMenu();CaptionBrandInvoked+=async(_,_)=>await ClickWebAsync("menu-app");placement=new WindowPlacementController(this,WindowPlacementStore.ForCurrentUser());Shown+=async(_,_)=>await StartAsync();FormClosing+=OnClosing;}
+ public MainWindow(bool demo){this.demo=demo;taskbarBadge=new(this);Text="码舱 CodeCang";Icon=Icon.ExtractAssociatedIcon(Application.ExecutablePath);Size=new Size(1257,945);MinimumSize=new Size(800,600);Controls.Add(view);Controls.Add(loading);BuildCaptionMenu();CaptionBrandInvoked+=async(_,_)=>await ClickWebAsync("menu-app");placement=new WindowPlacementController(this,WindowPlacementStore.ForCurrentUser());Shown+=async(_,_)=>await StartAsync();FormClosing+=OnClosing;}
  protected override void OnLoad(EventArgs e){base.OnLoad(e);placement.Restore();try{ShowTray();}catch{DisposeTray();ShowTrayFailure();}}
  protected override void OnMove(EventArgs e){base.OnMove(e);placement?.Capture();}
  FormWindowState previousWindowState;bool restorePaintQueued;
@@ -181,6 +182,12 @@ internal sealed class MainWindow : CaptionWindow {
     string line=await ReadBoundedLineAsync(reader,hostMessages.Token,262144);
     using var document=JsonDocument.Parse(line);var message=document.RootElement;
     if(message.ValueKind!=JsonValueKind.Object||!message.TryGetProperty("type",out var type)||type.ValueKind!=JsonValueKind.String)throw new InvalidDataException();
+    if(type.GetString()=="systemSleep"){
+     if(message.EnumerateObject().Count()!=2||!message.TryGetProperty("keepAwake",out var awake)||awake.ValueKind is not (JsonValueKind.True or JsonValueKind.False))throw new InvalidDataException();
+     if(!closing&&!IsDisposed&&!systemSleep.Set(awake.GetBoolean()))
+      tray?.ShowBalloonTip(5000,"码舱 CodeCang","Windows 未能更新自动休眠请求，请检查电脑的电源设置。",ToolTipIcon.Warning);
+     continue;
+    }
     if(type.GetString()=="storage"){
      if(message.EnumerateObject().Count()!=4||!message.TryGetProperty("requestId",out var storageRequest)||!Guid.TryParseExact(storageRequest.GetString(),"D",out var storageId)||!message.TryGetProperty("action",out var storageAction)||!message.TryGetProperty("input",out var storageInput))throw new InvalidDataException();
      object? result=null;string? error=null;
@@ -201,14 +208,14 @@ internal sealed class MainWindow : CaptionWindow {
     int fields=message.EnumerateObject().Count();
     if(type.GetString()!="theme"||(fields!=2&&fields!=3)||!message.TryGetProperty("theme",out var theme)||theme.ValueKind!=JsonValueKind.String)throw new InvalidDataException();
     string style="codex";
-    if(fields==3){if(!message.TryGetProperty("visualStyle",out var visual)||visual.ValueKind!=JsonValueKind.String)throw new InvalidDataException();style=visual.GetString()!;if(style!="codex"&&style!="claude")throw new InvalidDataException();}
+    if(fields==3){if(!message.TryGetProperty("visualStyle",out var visual)||visual.ValueKind!=JsonValueKind.String)throw new InvalidDataException();style=visual.GetString()!;if(!IsCaptionStyle(style))throw new InvalidDataException();}
     string? value=theme.GetString();if(value!="light"&&value!="dark")throw new InvalidDataException();
     if(closing||IsDisposed)return;
     SetCaptionTheme(value=="light",style);loading.BackColor=BackColor;loading.ForeColor=ForeColor;
    }
   }catch(OperationCanceledException){}catch{
    if(!closing&&!IsDisposed&&!updateShutdownAttempted){ShowFailure("本地界面通信已中断。请关闭并重新打开应用；未自动重发任务。");await StopBackendAsync();}
-  }
+  }finally{systemSleep.Set(false);}
  }
  ToolStripMenuItem? fileMenu,viewMenu;
  bool HandleWindowCommand(string json){
@@ -437,6 +444,7 @@ internal sealed class MainWindow : CaptionWindow {
   await WriteHostAsync("{\"action\":\"shutdown\"}");process.StandardInput.Close();await process.WaitForExitAsync();
  }
  void ReleaseBackend(){
+  systemSleep.Set(false);
   job?.Dispose();job=null;
   if(backend!=null){try{if(!backend.HasExited)backend.Kill(true);}catch{}backend.Dispose();backend=null;}
  }

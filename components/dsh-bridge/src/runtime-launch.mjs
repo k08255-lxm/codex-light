@@ -11,6 +11,7 @@ export function runtimeLaunch(config, agent, env = process.env) {
   const executable = config.desktopExecutable || env.DSH_DESKTOP_EXECUTABLE;
   const cli = executable ? desktopCli(executable) : config.cli;
   const args = [cli, '--profile', config.profile || 'codex-subagent', '--patch', agent.preset ? config.patch : config.legacyPatch];
+  for (const file of config.installedPresetPatches ?? []) args.push('--patch',file);
   return {
     command: executable || process.execPath,
     args: executable ? ['--expose-internals', ...args] : args,

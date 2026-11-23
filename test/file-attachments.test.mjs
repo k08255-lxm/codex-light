@@ -12,8 +12,20 @@ test('explicit uploaded bytes stored safely; only owned IDs resolve; close prese
 test('policy rejects unsafe names and executable/image uploads; MIME conflict stays unknown',async t=>{
  const {store}=await fixture(t);for(const filename of ['/a.txt','C:\\a.txt','a.exe','script.js'])await assert.rejects(()=>store.add(bytes(),{...meta,filename}));
  await assert.rejects(()=>store.add(bytes(),{filename:'a.png',mime:'image/png'}),/image/);
- const file=await store.add(bytes(),{filename:'a.pdf',mime:'text/plain'});assert.equal(file.category,'unknown');assert.equal(file.riskWarning,true);assert.match(file.warning,/not executed/);
- const zip=await store.add(bytes(),{filename:'a.zip',mime:'application/zip'});assert.equal(zip.riskWarning,true);
+ const file=await store.add(bytes(),{filename:'a.pdf',mime:'text/plain'});assert.equal(file.category,'unknown');assert.equal(file.riskWarning,true);assert.match(file.warning,/无法确认文件格式/);
+ const zip=await store.add(bytes(),{filename:'a.zip',mime:'application/zip'});assert.equal(zip.riskWarning,true);assert.match(zip.warning,/压缩文件/);
+});
+test('JSON Lines use verified UTF-8 records with compatible or missing MIME; conflicts and malformed content still warn',async t=>{
+ const {store}=await fixture(t),content='{"标题":"测试"}\r\n[1,2]\n';
+ for(const [filename,mime] of [['posts-48h (2).jsonl','application/octet-stream'],['records.NDJSON','application/x-ndjson'],['data.jsonl','text/plain'],['data.ndjson',''],['sample.jsonl','application/json']]){
+  const record=await store.add(bytes(content),{filename,mime});
+  assert.equal(record.category,'text');assert.equal(record.riskWarning,false);
+  assert.equal(await fs.readFile(record.path,'utf8'),content);
+ }
+ for(const [content,mime] of [['{}\nmalformed','text/plain'],[Buffer.from([0xff,0xfe]),'application/json'],['\n','application/octet-stream'],['{}','application/zip']]){
+  const record=await store.add(bytes(content),{filename:'data.jsonl',mime});
+  assert.equal(record.category,'unknown');assert.equal(record.riskWarning,true);
+ }
 });
 test('oversize and failing streams clean only this attempt, not historical cache',async t=>{
  const {root,store}=await fixture(t);await fs.writeFile(path.join(root,'history.txt'),'keep');
