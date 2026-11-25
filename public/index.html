@@ -19,7 +19,6 @@
 <link rel="stylesheet" href="/ui/shell-polish.css">
 <link rel="stylesheet" href="/ui/file-preview.css">
 <link rel="stylesheet" href="/ui/dsh-theme.css">
-<link rel="stylesheet" href="/vendor/xterm.css">
 </head>
 <body>
 <!-- Native host bridges (MainWindow.cs clicks these ids); hidden, the host owns its caption menu. -->
@@ -52,7 +51,6 @@
     <div class="rail-group">
       <button id="rail-home" class="rail-btn active" data-route="chat" title="对话" aria-label="对话"><span data-icon="home"></span></button>
       <button id="rail-usage" class="rail-btn" data-route="usage" title="用量与性能" aria-label="用量与性能"><span data-icon="chart"></span></button>
-      <button id="rail-terminal" class="rail-btn" data-route="terminal" title="终端与 Git" aria-label="终端与 Git"><span data-icon="terminal"></span></button>
       <button id="rail-plugins" class="rail-btn" data-route="settings" title="插件" aria-label="插件"><span data-icon="plug"></span></button>
     </div>
     <div class="rail-spacer"></div>
@@ -173,31 +171,6 @@
     <div class="hidden"><div id="account-pending" class="account-pending hidden"></div><div id="account-login-controls" class="account-login-panel"></div></div>
   </main>
 
-  <!-- ===== Terminal & Git ===== -->
-  <main id="terminal-page" class="stage page hidden" aria-label="终端与 Git">
-    <header class="stage-bar"><div class="crumbs"><strong>终端与 Git</strong><span class="crumb-sep" aria-hidden="true">·</span><span id="terminal-cwd" class="crumb-project">尚未打开</span></div>
-      <div class="stage-actions"><div class="segmented" role="tablist" aria-label="工作台视图"><button id="terminal-tab-shell" type="button" role="tab" aria-selected="true" aria-controls="terminal-shell-workspace">终端</button><button id="terminal-tab-git" type="button" role="tab" aria-selected="false" aria-controls="terminal-git-workspace">Git</button></div><button id="terminal-back" class="btn ghost small" type="button"><span data-icon="back"></span><span class="label">返回对话</span></button></div></header>
-    <section id="terminal-shell-workspace" class="work" role="tabpanel">
-      <div class="work-bar"><button id="terminal-open" class="btn primary" type="button"><span data-icon="terminal"></span>打开当前目录终端</button><button id="terminal-restore" type="button" class="btn" disabled>恢复连接</button><button id="terminal-interrupt" class="btn" type="button" disabled>Ctrl+C</button><button id="terminal-close" class="btn danger" type="button" disabled>结束终端</button><p id="terminal-status" class="work-status" role="status">尚未启动 shell。点击打开才会创建本地终端，不会调用模型。</p></div>
-      <div id="terminal-container" class="terminal-container"><div id="terminal-empty" class="terminal-empty"><span data-icon="terminal"></span><h2>在工作目录中直接操作</h2><p>命令由本地 shell 执行，可能修改项目文件。终端固定使用打开时的目录；返回对话不会结束它。</p></div></div>
-    </section>
-    <section id="terminal-git-workspace" class="work git-work hidden" role="tabpanel">
-      <div class="work-bar"><button id="git-status-read" type="button" class="btn">刷新状态</button><button id="git-diff-read" type="button" class="btn">未暂存差异</button><button id="git-staged-read" type="button" class="btn">已暂存差异</button><p id="git-status" class="work-status" role="status">只在点击后读取，不暂存、提交或推送。</p></div>
-      <div class="git-split">
-        <div id="git-output" class="git-output"><p class="muted">尚未读取 Git 信息。</p></div>
-        <section id="git-write" class="git-write" aria-label="Git 写操作">
-          <h2 class="section-title">暂存与提交</h2>
-          <div class="work-row"><button id="git-stage-plan" type="button" class="btn">暂存所选…</button><button id="git-unstage-plan" type="button" class="btn">取消暂存所选…</button></div>
-          <label for="git-commit-message">提交信息（只提交已暂存内容）</label><textarea id="git-commit-message" rows="3" maxlength="10000"></textarea>
-          <div class="work-row"><button id="git-commit-plan" type="button" class="btn">检查提交计划…</button><button id="git-push-plan" type="button" class="btn">检查推送计划…</button></div>
-          <p id="git-action-status" class="work-status" role="status">先读取状态并勾选路径。每个写操作都会先展示计划再确认。</p>
-          <div id="git-action-pending"></div>
-          <section id="git-plan" class="git-plan hidden"><h2 class="section-title">核对计划</h2><pre id="git-plan-summary"></pre><div class="work-row"><button id="git-plan-apply" type="button" class="btn primary">确认执行</button><button id="git-plan-cancel" type="button" class="btn">取消</button></div></section>
-        </section>
-      </div>
-    </section>
-  </main>
-
   <!-- ===== Review ===== -->
 
   <!-- ===== Settings ===== -->
@@ -272,7 +245,7 @@
       <section id="settings-notifications" class="settings-section hidden">
         <h1>通知</h1>
         <div id="mobile-task-notifications" class="panel" hidden>
-          <label class="pref-row" for="mobile-task-enabled"><div><strong>手机任务通知</strong><small class="fine">主动监控运行中的长任务。通知可显示对话标题；点按返回对话，等待回答和任务结果使用普通通知。</small></div><input id="mobile-task-enabled" type="checkbox" class="switch"></label>
+          <label class="pref-row" for="mobile-task-enabled"><div><strong>接收实时任务通知</strong><small class="fine">在手机上查看思考、执行、回复和任务结果。点按通知可返回对话。</small></div><input id="mobile-task-enabled" type="checkbox" class="switch"></label>
           <p id="mobile-task-status" class="fine" role="status"></p>
           <p id="mobile-task-promotion-status" class="fine" role="status"></p>
           <div class="settings-actions">

@@ -52,7 +52,8 @@ try {
   await page.locator('#prompt').click(); await page.keyboard.type('/');
   await page.locator('#slash-menu .slash-option').first().waitFor();
   const labels = await page.locator('#slash-menu .slash-label').allTextContents();
-  assert.deepEqual(labels.slice(0, 8), ['/new', '/compact', '/fork', '/rename', '/model', '/usage', '/account', '/terminal']);
+  assert.deepEqual(labels.slice(0, 7), ['/new', '/compact', '/fork', '/rename', '/model', '/usage', '/account']);
+  assert.ok(!labels.includes('/terminal'));
   assert.equal(await page.locator('#slash-menu [aria-disabled="true"]').filter({ hasText: '/compact' }).count(), 1, 'compact disabled on draft');
   const selected = () => page.locator('#slash-menu [aria-selected="true"] .slash-label').textContent();
   assert.equal(await selected(), '/new'); await page.keyboard.press('ArrowDown');

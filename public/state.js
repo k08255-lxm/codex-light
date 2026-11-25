@@ -340,7 +340,6 @@ export const SLASH_COMMANDS = Object.freeze([
   { id: 'model', name: 'model', icon: 'bolt', title: '模型与思考强度', detail: '打开模型选择' },
   { id: 'usage', name: 'usage', icon: 'chart', title: '用量与性能', detail: '打开统计页' },
   { id: 'account', name: 'account', icon: 'user', title: '账户与额度', detail: '查看登录、额度和重置时间' },
-  { id: 'terminal', name: 'terminal', icon: 'terminal', title: '终端', detail: '打开工作目录终端页（不会自动启动 shell）' },
 ].map(Object.freeze));
 
 /** Returns the slash token touching the caret: `/word` at the start or after whitespace. */
@@ -370,7 +369,7 @@ export function slashAvailability(command, ctx) {
     case 'compact': return !ctx.thread ? { enabled: false, reason: '新聊天尚无上下文' } : !idleThread ? { enabled: false, reason: '任务运行或连接中断时不可用' } : { enabled: true };
     case 'review': case 'fork': case 'rename': return idleThread ? { enabled: true } : { enabled: false, reason: ctx.thread ? '任务运行或连接中断时不可用' : '需要已有对话' };
     case 'model': return ctx.busy || ctx.sending ? { enabled: false, reason: '任务运行时不可更改' } : { enabled: true };
-    case 'usage': case 'account': case 'terminal': return { enabled: true };
+    case 'usage': case 'account': return { enabled: true };
     default: return { enabled: false, reason: '不支持' };
   }
 }

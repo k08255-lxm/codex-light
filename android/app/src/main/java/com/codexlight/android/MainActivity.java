@@ -237,6 +237,11 @@ public class MainActivity extends Activity {
 
     public void setTaskNotificationsEnabled(boolean enabled) {
         if (trustedTaskNotificationPage() && taskNotifications != null) {
+            if (!enabled) {
+                MobileNotificationService.remember(this, currentConfig, false, false);
+                backgroundPermissionTarget = null;
+                MobileNotificationService.setEnabled(this, currentConfig, false);
+            }
             taskNotifications.setEnabled(enabled,this);
             notifyTaskNotificationStatus();
         }
@@ -246,13 +251,35 @@ public class MainActivity extends Activity {
         if (trustedTaskNotificationPage() && taskNotifications != null) taskNotifications.openSettings(this);
     }
 
+    public void setRealtimeNotifications(boolean enabled, boolean questionsEnabled) {
+        if (!trustedTaskNotificationPage() || !canOpenWorkbenchSettings() || !hasWindowFocus()) return;
+        MobileNotificationService.remember(this, currentConfig, enabled, questionsEnabled);
+        backgroundPermissionTarget = enabled && !taskNotifications.permissionGranted() ? currentConfig : null;
+        taskNotifications.setEnabled(enabled, this);
+        if (!enabled || taskNotifications.permissionGranted())
+            MobileNotificationService.setEnabled(this, currentConfig, enabled);
+        notifyTaskNotificationStatus();
+    }
+
+    private void resumeSavedNotifications() {
+        if (snapshotPageReady && trustedTaskNotificationPage() && hasWindowFocus()
+                && taskNotifications.permissionGranted())
+            MobileNotificationService.resumeSaved(this, currentConfig);
+    }
+
+    @Override public void onWindowFocusChanged(boolean focused) {
+        super.onWindowFocusChanged(focused);
+        if (focused) resumeSavedNotifications();
+    }
+
     public void openLiveUpdateSettings() {
         if (canOpenWorkbenchSettings() && taskNotifications != null) taskNotifications.openPromotionSettings(this);
     }
 
     public void setBackgroundNotifications(boolean enabled, boolean questionsEnabled) {
         if (!canOpenWorkbenchSettings() || !hasWindowFocus()) return;
-        MobileNotificationService.setQuestionAlerts(questionsEnabled);
+        if (!trustedTaskNotificationPage()) return;
+        MobileNotificationService.remember(this, currentConfig, enabled, questionsEnabled);
         backgroundPermissionTarget = null;
         if (enabled && !taskNotifications.permissionGranted()) {
             backgroundPermissionTarget = currentConfig;
@@ -285,7 +312,7 @@ public class MainActivity extends Activity {
 
     public void setBackgroundQuestionAlerts(boolean enabled) {
         if (!trustedTaskNotificationPage()) return;
-        MobileNotificationService.setQuestionAlerts(enabled);
+        MobileNotificationService.saveQuestionAlerts(this, currentConfig, enabled);
         if (!enabled && questionNotifications != null) questionNotifications.clearAll();
     }
 
@@ -303,8 +330,8 @@ public class MainActivity extends Activity {
 
     public void updateTaskNotification(String json) {
         if (trustedTaskNotificationPage() && taskNotifications != null) {
+            taskNotifications.update(json);
             if (MobileNotificationService.ownsNotifications()) MobileNotificationService.refreshFromWeb();
-            else taskNotifications.update(json);
             deliverTaskNotificationIntent();
         }
     }
@@ -351,6 +378,7 @@ public class MainActivity extends Activity {
         webView.setVisibility(View.VISIBLE);
         errorOverlay.setVisibility(View.GONE);
         offlineSnapshots.liveReady();
+        resumeSavedNotifications();
         updateToolbarVisibility();
         deliverQuestionNotificationIntent();
     }
@@ -405,7 +433,7 @@ public class MainActivity extends Activity {
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
 
         String defaultUa = settings.getUserAgentString();
-        settings.setUserAgentString(defaultUa + " CodexLightMobile/0.4.16");
+        settings.setUserAgentString(defaultUa + " CodexLightMobile/0.4.17");
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             settings.setSafeBrowsingEnabled(false);

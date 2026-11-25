@@ -10,6 +10,37 @@ const address='192.168.123.7',network='a'.repeat(64);
 function memory(){let value=null;return {read:async()=>structuredClone(value),write:async v=>{value=structuredClone(v);}};}
 function manager(t,store,extra={}){const m=new LanAccess({handler:(_q,r)=>r.end('ok'),networkInterfaces:()=>({Test:[{family:'IPv4',internal:false,address}]}),preferenceStore:store,networkIdentity:async()=>network,serverFactory:fn=>{const s=http.createServer(fn),listen=s.listen;s.listen=function(o,...args){return listen.call(this,{...o,host:'127.0.0.1'},...args);};return s;},...extra});t.after(()=>m.close());return m;}
 const enable=m=>m.enable({address,confirmed:true});
+test('saved access retries on startup and after network loss, until disabled',async t=>{
+ t.mock.timers.enable({apis:['setTimeout','setInterval']});
+ const store=memory(),first=manager(t,store);
+ const original=await enable(first);
+ await first.close();
+ let identity='another network';
+ const next=manager(t,store,{networkIdentity:async()=>identity});
+ const advance=async ms=>{t.mock.timers.tick(ms);await new Promise(resolve=>setImmediate(resolve));};
+ await next.restore();
+ assert.equal(next.status().retryScheduled,true);
+ await advance(5000);
+ assert.equal(next.status().enabled,false);
+ identity=network;
+ await advance(10000);
+ assert.equal(next.status().url,original.url);
+ identity='another network';
+ await advance(15000);
+ assert.equal(next.status().enabled,false);
+ assert.equal(next.status().retryScheduled,true);
+ identity=network;
+ await advance(5000);
+ assert.equal(next.status().url,original.url);
+ identity='another network';
+ await advance(15000);
+ await next.disable();
+ identity=network;
+ await advance(60000);
+ assert.equal(next.status().enabled,false);
+ assert.equal(next.status().retryScheduled,false);
+ assert.equal(await store.read(),null);
+});
 test('explicit enable persists by default; service restart preserves port and capability; disable revokes',async t=>{const store=memory(),first=manager(t,store);await assert.rejects(first.enable({address}),e=>e.code==='LAN_CONFIRMATION_REQUIRED');const before=await enable(first);assert.equal(before.persistent,true);await first.close();const next=manager(t,store),after=await next.restore();assert.equal(after.enabled,true);assert.equal(after.restoring,false);assert.equal(after.url,before.url);assert.equal(after.port,before.port);await next.disable();assert.equal(await store.read(),null);await next.close();assert.equal((await manager(t,store).restore()).enabled,false);});
 test('network/address/port restoration failures preserve desired enabled but never fallback',async t=>{const store=memory(),first=manager(t,store);const state=await enable(first);await first.close();for(const options of [{networkIdentity:async()=> 'b'.repeat(64)},{networkInterfaces:()=>({})}]){const m=manager(t,store,options),s=await m.restore();assert.equal(s.enabled,false);assert.equal(s.restoring,false);assert.equal(s.persistent,true);assert.ok(s.restoreError);assert.equal(s.url,null);}const blocker=http.createServer();await new Promise(r=>blocker.listen(state.port,'127.0.0.1',r));t.after(()=>new Promise(r=>blocker.close(r)));const m=manager(t,store),s=await m.restore();assert.equal(s.enabled,false);assert.equal(s.restoring,false);assert.equal(s.persistent,true);assert.ok(s.restoreError);assert.equal((await store.read()).port,state.port);});
 test('rotation persists new capability across restart',async t=>{const store=memory(),first=manager(t,store);const old=await enable(first),next=await first.rotate();assert.notEqual(old.url,next.url);await first.close();assert.equal((await manager(t,store).restore()).url,next.url);});

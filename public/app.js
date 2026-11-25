@@ -31,7 +31,6 @@ import { pastedFiles, classifyPaste, isImageFile } from './ui/paste.js';
 import { renderApprovals } from './ui/approvals-view.js';
 import { createDshView } from './ui/dsh-view.js';
 import { createRemoteView } from './ui/remote-view.js';
-import { createWorkbench } from './ui/workbench-view.js';
 import { createSlashMenu } from './ui/slash-menu.js';
 import { createComposer } from './ui/composer.js';
 import { createAsyncAnswerSender } from './async-answer.js';
@@ -368,12 +367,10 @@ function clearRuntimePendingAfterRecovery(){
 function applyRuntimeTarget(){
  const wsl=state.runtimeTarget==='wsl';
  document.documentElement.dataset.runtimeTarget=wsl?'wsl':'native';
- for(const [id,text] of [['runtime-panel','WSL 环境的 Codex 请在对应发行版内更新；此处不会更新 Windows 引擎。'],['dsh-config-root','WSL 模式暂不支持编辑 Windows DSH 配置来源。'],['terminal-git-workspace','WSL 支持读取当前发行版的 Git 状态与差异，暂不提供暂存、提交或推送。']]){
+ for(const [id,text] of [['runtime-panel','WSL 环境的 Codex 请在对应发行版内更新；此处不会更新 Windows 引擎。'],['dsh-config-root','WSL 模式暂不支持编辑 Windows DSH 配置来源。']]){
   const host=$(id);if(!host)continue;
-  let note=$(id+'-wsl-notice');if(!note){note=el('p','runtime-status');note.id=id+'-wsl-notice';host.before(note);}note.textContent=text;note.classList.toggle('hidden',!wsl);host.classList.toggle('wsl-unavailable',wsl&&id!=='terminal-git-workspace');host.inert=wsl&&id!=='terminal-git-workspace';
+  let note=$(id+'-wsl-notice');if(!note){note=el('p','runtime-status');note.id=id+'-wsl-notice';host.before(note);}note.textContent=text;note.classList.toggle('hidden',!wsl);host.classList.toggle('wsl-unavailable',wsl);host.inert=wsl;
  }
- $('git-write').inert=wsl;
- if(wsl)for(const id of ['git-stage-plan','git-unstage-plan','git-commit-plan','git-push-plan','git-plan-apply'])$(id).disabled=true;
  if(wsl){dshConfigView.deactivate();}
 }
 function createRuntimePanel(){return mountRuntimePanel($('runtime-panel'),{read:()=>api('/api/runtime/status',{}),check:()=>api('/api/runtime/check',{}),configure:params=>api('/api/runtime/preferences',params),upgrade:params=>performMutation('runtime/upgrade',params),queryPending:queryRuntimePending,onRecovered:clearRuntimePendingAfterRecovery});}
@@ -456,7 +453,7 @@ async function recoverPendingResult(marker,result,current){
  }
  if(marker.method==='terminal/open'){
   if(!recoveredId(result?.processId)||(result.cwd!==undefined&&typeof result.cwd!=='string'))throw new Error('原终端结果缺少有效进程标识，继续保留待同步记录。');
-  await workbench.adoptRecovered(result,envelope,current);
+  notice('旧版终端已创建，进程标识：'+result.processId);
  }
 }
 async function handlePendingReconcileResult(marker,response,decision){
@@ -480,7 +477,6 @@ async function handlePendingReconcileResult(marker,response,decision){
  if(marker.method==='runtime/upgrade'&&state.settingsPage==='general'&&!$('settings-dialog').classList.contains('hidden'))runtimePanel?.refresh();
  if(marker.method.startsWith('account/')&&currentRoute==='account')refreshAccount().catch(error=>notice('无法刷新账户状态：'+error.message,true));
  if(marker.method.startsWith('remoteControl/'))remoteControls();
- if(marker.method==='terminal/open')workbench.dropUnexecuted(resolved);
  if(marker.method==='skills/config/write'){
   slashMenu.invalidateSkills();
   skillsView.recover(skillPath,response?.result,resolved);
@@ -494,7 +490,6 @@ function handlePendingReconcileError(marker,error){
 }
 pendingReconciler=new PendingReconciler({records:reconcilableRecords,query:marker=>api('/api/operations?requestId='+encodeURIComponent(marker.requestId)),onResult:handlePendingReconcileResult,onError:handlePendingReconcileError,interval:5000,maxBackoff:30000});
 pendingReconciler.setActive(false);
-const eventSubscribers = new Set();
 // Activation also reads the login-operation snapshot. Only authoritative account events
 // invalidate account-scoped views; a read-only snapshot merely refreshes this page.
 const accountLoginPanel=mountAccountLoginPanel($('account-login-controls'),{api:accountApi,readOnly:access.lan,onAccountChanged:async()=>{if(currentRoute==='account')await refreshAccount();}});
@@ -559,14 +554,19 @@ function resetAccountScopedViews(reason='账户已改变'){
 }
 const configPanel=mountConfigSettingsPanel($('config-panel'),{read:()=>api('/api/config-settings/read',state.cwd?{cwd:state.cwd}:{}),plan:edits=>{if(scopedPending('config').length)throw new Error('配置状态仍在自动同步');return api('/api/config-settings/plan',{edits});},apply:params=>{if(pendingMutations.storageError||scopedPending('config').length)throw new Error('配置状态仍在自动同步');return performMutation('config/apply',params);}});
 function renderConfigPending(){const host=$('config-pending');if(!host)return;const records=scopedPending('config');host.replaceChildren();for(const marker of records){const row=el('div','pending-inline');row.setAttribute('role','status');const status=el('span','pending-inline-status','正在更新配置状态…');const failure=pendingReconcileErrors.get(marker.requestId);if(failure)status.title=failure;row.append(status);host.append(row);}}
+let eventsReconnecting = false;
 function setConnected(connected, label) {
+  if (eventsReconnecting && !state.shuttingDown) {
+    connected = false;
+    label = state.lan ? '正在重新连接电脑…' : '正在重新连接本地服务…';
+  }
   if (!connected && state.connected) {
     if (state.loadingThread) { state.openGeneration++; setThreadLoading(null); }
     threadAutoLoad.reset();
     historyAutoLoad.reset();
     if (searchStatus.busy) searchStatus = {text:'',busy:false};
   }
-  if(!connected){taskNotifications?.disconnected();sessionControls.invalidate();resetContext();} if(state.connected !== connected){accountIdentity.reset();deactivatePendingReconciler();pluginPanel.reset();configPanel.reset();resetUsage();if(!connected)accountLoginPanel.update({state:'unknown'});state.dshReadGeneration++;state.dshReads.clear();state.dshReadErrors.clear();} state.connected = connected; renderThreads(); if(connected)accountQuota.start(state.serverInstance);else accountQuota.stop(); if(!connected){followUps.pauseAll('连接已断开');renderQueue();try{workbench.connectionLost();}catch(error){notice('终端未能处理连接断开：'+(error?.message||'未知错误')+'。其余断连清理继续。',true);}state.searchGeneration++;resetRuntimePanel();remoteReset({statusMessage:'连接已断开，无法读取远控状态。',pairMessage:'连接已断开，本机配对码显示已清除；不会撤销任何设备。',devicesMessage:'连接已断开，设备列表显示已清除；未撤销旧环境设备。'});}terminalControls();$('connection-dot').className = connected ? 'ok' : 'bad'; $('connection-text').textContent = label || (connected ? '本地 Codex 已连接' : '连接已断开'); $('status-info').textContent = $('connection-text').textContent; updateControls(); renderDshConnection(); remoteControls(); syncSessionDefaults(); syncDshLiveContext(); syncDelegationMonitor(); syncPendingReconciler(); syncRuntimePanelActivity(); connectionBootstrap.update(connected,state.serverInstance); }
+  if(!connected){taskNotifications?.disconnected();sessionControls.invalidate();resetContext();} if(state.connected !== connected){accountIdentity.reset();deactivatePendingReconciler();pluginPanel.reset();configPanel.reset();resetUsage();if(!connected)accountLoginPanel.update({state:'unknown'});state.dshReadGeneration++;state.dshReads.clear();state.dshReadErrors.clear();} state.connected = connected; renderThreads(); if(connected)accountQuota.start(state.serverInstance);else accountQuota.stop(); if(!connected){followUps.pauseAll('连接已断开');renderQueue();state.searchGeneration++;resetRuntimePanel();remoteReset({statusMessage:'连接已断开，无法读取远控状态。',pairMessage:'连接已断开，本机配对码显示已清除；不会撤销任何设备。',devicesMessage:'连接已断开，设备列表显示已清除；未撤销旧环境设备。'});}$('connection-dot').className = connected ? 'ok' : 'bad'; $('connection-text').textContent = label || (connected ? '本地 Codex 已连接' : '连接已断开'); $('status-info').textContent = $('connection-text').textContent; updateControls(); renderDshConnection(); remoteControls(); syncSessionDefaults(); syncDshLiveContext(); syncDelegationMonitor(); syncPendingReconciler(); syncRuntimePanelActivity(); connectionBootstrap.update(connected,state.serverInstance); }
 function syncSessionDefaults(){sessionDefaults.sync({connected:state.connected,serverInstance:state.serverInstance,cwd:state.cwd,enabled:!state.demo});}
 function formatModelDisplayName(value){const text=typeof value==='string'?value.trim():'';if(!text)return '';return text.replace(/^GPT-(\d+(?:\.\d+)?)-([A-Za-z][A-Za-z0-9]*(?:[-.][A-Za-z0-9]+)*)/,'GPT-$1 $2');}
 function effectiveModel(){const id=activeModelId($('model').value,sessionDefaults.snapshot().value);return {id,model:id?state.models.find(entry=>entry.model===id)||null:null};}
@@ -594,9 +594,9 @@ function updateControls() { syncSettingsFolderPicker();const availability=curren
  syncSkillsContext();
  void questionNotifications?.flushOpen();
 }
-function setCwd(cwd) { if(state.cwd !== (cwd || '')){workbench.cwdChanged();pluginPanel.reset();configPanel.reset();} state.cwd = cwd || ''; const label=state.cwd.split(/[\\/]/).filter(Boolean).at(-1)||'无项目';$('cwd-label').textContent=label; $('cwd-button').title=state.cwd||'选择项目'; $('project-name').textContent=label;syncSessionDefaults();updateControls();renderThreads(); }
+function setCwd(cwd) { if(state.cwd !== (cwd || '')){pluginPanel.reset();configPanel.reset();} state.cwd = cwd || ''; const label=state.cwd.split(/[\\/]/).filter(Boolean).at(-1)||'无项目';$('cwd-label').textContent=label; $('cwd-button').title=state.cwd||'选择项目'; $('project-name').textContent=label;syncSessionDefaults();updateControls();renderThreads(); }
 // ---------- Router: exactly one stage is visible; every page transition goes through here ----------
-const STAGES = { chat: 'chat-page', usage: 'usage-page', account: 'account-page', terminal: 'terminal-page', settings: 'settings-dialog' };
+const STAGES = { chat: 'chat-page', usage: 'usage-page', account: 'account-page', settings: 'settings-dialog' };
 let currentRoute = 'chat';
 const navigationHistory = createNavigationHistory({name:'chat',threadId:null,cwd:state.cwd});
 let navigatingHistory=false;
@@ -646,7 +646,6 @@ function route(name, { section, back = false } = {}) {
   if (name === 'usage') statsView.activate();
   if (name === 'account') { accountView.activate(); accountLoginPanel.activate(); }
   if (name === 'settings') { renderDshConnection(); $('cwd-input').value = state.cwd; $('settings-notice').classList.add('hidden'); selectSettingsSection(section || 'general'); }
-  if (name === 'terminal') { $('terminal-cwd').textContent = workbench.label() || state.cwd || '先选择工作目录'; terminalControls(); }
   syncDshLiveContext(); syncDelegationMonitor(); syncRuntimePanelActivity();
   if (name === 'settings') sidebarController.open({desktopOnly:document.documentElement.dataset.mobileShell==='android'||!!section&&section!=='general'});
   else sidebarController.closeForNavigation();
@@ -657,7 +656,6 @@ function route(name, { section, back = false } = {}) {
 }
 function openSettings(section = 'general') { route('settings', { section: typeof section === 'string' ? section : 'general' }); }
 function closeSettings() { route('chat'); }
-function showTerminal() { route('terminal'); }
 function newThread(cwd = projectsState.draftCwd) {
   if (state.sending) return;
   route('chat',{back:true}); sidebarController.closeForNavigation();
@@ -1110,11 +1108,9 @@ function clearSubmittedDraft(envelope) {
 async function inspectRelatedRequest(marker) {
   if(marker.method==='runtime/upgrade'){openSettings('general');runtimePanel?.refresh();return;}
   if(marker.method==='config/apply'){openSettings('configuration');return;}
-  if(marker.method==='git/apply'){showTerminal();showWorkspaceTab('git');return;}
   if(marker.method==='plugin/apply'){openSettings('plugins');return;}
   if(marker.method==='skills/config/write'){openSettings('skills');return;}
   if(marker.method.startsWith('account/')){openSettings('account');return;}
-  if (marker.method==='terminal/open') { showTerminal(); return; }
   if (marker.method.startsWith('remoteControl/')) { openSettings('remote'); return; }
   if (marker.threadId) await openThread({ id: marker.threadId, name: '原请求所在对话' });
   else { await loadThreads(); notice('这次请求正在创建新对话；正在自动同步状态，请稍后在最近对话中查看。'); }
@@ -1149,7 +1145,7 @@ function renderPendingMutations() {
     }
     fragment.append(row);
   }
-  container.replaceChildren(fragment);renderAccountPending();renderPluginPending();renderGitPending();renderConfigPending();skillsView.syncPending();
+  container.replaceChildren(fragment);renderAccountPending();renderPluginPending();renderConfigPending();skillsView.syncPending();
 }
 async function performMutation(method, params, extras = {}) {
   let envelope;
@@ -1163,7 +1159,7 @@ async function performMutation(method, params, extras = {}) {
       ? await api('/api/runtime/upgrade',{...envelope.params,requestId:envelope.requestId},{timeoutMs:1860000})
       : method.startsWith('app-update/') ? await api('/api/'+method,{...envelope.params,requestId:envelope.requestId},{timeoutMs:method==='app-update/download'?960000:60000})
       : method==='skills/config/write' ? await api('/api/skills/set-enabled',{...envelope.params,requestId:envelope.requestId})
-      : await (method==='config/apply' ? api('/api/config-settings/apply',{...envelope.params,requestId:envelope.requestId}) : method==='git/apply' ? api('/api/git/apply',{...envelope.params,requestId:envelope.requestId}) : method==='plugin/apply' ? api('/api/plugins/apply',{...envelope.params,requestId:envelope.requestId}) : method==='terminal/open' ? api('/api/terminal/open',{...envelope.params,requestId:envelope.requestId}) : ['account/start','account/cancel','account/logout'].includes(method) ? api('/api/'+method,{...envelope.params,requestId:envelope.requestId}) : api('/api/rpc', envelope));
+      : await (method==='config/apply' ? api('/api/config-settings/apply',{...envelope.params,requestId:envelope.requestId}) : method==='plugin/apply' ? api('/api/plugins/apply',{...envelope.params,requestId:envelope.requestId}) : ['account/start','account/cancel','account/logout'].includes(method) ? api('/api/'+method,{...envelope.params,requestId:envelope.requestId}) : api('/api/rpc', envelope));
     if(method==='skills/config/write'&&typeof result?.effectiveEnabled!=='boolean')throw Object.assign(new Error('Codex 未返回生效状态，请刷新技能目录核对。'),{outcome:'unknown'});
     if(method.startsWith('app-update/')){
       const marker=pendingMutations.values().find(row=>row.requestId===envelope.requestId);
@@ -1262,7 +1258,7 @@ function readSkillDirectory(cwd, { forceReload = false, signal } = {}) {
 }
 const slashMenu = createSlashMenu({ document, prompt: $('prompt'), menu: $('slash-menu'), el, readSkills: readSkillDirectory,
   context: () => ({ ...skillContext(), thread: !!state.thread, busy: state.busy, sending: state.sending }),
-  commands: { new: newThread, compact: () => compactThread(), fork: () => forkCurrentThread(), rename: () => openRename(), model: () => openReasoning(), usage: () => route('usage'), account: () => route('account'), terminal: () => showTerminal() },
+  commands: { new: newThread, compact: () => compactThread(), fork: () => forkCurrentThread(), rename: () => openRename(), model: () => openReasoning(), usage: () => route('usage'), account: () => route('account') },
   onDraftChange: () => { autosizePrompt(); updateControls(); } });
 async function releaseUnknownSkill(requestId, current) {
   const marker = scopedPending('skills').find(row => row.requestId === requestId);
@@ -1494,7 +1490,6 @@ function onEvent(message) {
   }
   questionNotifications?.observe(message);
   accountQuota.handleEvent(message);
-  for(const handler of eventSubscribers){try{handler(message);}catch{notice('工具面板未能处理此事件；不会自动重发请求。',true);}}
   if(message.method==='thread/name/updated'){
     const {threadId,threadName}=message.params||{};
     if(typeof threadId!=='string'||(threadName!==null&&typeof threadName!=='string'))return;
@@ -1607,18 +1602,29 @@ async function events() {
     try {
       const response = await fetch('/api/events', { signal: controller.signal, headers: { Authorization: `Bearer ${token}` } }); if (!response.ok) throw new Error(`事件连接失败 (${response.status})`);
       lastEventAt=Date.now();
-      reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = ''; await syncStatus(); delay = 1000;
+      reader = response.body.getReader(); eventsReconnecting = false; const decoder = new TextDecoder(); let buffer = ''; await syncStatus(); delay = 1000;
       offlineSnapshot?.ready();
-      if (reconnected && state.thread) { const current = state.thread; await openThread(current); } reconnected = true;
+      if (reconnected && state.thread) {
+        try { await openThread(state.thread); }
+        catch (error) { notice('已恢复连接，重新载入对话失败：'+error.message, true); }
+      }
+      reconnected = true;
       while (true) {
         // The server sends a keepalive every 15 seconds. A silent socket must not keep stale task notifications alive.
-        const watchdog=setTimeout(()=>controller.abort(),60000);
+        const watchdog=setTimeout(()=>controller.abort(new DOMException('本地事件流已超过 60 秒未收到数据','TimeoutError')),60000);
         let chunk;try{chunk=await reader.read();}finally{clearTimeout(watchdog);}
         const { value, done } = chunk; if (done) throw new Error('事件连接已关闭');lastEventAt=Date.now(); buffer += decoder.decode(value, { stream: true });
         if (buffer.length > 8 * 1024 * 1024) throw new Error('事件超过界面缓冲限制');
         let split; while ((split = buffer.indexOf('\n\n')) >= 0) { const raw = buffer.slice(0, split); buffer = buffer.slice(split + 2); const data = raw.split('\n').filter(l => l.startsWith('data:')).map(l => l.slice(5).trimStart()).join('\n'); if (data) { try { onEvent(JSON.parse(data)); } catch (e) { notice('无法处理事件：' + e.message, true); } } }
       }
-    } catch (e) { threadReadReporter.disconnect(); setConnected(false); if (!state.shuttingDown) activity('连接已断开，正在重连。不会自动重发消息。'); }
+    } catch (error) {
+      threadReadReporter.disconnect();
+      if (!state.shuttingDown) {
+        console.warn('本地事件连接重试', error.name, error.message);
+        eventsReconnecting = true;
+        setConnected(false);
+      }
+    }
     finally { controller.abort(); if (reader) { try { await reader.cancel(); } catch {} } }
     await new Promise(r => setTimeout(r, delay)); delay = Math.min(10000, delay * 2);
   }
@@ -1805,7 +1811,6 @@ function openWindowMenu(name) {
     ['对话', 'home', () => route('chat')],
     ['额度与用量', 'chart', () => route('usage')],
     ['账户', 'user', () => route('account')],
-    ['终端与 Git', 'terminal', showTerminal],
     ['工具活动', 'activity', () => showDetails('tools', true)],
     ['DSH 子代理', 'branch', () => showDetails('dsh', true)],
     null,
@@ -1904,9 +1909,6 @@ document.addEventListener('focusin',scheduleThreadRead);
 document.addEventListener('close',scheduleThreadRead,true);
 document.addEventListener('visibilitychange',()=>{renderThreads();remoteView.expireIfNeeded();syncDshLiveContext();syncDelegationMonitor();syncPendingReconciler();syncRuntimePanelActivity();});
 window.addEventListener('focus',()=>renderThreads());
-const workbench = createWorkbench({ document, state, $, el, api, notice, confirm: text => confirm(text), performMutation, scopedPending, pendingMutations, pendingReconcileErrors, eventSubscribers, showTerminal, openSettings });
-const { terminalControls, showWorkspaceTab, renderGitPending } = workbench;
-$('rail-terminal').addEventListener('click',showTerminal);$('terminal-back').addEventListener('click',closeSettings);
 function pendingAccount(){return scopedPending('account');}
 function renderAccountPending(){const container=$('account-pending'),rows=pendingAccount();container.classList.toggle('hidden',!rows.length);container.replaceChildren();for(const marker of rows){const row=el('div','pending-inline');row.setAttribute('role','status');const status=el('span','pending-inline-status','正在更新账户状态…');const failure=pendingReconcileErrors.get(marker.requestId);if(failure)status.title=failure;row.append(status);container.append(row);}}
 async function accountApi(path,body){

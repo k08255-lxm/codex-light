@@ -32,28 +32,17 @@ try {
   await page.locator('.message-bubble').first().waitFor();
   await page.locator('.markdown-body').filter({hasText: /./}).first().waitFor();
 
-  // Keep the actual xterm renderer alive across all preference changes without starting a shell.
-  const terminal = await page.evaluateHandle(async () => {
-    const { mountTerminal } = await import('/terminal.js');
-    const container = document.createElement('div');
-    container.id = 'appearance-terminal';
-    container.className = 'terminal-container';
-    Object.assign(container.style, { position: 'fixed', left: '-1200px', width: '600px', height: '300px' });
-    document.body.append(container);
-    return mountTerminal({ container, status: document.createElement('div'), subscribe: () => () => {},
-      api() { throw new Error('Appearance test tried to operate a shell'); } });
-  });
   async function appearanceSettings() {
     await page.locator('#rail-settings').click();
     await page.locator('[data-settings-section="appearance"]').click();
   }
   const rgb = hex => 'rgb(' + hex.match(/../g).map(channel => parseInt(channel, 16)).join(', ') + ')';
   for (const [style, theme, colors] of [
-    // Canvas, sidebar, composer, user bubble, text, terminal background.
-    ['codex', 'dark',  ['1a1d22','171a1e','22262c','292f37','e4e8ee','1f2329']],
-    ['codex', 'light', ['fcfcfd','f3f5f7','ffffff','edf0f4','232931','f3f5f7']],
-    ['dsh',   'light', ['ffffff','f9fafb','ffffff','edf3fe','0f1115','ffffff']],
-    ['dsh',   'dark',  ['151517','1b1b1c','2c2c2e','2c2c2e','f9fafb','151517']],
+    // Canvas, sidebar, composer, user bubble, text.
+    ['codex', 'dark',  ['18191a','151617','1f2021','262829','cfd0d1']],
+    ['codex', 'light', ['fcfcfd','f3f5f7','ffffff','edf0f4','232931']],
+    ['dsh',   'light', ['ffffff','f9fafb','ffffff','edf3fe','0f1115']],
+    ['dsh',   'dark',  ['151517','1b1b1c','2c2c2e','2c2c2e','f9fafb']],
   ]) {
     await appearanceSettings();
     await page.locator(`[data-style-choice="${style}"]`).click();
@@ -63,11 +52,9 @@ try {
     const actual = await page.evaluate(() => {
       const css = selector => getComputedStyle(document.querySelector(selector));
       return [css('body').backgroundColor, css('.sidebar').backgroundColor, css('.composer').backgroundColor,
-        css('.message-bubble').backgroundColor, css('.message-bubble').color,
-        css('#appearance-terminal .xterm-viewport').backgroundColor,
-        css('#appearance-terminal .xterm [style*="background-color"]').backgroundColor];
+        css('.message-bubble').backgroundColor, css('.message-bubble').color];
     });
-    assert.deepEqual(actual, [...colors, colors.at(-1)].map(rgb), style + ' ' + theme);
+    assert.deepEqual(actual, colors.map(rgb), style + ' ' + theme);
     if (style === 'dsh') {
       await page.locator('#prompt').click();
       const focus = await page.locator('.composer').evaluate(el => {
@@ -77,9 +64,8 @@ try {
       assert.deepEqual(focus, ['rgb(127, 130, 135)', '1px', 'none'], 'single neutral input border');
     }
     await page.screenshot({ path: path.join(screenshots, style + '-' + theme + '.png') });
-    console.log('PASS', style, theme, 'chat and mounted terminal');
+    console.log('PASS', style, theme, 'chat');
   }
-  await terminal.evaluate(view => view.dispose());
   await page.reload();
   await appearanceSettings();
   for (const selector of ['[data-style-choice="dsh"]', '[data-theme-choice="dark"]']) {
@@ -91,8 +77,39 @@ try {
     return rect.width > 0 && rect.left >= 0 && rect.right <= innerWidth;
   })), true, 'all appearance choices fit at 390px');
   await page.screenshot({ path: path.join(screenshots, 'mobile-picker.png') });
+  await page.locator('[data-style-choice="codex"]').click();
+  await page.evaluate(() => { document.documentElement.dataset.mobileShell = 'android'; });
+  await page.locator('#rail-home').click();
+  await page.locator('#model-trigger').click();
+  await page.locator('#model-list-open').click();
+  await page.locator('.model-option').filter({hasText: '演示六档模型'}).click();
+  await page.locator('#reasoning-range').focus();
+  await page.keyboard.press('Home');
+  for (let step = 0; step < 3; step++) await page.keyboard.press('ArrowRight');
+  assert.equal(await page.locator('#effort').inputValue(), 'xhigh');
+  await page.locator('#reasoning-range').blur();
+  for (const width of [320, 390]) {
+    await page.setViewportSize({width, height: 844});
+    const layout = await page.evaluate(() => {
+      const rect = id => document.getElementById(id).getBoundingClientRect();
+      const dialog = rect('reasoning-popover'), model = rect('model-list-open');
+      const effort = rect('reasoning-label'), range = rect('reasoning-range');
+      return {
+        fits: dialog.left >= 0 && dialog.right <= innerWidth,
+        sameRow: model.right <= effort.left + 1 && Math.abs((model.top + model.bottom - effort.top - effort.bottom) / 2) < 2,
+        targetHeight: Math.min(range.height, model.height, rect('reasoning-reset').height),
+        modelFont: parseFloat(getComputedStyle(document.getElementById('model-list-open')).fontSize)
+      };
+    });
+    assert.ok(layout.fits && layout.sameRow && layout.targetHeight >= 44 && layout.modelFont >= 14,
+      'Android reasoning selector at ' + width + 'px ' + JSON.stringify(layout));
+  }
+  await page.screenshot({path: path.join(screenshots, 'android-reasoning-dark.png')});
+  await page.locator('#model-list-open').click();
+  await page.locator('#model-list-back').click();
+  assert.equal(await page.locator('#reasoning-range').isVisible(), true);
   assert.deepEqual(errors, []);
-  console.log('PASS refresh and 390px appearance picker');
+  console.log('PASS refresh, appearance picker and Android reasoning controls at 320px and 390px');
 } finally {
   await browser?.close();
   await app?.close();

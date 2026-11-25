@@ -59,7 +59,7 @@ export function mountLanAccess(host, { api, notice = () => {} }) {
   });
   linkActions.append(qrButton, show, copy, rotate);
   linkRow.append(link, linkActions, pairing.element);
-  const retry=el(document,'button','btn','重试恢复');retry.type='button';retry.classList.add('hidden');retry.addEventListener('click',async()=>{try{await call('/api/lan/restore',{});}catch{}});
+  const retry=el(document,'button','btn','立即重试');retry.type='button';retry.classList.add('hidden');retry.addEventListener('click',async()=>{try{await call('/api/lan/restore',{});}catch{}});
   const message = el(document, 'p', 'fine'); message.setAttribute('role', 'status');
   panel.append(state, addressRow, linkRow, retry);
 
@@ -140,9 +140,10 @@ export function mountLanAccess(host, { api, notice = () => {} }) {
     const endpoint = currentEndpoint(endpoints);
     const modeLabel = status?.mode === ALL_ADDRESSES ? `正在监听 ${endpoints.length} 个私有 IPv4 地址` : endpoint?.origin || '';
     retry.classList.toggle('hidden', enabled || !status?.persistent);
-    retry.disabled = busy;
+    retry.disabled = busy || !!status?.restoring;
     toggle.checked = desired;
     stateSub.textContent = !status ? '读取中…' : status.restoring ? '正在安全恢复…' : enabled ? `已开启 · ${modeLabel}${status.persistent ? ' · 已记住' : ''}` : status.persistent ? `已保持开启设置 · ${status.restoreError || '等待恢复'}` : status.restoreError || '已关闭';
+    if (status?.retryScheduled && !status.restoring) stateSub.textContent += ' 后台会自动重试。';
 
     if (selectedAddress !== ALL_ADDRESSES && !addresses.some(row => row.address === selectedAddress)) selectedAddress = '';
     const rows = enabled ? endpoints : addresses;

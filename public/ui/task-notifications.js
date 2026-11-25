@@ -110,7 +110,11 @@ export function mountTaskNotifications({document,window,snapshot,title,waiting,o
   });}
   const reconcile=()=>run(()=>{const data=snapshot();monitor.reconcile(data.threads,data.connected);void tryOpen();});
   const refresh=()=>run(()=>{if(snapshot().connected)monitor.refresh();else monitor.disconnected();});
-  toggle.addEventListener('change',()=>run(()=>{bridge.setTaskNotificationsEnabled(toggle.checked);}));
+  toggle.addEventListener('change',()=>run(()=>{
+    if(typeof bridge.setRealtimeNotifications==='function')
+      bridge.setRealtimeNotifications(toggle.checked,document.getElementById('preference-approval')?.checked===true);
+    else bridge.setTaskNotificationsEnabled(toggle.checked);
+  }));
   document.getElementById('mobile-task-system-settings').addEventListener('click',()=>run(()=>bridge.openTaskNotificationSettings()));
   promotionSettings?.addEventListener('click',()=>run(()=>bridge.openLiveUpdateSettings?.()));
   background?.addEventListener('change',()=>run(()=>bridge.setBackgroundNotifications?.(background.checked,document.getElementById('preference-approval')?.checked===true)));

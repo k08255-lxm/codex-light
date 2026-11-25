@@ -17,7 +17,7 @@ try{
  assert.equal(await page.locator('#rail-dsh').count(),0);
  for(const width of [1440,390]){
   await page.setViewportSize({width,height:920});
-  for(const [entry,route] of [['rail-home','chat'],['rail-usage','usage'],['rail-account','account'],['rail-terminal','terminal'],['rail-settings','settings']]){
+  for(const [entry,route] of [['rail-home','chat'],['rail-usage','usage'],['rail-account','account'],['rail-settings','settings']]){
    await page.locator('#'+entry).click();
    const toggle=page.locator('#rail-sidebar');assert.equal(await toggle.isVisible(),true,`${width} ${route} toggle`);
    if(await toggle.getAttribute('aria-expanded')==='true'){if(width<760)await page.locator(route==='settings'?'#settings-sidebar-close':'#close-sidebar').click();else await toggle.click();}

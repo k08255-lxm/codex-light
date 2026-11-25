@@ -46,13 +46,12 @@ test('LAN and windows without the native capability never open a folder picker',
   }
 });
 
-test('WSL leaves Git reads available and disables only the write area',()=>{
+test('WSL disables Windows runtime and DSH configuration panels',()=>{
   const document={createElement:()=>({classList:{toggle(){}},textContent:''})},nodes=new Map();
   const $=id=>{if(!nodes.has(id))nodes.set(id,{inert:false,disabled:false,classList:{toggle(){}},before(){}});return nodes.get(id);};
   const state={runtimeTarget:'wsl'},deps={state,document:{...document,documentElement:{dataset:{}}},$,el:()=>({classList:{toggle(){}}}),dshConfigView:{deactivate(){}}};
   const runtimeSource=app.slice(app.indexOf('function applyRuntimeTarget('),app.indexOf('function createRuntimePanel('));
   new Function(...Object.keys(deps),runtimeSource+';applyRuntimeTarget();')(...Object.values(deps));
-  assert.equal($('terminal-git-workspace').inert,false);assert.equal($('git-write').inert,true);
-  assert.equal($('git-diff-read').disabled,false);assert.equal($('git-status-read').disabled,false);
-  for(const id of ['git-stage-plan','git-unstage-plan','git-commit-plan','git-push-plan','git-plan-apply'])assert.equal($(id).disabled,true);
+  assert.equal($('runtime-panel').inert,true);
+  assert.equal($('dsh-config-root').inert,true);
 });

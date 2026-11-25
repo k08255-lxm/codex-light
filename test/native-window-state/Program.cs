@@ -110,7 +110,7 @@ internal static class NativeWindowTests {
   AssertCornerPreference(handle);
   var windowRect=GetWindowRectangle(handle);
   foreach(var (style,light,background,foregroundColor) in new[]{
-   ("codex",true,0xfcfcfd,0x232931),("codex",false,0x1a1d22,0xe4e8ee),
+   ("codex",true,0xfcfcfd,0x232931),("codex",false,0x18191a,0xcfd0d1),
    ("claude",true,0xfaf9f5,0x202020),("claude",false,0x262624,0xffffff),
    ("dsh",true,0xffffff,0x0f1115),("dsh",false,0x151517,0xf9fafb),
   }){

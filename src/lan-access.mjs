@@ -48,6 +48,7 @@ function tunnelEndpoint(input) {
 
 /** An opt-in listener for paired devices, on a LAN adapter or behind a local HTTPS tunnel connector. */
 export class LanAccess {
+ #retryTimer=null;#retryDelay=5000;
  #revision=0;#stopRevision=0;#handler;#publicPaths;#networkInterfaces;#serverFactory;#session=null;#queue=Promise.resolve();#closed=false;#pairing=null;#preference=null;#restoreError=null;#restoring=false;#monitor=null;#store;#networkIdentity;#networkSnapshot;#beforeListenerClose;#tunnel;
  constructor({handler,publicPaths=['/','/index.html'],networkInterfaces=os.networkInterfaces,serverFactory=listener=>http.createServer(listener),preferenceStore=null,networkIdentity=null,networkSnapshot=null,beforeListenerClose=null,tunnel=false}={}){
   if(typeof handler!=='function'||typeof networkInterfaces!=='function'||typeof serverFactory!=='function')throw new TypeError('LAN handler and providers must be functions');
@@ -71,7 +72,7 @@ export class LanAccess {
   if(this.#tunnel)return endpoint;
   const endpoints=enabled?session.listeners.map(({address,family,origin})=>({address,family,origin,url:`${origin}/#token=${session.token}`})):[];
   const addresses=this.#addresses().map(({name,address,family})=>({name,address,family}));
-  return {...endpoint,mode:enabled?session.mode:null,endpoints,restoring:this.#restoring,persistent:!!this.#preference,persistenceAvailable:!!this.#store&&!!this.#networkIdentity,restoreError:this.#restoreError,addresses,transport:'http',encrypted:false};
+  return {...endpoint,mode:enabled?session.mode:null,endpoints,restoring:this.#restoring,retryScheduled:!!this.#retryTimer,persistent:!!this.#preference,persistenceAvailable:!!this.#store&&!!this.#networkIdentity,restoreError:this.#restoreError,addresses,transport:'http',encrypted:false};
  }
  #serial(run){const next=this.#queue.then(run,run);this.#queue=next.catch(()=>{});return next;}
  #invalidate(session=this.#session){
@@ -129,6 +130,7 @@ export class LanAccess {
    const candidates=mode==='auto'?addresses:addresses.filter(row=>row.address===address);
    if(!candidates.length)throw failure('请选择当前可用的局域网地址','LAN_ADDRESS_UNAVAILABLE');
    if(!Number.isInteger(port)||port<0||port>65535)throw failure('局域网端口无效','LAN_INVALID_PORT');
+   if(persistent&&candidates[0].adapters.size!==1)throw failure('多个网卡共用此地址，暂时无法确认可信网络','LAN_NETWORK_UNVERIFIED',409);
    const network=persistent?await this.#networkIdentity(candidates[0].name):null;
    if(saved&&revision!==this.#revision)throw failure('恢复已取消','LAN_RESTORE_CANCELLED',409);
    if(saved&&saved.network!==network)throw failure('网络已变化；未恢复局域网访问，请重新确认并配对','LAN_NETWORK_CHANGED',409);
@@ -146,8 +148,7 @@ export class LanAccess {
    const listenerFailed=()=>{
     session.failed=true;
     if(this.#session!==session||session.stopping)return;
-    this.#restoreError='监听服务出现错误，已停止访问。请重新开启或恢复。';
-    this.#stop().catch(()=>{this.#restoreError='监听已停用，尚未完成关闭。请重试关闭访问。';});
+    this.#stopForRecovery('监听服务出现错误，访问已暂停。').catch(()=>{this.#restoreError='监听已停用，尚未完成关闭。请重试关闭访问。';});
    };
    server.on('error',listenerFailed);server.on('close',listenerFailed);
    await new Promise((resolve,reject)=>{
@@ -187,6 +188,7 @@ export class LanAccess {
     if(session.failed)throw new Error('LAN listener failed');
     session.token=token;
     this.#preference=preference;this.#restoreError=null;this.#session=session;
+    this.#clearRetry();
     if(persistent||mode==='auto')this.#startMonitor(session);
     return this.status();
    }catch(error){
@@ -198,14 +200,39 @@ export class LanAccess {
     throw failure(this.#tunnel?'无法监听本机回源端口，请检查端口是否已被占用。':mode==='auto'?'无法监听全部局域网地址或共用端口，请检查网卡和端口，或选择单个地址。':'无法监听所选局域网地址或端口','LAN_LISTEN_FAILED',503);
    }
  }
+ #clearRetry(){
+  clearTimeout(this.#retryTimer);this.#retryTimer=null;this.#retryDelay=5000;
+ }
+ #scheduleRestore(revision){
+  if(revision!==this.#revision||this.#closed||this.#session||this.#retryTimer)return;
+  this.#retryTimer=setTimeout(()=>{
+   this.#retryTimer=null;
+   void this.restore().catch(()=>{this.#scheduleRestore(revision);});
+  },this.#retryDelay);
+  this.#retryTimer.unref?.();
+  this.#retryDelay=Math.min(this.#retryDelay*2,60000);
+ }
+ async #stopForRecovery(message){
+  const revision=this.#revision;
+  this.#restoreError=message;
+  await this.#stop();
+  if(this.#preference)this.#scheduleRestore(revision);
+ }
  async restore(){const revision=this.#revision;return this.#serial(async()=>{
-  if(!this.#store||this.#session||this.#closed)return this.status();
+  if(revision!==this.#revision||!this.#store||this.#session||this.#closed)return this.status();
   this.#restoring=true;
   try{
    const saved=await this.#store.read();
-   if(revision===this.#revision){this.#preference=saved;if(saved)await this.#enable({address:saved.address,port:saved.port,persistent:true},saved,revision);}
+   if(revision===this.#revision){
+    this.#preference=saved;
+    if(saved)await this.#enable({address:saved.address,port:saved.port,persistent:true},saved,revision);
+    else {this.#clearRetry();this.#restoreError=null;}
+   }
   }catch(error){
-   if(error.code!=='LAN_RESTORE_CANCELLED')this.#restoreError=error.code==='LAN_NETWORK_CHANGED'?'网络已变化，未自动恢复。请在可信网络重新启用并配对。':error.code==='LAN_ADDRESS_UNAVAILABLE'?'原网络地址不可用，未自动恢复。请重新选择网络地址。':error.code==='LAN_LISTEN_FAILED'?'原端口不可用，未自动更换端口。请释放端口或重新配对。':'安全恢复失败，未开启访问；请重新确认设置。';
+   if(revision===this.#revision){
+    this.#restoreError=error.code==='LAN_NETWORK_CHANGED'?'等待原可信网络恢复。':error.code==='LAN_ADDRESS_UNAVAILABLE'?'等待原网络地址恢复。':error.code==='LAN_LISTEN_FAILED'?'等待原监听端口可用。':'等待重新核验已保存的局域网设置。';
+    this.#scheduleRestore(revision);
+   }
   }finally{this.#restoring=false;}
   return this.status();
  });}
@@ -230,7 +257,7 @@ export class LanAccess {
      if(await this.#networkIdentity(session.listeners[0].name)!==this.#preference.network)throw new Error('network changed');
     }
    }catch{
-    await this.#stop();this.#restoreError='网络环境变化或无法验证，访问已关闭。请重新确认后开启。';
+    await this.#stopForRecovery(this.#preference?'网络暂时无法验证，等待原可信网络恢复。':'网络环境变化或无法验证，访问已关闭。请重新确认后开启。');
    }
   }).catch(()=>{});},15000);this.#monitor.unref?.();
  }
@@ -255,8 +282,8 @@ export class LanAccess {
    catch(error){await this.#stop();try{await this.#store?.write(null);this.#preference=null;}catch{}this.#restoreError='令牌轮换未能安全保存，当前访问已关闭。请成功关闭恢复设置后重新配对；未清除前旧配对可能在重启时恢复。';throw error;}
   });
  }
- disable(){this.#revision++;this.#stopRevision++;this.#invalidate();return this.#serial(async()=>{await this.#stop();try{await this.#store?.write(null);this.#preference=null;this.#restoreError=null;}catch(error){this.#restoreError='当前访问已关闭，但恢复设置清除失败；重启前请重试关闭。';throw error;}return this.status();});}
- close(){this.#revision++;this.#closed=true;this.#invalidate();return this.#serial(async()=>{await this.#stop();return this.status();});}
+ disable(){this.#revision++;this.#stopRevision++;this.#clearRetry();this.#invalidate();return this.#serial(async()=>{await this.#stop();this.#clearRetry();try{await this.#store?.write(null);this.#preference=null;this.#restoreError=null;}catch(error){this.#restoreError='当前访问已关闭，但恢复设置清除失败；重启前请重试关闭。';throw error;}return this.status();});}
+ close(){this.#revision++;this.#closed=true;this.#clearRetry();this.#invalidate();return this.#serial(async()=>{await this.#stop();return this.status();});}
  verifyRelayProof(nonce,proof){
   const token=this.#session?.token;
   if(!this.#tunnel||!token||!validNonce(nonce)||typeof proof!=='string'||!/^[a-f0-9]{64}$/.test(proof))return false;

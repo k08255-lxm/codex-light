@@ -112,3 +112,41 @@ test('mobile settings distinguish Android promotion and ordinary delivery', () =
   assert.match(text.textContent, /Android 16 以下/);
   assert.equal(settings.hidden, true);
 });
+
+test('the Android real-time switch passes the independent question preference and stops task updates when off', () => {
+  const document = createDocument(), window = new EventTarget(), received = [], switches = [];
+  let enabled = false;
+  for (const id of ['mobile-task-notifications', 'mobile-task-enabled', 'mobile-task-status',
+    'mobile-task-system-settings', 'preference-approval']) {
+    const node = document.createElement('input');
+    node.id = id;
+    document.body.append(node);
+  }
+  window.setInterval = () => 0;
+  window.CodexLightNative = {
+    getTaskNotificationStatus: () => JSON.stringify({supported: true, enabled,
+      reason: enabled ? 'ready' : 'disabled', supportsTaskPhase: true}),
+    setTaskNotificationsEnabled: () => assert.fail('used legacy bridge'),
+    setRealtimeNotifications(on, questions) {
+      switches.push([on, questions]);
+      enabled = on;
+      window.dispatchEvent(new Event('codexlight-task-notification-status'));
+    },
+    updateTaskNotification: data => received.push(JSON.parse(data)), openTaskNotificationSettings() {}
+  };
+  const controller = mountTaskNotifications({document, window, snapshot: () => ({
+    connected: true, threads: [{threadId: 'thread1', activeTurnId: 'turn1'}]
+  }), notice: assert.fail});
+  const toggle = document.getElementById('mobile-task-enabled');
+  document.getElementById('preference-approval').checked = true;
+  toggle.checked = true;
+  toggle.dispatch('change');
+  assert.equal(received.at(-1).state, 'running');
+  document.getElementById('preference-approval').checked = false;
+  toggle.checked = false;
+  toggle.dispatch('change');
+  const count = received.length;
+  controller.observe({method: 'turn/completed', params: {threadId: 'thread1', turn: {id: 'turn1', status: 'completed'}}});
+  assert.equal(received.length, count);
+  assert.deepEqual(switches, [[true, true], [false, false]]);
+});

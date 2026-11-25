@@ -31,7 +31,7 @@ internal class CaptionWindow : Form {
  Color CaptionSurface=>SystemInformation.HighContrast?SystemColors.Window:visualStyle switch {
   "claude"=>lightTheme?Color.FromArgb(250,249,245):Color.FromArgb(38,38,36),
   "dsh"=>lightTheme?Color.White:Color.FromArgb(21,21,23),
-  _=>lightTheme?Color.FromArgb(252,252,253):Color.FromArgb(26,29,34),
+  _=>lightTheme?Color.FromArgb(252,252,253):Color.FromArgb(24,25,26),
  };
  protected bool HasIntegratedCaption=>true;
  protected void RefreshCaptionLayout(){
@@ -50,7 +50,7 @@ internal class CaptionWindow : Form {
   if(!IsCaptionStyle(style))throw new ArgumentException("Invalid caption style",nameof(style));
   lightTheme=light;visualStyle=style;BackColor=CaptionSurface;
   ForeColor=SystemInformation.HighContrast?SystemColors.WindowText:style switch {
-   "codex"=>light?Color.FromArgb(35,41,49):Color.FromArgb(228,232,238),
+   "codex"=>light?Color.FromArgb(35,41,49):Color.FromArgb(207,208,209),
    "dsh"=>light?Color.FromArgb(15,17,21):Color.FromArgb(249,250,251),
    _=>light?Color.FromArgb(32,32,32):Color.White,
   };

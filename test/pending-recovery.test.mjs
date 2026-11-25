@@ -5,40 +5,22 @@ import {PendingMutations,lookupDecision} from '../public/submissions.js';
 import {threadProjectPath} from '../public/projects.js';
 const app=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
 const INSTANCE='a'.repeat(32),OTHER='b'.repeat(32),NOW=1794400000000;
-// Builds the real workbench module around a minimal DOM, so recovery uses its actual terminal semantics.
-// The terminal factory is injected; a pre-existing process/view is established through the module's
-// own recovery entry point, exactly as a previous reconciliation would.
-async function recoveryWorkbench({processId,view,$,createTerminalView,openedOnVisiblePage=false}){
- const {createWorkbench}=await import('../public/ui/workbench-view.js');
- const stub=()=>({addEventListener(){},classList:{add(){},remove(){},toggle(){},contains:()=>false},setAttribute(){},replaceChildren(){},append(){},textContent:'',disabled:false,title:''});
- const nodes=new Map();const handlers=new Map();
- const lookup=id=>{if(id==='terminal-page'||id==='terminal-cwd')return $(id);if(!nodes.has(id)){const node=stub();node.addEventListener=(type,fn)=>handlers.set(id+':'+type,fn);nodes.set(id,node);}return nodes.get(id);};
- // Every view the module mounts goes through the harness factory, so created/restored/disposed are observed.
- const wb=createWorkbench({document:{createDocumentFragment:stub},state:{connected:true,cwd:'/project'},$:lookup,el:stub,api:async()=>{},notice(){},confirm:()=>false,performMutation:async()=>{},scopedPending:()=>[],pendingMutations:{storageError:null},pendingReconcileErrors:new Map(),eventSubscribers:new Set(),showTerminal(){},openSettings(){},
-  loadTerminal:async()=>({mountTerminal:({cwd})=>{createTerminalView(cwd);return view;}})});
- if(processId)await wb.adoptRecovered({processId},null,()=>false);
- // A mounted view without a process = the user clicked Open and the ledgered open has not settled.
- // Opening is only possible on the visible terminal page (the real precondition for clicking Open).
- if(view&&!processId&&openedOnVisiblePage){view.open=()=>new Promise(()=>{});handlers.get('terminal-open:click')();await new Promise(resolve=>setTimeout(resolve,0));}
- return wb;
-}
 async function harness(method,params={},options={}){
  const storage={raw:null,getItem(){return this.raw;},setItem(key,value){this.raw=value;},removeItem(){this.raw=null;}};
  const original=new PendingMutations(storage,{now:()=>NOW,uuid:()=> '00000000-0000-4000-8000-000000000001'});
  const envelope=original.begin(INSTANCE,method,params);original.mark(envelope.requestId,'unknown');
  const ledger=options.restored?new PendingMutations(storage):original;
- const marker=ledger.values()[0],calls={draft:[],history:[],lists:0,restored:[],created:[],notices:[],reasoning:[],permissions:[],requestRenders:0,optimistic:[]};
+ const marker=ledger.values()[0],calls={draft:[],history:[],lists:0,notices:[],reasoning:[],permissions:[],requestRenders:0,optimistic:[]};
  const state={connected:true,serverInstance:INSTANCE,thread:null,cwd:'/project',loadingThread:false,openGeneration:0,busy:false,turnId:null,terminalTurns:new Set(),dshReadErrors:new Map(),dshOpenDetails:new Set(),settingsPage:'general',ledger:{merge(){},activate(){}},...options.state};
- const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,{textContent:'',classList:{contains:()=>id==='terminal-page'&&options.hidden!==false,add(){} }});return nodes.get(id);};
- const view={restore:async id=>{calls.restored.push(id);if(options.restoreError)throw Error('snapshot offline');},dispose:()=>calls.disposed=true};
+ const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,{textContent:'',classList:{contains:()=>false,add(){} }});return nodes.get(id);};
  const contexts=new Map();if(options.context)contexts.set(marker.requestId,options.context);
- const deps={sessionControls:{load:async id=>{calls.permissions.push(id);await options.loadPermission?.(id,state);}},composer:{resolveOptimistic:(...args)=>calls.optimistic.push(args)},state,pendingMutations:ledger,allPendingRecords:()=>ledger.values(),mutationContexts:contexts,pendingReadGeneration:0,pendingReconcileErrors:new Map(),lookupDecision,pendingLedgerSignature:()=>'',pendingReconcilerSignature:'',renderPendingMutations(){},updateControls(){},noteLedgerChanged(){},notice:(...args)=>calls.notices.push(args),runtimePanel:{refresh(){}},refreshAccount:async()=>{},remoteControls(){},terminalControls(){},$,
-  workbench:await recoveryWorkbench({processId:options.processId||null,view:options.view?view:null,$,createTerminalView:cwd=>{calls.created.push(cwd);return view;},openedOnVisiblePage:options.openedView===true}),clearSubmittedDraft:value=>calls.draft.push(value),restoreThreadReasoning:value=>calls.reasoning.push(value),dshTasks:{reset(){}},renderDshConnection(){},syncDshLiveContext(){},renderDshTasks(){},renderRequests(){calls.requestRenders++;},activity(){},
+ const deps={sessionControls:{load:async id=>{calls.permissions.push(id);await options.loadPermission?.(id,state);}},composer:{resolveOptimistic:(...args)=>calls.optimistic.push(args)},state,pendingMutations:ledger,allPendingRecords:()=>ledger.values(),mutationContexts:contexts,pendingReadGeneration:0,pendingReconcileErrors:new Map(),lookupDecision,pendingLedgerSignature:()=>'',pendingReconcilerSignature:'',renderPendingMutations(){},updateControls(){},noteLedgerChanged(){},notice:(...args)=>calls.notices.push(args),runtimePanel:{refresh(){}},refreshAccount:async()=>{},remoteControls(){},$,
+  clearSubmittedDraft:value=>calls.draft.push(value),restoreThreadReasoning:value=>calls.reasoning.push(value),dshTasks:{reset(){}},renderDshConnection(){},syncDshLiveContext(){},renderDshTasks(){},renderRequests(){calls.requestRenders++;},activity(){},
   loadThreads:async()=>{calls.lists++;if(options.loadThreads)await options.loadThreads();},loadItems:async(...args)=>{calls.history.push(args);if(options.loadItems)await options.loadItems();}};
  const start=app.indexOf('function pendingMarkerExists('),end=app.indexOf('function handlePendingReconcileError(',start);assert.ok(start>=0&&end>start);
- const functions=new Function('threadProjectPath',...Object.keys(deps),`${app.slice(start,end)};return {handle:handlePendingReconcileResult,invalidate(){pendingReadGeneration++;},terminal(){return workbench.snapshot();}};`)(threadProjectPath,...Object.values(deps));
+ const functions=new Function('threadProjectPath',...Object.keys(deps),`${app.slice(start,end)};return {handle:handlePendingReconcileResult,invalidate(){pendingReadGeneration++;}};`)(threadProjectPath,...Object.values(deps));
  const response=result=>({serverInstance:INSTANCE,method,state:'succeeded',result});
- return{...functions,state,calls,ledger,marker,envelope,response,view};
+ return{...functions,state,calls,ledger,marker,envelope,response};
 }
 test('new thread recovery adopts only the matching unassigned page and never sends its draft',async()=>{
  const h=await harness('thread/start',{cwd:'/project'});const thread={id:'created',cwd:'/project'};
@@ -67,15 +49,11 @@ test('an already completed or newer running turn cannot be resurrected by lookup
  const completed=await harness('turn/start',{threadId:'current'},{state:{thread:{id:'current'},terminalTurns:new Set(['old'])}});await completed.handle(completed.marker,completed.response({turn:{id:'old',status:'inProgress'}}));assert.equal(completed.state.busy,false);assert.equal(completed.state.turnId,null);
  const newer=await harness('turn/start',{threadId:'current'},{state:{thread:{id:'current'},busy:true,turnId:'newer'}});await newer.handle(newer.marker,newer.response({turn:{id:'old',status:'completed'}}));assert.equal(newer.state.busy,true);assert.equal(newer.state.turnId,'newer');
 });
-test('terminal recovery retains its original process and restores only when the terminal page is visible',async()=>{
- for(const hidden of [true,false]){
-  const h=await harness('terminal/open',{cwd:'/original'},{hidden,view:true});await h.handle(h.marker,h.response({processId:'original-process'}));assert.equal(h.terminal().processId,'original-process');assert.equal(h.terminal().cwd,'/original');assert.deepEqual(h.calls.restored,hidden?[]:['original-process']);assert.deepEqual(h.calls.created,hidden?[]:['/original']);assert.equal(h.ledger.values().length,0);
- }
- const failed=await harness('terminal/open',{cwd:'/project'},{hidden:false,view:true,restoreError:true});await assert.rejects(failed.handle(failed.marker,failed.response({processId:'original'})),/snapshot offline/);assert.equal(failed.ledger.values().length,1);assert.equal(failed.terminal().processId,'original');
- const existing=await harness('terminal/open',{}, {processId:'newer'});await assert.rejects(existing.handle(existing.marker,existing.response({processId:'older'})),/另一个终端/);assert.equal(existing.terminal().processId,'newer');assert.equal(existing.ledger.values().length,1);
-});
-test('a known unexecuted terminal open removes the unusable local view without inventing a process',async()=>{
- const h=await harness('terminal/open',{}, {view:true,openedView:true,hidden:false});h.calls.created.length=0;await h.handle(h.marker,{serverInstance:INSTANCE,method:'terminal/open',state:'failed',outcome:'notExecuted'});assert.equal(h.ledger.values().length,0);assert.equal(h.terminal().view,null);assert.equal(h.calls.disposed,true);assert.equal(h.terminal().processId,null);
+test('legacy terminal records settle and identify the existing process',async()=>{
+ const h=await harness('terminal/open',{});
+ await h.handle(h.marker,h.response({processId:'original-process'}));
+ assert.match(h.calls.notices[0][0],/original-process/);
+ assert.equal(h.ledger.values().length,0);
 });
 test('obsolete instances, removed markers and late async recovery cannot settle current state',async()=>{
  const stale=await harness('thread/start');stale.state.serverInstance=OTHER;await stale.handle(stale.marker,stale.response({thread:{id:'old',cwd:'/project'}}));assert.equal(stale.state.thread,null);assert.equal(stale.ledger.values().length,1);

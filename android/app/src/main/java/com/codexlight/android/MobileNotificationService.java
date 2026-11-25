@@ -43,6 +43,27 @@ public final class MobileNotificationService extends Service {
     static String status() { return state; }
     static boolean ownsNotifications() { return started && "active".equals(state); }
     static void setQuestionAlerts(boolean enabled) { backgroundQuestions = enabled; }
+    static void saveQuestionAlerts(Context context, ServerConfig config, boolean enabled) {
+        android.content.SharedPreferences prefs = context.getSharedPreferences(CHANNEL, MODE_PRIVATE);
+        if (config.sourceKey().equals(prefs.getString("source", ""))) prefs.edit().putBoolean("questions", enabled).apply();
+        setQuestionAlerts(enabled);
+    }
+
+    static void remember(Context context, ServerConfig config, boolean enabled, boolean questions) {
+        android.content.SharedPreferences.Editor editor = context.getSharedPreferences(CHANNEL, MODE_PRIVATE).edit();
+        if (enabled) editor.putString("source", config.sourceKey()).putBoolean("questions", questions);
+        else editor.remove("source");
+        editor.apply();
+        setQuestionAlerts(questions);
+    }
+
+    static void resumeSaved(Context context, ServerConfig config) {
+        if (started || "connecting".equals(state)) return;
+        android.content.SharedPreferences saved = context.getSharedPreferences(CHANNEL, MODE_PRIVATE);
+        if (!config.sourceKey().equals(saved.getString("source", ""))) return;
+        backgroundQuestions = saved.getBoolean("questions", true);
+        setEnabled(context, config, true);
+    }
 
     // WebView events wake the authoritative feed while the app is visible. After the
     // WebView pauses, the same service continues polling without relying on JS timers.
@@ -78,6 +99,8 @@ public final class MobileNotificationService extends Service {
             return;
         }
         if (config == null || !config.eligible()) return;
+        if (config.sourceKey().equals(targetOrigin) && config.getToken().equals(targetToken)
+                && (started || "connecting".equals(state))) return;
         targetOrigin = config.sourceKey(); targetToken = config.getToken();
         intent.putExtra("remoteHostId",config.getRemoteHostId()).putExtra("scheme",config.getScheme()).putExtra("host",config.getHost()).putExtra("port",config.getPort()).putExtra("token",config.getToken());
         state = "connecting";
@@ -109,6 +132,7 @@ public final class MobileNotificationService extends Service {
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent == null || STOP.equals(intent.getAction())) {
+            if (intent != null) getSharedPreferences(CHANNEL, MODE_PRIVATE).edit().remove("source").apply();
             state = "off";
             stopSelf();
             return START_NOT_STICKY;
@@ -227,6 +251,11 @@ public final class MobileNotificationService extends Service {
         refreshPending = false;
         if (SystemClock.elapsedRealtime() >= deadline) { expireSession(); return; }
         if (!tasks.permissionGranted()) { state = "permission_required"; stopSelf(); return; }
+        // A foreground event received during this request is newer than its snapshot.
+        if (refresh && data != null && data.optBoolean("connected")) {
+            handler.post(nextPoll);
+            return;
+        }
         if (data == null || !data.optBoolean("connected")) {
             if ("active".equals(state)) tasks.disconnected();
             state = data == null ? error : "engine_offline";
@@ -273,7 +302,7 @@ public final class MobileNotificationService extends Service {
             if (remember(knownFinished,key) && !baseline && !currentThreads.contains(task.optString("threadId"))) tasks.updateFromFeed(task);
         }
         tasks.reconcile(currentThreads);
-        handler.postDelayed(nextPoll,refresh ? 100L : 5_000L);
+        handler.postDelayed(nextPoll,5_000L);
     }
 
     private static boolean remember(Set<String> seen, String key) {

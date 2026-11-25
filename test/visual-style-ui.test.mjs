@@ -8,7 +8,7 @@ const rule=(selector,...patterns)=>{for(const pattern of patterns)assert.match(c
 
 test('all four codex/claude light/dark token sets use the fixed palette',()=>{
  const sets=[
-  [':root {',['#1a1d22','#171a1e','#22262c','#2a2f36','#303944','#e4e8ee','#bdc4ce','#a1abb9','#aac4e7'],'#17283c'],
+  [':root {',['#18191a','#151617','#1f2021','#27292a','#303234','#cfd0d1','#bcbebe','#b2b4b5','#b4c2cc'],'#22292e'],
   [':root[data-visual-style="claude"]',['#262624','#2d2c29','#232320','#32312d','#383730','#403c32','#eceae2','#c2beb1','#aaa597','#d99b79'],'#252420'],
   [':root[data-theme="light"]',['#fcfcfd','#f3f5f7','#f5f6f8','#ffffff','#e3e9ef','#232931','#4f5865','#606b78','#435e80'],'#ffffff'],
   [':root[data-theme="light"][data-visual-style="claude"]',['#faf9f5','#f0eee6','#e9e6dc','#f4f2eb','#ffffff','#e7e3d7','#30302b','#5c5a51','#716e62','#a24c31'],'#ffffff'],

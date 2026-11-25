@@ -425,7 +425,6 @@
   :root[data-mobile-shell="android"] #rail-sidebar::after { content: "目录"; }
   :root[data-mobile-shell="android"] #rail-home::after { content: "对话"; }
   :root[data-mobile-shell="android"] #rail-usage::after { content: "用量"; }
-  :root[data-mobile-shell="android"] #rail-terminal::after { content: "终端"; }
   :root[data-mobile-shell="android"] #rail-account::after { content: "账户"; }
   :root[data-mobile-shell="android"] #rail-settings::after { content: "设置"; }
   :root[data-mobile-shell="android"] .rail-btn.active {
@@ -476,9 +475,54 @@
   :root[data-mobile-shell="android"] .stop {
     border-radius: 999px;
   }
+  :root[data-mobile-shell="android"] .model-control { position: static; }
   :root[data-mobile-shell="android"] .model-control .reasoning-popover {
     right: 0;
-    max-width: min(264px, calc(100vw - 24px));
+    width: min(20rem, 100%);
+    max-width: 100%;
+    padding: 4px 14px 6px;
+  }
+  :root[data-mobile-shell="android"] #reasoning-controls:not(.hidden) {
+    display: grid;
+    grid-template-columns: minmax(0,1fr) auto;
+    align-items: center;
+  }
+  :root[data-mobile-shell="android"] #model-list-open {
+    grid-area: 1 / 1;
+    justify-content: flex-start;
+    gap: 4px;
+    padding: 0;
+    height: 44px;
+    font-size: .9375rem;
+    color: var(--text);
+  }
+  :root[data-mobile-shell="android"] .reasoning-heading {
+    grid-area: 1 / 2;
+    display: flex;
+    align-items: center;
+    height: 44px;
+  }
+  :root[data-mobile-shell="android"] .reasoning-heading button {
+    width: 44px; height: 44px; justify-content:center; align-items:center;
+  }
+  :root[data-mobile-shell="android"] .reasoning-heading output { font-size: .875rem; }
+  :root[data-mobile-shell="android"] .reasoning-track {
+    grid-column: 1 / -1;
+    height: 44px; margin: 0;
+    background: transparent;
+  }
+  :root[data-mobile-shell="android"] .reasoning-track::before {
+    content: ""; position: absolute; inset: calc(50% - 4px) 0; border-radius: 4px;
+    background: linear-gradient(to right,var(--reasoning-blue) var(--effort-fill),var(--reasoning-empty) var(--effort-fill));
+  }
+  :root[data-mobile-shell="android"] .reasoning-track.unknown::before { background: var(--reasoning-empty); }
+  :root[data-mobile-shell="android"] .reasoning-track:has(input:disabled):not(:focus-within).unknown { display: none; }
+  :root[data-mobile-shell="android"] #reasoning-range { height: 44px; display:block; }
+  :root[data-mobile-shell="android"] #reasoning-range::-webkit-slider-thumb {
+    width: 28px; height: 22px; margin-top: 1px; border-radius: 12px;
+  }
+  :root[data-mobile-shell="android"] .reasoning-fast {
+    grid-column: 1 / -1; margin-top: 2px; min-height: 44px; font-size: .875rem; padding-top: 2px;
   }
   :root[data-mobile-shell="android"][data-keyboard="open"] .rail {
     display: none;

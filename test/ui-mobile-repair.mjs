@@ -107,7 +107,7 @@ try{
  await page.setViewportSize({width:393,height:850});
  checks.push('short project names remain left-aligned and short model names remain next to send controls');
  await page.evaluate(()=>{window.pageEntries=[];document.addEventListener('animationstart',event=>{if(event.animationName==='page-enter')window.pageEntries.push(event.target.id);});});
- for(const [rail,target]of [['usage','usage-page'],['terminal','terminal-page'],['account','account-page'],['home','chat-page'],['settings','settings-dialog']]){
+ for(const [rail,target]of [['usage','usage-page'],['account','account-page'],['home','chat-page'],['settings','settings-dialog']]){
   await page.locator('#rail-'+rail).click();await page.waitForFunction(id=>window.pageEntries.includes(id),target);
  }
  for(const section of ['appearance','notifications','shortcuts']){

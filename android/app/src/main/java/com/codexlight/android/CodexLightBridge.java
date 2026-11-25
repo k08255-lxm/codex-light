@@ -77,6 +77,12 @@ public class CodexLightBridge {
     }
 
     @JavascriptInterface
+    public void setRealtimeNotifications(boolean enabled, boolean questionsEnabled) {
+        if (activity instanceof MainActivity) activity.runOnUiThread(
+            () -> ((MainActivity) activity).setRealtimeNotifications(enabled, questionsEnabled));
+    }
+
+    @JavascriptInterface
     public void openTaskNotificationSettings() {
         if (activity instanceof MainActivity && ((MainActivity) activity).trustedTaskNotificationPage()) {
             activity.runOnUiThread(() -> ((MainActivity) activity).openTaskNotificationSettings());
@@ -218,7 +224,7 @@ public class CodexLightBridge {
 
     @JavascriptInterface
     public String getAppVersion() {
-        return "0.4.16";
+        return "0.4.17";
     }
 
     @JavascriptInterface

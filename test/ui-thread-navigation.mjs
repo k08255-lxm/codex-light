@@ -108,7 +108,7 @@ try {
   const runningId = pendingThreadId; pendingThreadId = null;
   await page.locator('#refresh').click();
   await page.locator('.project-group-thread').waitFor();
-  for (const [rail, stage] of [['usage', 'usage-page'], ['account', 'account-page'], ['terminal', 'terminal-page']]) {
+  for (const [rail, stage] of [['usage', 'usage-page'], ['account', 'account-page']]) {
     await page.locator('#rail-' + rail).click();
     await page.locator('#' + stage).waitFor();
     await check(`project sidebar closes by default on ${rail}`, async () => assert.equal(await page.locator('#rail-sidebar').getAttribute('aria-expanded'), 'false'));

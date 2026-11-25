@@ -240,7 +240,7 @@ internal sealed class MainWindow : CaptionWindow {
 
   var display=new ToolStripMenuItem("视图(&V)"){AccessibleName="视图"};
   // Stable element IDs keep the native menu independent of translated web labels.
-  foreach(var (label,target) in new[]{("对话","rail-home"),("用量与性能","rail-usage"),("账户","rail-account"),("终端与 Git","rail-terminal"),("工具活动","toggle-details"),("DSH 子代理","rail-dsh"),("设置","rail-settings")}){var id=target;display.DropDownItems.Add(label,null,async(_,_)=>await ClickWebAsync(id));}
+  foreach(var (label,target) in new[]{("对话","rail-home"),("用量与性能","rail-usage"),("账户","rail-account"),("工具活动","toggle-details"),("DSH 子代理","rail-dsh"),("设置","rail-settings")}){var id=target;display.DropDownItems.Add(label,null,async(_,_)=>await ClickWebAsync(id));}
   var help=new ToolStripMenuItem("帮助(&H)"){AccessibleName="帮助"};help.Click+=async(_,_)=>await ClickWebAsync("menu-help");
   fileMenu=file;viewMenu=display;
   CaptionMenu.Items.AddRange(new ToolStripItem[]{file,display,help});

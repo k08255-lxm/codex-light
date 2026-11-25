@@ -16,7 +16,7 @@
   --terminal-background: var(--code-bg);
   --terminal-foreground: var(--text);
   --composer-bg: var(--surface);
-  --composer-focus: #697f9b;
+  --composer-focus: var(--focus);
   --composer-shadow: 0 2px 8px rgb(5 10 18 / .16);
   --syntax-keyword:#c6b4e9; --syntax-string:#a2cbb4; --syntax-number:#dbb997; --syntax-comment:#a1aab7;
 }
