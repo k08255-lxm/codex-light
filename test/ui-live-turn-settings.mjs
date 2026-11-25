@@ -126,6 +126,29 @@ test('model and slider clicks update the owned running turn in order and carry t
  assert.equal(next.threadId,owner.threadId);assert.equal(next.model,'demo-five');assert.equal(next.effort,'max');
 });
 
+test('steering and reopening the thread preserve its new effort when history still reports the original one',async t=>{
+ const f=await fixture(t),{page}=f,owner=await startSix(f);
+ await page.locator('#model-trigger').click();
+ const [changed]=await Promise.all([onResponse(page,update),clickEffort(page,3)]);
+ assert.equal(changed.status(),200,await changed.text());
+ assert.equal(f.effects.at(-1).result.status,'applied');
+ await page.keyboard.press('Escape');
+ await page.locator('#prompt').fill('补充当前任务');
+ const [steered]=await Promise.all([onResponse(page,'turn/steer'),page.locator('#send').click()]);
+ assert.equal(steered.status(),200,await steered.text());
+ const thread=f.client.threads.get(owner.threadId);
+ assert.equal(thread.reasoningEffort,'ultra');
+ await finish(f,owner);
+ await page.getByRole('button',{name:f.other.name,exact:true}).click();
+ await page.waitForFunction(()=>document.querySelector('#model').value==='demo');
+ await page.getByRole('button',{name:thread.name,exact:true}).click();
+ await page.waitForFunction(()=>document.querySelector('#model').value==='demo-six');
+ assert.equal(await page.locator('#reasoning-label').textContent(),'极高');
+ const next=await send(page,'下一轮继续使用极高');
+ assert.equal(next.threadId,owner.threadId);
+ assert.equal(next.effort,'xhigh');
+});
+
 test('a late update receipt stays with the original turn after the user opens another conversation',async t=>{
  const entered=deferred(),gate=deferred();
  const f=await fixture(t,{beforeUpdate:async()=>{entered.resolve();await gate.promise;}});

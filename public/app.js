@@ -1383,7 +1383,8 @@ function chooseModel(value) {
 }
 function restoreThreadReasoning(result, override) {
  sessionControls.restore(result.sessionPermission,result.serviceTier);
- const choice=nextTurnChoices.get(result.thread?.id);
+ // A history read can still report the turn's starting settings after a live change.
+ const choice=nextTurnChoices.get(state.thread.id);
  const model=choice?.model??(typeof result.model==='string'?result.model:'');
  if(model&&![...$('model').options].some(option=>option.value===model))$('model').append(new Option(model+'（目录外）',model));
  $('model').value=model;state.reasoning=restoredReasoning(choice?null:result.reasoningEffort);if(choice||override)state.reasoning.override=choice?choice.effort:override;populateEfforts();
