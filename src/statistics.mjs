@@ -37,6 +37,7 @@ function cleanRow(raw){
  const row=blankRow(raw.threadId,raw.turnId,'light-events');
  Object.assign(row,{timestamp:iso(raw.timestamp),startedAt:iso(raw.startedAt),completedAt:iso(raw.completedAt),model:id(raw.model),provider:providerId(raw.provider),status:raw.status,submissionCount:n(raw.submissionCount)??0,tokens:tokens(raw.tokens),tokensComplete:raw.tokensComplete===true,outputTokensComplete:raw.outputTokensComplete===true,unknownTokenFields:TOKEN_KEYS.filter(key=>raw.unknownTokenFields?.includes(key)),performance:Object.fromEntries(METRICS.map(key=>[key,metric(raw.performance?.[key])]))});
  row.account=publicAccountIdentity(raw.account);if(raw.tokenSource==='verified-local-turn')row.tokenSource='verified-local-turn';
+ if(n(raw.context?.used)!==null&&n(raw.context?.window)>0)row.context={used:raw.context.used,window:raw.context.window};
  return row;
 }
 function addUsage(row,delta){for(const key of TOKEN_KEYS){const value=n(delta[key]);if(value===null){row.tokens[key]=null;if(!row.unknownTokenFields.includes(key))row.unknownTokenFields.push(key);row.tokensComplete=false;}else if(!row.unknownTokenFields.includes(key)){row.tokens[key]=row.tokens[key]===null?value:plus(row.tokens[key],value);if(row.tokens[key]===null){row.unknownTokenFields.push(key);row.tokensComplete=false;}}}}
@@ -53,12 +54,16 @@ function turnThroughput(row){
 }
 function cost(row,pricing,references){
  let estimate=null,reference=null;
- if(row.provider&&row.model&&row.model.length<=200){try{
+ if(row.model&&row.model.length<=200){try{
   const key=JSON.stringify([row.provider,row.model]);
   if(!references.has(key))references.set(key,pricing.get(row.model,row.provider));
   reference=references.get(key);estimate=estimateTokenCost({...row.tokens,model:row.model,provider:row.provider},reference);
  }catch{/* Invalid model/provider or schema cannot be priced. */}}
- return {kind:'reference-estimate',currency:'USD',usd:estimate?.complete?estimate.usd:estimate?.knownUsd??null,complete:estimate?.complete===true&&row.tokensComplete===true,tokenSource:row.tokenSource||'observed',components:estimate?.components||[],pricingComplete:estimate?.complete===true,usageComplete:row.tokensComplete===true,reason:estimate?.reason||(estimate?.complete&&!row.tokensComplete?'计价分项已齐全，但观察记录未确认覆盖整个回合':null)||(!row.model||!row.provider?'模型或路由未知':null),reference:reference?{source:reference.source,catalogProvider:reference.catalogProvider||null,catalogModel:reference.catalogModel||null,matchedBy:reference.matchedBy,referenceTier:reference.referenceTier||null,fetchedAt:reference.fetchedAt||null}:null};
+ // Output coverage requires an uninterrupted baseline from turn start. If a
+ // breakdown is missing, the tariff may still price all observed tokens exactly.
+ const usageComplete=row.tokensComplete===true||row.outputTokensComplete===true&&n(row.tokens.totalTokens)!==null&&estimate?.complete===true;
+ const noUsage=TOKEN_KEYS.every(key=>n(row.tokens[key])===null);
+ return {kind:'reference-estimate',currency:'USD',usd:estimate?.complete?estimate.usd:estimate?.knownUsd??null,complete:estimate?.complete===true&&usageComplete,tokenSource:row.tokenSource||'observed',components:estimate?.components||[],pricingComplete:estimate?.complete===true,usageComplete,reason:noUsage?'引擎未返回本轮用量':estimate?.reason||(estimate?.complete&&!usageComplete?'计价分项已齐全，但观察记录未确认覆盖整个回合':null)||(!row.model?'模型未知':null),reference:reference?{source:reference.source,scope:reference.scope??null,catalogProvider:reference.catalogProvider||null,catalogModel:reference.catalogModel||null,matchedBy:reference.matchedBy,referenceTier:reference.referenceTier||null,fetchedAt:reference.fetchedAt||null}:null};
 }
 function aggregate(rows){
  const tokenTotals=Object.fromEntries(TOKEN_KEYS.map(key=>{const known=rows.map(row=>n(row.tokens[key])).filter(value=>value!==null);const sum=known.reduce((a,b)=>a+b,0);return [key,known.length&&Number.isSafeInteger(sum)?sum:null];}));
@@ -133,9 +138,19 @@ export class StatisticsService {
   if(message.method==='bridge/status'&&p.connected===false){for(const [k,a] of this.active){const row=this.rows.get(k);if(row?.status==='inProgress')row.status='unknown';}this.active.clear();this.threads.clear();this.baselines.clear();this.blockedTokenThreads.clear();this.changed();return;}
   if(message.method==='thread/started'){this.thread(p.thread);return;}
   if(!threadId)return;
+  if(['item/started','item/completed'].includes(message.method)&&p.item?.type==='subAgentActivity'&&p.item.kind==='started'){
+   // Unlike a spawn request, this native event carries the model resolved for the child.
+   const child=id(p.item.agentThreadId),model=id(p.item.model);
+   if(child&&model&&!this.threads.get(child)?.model)this.thread({id:child,model});
+  }
+  if(message.method==='thread/settings/updated'){
+   if(p.threadSettings)this.thread({id:threadId},p.threadSettings);return;
+  }
   if(message.method==='thread/tokenUsage/updated'){
    const current=tokens(p.tokenUsage?.total),previous=this.baselines.get(threadId);this.rememberBaseline(threadId,current);
    const row=key?this.rows.get(key):null;if(!row)return;
+   const used=n(p.tokenUsage?.last?.totalTokens),window=n(p.tokenUsage?.modelContextWindow);
+   if(used!==null&&window>0)row.context={used,window};
    if(this.blockedTokenThreads.has(threadId))return;
    if(previous&&TOKEN_KEYS.some(field=>current[field]!==null&&previous[field]!==null&&current[field]<previous[field])){
     this.blockedTokenThreads.add(threadId);row.tokens=emptyTokens();row.tokensComplete=false;row.outputTokensComplete=false;this.changed();return;
@@ -170,6 +185,14 @@ export class StatisticsService {
   }
  }
  finishStream(active,row,itemId){const stream=active.streams.get(itemId);if(!stream||stream.done)return;stream.done=true;const elapsed=stream.last-stream.first;if(elapsed>0&&stream.afterFirstChars>0){active.streamChars+=stream.afterFirstChars;active.streamMs+=elapsed;row.performance.textCharsPerSecond=active.streamChars/(active.streamMs/1000);}}
+ recoveryThreads(){
+  const priorities=new Map();
+  for(const row of this.rows.values()){
+   const rank=!row.model?3:!row.provider?2:!row.tokensComplete&&n(row.tokens.totalTokens)!==null?1:0;
+   if(rank>0)priorities.set(row.threadId,Math.max(rank,priorities.get(row.threadId)||0));
+  }
+  return priorities;
+ }
  recoverLocalModels(scan){
   const evidence=new Map();
   for(const session of scan.sessions||[]){
@@ -183,7 +206,7 @@ export class StatisticsService {
   let updatedRows=0,modelRows=0,providerRows=0,ambiguousRows=0;
   for(const row of this.rows.values()){
    const entry=evidence.get(row.id);if(!entry)continue;let changed=false;
-   if(entry.models.size>1||entry.providers.size>1||(row.model&&entry.models.size===1&&!entry.models.has(row.model))){ambiguousRows++;continue;}
+   if(entry.models.size>1||entry.providers.size>1||(row.model&&entry.models.size===1&&!entry.models.has(row.model))||(row.provider&&entry.providers.size===1&&!entry.providers.has(row.provider))){ambiguousRows++;continue;}
    // Exact thread + turn context only. Never fill historical rows from current defaults or another turn.
    if(!row.model&&entry.models.size===1){row.model=[...entry.models][0];modelRows++;changed=true;}
    if(!row.provider&&entry.providers.size===1){row.provider=[...entry.providers][0];providerRows++;changed=true;}
@@ -214,6 +237,20 @@ export class StatisticsService {
    this.localRows=[...out.values()].sort((a,b)=>(b.timestamp||'').localeCompare(a.timestamp||'')).slice(0,this.limit);this.localCoverage={partial:scan.partial||out.size>this.limit||excluded>0||overlap.size>0,excludedOverlappingThreads:overlap.size,excludedAmbiguousSessions:excluded};this.revision++;
   }
   return {recovered};
+ }
+ turnUsage(input){
+  if(!input||Object.keys(input).sort().join(',')!=='threadId,turnIds'||!id(input.threadId)||!Array.isArray(input.turnIds)||input.turnIds.length>100||input.turnIds.some(value=>!id(value)))throw error('回合用量查询参数无效');
+  const requested=new Set(input.turnIds),references=new Map(),turns=[];
+  const local=new Map(this.localRows.filter(row=>row.kind==='turn'&&row.threadId===input.threadId&&requested.has(row.turnId)).map(row=>[row.turnId,row]));
+  for(const turnId of requested){
+   const live=this.rows.get(keyFor(input.threadId,turnId)),history=local.get(turnId);
+   const compatible=history&&(!live?.model||!history.model||live.model===history.model)&&(!live?.provider||!history.provider||live.provider===history.provider);
+   const preferHistory=compatible&&live?.status!=='inProgress'&&!live?.tokensComplete&&(history.tokensComplete||!live||Object.values(live.tokens).every(value=>value===null));
+   const row=preferHistory?history:live||history;
+   if(!row)continue;
+   turns.push({turnId,model:row.model,provider:row.provider,tokens:{...row.tokens},tokensComplete:row.tokensComplete,estimatedCost:cost(row,this.pricing,references),context:live?.context??null});
+  }
+  return {turns};
  }
  query(input={}){
   if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['scope','from','to','bucket','model','provider','account','cursor','limit'].includes(key)))throw error('统计查询参数无效');

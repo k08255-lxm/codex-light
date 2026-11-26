@@ -250,23 +250,24 @@ export function mountAccount(host, { rpc, loginPanelHost, pendingHost, demo = ()
       children.push(dataTable(['日期', 'Tokens', '占返回日期合计'], buckets.slice().reverse().map(row => [row.startDate, integer(row.tokens), sum ? `${(row.tokens / sum * 100).toFixed(1)}%` : '0%'])));
     } else if (usageTab === 'thread') {
       const facts = el(document, 'div', 'facts');
-      if (finite(thread.estimatedUsageCreditsMicros)) facts.append(fact('估算 Credits', decimal(micros(thread.estimatedUsageCreditsMicros))));
-      if (finite(thread.estimatedUsageUsdMicros)) facts.append(fact('估算费用（USD）', usd(micros(thread.estimatedUsageUsdMicros))));
+      if (finite(thread.estimatedUsageCreditsMicros)) facts.append(fact('Credits', decimal(micros(thread.estimatedUsageCreditsMicros))));
+      if (finite(thread.estimatedUsageUsdMicros)) facts.append(fact('费用（USD）', usd(micros(thread.estimatedUsageUsdMicros))));
       children.push(facts);
+      if(finite(thread.estimatedUsageCreditsMicros)||finite(thread.estimatedUsageUsdMicros))children.push(el(document,'p','acct-usage-caption','费用与 Credits 来自官方用量估算，实际扣款以账单为准。'));
       const groups = Array.isArray(thread.groups) ? thread.groups : [];
       if (groups.length) {
         const columns = [
           ['model', '模型', String], ['reasoningEffort', '推理强度', String], ['speed', '速度档', String],
           ['inputTokens', '输入', integer], ['cachedInputTokens', '缓存输入', integer], ['netNewInputTokens', '新增输入', integer], ['outputTokens', '输出', integer], ['totalTokens', '总 Tokens', integer],
-          ['estimatedUsageCreditsMicros', '估算 Credits', value => decimal(micros(value))],
+          ['estimatedUsageCreditsMicros', 'Credits', value => decimal(micros(value))],
         ].filter(([key]) => groups.some(group => group[key] != null));
         children.push(dataTable(columns.map(([, name]) => name), groups.map(group => columns.map(([key, , format]) => group[key] == null ? UNKNOWN : format(group[key])))));
       }
     }
     if (result?.accountUsageError) children.push(el(document, 'p', 'inline-error', usageFailureText('官方账户汇总', result.accountUsageError)));
     if (result?.usageThreadId && result.usageThreadId === getThreadId()) {
-      if (result.threadUsageError) children.push(el(document, 'p', 'inline-error', usageFailureText('当前对话的官方用量估算', result.threadUsageError)));
-      else if (!thread) children.push(el(document, 'p', 'empty-line', '官方尚未提供当前对话的用量估算。账户汇总与额度会独立读取。'));
+      if (result.threadUsageError) children.push(el(document, 'p', 'inline-error', usageFailureText('当前对话的官方用量', result.threadUsageError)));
+      else if (!thread) children.push(el(document, 'p', 'empty-line', '暂无当前对话的官方用量。'));
     }
     section(usage, '官方账户用量', ...children);
   }
@@ -324,7 +325,7 @@ export function mountAccount(host, { rpc, loginPanelHost, pendingHost, demo = ()
       const threadUsage = threadResult?.status === 'fulfilled' ? threadResult.value?.threadUsage : null;
       if (accountUsageError && !threadUsage) {
         const errors = [usageFailureText('官方账户汇总', accountUsageError)];
-        if (threadUsageError) errors.push(usageFailureText('当前对话的官方用量估算', threadUsageError));
+        if (threadUsageError) errors.push(usageFailureText('当前对话的官方用量', threadUsageError));
         throw new Error(errors.join(' '));
       }
       return { ...accountResult.value, threadUsage, usageThreadId: threadId, accountUsageError, threadUsageError };

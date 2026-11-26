@@ -1,5 +1,9 @@
 import { EventEmitter } from 'node:events';
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { promisify } from 'node:util';
 import { readFileSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import {validServerRequestId,serverRequestKey,findServerRequest,removeServerRequest,serverRequestThread} from './server-requests.mjs';
@@ -11,6 +15,32 @@ export class RpcClient extends EventEmitter {
   constructor({ command = process.env.CODEX_LIGHT_CODEX || 'codex', args = [...APP_SERVER_ARGS], cwd = process.cwd(), timeout = 60000, closeTimeout = 1500, spawnProcess = spawn, env, mapRequest, mapResponse } = {}) {
     super(); Object.assign(this, {command,args,cwd,timeout,closeTimeout,spawnProcess,env,mapRequest,mapResponse});
     this.pending = new Map(); this.requests = new Map(); this.sequence = 0; this.connected = false; this.closed = false; this.buffer = ''; this.lastError = null;
+  }
+  // Older engines may silently ignore unknown fork parameters. Check this executable's
+  // protocol once before sending a mutation that could otherwise copy later turns.
+  async supportsTurnFork(toEnginePath = value => value) {
+    if (!this.forkSchema) this.forkSchema = this.readTurnForkSchema(toEnginePath).catch(error => {
+      this.forkSchema = null;
+      throw error;
+    });
+    return this.forkSchema;
+  }
+  async readTurnForkSchema(toEnginePath) {
+    const index = this.args.lastIndexOf('app-server');
+    if (index < 0) return false;
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'codecang-fork-schema-'));
+    try {
+      const args = [...this.args.slice(0,index),'app-server','generate-json-schema','--experimental','--out',await toEnginePath(dir)];
+      await promisify(execFile)(this.command,args,{cwd:this.cwd,env:this.env,windowsHide:true,timeout:15000,maxBuffer:256*1024});
+      const schema = JSON.parse(await readFile(path.join(dir,'v2','ThreadForkParams.json'),'utf8'));
+      const type = schema.properties?.lastTurnId?.type;
+      return type === 'string' || (Array.isArray(type) && type.includes('string'));
+    } catch (error) {
+      if (error.code === 'ENOENT') return false;
+      throw Object.assign(new Error('无法读取当前引擎的分支协议，请检查引擎后重试。'),{code:'FORK_SCHEMA_UNAVAILABLE',outcome:'notExecuted'});
+    } finally {
+      await rm(dir,{recursive:true,force:true,maxRetries:3});
+    }
   }
   async start() {
     if (this.started) throw failure('Codex 连接不能重复启动', 'ALREADY_STARTED');

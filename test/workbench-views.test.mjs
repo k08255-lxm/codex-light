@@ -152,7 +152,9 @@ test('statistics pager enables Next after load and keeps one frozen time window 
   assert.doesNotMatch(metrics, /TTFT|API 请求|字\/秒|字\/s/, 'no character-rate or API-request metrics in the primary strip');
   assert.match(metrics, /回合平均输出12.5 tok\/s/); assert.doesNotMatch(metrics, /900/, 'the character-rate number is never relabelled as tok/s');
   assert.match(h.host.querySelector('.perf-strip').innerTitle ?? h.host.querySelector('.perf-strip').children[2].title, /整轮耗时/);
-  assert.match(h.host.textContent, /已计价 0 · 未计价 3/);
+  assert.doesNotMatch(h.host.querySelector('.table-head').textContent,/路由/);
+  assert.doesNotMatch(h.host.querySelector('.kpi-row').textContent,/未计价|估算/);
+  assert.equal(h.host.querySelector('.stats-cost').querySelector('summary').textContent,'—');
 });
 test('late automatic price sync does not reset a newer page or its frozen time range', async () => {
   let finish;const pending=new Promise(resolve=>{finish=resolve;});
@@ -173,7 +175,7 @@ test('statistics query anchors time, and cost coverage is honest', () => {
     const today = statisticsQuery({range:'today',anchor,scope:'local'});
     assert.deepEqual([today.from,today.to,today.bucket], [midnight.toISOString(),nextMidnight.toISOString(),'hour']);
   }
-  assert.equal(costCoverage({ pricedRows: 3, totalRows: 3, complete: true }), '已计价 3 · 未计价 0'); assert.equal(costCoverage(null), '价格覆盖未知');
+  assert.equal(costCoverage({pricedRows:3,totalRows:3,complete:true}),'');assert.equal(costCoverage(null),'');assert.match(costCoverage({totalRows:3,pricedRows:1}),/1 \/ 3/);
 });
 test('chart draws null as a gap, never fabricates zero bars, and lays out at real pixel width', () => {
   const document = createDocument();

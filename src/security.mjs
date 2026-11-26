@@ -44,7 +44,7 @@ const fields = {
  'thread/unarchive':['threadId'],
  'thread/delete':['threadId'],
  'thread/summary':['threadId'],
- 'thread/fork':['threadId','excludeTurns'],
+ 'thread/fork':['threadId','excludeTurns','lastTurnId'],
  'account/read':['refreshToken'],
  'account/rateLimits/read':['excludeResetCreditDetails'],
  'review/start':['threadId','target','delivery'],
@@ -57,7 +57,7 @@ export function validateRpc(method,params,{hasAttachments=false}={}) {
  if(!METHODS.has(method))throw new Error('此 GUI 不提供该 RPC 方法');
  if(!params || typeof params!=='object' || Array.isArray(params))throw new Error('参数格式错误');
  for(const key of Object.keys(params))if(!fields[method].includes(key))throw new Error(`不支持参数 ${key}`);
- for(const key of ['threadId','turnId','expectedTurnId'])if(params[key]!==undefined && (typeof params[key]!=='string'||!params[key]||params[key].length>256||/[\x00-\x1f]/.test(params[key])))throw new Error('对话标识无效');
+ for(const key of ['threadId','turnId','expectedTurnId','lastTurnId'])if(params[key]!==undefined && (typeof params[key]!=='string'||!params[key].trim()||params[key].length>256||/[\x00-\x1f]/.test(params[key])))throw new Error('对话标识无效');
  if(method.startsWith('turn/') || ['thread/read','thread/items/list','thread/turns/list','thread/resume','thread/unsubscribe','thread/compact/start','thread/name/set','thread/archive','thread/unarchive','thread/delete','thread/summary','thread/fork','review/start'].includes(method))if(!params.threadId)throw new Error('缺少对话标识');
  if(method==='turn/steer'&&!params.expectedTurnId)throw new Error('立即发送需要明确的 expectedTurnId');
  if(method==='turn/settings/update'){

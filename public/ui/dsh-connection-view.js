@@ -135,7 +135,7 @@ export function mountDshConnection(host, { api, wait = ms => new Promise(resolve
     } catch (error) {
       if (mine !== generation) return;
       const unknown = planned && !NOT_EXECUTED.has(error.code) && error.outcome !== 'notExecuted';
-      message = { text: unknown ? `连接结果未知：${error.message}。已重新读取状态，请核对后再操作；不会自动重发。` : error.code === 'MCP_ALREADY_CONFIGURED' ? `${error.message}。现有配置可继续使用。` : error.message, error: true };
+      message = { text: unknown ? `未收到连接结果：${error.message}。已重新读取连接状态。` : error.code === 'MCP_ALREADY_CONFIGURED' ? `${error.message}。现有配置可继续使用。` : error.message, error: true };
     } finally {
       connecting = false;
       if (mine === generation) { busy = false; await load(mine); follow(mine); }

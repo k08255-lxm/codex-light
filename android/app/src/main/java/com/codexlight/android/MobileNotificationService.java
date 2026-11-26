@@ -49,8 +49,14 @@ public final class MobileNotificationService extends Service {
         setQuestionAlerts(enabled);
     }
 
+    static boolean hasSavedChoice(Context context) {
+        android.content.SharedPreferences prefs=context.getSharedPreferences(CHANNEL,MODE_PRIVATE);
+        return prefs.contains("source") || prefs.contains("questions") || prefs.contains("configured");
+    }
+
     static void remember(Context context, ServerConfig config, boolean enabled, boolean questions) {
         android.content.SharedPreferences.Editor editor = context.getSharedPreferences(CHANNEL, MODE_PRIVATE).edit();
+        editor.putBoolean("configured",true);
         if (enabled) editor.putString("source", config.sourceKey()).putBoolean("questions", questions);
         else editor.remove("source");
         editor.apply();

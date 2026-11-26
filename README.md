@@ -20,9 +20,20 @@ v0.4.13 起，首次引导和打开「连接与运行」时会自动检测正在
 
 ![电脑端：顶部导航、项目侧栏、对话与文件变更](docs/assets/conversation-demo.png)
 
-**手机端 · 393 × 900**
+**手机端 · 1220 × 2656 物理像素**（模拟竖屏，CSS 视口 406 × 884，像素比约 3.005）
 
-<img src="docs/assets/narrow-layout-demo.png" alt="手机端：顶部额度、完整对话、文件变更与底部输入操作" width="393">
+<img src="docs/assets/narrow-layout-demo.png" alt="手机端：顶部额度、完整对话、文件变更与底部输入操作" width="406">
+
+<details>
+<summary>本轮用量、首次主题选择与引擎更新</summary>
+
+![每轮回答的 token 用量和参考费用明细](docs/assets/turn-usage.png)
+
+![首次进入工作区时选择明暗模式和界面风格](docs/assets/first-theme.png)
+
+![引擎更新页的版本列表和升级按钮](docs/assets/engine-updates.png)
+
+</details>
 
 ## 已实现的主要功能
 

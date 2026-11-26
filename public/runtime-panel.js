@@ -1,4 +1,5 @@
 import {icon} from './icons.js';
+import {switchInput,onAsyncSwitchChange} from './ui/format.js';
 
 const STABLE_VERSION=/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const CHECK_TTL=20*60*1000;
@@ -64,7 +65,7 @@ export function mountRuntimePanel(container,{read,check,upgrade,configure,queryP
  const source=el('select'),sourceOptions=new Map();
  for(const [value,label] of [['auto','自动选择'],['npm','全局 npm CLI'],['desktop','官方客户端内建']]){const option=el('option',label);option.value=value;sourceOptions.set(value,option);source.append(option);}
  source.setAttribute('aria-label','下次启动的 Windows 引擎来源');
- const autoCheck=el('input'),autoInstall=el('input');autoCheck.type=autoInstall.type='checkbox';
+ const autoCheck=switchInput(doc),autoInstall=switchInput(doc);
  preferences.append(preference('下次启动的来源',null,source),preference('自动检查 npm 更新',null,autoCheck),preference('下次启动前安装 npm 更新','完全退出再打开时安装，托盘模式仍在运行。',autoInstall));
  const automaticStatus=el('p','','runtime-intro');automaticStatus.setAttribute('role','status');preferences.append(automaticStatus);
  const options=el('details',undefined,'engine-options');options.append(el('summary','启动与自动更新设置'),preferences);
@@ -116,7 +117,7 @@ export function mountRuntimePanel(container,{read,check,upgrade,configure,queryP
    for(const key of ['npm','desktop'])sourceOptions.get(key).disabled=!snapshot[key].available||!snapshot[key].version;
    autoCheck.checked=automatic.checkAutomatically===true;autoInstall.checked=automatic.installOnRestart===true;
    automaticStatus.textContent=automatic.error||(automatic.explicit?'当前由显式路径指定，使用原安装渠道更新。':
-    automatic.phase==='preflight'?'正在核对下次启动前的 npm 更新。':
+    automatic.phase==='preflight'?'正在检查待安装的 npm 版本。':
     automatic.phase==='installing'?`正在启动前安装 npm CLI ${automatic.queuedVersion}。`:
     automatic.phase==='checking'?'正在检查 npm 稳定版。':
     automatic.result?.outcome==='unknown'?(automatic.result.message||'上次更新未确认完成。'):
@@ -236,8 +237,8 @@ export function mountRuntimePanel(container,{read,check,upgrade,configure,queryP
   return savePreference({queueVersion:snapshot.automatic.queueOnce?null:snapshot.latest.version});
  });
  source.addEventListener('change',()=>savePreference({source:source.value}));
- autoCheck.addEventListener('change',()=>savePreference({checkAutomatically:autoCheck.checked}));
- autoInstall.addEventListener('change',()=>savePreference({installOnRestart:autoInstall.checked}));
+ onAsyncSwitchChange(autoCheck,()=>savePreference({checkAutomatically:autoCheck.checked}));
+ onAsyncSwitchChange(autoInstall,()=>savePreference({installOnRestart:autoInstall.checked}));
  renderRows();state();
  return{refresh(){return load('read');},updateAvailable(){if(active&&!busy)void load('read',{automatic:true});},setActive,reset,destroy};
 }

@@ -19,6 +19,7 @@
 <link rel="stylesheet" href="/ui/shell-polish.css">
 <link rel="stylesheet" href="/ui/file-preview.css">
 <link rel="stylesheet" href="/ui/dsh-theme.css">
+<link rel="stylesheet" href="/ui/select.css">
 </head>
 <body>
 <!-- Native host bridges (MainWindow.cs clicks these ids); hidden, the host owns its caption menu. -->
@@ -109,12 +110,18 @@
     </header>
     <div id="notice" class="notice hidden" role="status"><span></span><button id="dismiss-notice" class="btn icon-only ghost" aria-label="关闭提示"><span data-icon="close"></span></button></div>
     <aside id="dsh-model-reminder" class="dsh-model-reminder local-only" aria-label="DeepSeek Harness 模型设置" hidden><span>为 DeepSeek Harness 子代理选择默认模型。</span><button type="button" class="btn small" id="configure-dsh-model">去设置</button><button type="button" class="btn ghost small" id="dismiss-dsh-model">稍后</button></aside>
+    <div class="conversation-frame">
     <section id="conversation" class="conversation" aria-label="对话内容" tabindex="0">
       <button id="earlier" type="button" class="btn ghost small earlier hidden">加载更早的内容</button>
       <p id="history-load-status" class="history-load-status" role="status" aria-live="polite"></p>
       <div id="welcome" class="welcome"><span class="welcome-mark"><span data-icon="brand"></span></span><h1>今天要做什么？</h1><p>描述任务，或输入 <kbd>/</kbd> 查看命令与技能</p></div>
       <div id="messages"></div>
     </section>
+    <nav id="turn-timeline" class="turn-timeline" aria-label="对话轮次" hidden>
+      <div class="turn-marks"></div>
+      <div class="turn-preview" aria-hidden="true" hidden></div>
+    </nav>
+    </div>
     <section id="pending-submissions" class="tray pending-submissions hidden" aria-label="待确认的任务请求" aria-live="polite"></section>
     <section id="approvals" class="tray approvals" aria-label="待处理请求" aria-live="polite"></section>
     <footer class="composer-dock">
@@ -211,8 +218,8 @@
                 <p id="desktop-close-status" class="fine" role="status" aria-live="polite"></p>
               </div>
               <div id="desktop-power-preferences" hidden>
-                <label class="pref-row" for="preference-awake-task"><span class="setting-copy"><strong>任务运行时阻止休眠</strong><small class="fine" id="awake-task-description">码舱对话或其 DSH 子任务运行时，让电脑保持唤醒。屏幕仍可按时关闭。</small></span><input id="preference-awake-task" class="switch" type="checkbox" aria-describedby="awake-task-description"></label>
-                <label class="pref-row" for="preference-awake-remote"><span class="setting-copy"><strong>远控连接时阻止休眠</strong><small class="fine" id="awake-remote-description">设备正通过局域网或隧道连接码舱时，让电脑保持唤醒。</small></span><input id="preference-awake-remote" class="switch" type="checkbox" aria-describedby="awake-remote-description"></label>
+                <label class="pref-row" for="preference-awake-task"><span class="setting-copy"><strong id="awake-task-label">任务运行时阻止休眠</strong><small class="fine" id="awake-task-description">码舱对话或其 DSH 子任务运行时，让电脑保持唤醒。屏幕仍可按时关闭。</small></span><input id="preference-awake-task" class="switch" type="checkbox" role="switch" aria-labelledby="awake-task-label" aria-describedby="awake-task-description"></label>
+                <label class="pref-row" for="preference-awake-remote"><span class="setting-copy"><strong id="awake-remote-label">远控连接时阻止休眠</strong><small class="fine" id="awake-remote-description">设备正通过局域网或隧道连接码舱时，让电脑保持唤醒。</small></span><input id="preference-awake-remote" class="switch" type="checkbox" role="switch" aria-labelledby="awake-remote-label" aria-describedby="awake-remote-description"></label>
               </div>
               <div class="pref-row"><div><strong>后台服务</strong><small id="runtime-close-info" class="fine">停止后会中断运行中的任务。</small></div><button id="shutdown" type="button" class="btn danger">停止服务</button></div>
             </div>
@@ -246,7 +253,7 @@
       <section id="settings-notifications" class="settings-section hidden">
         <h1>通知</h1>
         <div id="mobile-task-notifications" class="panel" hidden>
-          <label class="pref-row" for="mobile-task-enabled"><div><strong>接收实时任务通知</strong><small class="fine">在手机上查看思考、执行、回复和任务结果。点按通知可返回对话。</small></div><input id="mobile-task-enabled" type="checkbox" class="switch"></label>
+          <label class="pref-row" for="mobile-task-enabled"><div><strong id="mobile-task-label">接收实时任务通知</strong><small class="fine" id="mobile-task-description">在手机上查看思考、执行、回复和任务结果。点按通知可返回对话。</small></div><input id="mobile-task-enabled" type="checkbox" role="switch" class="switch" aria-labelledby="mobile-task-label" aria-describedby="mobile-task-description"></label>
           <p id="mobile-task-status" class="fine" role="status"></p>
           <p id="mobile-task-promotion-status" class="fine" role="status"></p>
           <div class="settings-actions">
@@ -254,14 +261,14 @@
             <button id="mobile-task-promotion-settings" type="button" class="btn small" hidden>实时通知设置</button>
           </div>
           <div id="mobile-task-background-panel" hidden>
-            <label class="pref-row" for="mobile-task-background"><div><strong>后台同步通知</strong><small class="fine">在离开应用后继续同步。手机需能访问配对电脑，可从通知栏随时停止。</small></div><input id="mobile-task-background" type="checkbox" class="switch"></label>
+            <label class="pref-row" for="mobile-task-background"><div><strong id="mobile-background-label">后台同步通知</strong><small class="fine" id="mobile-background-description">在离开应用后继续同步。手机需能访问配对电脑，可从通知栏随时停止。</small></div><input id="mobile-task-background" type="checkbox" role="switch" class="switch" aria-labelledby="mobile-background-label" aria-describedby="mobile-background-description"></label>
             <p id="mobile-task-background-status" class="fine" role="status"></p>
           </div>
         </div>
         <div class="panel">
-          <label class="pref-row"><div><strong>任务结束提示</strong><small class="fine">应用内提示，不请求系统通知</small></div><input id="preference-completion" type="checkbox" class="switch"></label>
+          <label class="pref-row"><div><strong id="completion-label">任务结束提示</strong><small class="fine" id="completion-description">应用内提示，不请求系统通知</small></div><input id="preference-completion" type="checkbox" role="switch" class="switch" aria-labelledby="completion-label" aria-describedby="completion-description"></label>
           <div class="notification-preference">
-            <label class="pref-row"><div><strong id="question-notification-label">提问与审批提醒</strong><small id="question-notification-status" class="fine" role="status"></small></div><input id="preference-approval" type="checkbox" class="switch" aria-labelledby="question-notification-label" aria-describedby="question-notification-status"></label>
+            <label class="pref-row"><div><strong id="question-notification-label">提问与审批提醒</strong><small id="question-notification-status" class="fine" role="status"></small></div><input id="preference-approval" type="checkbox" role="switch" class="switch" aria-labelledby="question-notification-label" aria-describedby="question-notification-status"></label>
             <div class="settings-actions">
               <button id="question-notification-permission" class="btn small" type="button" hidden>允许系统通知</button>
             </div>
@@ -277,10 +284,15 @@
       <section id="settings-remote" class="settings-section hidden">
         <h1>远程控制</h1>
         <p class="fine">使用本机 Codex 的官方远控协议。连接或配对成功不等于手机端已验证可用。</p>
-        <div class="panel"><div class="work-row"><button id="remote-refresh" type="button" class="btn">刷新</button><button id="remote-enable" type="button" class="btn">本次会话启用</button><button id="remote-disable" type="button" class="btn">持久停用</button></div><div id="remote-status" role="status">尚未读取。</div></div>
+        <div class="panel remote-panel"><div class="work-row"><button id="remote-refresh" type="button" class="btn">刷新</button><button id="remote-enable" type="button" class="btn">本次会话启用</button><button id="remote-disable" type="button" class="btn">持久停用</button></div><div id="remote-status" role="status">尚未读取。</div></div>
         <h2 class="section-title">设备</h2><div id="remote-devices" class="panel list-panel"><p class="fine">尚未读取。</p></div>
         <h2 class="section-title">配对</h2>
-        <div class="panel"><p class="fine">配对码到期只结束本次配对流程，已授权设备不会自动撤销。</p><button id="remote-pair" type="button" class="btn">创建配对码</button><div id="remote-pairing" class="hidden"><code id="remote-pair-code"></code><p id="remote-pair-expiry" class="fine"></p><div class="work-row"><button id="remote-pair-check" type="button" class="btn">查询状态</button><button id="remote-pair-hide" type="button" class="btn">隐藏</button></div></div><p id="remote-pair-status" class="fine" role="status"></p></div>
+        <div class="panel remote-panel">
+          <p class="fine">配对码到期只结束本次配对流程，已授权设备不会自动撤销。</p>
+          <button id="remote-pair" type="button" class="btn">创建配对码</button>
+          <div id="remote-pairing" class="hidden"><code id="remote-pair-code"></code><p id="remote-pair-expiry" class="fine"></p><div class="work-row"><button id="remote-pair-check" type="button" class="btn">查询状态</button><button id="remote-pair-hide" type="button" class="btn">隐藏</button></div></div>
+          <p id="remote-pair-status" class="fine" role="status"></p>
+        </div>
         <section id="settings-lan" class="local-only remote-lan-section"><h2 class="section-title">连接此电脑</h2><div id="lan-root"></div></section>
       </section>
       <section id="settings-skills" class="settings-section hidden"></section>
@@ -303,6 +315,22 @@
 
 <dialog id="project-dialog" aria-labelledby="project-heading"><div class="dialog-header"><h2 id="project-heading">打开项目</h2><button id="project-close" type="button" class="btn icon-only ghost" aria-label="关闭"><span data-icon="close"></span></button></div><div id="project-choices" class="project-choices"></div><button id="project-browse" class="btn project-browse" type="button"><span data-icon="folder"></span>选择文件夹…</button><details id="project-manual"><summary>输入文件夹路径</summary><form id="project-form"><label class="field" for="project-path">项目文件夹<input id="project-path" maxlength="4096" autocomplete="off" required placeholder="例如 C:\Users\USER\Projects\my-app"></label><div class="work-row end"><button id="project-save" type="submit" class="btn primary">打开项目</button></div></form></details><p id="project-status" role="status"></p></dialog>
 <dialog id="rename-dialog" aria-labelledby="rename-heading"><form id="rename-form"><div class="dialog-header"><h2 id="rename-heading">重命名对话</h2><button id="rename-close" type="button" class="btn icon-only ghost" aria-label="取消重命名"><span data-icon="close"></span></button></div><label class="field">名称<input id="rename-input" maxlength="200" required autocomplete="off"></label><div class="work-row end"><button id="rename-cancel" type="button" class="btn">取消</button><button id="rename-save" type="submit" class="btn primary">保存</button></div></form></dialog>
+<dialog id="first-theme" aria-labelledby="first-theme-title">
+  <form id="first-theme-form">
+    <h2 id="first-theme-title">选择你的主题</h2>
+    <fieldset><legend>明暗模式</legend><div class="first-theme-modes">
+      <label><input type="radio" name="scheme" value="system" checked><span>跟随系统</span></label>
+      <label><input type="radio" name="scheme" value="light"><span>浅色</span></label>
+      <label><input type="radio" name="scheme" value="dark"><span>深色</span></label>
+    </div></fieldset>
+    <fieldset><legend>界面风格</legend><div class="first-theme-styles">
+      <label><input type="radio" name="skin" value="codex" checked><span class="style-preview style-preview-codex" aria-hidden="true"></span><span>Codex</span></label>
+      <label><input type="radio" name="skin" value="claude"><span class="style-preview style-preview-claude" aria-hidden="true"></span><span>Claude</span></label>
+      <label><input type="radio" name="skin" value="dsh"><span class="style-preview style-preview-dsh" aria-hidden="true"></span><span>DSH</span></label>
+    </div></fieldset>
+    <div class="first-theme-footer"><span id="first-theme-status" role="status">以后可以在设置中更改。</span><button type="submit" class="btn primary">使用此主题</button></div>
+  </form>
+</dialog>
 <dialog id="context-details" aria-labelledby="context-details-title">
   <div class="context-details-body">
     <div class="dialog-header"><h2 id="context-details-title">上下文用量</h2><button id="context-details-close" class="btn icon-only ghost" type="button" aria-label="关闭上下文详情" autofocus><span data-icon="close"></span></button></div>
@@ -316,5 +344,6 @@
   </div>
 </dialog>
 <script type="module" src="/app.js"></script>
+<script type="module" src="/ui/select.js"></script>
 </body>
 </html>

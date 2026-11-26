@@ -1,4 +1,6 @@
 import { historyViewport } from './history-viewport.js';
+import { mountTurnTimeline } from './ui/turn-timeline.js';
+import {createTurnActions,createTurnUsageSource} from './ui/turn-actions.js';
 // Conversation view: one keyed DOM tree per turn built from state.buildTurns().
 // Messages and compaction stay visible; consecutive operations form collapsible groups.
 import { boundedText, itemText } from './store.js';
@@ -409,9 +411,10 @@ function longTextView(document, { render, label = '正文', onCopy, initialWindo
 
 // ---------- View ----------
 
-export function mountConversation(host, { onLocalLink, getCwd = () => '', getThreadId = () => '', onAnswerAsync, onCopy, artifacts = null, loadAgentThread, onOpenAgent, scrollController = null } = {}) {
+export function mountConversation(host, { onLocalLink, getCwd = () => '', getThreadId = () => '', onAnswerAsync, onCopy, onFork, readTurnUsage, ensurePrices, getContext, artifacts = null, loadAgentThread, onOpenAgent, scrollController = null } = {}) {
   const document = host.ownerDocument;
   const turns = new Map(); // turn id -> view
+  const usageSource=readTurnUsage?createTurnUsageSource(readTurnUsage):null;
   const userOpen = new Map(); // process key -> boolean chosen by the user
   const agentExpanded = new Map();
   const agentDetails = new Map();
@@ -421,6 +424,11 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
   const asyncInputs = new Map(); // thread/item identity keeps unsubmitted drafts across history refreshes.
   let runningClocks = [];
   const scroller = host.closest?.('#conversation');
+  const rail = scroller && document.getElementById?.('turn-timeline');
+  const timeline = rail ? mountTurnTimeline(rail, scroller, host, {
+    pause: () => scrollController?.pause(),
+    reveal: id => { if (!turns.has(id)) render(lastList, {follow:false, revealTurnId:id}); },
+  }) : null;
   const heights = new Map(), placeholders = new Map();
   let lastList = [], virtualFrame = null, rendering = false;
   function scheduleViewport() {
@@ -752,7 +760,7 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     return reply.node;
   }
   function releaseSegment(view){for(const row of view.rows.values())row.images?.release?.();}
-  function releaseTurn(view){view.art?.release?.();for(const segment of view.segments.values())releaseSegment(segment);for(const message of view.messages.values()){if(message.long)longPositions.set(message.node.dataset.itemId,{start:message.long.window.start,follow:message.long.window.follow});message.media?.release?.();}}
+  function releaseTurn(view){view.actions?.release();view.art?.release?.();for(const segment of view.segments.values())releaseSegment(segment);for(const message of view.messages.values()){if(message.long)longPositions.set(message.node.dataset.itemId,{start:message.long.window.start,follow:message.long.window.follow});message.media?.release?.();}}
 
   function timingLabel(turn, now) {
     const t = turn.timing;
@@ -913,6 +921,11 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
           reconcile(view.workBody, intermediates);
           rest.splice(insertion, 0, view.work);
         } else if (footer) { rest.splice(insertion, 0, view.footer); }
+        if(finalNode&&usageSource&&onFork&&getThreadId()){
+          view.actions??=createTurnActions(document,{threadId:getThreadId(),turnId:turn.id,source:usageSource,onCopy,onFork,getContext,ensurePrices});
+          view.actions.update(view.messages.get(finalAnswer.id).text||'',retentionOf(finalAnswer,['text']).complete);
+          rest.splice(rest.indexOf(finalNode)+1,0,view.actions.node);
+        }
         reconcile(view.node, rest);
       } else {
         view.work.open = false; // every running → completed transition starts collapsed
@@ -938,6 +951,7 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
       else if(retainedItem)scroller.scrollTop+=retainedItem.getBoundingClientRect().top-scrollerTop-itemOffset;
       else if(retained)scroller.scrollTop+=retained.getBoundingClientRect().top-scrollerTop-anchorOffset;
     }
+    timeline?.update(list);
     } finally { rendering = false; }
   }
 
@@ -947,7 +961,7 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     for(const item of items)if(item.type==='reasoning'&&itemState(item)==='running'){const row=process.rows.get(item.id);if(row)updateRow(row,item,now);}
     const info=describeItem(items.at(-1),now);setText(process.latest,`${info.verb}${!info.code&&info.target?' · '+info.target.slice(0,90):''}`);
   } }
-  function clear() { longPositions.clear(); lastList=[];heights.clear();placeholders.clear(); for(const view of turns.values())releaseTurn(view);turns.clear(); longPositions.clear(); userOpen.clear(); agentExpanded.clear(); agentDetails.clear(); fileState.clear(); imageRefs.clear(); runningClocks = []; host.replaceChildren(); artifacts?.clear(); }
+  function clear() { timeline?.clear();usageSource?.clear();longPositions.clear(); lastList=[];heights.clear();placeholders.clear(); for(const view of turns.values())releaseTurn(view);turns.clear(); longPositions.clear(); userOpen.clear(); agentExpanded.clear(); agentDetails.clear(); fileState.clear(); imageRefs.clear(); runningClocks = []; host.replaceChildren(); artifacts?.clear(); }
   function revealItem(itemId) {
     const turn = lastList.find(row => row.items?.some(item => item.id === itemId));
     if (!turn) return null;
@@ -955,5 +969,5 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     if (!turns.has(turn.id)) render(lastList, {follow:false, revealTurnId:turn.id});
     return turns.get(turn.id)?.messages.get(itemId)?.node ?? null;
   }
-  return { render, tick, clear, revealItem, hasRunningClock: () => runningClocks.length > 0 };
+  return { render, tick, clear, revealItem, refreshTurnUsage:(threadId,turnId)=>usageSource?.refresh(threadId,turnId), recoverTurnUsage:()=>usageSource?.recovered(), hasRunningClock: () => runningClocks.length > 0 };
 }

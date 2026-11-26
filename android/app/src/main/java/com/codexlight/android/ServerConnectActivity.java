@@ -19,7 +19,10 @@ import java.util.List;
 import java.util.Locale;
 
 public class ServerConnectActivity extends Activity {
+    @Override protected void attachBaseContext(android.content.Context base) { super.attachBaseContext(DeviceAppearance.apply(base)); }
     private boolean pairingBusy=false;
+    private boolean waitingForNotificationPermission;
+    private boolean pendingInitialLaunch;
     private ServerConfig filled;
     private EditText editHost;
     private EditText editPort;
@@ -27,7 +30,7 @@ public class ServerConnectActivity extends Activity {
     private LinearLayout recentSection;
     private LinearLayout recentListContainer;
     private ServerConfigManager configManager;
-    private android.widget.CheckBox autoConnect;
+    private android.widget.Switch autoConnect;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -73,15 +76,66 @@ public class ServerConnectActivity extends Activity {
 
         refreshHistoryUI();
 
-        if (getIntent().getBooleanExtra("demo", false)) {
-            launchDemoMode();
-        } else if (savedInstanceState == null && !getIntent().getBooleanExtra("manual", false)
-                && configManager.isAutoConnectEnabled() && last != null
-                && last.eligible()) {
-            launchConnection(last, true);
-        }
+        pendingInitialLaunch=savedInstanceState == null || savedInstanceState.getBoolean("pendingInitialLaunch");
+        waitingForNotificationPermission=savedInstanceState!=null && savedInstanceState.getBoolean("notificationPermission");
+        if (!waitingForNotificationPermission) offerFirstChoices(last);
         if (configManager.hasStorageError()) Toast.makeText(this,
             "已保存的连接无法解密，请重新配对；没有发送旧凭据。", Toast.LENGTH_LONG).show();
+    }
+
+    private void offerFirstChoices(ServerConfig last) {
+        if (last==null && DeviceAppearance.theme(this).isEmpty()) {
+            String[] names={"跟随系统","浅色","深色"};
+            String[] values={"system","light","dark"};
+            new android.app.AlertDialog.Builder(this).setTitle("选择你的主题")
+                .setItems(names,(dialog,index)->{DeviceAppearance.save(this,values[index]);recreate();})
+                .setCancelable(false).show();
+            return;
+        }
+        TaskNotificationController notifications=TaskNotificationController.get(this);
+        if (notifications.hasNotificationChoice() || MobileNotificationService.hasSavedChoice(this)) {
+            continueLaunch();return;
+        }
+        new android.app.AlertDialog.Builder(this).setTitle("开启任务通知？")
+            .setMessage("连接电脑后，在手机上接收任务进度、完成和提问提醒。以后可以在设置中更改。")
+            .setNegativeButton("暂不开启",(dialog,which)->{declineFirstNotifications();continueLaunch();})
+            .setPositiveButton("开启通知",(dialog,which)->{
+                waitingForNotificationPermission=android.os.Build.VERSION.SDK_INT>=33 &&
+                    checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED;
+                notifications.enableForFirstConnection(this);
+                if (!waitingForNotificationPermission) continueLaunch();
+            }).setCancelable(false).show();
+    }
+
+    private void continueLaunch() {
+        if (!pendingInitialLaunch || isFinishing() || isDestroyed()) return;
+        pendingInitialLaunch=false;
+        ServerConfig last=configManager.getCurrent();
+        if (getIntent().getBooleanExtra("demo",false)) launchDemoMode();
+        else if (!getIntent().getBooleanExtra("manual", false) && configManager.isAutoConnectEnabled()
+                && last!=null && last.eligible()) launchConnection(last,true);
+    }
+
+    @Override protected void onSaveInstanceState(Bundle out) {
+        super.onSaveInstanceState(out);
+        out.putBoolean("notificationPermission",waitingForNotificationPermission);
+        out.putBoolean("pendingInitialLaunch",pendingInitialLaunch);
+    }
+
+    @Override public void onRequestPermissionsResult(int request,String[] permissions,int[] results) {
+        super.onRequestPermissionsResult(request,permissions,results);
+        if (request==TaskNotificationController.PERMISSION_REQUEST && waitingForNotificationPermission) {
+            waitingForNotificationPermission=false;
+            QuestionNotificationController.get(this).permissionResult(results);
+            if (results.length==0 || results[0]!=android.content.pm.PackageManager.PERMISSION_GRANTED)
+                declineFirstNotifications();
+            continueLaunch();
+        }
+    }
+
+    private void declineFirstNotifications() {
+        TaskNotificationController.get(this).setEnabled(false,this);
+        QuestionNotificationController.get(this).setFirstPromptDeclined(true);
     }
 
     @Override protected void onResume(){super.onResume();AppUpdateChecker.start(this);}

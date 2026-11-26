@@ -42,8 +42,8 @@ test('entry only reads; explicit discover never saves; save separates current an
 test('LAN never reads or offers mutation',async()=>{
  const x=setup({isLocal:()=>false});x.panel.setActive(true);await flush();await click(x,'完整检测 WSL');assert.deepEqual(x.calls,[]);assert.equal(x.host.children[0].hidden,true);
 });
-test('save failure disables resubmission until explicit status reconciliation',async()=>{
- const x=setup({select:async()=>{throw Error('timeout');}});x.panel.setActive(true);await flush();await click(x,'完整检测 WSL');choose(x);await click(x,'保存环境');assert.match(text(x.host),/保存结果未确认/);assert.equal(button(x.host,'保存环境').disabled,true);await click(x,'刷新状态');assert.equal(button(x.host,'完整检测 WSL').disabled,false);
+test('save timeout reads the actual setting without repeating the save',async()=>{
+ const x=setup({select:async()=>{throw Error('timeout');}});x.panel.setActive(true);await flush();await click(x,'完整检测 WSL');choose(x);await click(x,'保存环境');assert.match(text(x.host),/运行环境未保存：timeout/);assert.equal(x.calls.at(-1),'read');assert.equal(button(x.host,'保存环境').disabled,true);assert.equal(button(x.host,'完整检测 WSL').disabled,false);
 });
 test('deactivated stale discovery cannot replace refreshed state',async()=>{
  let resolve;const x=setup({discover:()=>new Promise(r=>resolve=r)});x.panel.setActive(true);await flush();const pending=click(x,'完整检测 WSL');x.panel.setActive(false);x.panel.setActive(true);await flush();resolve({...data(),selected:wsl,candidates:[]});await pending;assert.doesNotMatch(text(x.host),/Ubuntu/);

@@ -41,7 +41,7 @@ export function createSkillsManagement(rpc, {wsl = false} = {}) {
     }
     const result = await rpc.call('skills/config/write', {path:input.path, enabled:input.enabled});
     if (typeof result?.effectiveEnabled !== 'boolean') {
-      throw Object.assign(new Error('Codex 未返回生效状态，请刷新技能目录核对'), {outcome:'unknown'});
+      throw Object.assign(new Error('Codex 未返回技能启用状态'), {outcome:'unknown'});
     }
     return {effectiveEnabled:result.effectiveEnabled};
   }

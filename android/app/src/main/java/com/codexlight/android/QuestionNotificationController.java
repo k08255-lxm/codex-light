@@ -44,8 +44,18 @@ final class QuestionNotificationController {
         }
     }
 
+    void setFirstPromptDeclined(boolean declined) {
+        android.content.SharedPreferences.Editor editor = context
+            .getSharedPreferences(TaskNotificationController.PREFS, Context.MODE_PRIVATE).edit();
+        if (declined) editor.putBoolean("firstQuestionPromptDeclined", true);
+        else editor.remove("firstQuestionPromptDeclined");
+        editor.apply();
+    }
+
     String status(Activity activity) {
         if (manager == null) return "unsupported";
+        if (context.getSharedPreferences(TaskNotificationController.PREFS, Context.MODE_PRIVATE)
+                .getBoolean("firstQuestionPromptDeclined", false)) return "permission_required";
         if (Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
                 != PackageManager.PERMISSION_GRANTED) {
             boolean denied = context.getSharedPreferences(TaskNotificationController.PREFS, Context.MODE_PRIVATE)
@@ -62,6 +72,7 @@ final class QuestionNotificationController {
     }
 
     void requestPermission(Activity activity) {
+        setFirstPromptDeclined(false);
         if (Build.VERSION.SDK_INT >= 33 && "permission_required".equals(status(activity))) {
             activity.requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, PERMISSION_REQUEST);
         }

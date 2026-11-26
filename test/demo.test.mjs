@@ -14,6 +14,17 @@ test('demo metadata rename archive restore and fork preserve usable history',asy
  await client.call('thread/unarchive',{threadId:thread.id});const fork=await client.call('thread/fork',{threadId:thread.id});assert.notEqual(fork.thread.id,thread.id);
  const result=await client.call('turn/start',{threadId:fork.thread.id,input:[{type:'text',text:'fork test'}]});assert.equal(result.turn.status,'inProgress');
 });
+test('forking through an earlier turn excludes later rows from both history views',async t=>{
+ const client=new DemoClient();t.after(()=>client.close());
+ const {thread}=await client.call('thread/start',{}), ids=['one','two','three'];
+ client.turns.set(thread.id,ids.map(id=>({id,status:'completed',items:[]})));
+ client.items.set(thread.id,ids.map(turnId=>({turnId,item:{id:'item-'+turnId}})));
+ const fork=await client.call('thread/fork',{threadId:thread.id,lastTurnId:'two'});
+ assert.deepEqual(client.turns.get(fork.thread.id).map(turn=>turn.id),['one','two']);
+ assert.deepEqual(client.items.get(fork.thread.id).map(row=>row.turnId),['one','two']);
+ await assert.rejects(client.call('thread/fork',{threadId:thread.id,lastTurnId:'missing'}));
+ assert.equal(client.threads.size,2);
+});
 test('demo catalog keeps legacy model and supplies explicit five/six-stop fixtures only',async t=>{
  const client=new DemoClient();t.after(()=>client.close());const {data}=await client.call('model/list',{});
  assert.equal(data[0].model,'demo');assert.deepEqual(data.map(m=>m.supportedReasoningEfforts.length),[1,5,6]);assert.ok(data.every(m=>m.displayName.includes('演示')&&m.displayName.includes('不调用 AI')));

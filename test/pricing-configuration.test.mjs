@@ -47,3 +47,29 @@ test('missing write usage stays unknown while independently known components hav
  }
  const unresolved=modelPriceFromCatalog(catalog,'m',{provider:'custom'});assert.equal(estimateTokenCost(usage,unresolved).knownUsd,null,'partial cost must not bypass ambiguous price selection');
 });
+
+test('shared model prices survive restart and old route-specific selections retain priority',async t=>{
+ const root=await directory(t),service=new PricingService({root,fetchImpl:async()=>new Response(JSON.stringify(catalog))});
+ await service.refresh();
+ await service.configure({mode:'catalog',provider:'custom',model:'m',catalogProvider:'openai',catalogModel:'m',referenceTier:'base'});
+ await service.configure({mode:'manual',model:'m',input:3,output:7});
+ const restored=new PricingService({root});await restored.load();
+ for(const route of [null,'unknown-route']){
+  const result=restored.get('m',route);
+  assert.equal(result.provider,route);assert.equal(result.scope,'model');assert.equal(result.input,3);
+ }
+ assert.equal(restored.get('m','custom').scope,'provider');assert.equal(restored.get('m','custom').input,10);
+ await restored.configure({mode:'automatic',model:'m',provider:'custom'});assert.equal(restored.get('m','custom').input,3);
+ await restored.configure({mode:'catalog',model:'m',catalogProvider:'cortecs',catalogModel:'m',referenceTier:'standard'});
+ assert.equal(restored.get('m',null).scope,'model');assert.equal(restored.get('m','custom').input,12.272);
+});
+
+test('equal published rates price a combined input count without inventing a write split',()=>{
+ const price=modelPriceFromCatalog({p:{models:{m:{cost:{input:5,output:9,cache_write:5,cache_read:1}}}}},'m',{provider:'p'});
+ const base={model:'m',provider:'p',inputTokens:100,cachedInputTokens:30,outputTokens:2};
+ const result=estimateTokenCost(base,price);assert.equal(result.complete,true);assert.equal(result.reason,null);
+ const combined=result.components.find(p=>p.kind==='inputIncludingCacheWrite');assert.equal(combined.tokens,70);assert.equal(combined.usd,70*5/1e6);
+ assert.equal(result.components.some(p=>p.kind==='cacheWrite'),false);
+ assert.equal(estimateTokenCost({...base,cachedInputTokens:100},{...price,cacheWrite:null}).complete,true);
+ assert.equal(estimateTokenCost({...base,cacheWriteInputTokens:-1},price).complete,false);
+});

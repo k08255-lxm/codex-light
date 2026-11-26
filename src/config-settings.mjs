@@ -51,7 +51,8 @@ export class ConfigSettingsService{
    if(managed.has(origin)||origin==='project'||origin==='sessionFlags'){readonly=true;reason='有效配置由其他配置层控制';}
    fields[key]={...value,source:sources[origin]??'来源未知',readonly,reason,options:[...new Set(options)]};
   }
-  return {cwd:cwd??null,userVersion:version,fields,models,requirementsKnown:!!requirementsKnown,
+  const configuredWindow=read?.config?.model_context_window;
+  return {cwd:cwd??null,userVersion:version,fields,models,engineContextWindow:Number.isSafeInteger(configuredWindow)&&configuredWindow>0?configuredWindow:null,requirementsKnown:!!requirementsKnown,
    requirementsFingerprint:requirementsKnown?digest(req):null};
  }
  async models(){
@@ -63,7 +64,7 @@ export class ConfigSettingsService{
    if(response.nextCursor==null)return models;if(!str(response.nextCursor)||response.nextCursor===cursor)throw new Error('Invalid model cursor');cursor=response.nextCursor;
   }throw new Error('Model catalog incomplete');
  }
- projection(snapshot){return {fields:structuredClone(snapshot.fields),models:structuredClone(snapshot.models),requirementsKnown:snapshot.requirementsKnown,hasWritableUserVersion:!!snapshot.userVersion};}
+ projection(snapshot){return {fields:structuredClone(snapshot.fields),models:structuredClone(snapshot.models),engineContextWindow:snapshot.engineContextWindow,requirementsKnown:snapshot.requirementsKnown,hasWritableUserVersion:!!snapshot.userVersion};}
  async read({cwd}={}){if(cwd!==undefined&&!absolute(cwd))throw new TypeError('Absolute cwd required');const generation=++this.generation;this.plans.clear();const snapshot=await this.load(cwd);if(generation!==this.generation)throw new Error('Config context changed');this.snapshot=snapshot;return this.projection(snapshot);}
  validate(edits,snapshot){
   if(!Array.isArray(edits)||!edits.length||edits.length>KEYS.length)throw new TypeError('Invalid number of config edits');

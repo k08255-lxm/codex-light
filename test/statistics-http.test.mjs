@@ -20,6 +20,33 @@ test('statistics routes retain token/origin validation and reject malformed filt
  assert.equal((await post(app,'/api/statistics/import',{directory:process.cwd()})).status,400,'demo must not scan real history');
 });
 
+test('turn usage lookup authenticates the request and does not run an RPC or return unrelated rows',async t=>{
+ const app=await fixture(t,{demo:true}),route='/api/statistics/turns';
+ const input={threadId:'requested',turnIds:['t','missing']};
+ app.rpc.call=async()=>{throw new Error('Unexpected RPC');};
+ for(const threadId of ['requested','other']){
+  app.statistics.observe({method:'turn/started',params:{threadId,turn:{id:'t',status:'inProgress'}}});
+ }
+ assert.equal((await fetch(app.origin+route,{method:'POST',body:JSON.stringify(input)})).status,401);
+ assert.equal((await post(app,route,input,{Origin:'https://outside.invalid'})).status,403);
+ assert.equal((await post(app,route,{threadId:'requested',turnIds:[null]})).status,400);
+ const response=await post(app,route,input);assert.equal(response.status,200);
+ const {turns}=await response.json();assert.deepEqual(turns.map(row=>row.turnId),['t']);
+ assert.ok(!Object.hasOwn(turns[0],'account'));
+ assert.deepEqual(await (await post(app,route,{...input,threadId:'absent'})).json(),{turns:[]});
+});
+
+test('an engine without a fork boundary cannot silently fork the entire thread from an earlier reply',async t=>{
+ const app=await fixture(t,{demo:true});
+ const {thread}=await (await rpc(app,'thread/start',{cwd:process.cwd()})).json();
+ app.rpc.supportsTurnFork=()=>false;
+ const response=await rpc(app,'thread/fork',{threadId:thread.id,lastTurnId:'older',excludeTurns:true});
+ const error=await response.json();
+ assert.equal(error.code,'TURN_FORK_UNSUPPORTED');assert.equal(error.outcome,'notExecuted');
+ assert.equal(app.rpc.threads.size,1);
+ assert.equal((await rpc(app,'thread/fork',{threadId:thread.id,excludeTurns:true})).status,200);
+});
+
 test('confirmed mutation dedup counts one submission; raw events supply measurements independently of frontend navigation',async t=>{
  const app=await fixture(t,{demo:true});
  const created=await(await rpc(app,'thread/start',{cwd:process.cwd()})).json(),threadId=created.thread.id;

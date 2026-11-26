@@ -5,11 +5,13 @@ async function fixture(t){const root=await mkdtemp(path.join(os.tmpdir(),'deskto
 test('preferences survive restart and a legacy receipt ledger is retired on the next save',async t=>{
  const state=await fixture(t);
  assert.deepEqual(await state.preferences(),DEFAULT_PREFERENCES);
+ assert.deepEqual(await state.preferenceSnapshot(),{preferences:DEFAULT_PREFERENCES,firstRun:true});
  await assert.rejects(stat(state.root),{code:'ENOENT'});
  await mkdir(state.root);
  const preferences={...DEFAULT_PREFERENCES,theme:'light',keepAwakeDuringTask:true};
  await writeFile(state.file,JSON.stringify({version:1,preferences,receipts:Array(1000).fill({state:'unknown'})}));
  assert.deepEqual(await state.preferences(),preferences);
+ assert.deepEqual(await state.preferenceSnapshot(),{preferences,firstRun:false});
  const {keepAwakeDuringTask,...olderClient}=preferences;
  await state.preferences({...olderClient,theme:'dark'});
  assert.deepEqual(JSON.parse(await readFile(state.file,'utf8')),{version:2,preferences:{...preferences,theme:'dark'}});

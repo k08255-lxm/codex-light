@@ -2,7 +2,7 @@ const THREAD_LIMIT='agents.max_concurrent_threads_per_session';
 const labels={model:'默认模型',model_reasoning_effort:'思考强度',web_search:'网页搜索',approval_policy:'批准策略',sandbox_mode:'沙盒模式',[THREAD_LIMIT]:'并发线程上限'};
 const text=value=>value==null?'引擎默认':String(value).slice(0,2000);
 
-export function mountConfigSettingsPanel(container,{read,plan,apply,clock=()=>Date.now()}={}){
+export function mountConfigSettingsPanel(container,{read,plan,apply,setContextWindow,readWindowCatalog,clock=()=>Date.now()}={}){
  if([read,plan,apply].some(fn=>typeof fn!=='function'))throw new TypeError('read/plan/apply callbacks required');
  const doc=container.ownerDocument,inputs=new Map();
  const node=(tag,label,cls)=>{const n=doc.createElement(tag);if(label!==undefined)n.textContent=label;if(cls)n.className=cls;return n;};
@@ -15,6 +15,75 @@ export function mountConfigSettingsPanel(container,{read,plan,apply,clock=()=>Da
  const controls=node('div',undefined,'config-settings-controls');controls.append(refresh,cancel,save,confirm);
  container.replaceChildren(heading,note,fields,diff,status,controls);container.classList.add('config-settings-panel');
  let snapshot=null,prepared=null,busy=false,unknown=false,generation=0,disposed=false;
+ const windowPanel=node('section'),windowModel=node('select'),windowSize=node('input'),windowStatus=node('p','','fine');
+ const windowSave=button('保存窗口大小','btn primary'),windowClear=button('恢复引擎默认'),catalogRefresh=button('重新读取模型目录');
+ const windowMode=node('strong'),catalogInfo=node('p','','fine');
+ if(setContextWindow){
+  const modelLabel=node('label','模型'),sizeLabel=node('label','上下文大小（tokens）');
+  modelLabel.append(windowModel);sizeLabel.append(windowSize);
+  windowSize.type='number';windowSize.min='1';windowSize.step='1';windowSize.inputMode='numeric';windowSize.placeholder='引擎默认';
+  windowStatus.setAttribute('role','status');
+  const controls=node('div',undefined,'config-settings-controls');controls.append(windowSave,windowClear);if(readWindowCatalog)controls.append(catalogRefresh);
+  const fields=node('div',undefined,'config-settings-fields');
+  for(const label of [modelLabel,sizeLabel]){const row=node('div',undefined,'config-settings-field');row.append(label);fields.append(row);}
+  windowPanel.append(node('h2','模型上下文窗口','section-title'),node('p','按模型设置，下次开始一轮时生效。','fine'),fields,windowMode,catalogInfo,controls,windowStatus);
+  container.append(windowPanel);
+ }
+ function showWindowInfo(){
+  const model=windowModel.value,catalog=snapshot?.windowCatalog;
+  const custom=Object.hasOwn(snapshot?.contextWindows||{},model);
+  windowMode.textContent=custom?'当前使用自定义窗口':'当前跟随引擎默认';
+  const entry=Object.hasOwn(catalog?.models||{},model)?catalog.models[model]:null;
+  const format=value=>value.toLocaleString('zh-CN');
+  const lines=[];
+  if(entry){
+   const range=entry.max&&entry.max!==entry.size?'，目录上限 '+format(entry.max):'';
+   lines.push('Codex 本机模型目录：标称窗口 '+format(entry.size)+range+' tokens。');
+   if(catalog.fetchedAt)lines.push('目录更新时间 '+new Date(catalog.fetchedAt).toLocaleString('zh-CN')+'。');
+  }else if(catalog?.status==='invalid'||catalog?.status==='unreadable'){
+   lines.push('暂时无法读取本机模型目录。');
+  }else lines.push('本机模型目录未提供此模型的窗口大小。');
+  if(snapshot?.engineContextWindow)lines.push('当前项目的 Codex 配置指定了 '+format(snapshot.engineContextWindow)+' tokens。');
+  lines.push('本轮实际可用窗口可在对话的「上下文详情」查看。');
+  catalogInfo.textContent=lines.join(' ');
+ }
+ function showWindowSize(){
+  const size=Object.hasOwn(snapshot?.contextWindows||{},windowModel.value)?snapshot.contextWindows[windowModel.value]:null;
+  windowSize.value=size==null?'':String(size);windowClear.disabled=size==null||busy;
+  showWindowInfo();
+ }
+ function showModels(){
+  const previous=windowModel.value;
+  const models=new Set([...(snapshot.models||[]).map(m=>m.model),...Object.keys(snapshot.contextWindows||{})]);
+  if(snapshot.fields.model?.value)models.add(snapshot.fields.model.value);
+  windowModel.replaceChildren();
+  for(const model of models){const option=node('option',model);option.value=model;windowModel.append(option);}
+  if(models.has(previous))windowModel.value=previous;
+  else if(snapshot.fields.model?.value)windowModel.value=snapshot.fields.model.value;
+  showWindowSize();
+ }
+ async function saveWindow(clear){
+  if(!snapshot||busy||!windowModel.value)return;
+  const model=windowModel.value,size=clear?null:Number(windowSize.value);
+  if(!clear&&(!Number.isSafeInteger(size)||size<=0)){windowStatus.textContent='请输入大于零的整数。';windowSize.focus();return;}
+  const version=generation;busy=true;sync();windowStatus.textContent='正在保存…';
+  try{
+   const result=await setContextWindow(model,size);if(!current(version))return;
+   snapshot.contextWindows=result.contextWindows;showModels();windowStatus.textContent=clear?'已恢复引擎默认值。':'已保存 '+model+' 的上下文大小。';
+  }catch(error){if(current(version))windowStatus.textContent=error.message||'保存失败，请重试。';}
+  finally{if(current(version)){busy=false;sync();}}
+ }
+ windowModel.addEventListener('change',()=>{showWindowSize();windowStatus.textContent='';});
+ windowSave.addEventListener('click',()=>saveWindow(false));windowClear.addEventListener('click',()=>saveWindow(true));
+ catalogRefresh.addEventListener('click',async()=>{
+  if(!readWindowCatalog||!snapshot||busy)return;
+  const version=generation;busy=true;sync();windowStatus.textContent='正在读取本机模型目录…';
+  try{
+   const result=await readWindowCatalog();if(!current(version))return;
+   snapshot.windowCatalog=result;showWindowInfo();windowStatus.textContent=result.status==='ready'?'已重新读取本机目录。':'';
+  }catch(error){if(current(version))windowStatus.textContent=error.message||'读取失败，请重试。';}
+  finally{if(current(version)){busy=false;sync();}}
+ });
  const current=v=>!disposed&&generation===v;
  function changes(){
   if(!snapshot)return [];
@@ -31,6 +100,10 @@ export function mountConfigSettingsPanel(container,{read,plan,apply,clock=()=>Da
   refresh.disabled=busy;save.disabled=busy||unknown;confirm.disabled=busy||unknown;cancel.disabled=busy;
   for(const control of inputs.values())control.disabled=busy||unknown;
   container.setAttribute('aria-busy',String(busy));
+  windowPanel.hidden=!snapshot||!setContextWindow;
+  windowModel.disabled=busy;windowSize.disabled=windowSave.disabled=busy||!windowModel.value;
+  catalogRefresh.disabled=busy;
+  windowClear.disabled=busy||!Object.hasOwn(snapshot?.contextWindows||{},windowModel.value);
  }
  function clearPlan(){prepared=null;diff.replaceChildren();}
  function options(control,values,selected,label){
@@ -73,7 +146,7 @@ export function mountConfigSettingsPanel(container,{read,plan,apply,clock=()=>Da
   try{
    const data=await read();if(!current(version))return;
    if(!data?.fields||typeof data.fields!=='object')throw Error();
-   snapshot=data;unknown=false;renderFields();
+   snapshot=data;unknown=false;renderFields();if(setContextWindow){showModels();windowStatus.textContent='';}
    status.textContent=message||(inputs.size?'已读取当前配置。':'已读取当前配置，当前环境没有可修改的选项。');
   }catch{if(current(version))status.textContent='配置读取失败，可重新读取。';}
   finally{if(current(version)){busy=false;sync();}}
@@ -95,7 +168,7 @@ export function mountConfigSettingsPanel(container,{read,plan,apply,clock=()=>Da
   if(busy||unknown||disposed||!snapshot)return;
   const edits=changes();if(!edits.length)return;
   if(edits.some(e=>e.key===THREAD_LIMIT&&!(Number.isSafeInteger(e.value)&&e.value>0))){status.textContent='并发线程上限须为正整数。';inputs.get(THREAD_LIMIT)?.focus();return;}
-  const version=++generation;busy=true;clearPlan();sync();status.textContent='正在核对更改…';
+  const version=++generation;busy=true;clearPlan();sync();status.textContent='正在预览更改…';
   let p;
   try{
    p=await plan(edits);if(!current(version))return;

@@ -14,7 +14,6 @@
 .plugins-controls input[type=search]:focus-visible { outline:2px solid var(--focus);outline-offset:2px; }
 .plugins-remote { display:inline-flex;align-items:center;gap:7px;font-size:.75rem;color:var(--secondary);white-space:nowrap; }
 .plugins-remote[hidden],.plugins-notice[hidden] { display:none; }
-.plugins-remote input[type=checkbox] { width:16px;height:16px;margin:0;accent-color:var(--accent); }
 .plugins-overview { display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:4px 12px;margin:18px 0 12px; }
 .plugins-overview-title { margin:0;font-size:.875rem;line-height:1.5;font-weight:650; }
 .plugins-status,.plugins-note { color:var(--secondary);font-size:.75rem;line-height:1.55;text-wrap:pretty; }

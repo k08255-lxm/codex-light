@@ -16,6 +16,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 public class MainActivity extends Activity {
+    @Override protected void attachBaseContext(android.content.Context base) { super.attachBaseContext(DeviceAppearance.apply(base)); }
     public static final int FILE_CHOOSER_REQUEST_CODE = 1001;
 
     private WebView webView;
@@ -253,18 +254,22 @@ public class MainActivity extends Activity {
 
     public void setRealtimeNotifications(boolean enabled, boolean questionsEnabled) {
         if (!trustedTaskNotificationPage() || !canOpenWorkbenchSettings() || !hasWindowFocus()) return;
+        if (enabled && questionsEnabled) questionNotifications.setFirstPromptDeclined(false);
         MobileNotificationService.remember(this, currentConfig, enabled, questionsEnabled);
         backgroundPermissionTarget = enabled && !taskNotifications.permissionGranted() ? currentConfig : null;
         taskNotifications.setEnabled(enabled, this);
         if (!enabled || taskNotifications.permissionGranted())
             MobileNotificationService.setEnabled(this, currentConfig, enabled);
         notifyTaskNotificationStatus();
+        notifyQuestionNotificationStatus();
     }
 
     private void resumeSavedNotifications() {
         if (snapshotPageReady && trustedTaskNotificationPage() && hasWindowFocus()
-                && taskNotifications.permissionGranted())
+                && taskNotifications.permissionGranted()) {
+            taskNotifications.bindFirstNotificationChoice(currentConfig);
             MobileNotificationService.resumeSaved(this, currentConfig);
+        }
     }
 
     @Override public void onWindowFocusChanged(boolean focused) {
@@ -307,7 +312,10 @@ public class MainActivity extends Activity {
     }
 
     public void requestQuestionNotificationPermission() {
-        if (trustedTaskNotificationPage() && questionNotifications != null) questionNotifications.requestPermission(this);
+        if (trustedTaskNotificationPage() && questionNotifications != null) {
+            questionNotifications.requestPermission(this);
+            notifyQuestionNotificationStatus();
+        }
     }
 
     public void setBackgroundQuestionAlerts(boolean enabled) {

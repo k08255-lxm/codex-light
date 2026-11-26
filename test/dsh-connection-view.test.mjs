@@ -171,10 +171,10 @@ test('plan conflict for an existing config is stated without retry', async () =>
 });
 
 test('an unknown connect outcome is reported as unknown and never resent', async () => {
-  const h = harness([status(), { planId: 'p2' }, fail('CONNECTION_OUTCOME_UNKNOWN', '配置写入结果需核对', 'unknown'), status()]);
+  const h = harness([status(), { planId: 'p2' }, fail('CONNECTION_OUTCOME_UNKNOWN', '未收到配置写入结果', 'unknown'), status()]);
   h.view.activate(); await settle(); h.byText('连接 DSH').click(); await settle();
   assert.equal(h.paths().filter(p => p.endsWith('/connect')).length, 1);
-  assert.match(h.host.textContent, /连接结果未知/); assert.match(h.host.textContent, /不会自动重发/);
+  assert.match(h.host.textContent, /未收到连接结果/); assert.match(h.host.textContent, /已重新读取连接状态/);
 });
 
 test('unavailable bundle or config limits only this feature', () => {

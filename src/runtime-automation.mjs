@@ -54,7 +54,7 @@ export class RuntimeAutomation {
  async load(){
   try{
    this.state=await this.store.read();
-   if(this.state.result?.outcome==='installing')await this.change(next=>{next.queuedVersion=null;next.result={...next.result,outcome:'unknown',message:'上次安装未确认完成。请核对当前版本后再安装。'};});
+   if(this.state.result?.outcome==='installing')await this.change(next=>{next.queuedVersion=null;next.result={...next.result,outcome:'unknown',message:'上次安装中断，请在「引擎更新」查看当前版本。'};});
   }catch{this.error='运行引擎设置无法读取或保存，自动更新已暂停。';this.state={...defaults(),checkAutomatically:false};}
  }
  change(update){
@@ -126,7 +126,7 @@ export class RuntimeAutomation {
    try{status=await runtime.check();}catch(error){await finish('deferred','无法重新确认待安装版本。'+error.message,{keep:true});return null;}
    if(this.closed)return null;
    if(!status.npm?.available||!status.npm.version||status.latest?.version!==queued){await finish('deferred','已检查版本或 npm 安装发生变化，请重新检查。');return null;}
-   if(compareVersions(status.npm.version,queued)>=0){await finish('succeeded','已核对 npm CLI 达到计划版本。');return null;}
+   if(compareVersions(status.npm.version,queued)>=0){await finish('succeeded','npm CLI 已达到计划版本。');return null;}
    await finish('installing',null,{keep:true});
    if(this.closed){await finish('deferred','更新在安装前取消。',{keep:true});return null;}
    this.phase='installing';this.emit();
@@ -141,7 +141,7 @@ export class RuntimeAutomation {
    if(replacement.npm?.version!==queued||!replacement.npm.path){await finish('unknown','安装完成后无法确认引擎路径。');return null;}
    try{await finish('succeeded');}catch{this.error='已验证新引擎，但无法保存更新结果。';}
    return replacement.npm.path;
-  }catch{this.error='运行引擎更新记录无法保存，请核对安装状态。';return null;}
+  }catch{this.error='无法保存引擎更新记录。可在「引擎更新」查看已安装版本。';return null;}
   finally{this.phase='idle';this.emit();}
  }
  close(){this.closed=true;clearTimeout(this.timer);}

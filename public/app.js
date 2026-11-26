@@ -274,7 +274,10 @@ async function fetchArtifactPreview(path, threadId = state.thread?.id, workspace
 const lightbox = mountLightbox(document);
 const artifactView = mountArtifacts({ document, fetchPreview: fetchArtifactPreview, getScope:()=>state.thread?.id||null, onOpen: view => lightbox.open(view), resolveImage: (itemId, slot) => state.store.image(itemId, slot) });
 const conversationScroll=mountConversationScroll($('conversation'));
-const conversation = mountConversation($('messages'), { scrollController:conversationScroll, onLocalLink: previewLocalFile, getCwd: () => state.thread?.cwd || state.cwd, getThreadId:()=>state.thread?.id, onAnswerAsync:payload=>answerAsync(payload), artifacts: artifactView, onOpenAgent:(id,kind)=>{showDetails('dsh',true);dshView.openAgent(id,kind);} });
+const conversation = mountConversation($('messages'), { scrollController:conversationScroll,
+  onFork:(threadId,lastTurnId)=>forkCurrentThread(lastTurnId,threadId),
+  readTurnUsage:(threadId,turnIds)=>api('/api/statistics/turns',{threadId,turnIds}),
+  ensurePrices:()=>api('/api/pricing/ensure',{}),getContext:()=>state.contexts.get(state.thread?.id), onLocalLink: previewLocalFile, getCwd: () => state.thread?.cwd || state.cwd, getThreadId:()=>state.thread?.id, onAnswerAsync:payload=>answerAsync(payload), artifacts: artifactView, onOpenAgent:(id,kind)=>{showDetails('dsh',true);dshView.openAgent(id,kind);} });
 setInterval(() => { if (conversation.hasRunningClock() && document.visibilityState === 'visible') conversation.tick(); }, 1000);
 /** Leaves a thread's subscription. Active work is retained by the bridge; that is not an error. */
 function releaseThread(threadId) {
@@ -572,9 +575,9 @@ function resetAccountScopedViews(reason='账户已改变'){
   taskNotifications?.reset();
   questionNotifications?.reset();
   threadSearchCache.clear();threadSearchController?.abort();state.searchGeneration++;searchStatus={text:'',busy:false};renderThreads();
-  accountQuota.reset();if(state.connected)accountQuota.refresh();resetUsage();configPanel.reset();pluginPanel.reset();resetRuntimePanel();remoteReset({statusMessage:reason+'，请重新读取远控状态。',pairMessage:reason+'，本机配对码显示已清除；不会撤销原账户或环境设备。',devicesMessage:reason+'，旧设备显示已清除；不会撤销原账户或环境设备。'});sessionDefaults.clear();state.dshReadGeneration++;state.dshReads.clear();state.dshReadErrors.clear();state.dshOpenDetails.clear();dshTasks.reset(state.thread?.id||null);state.dshConnection=null;renderDshConnection();dshLive.reset();syncDshLiveContext();if(state.connected)syncSessionDefaults();
+  accountQuota.reset();if(state.connected)accountQuota.refresh();resetUsage();configPanel.reset();pluginPanel.reset();resetRuntimePanel();remoteReset({statusMessage:reason+'，请重新读取远控状态。',pairMessage:reason+'，旧配对码已隐藏。',devicesMessage:reason+'，旧设备显示已清除；不会撤销原账户或环境设备。'});sessionDefaults.clear();state.dshReadGeneration++;state.dshReads.clear();state.dshReadErrors.clear();state.dshOpenDetails.clear();dshTasks.reset(state.thread?.id||null);state.dshConnection=null;renderDshConnection();dshLive.reset();syncDshLiveContext();if(state.connected)syncSessionDefaults();
 }
-const configPanel=mountConfigSettingsPanel($('config-panel'),{read:()=>api('/api/config-settings/read',state.cwd?{cwd:state.cwd}:{}),plan:edits=>{if(scopedPending('config').length)throw new Error('配置状态仍在自动同步');return api('/api/config-settings/plan',{edits});},apply:params=>{if(pendingMutations.storageError||scopedPending('config').length)throw new Error('配置状态仍在自动同步');return performMutation('config/apply',params);}});
+const configPanel=mountConfigSettingsPanel($('config-panel'),{readWindowCatalog:()=>api('/api/config-settings/window-catalog',{}),setContextWindow:(model,size)=>api('/api/config-settings/context-window',{model,size}),read:()=>api('/api/config-settings/read',state.cwd?{cwd:state.cwd}:{}),plan:edits=>{if(scopedPending('config').length)throw new Error('配置状态仍在自动同步');return api('/api/config-settings/plan',{edits});},apply:params=>{if(pendingMutations.storageError||scopedPending('config').length)throw new Error('配置状态仍在自动同步');return performMutation('config/apply',params);}});
 function renderConfigPending(){const host=$('config-pending');if(!host)return;const records=scopedPending('config');host.replaceChildren();for(const marker of records){const row=el('div','pending-inline');row.setAttribute('role','status');const status=el('span','pending-inline-status','正在更新配置状态…');const failure=pendingReconcileErrors.get(marker.requestId);if(failure)status.title=failure;row.append(status);host.append(row);}}
 let eventsReconnecting = false;
 function setConnected(connected, label) {
@@ -588,7 +591,7 @@ function setConnected(connected, label) {
     historyAutoLoad.reset();
     if (searchStatus.busy) searchStatus = {text:'',busy:false};
   }
-  if(!connected){taskNotifications?.disconnected();sessionControls.invalidate();resetContext();} if(state.connected !== connected){accountIdentity.reset();deactivatePendingReconciler();pluginPanel.reset();configPanel.reset();resetUsage();if(!connected)accountLoginPanel.update({state:'unknown'});state.dshReadGeneration++;state.dshReads.clear();state.dshReadErrors.clear();} state.connected = connected; renderThreads(); if(connected)accountQuota.start(state.serverInstance);else accountQuota.stop(); if(!connected){followUps.pauseAll('连接已断开');renderQueue();state.searchGeneration++;resetRuntimePanel();remoteReset({statusMessage:'连接已断开，无法读取远控状态。',pairMessage:'连接已断开，本机配对码显示已清除；不会撤销任何设备。',devicesMessage:'连接已断开，设备列表显示已清除；未撤销旧环境设备。'});}$('connection-dot').className = connected ? 'ok' : 'bad'; $('connection-text').textContent = label || (connected ? '本地 Codex 已连接' : '连接已断开'); $('status-info').textContent = $('connection-text').textContent; updateControls(); renderDshConnection(); remoteControls(); syncSessionDefaults(); syncDshLiveContext(); syncDelegationMonitor(); syncPendingReconciler(); syncRuntimePanelActivity(); connectionBootstrap.update(connected,state.serverInstance); }
+  if(!connected){taskNotifications?.disconnected();sessionControls.invalidate();resetContext();} if(state.connected !== connected){accountIdentity.reset();deactivatePendingReconciler();pluginPanel.reset();configPanel.reset();resetUsage();if(!connected)accountLoginPanel.update({state:'unknown'});state.dshReadGeneration++;state.dshReads.clear();state.dshReadErrors.clear();} state.connected = connected; renderThreads(); if(connected)accountQuota.start(state.serverInstance);else accountQuota.stop(); if(!connected){followUps.pauseAll('连接已断开');renderQueue();state.searchGeneration++;resetRuntimePanel();remoteReset({statusMessage:'连接已断开，无法读取远控状态。',pairMessage:'连接已断开，配对码已隐藏。',devicesMessage:'连接已断开，设备列表显示已清除；未撤销旧环境设备。'});}$('connection-dot').className = connected ? 'ok' : 'bad'; $('connection-text').textContent = label || (connected ? '本地 Codex 已连接' : '连接已断开'); $('status-info').textContent = $('connection-text').textContent; updateControls(); renderDshConnection(); remoteControls(); syncSessionDefaults(); syncDshLiveContext(); syncDelegationMonitor(); syncPendingReconciler(); syncRuntimePanelActivity(); connectionBootstrap.update(connected,state.serverInstance); }
 function syncSessionDefaults(){sessionDefaults.sync({connected:state.connected,serverInstance:state.serverInstance,cwd:state.cwd,enabled:!state.demo});}
 function formatModelDisplayName(value){const text=typeof value==='string'?value.trim():'';if(!text)return '';return text.replace(/^GPT-(\d+(?:\.\d+)?)-([A-Za-z][A-Za-z0-9]*(?:[-.][A-Za-z0-9]+)*)/,'GPT-$1 $2');}
 function effectiveModel(){const id=activeModelId($('model').value,sessionDefaults.snapshot().value);return {id,model:id?state.models.find(entry=>entry.model===id)||null:null};}
@@ -1276,6 +1279,7 @@ function renderContext() {
   contextDetails.update(id,state.contexts.get(id)||null,pendingContextRead?.id===id);
 }
 function cacheContext(snapshot,source) {
+  if(snapshot.turnId)conversation.refreshTurnUsage(snapshot.threadId,snapshot.turnId);
   state.contexts.delete(snapshot.threadId);
   state.contexts.set(snapshot.threadId,{...snapshot,source});
   if(state.contexts.size>512)state.contexts.delete(state.contexts.keys().next().value);
@@ -1349,7 +1353,26 @@ async function compactThread() {
   catch (e) { showMutationFailure(e, '压缩上下文'); activity(''); }
   finally { state.sending = false; updateControls(); }
 }
-function autosizePrompt() { const prompt = $('prompt'); prompt.style.height = 'auto'; prompt.style.height = Math.min(prompt.scrollHeight, 220) + 'px'; }
+const nativePromptSizing = CSS.supports('field-sizing', 'content');
+let promptMeasure = null;
+function autosizePrompt() {
+  if (nativePromptSizing) return;
+  // Older WebViews need a measurement outside the flex flow. Shrinking the live
+  // field to measure it momentarily expands the transcript and clamps its scrollTop.
+  const prompt = $('prompt');
+  if (!promptMeasure) {
+    promptMeasure = el('textarea','prompt-measure');
+    promptMeasure.tabIndex = -1;
+    promptMeasure.setAttribute('aria-hidden','true');
+    promptMeasure.readOnly = true;
+    prompt.after(promptMeasure);
+  }
+  promptMeasure.style.width = prompt.offsetWidth + 'px';
+  promptMeasure.value = prompt.value;
+  const height = Math.min(promptMeasure.scrollHeight,220) + 'px';
+  if (prompt.style.height !== height) prompt.style.height = height;
+}
+if (!nativePromptSizing) window.addEventListener('resize', autosizePrompt);
 // IME composition always wins: Enter/arrow keys confirm candidates and must not send or move the menu.
 function onPromptKey(e) {
   if (e.isComposing || e.keyCode === 229) return;
@@ -1564,7 +1587,7 @@ function onEvent(message) {
     renderThreads();updateControls();return;
   }
   if(message.method==='account/updated')return accountIdentity.verify();
-  if(message.method==='bridge/statisticsRecovered'){statsView.recovered();return;}
+  if(message.method==='bridge/statisticsRecovered'){statsView.recovered();conversation.recoverTurnUsage();return;}
   if(message.method==='bridge/accountLogin'){accountLoginPanel.update(message.params);if(['completed','loggedOut'].includes(message.params?.state)){accountIdentity.reset();resetAccountScopedViews('账户已改变');}return;}
   if(message.method==='thread/tokenUsage/updated'){if(!state.connected)return;const snapshot=contextSnapshot(message.params);if(snapshot){cacheContext(snapshot,'live');if(snapshot.threadId===state.thread?.id)renderContext();}return;}
   if(message.method==='bridge/threadReads'){
@@ -1642,7 +1665,7 @@ function applyThreadSessions(params) {
 }
 async function syncStatus() {
   const updateRevision=aboutView.revision;
-  const status = await api('/api/status'); applyAccessMode(state.lan || status.access === 'lan'); state.cliVersion = typeof status.version==='string'&&status.version ? boundedText(status.version,300) : null; state.desktop = status.desktop === true; state.canImportSkill = status.canImportSkill === true; state.runtimeTarget=status.runtimeTarget==='wsl'?'wsl':'native';applyRuntimeTarget(); if($('version-info'))$('version-info').textContent=state.cliVersion||'未知'; document.body.classList.toggle('native-desktop',state.desktop); $('runtime-close-info').textContent='停止服务会中断正在运行的本应用任务。'; $('reopen-info').textContent=state.desktop?'重新打开窗口可查看对话历史。':status.reopenAvailable===true?'可通过启动器重新打开本地界面。':status.reopenAvailable===false?'关闭后可能需要重新运行启动器。':''; if(!state.desktop&&status.reopenError)$('reopen-info').textContent+=' '+boundedText(status.reopenError,800); if(state.serverInstance !== (status.serverInstance || null)){resetContext();sessionControls.reset();deactivatePendingReconciler();historyCaps.unsupported.clear();pluginPanel.reset();configPanel.reset();resetUsage();resetRuntimePanel();dshLive.reset();remoteReset({statusMessage:'本地服务实例已变化，请重新读取远控状态。',pairMessage:'本地服务实例已变化，本机配对码显示已清除；不会撤销旧环境设备。',devicesMessage:'本地服务实例已变化，旧设备显示已清除；不会撤销旧环境设备。'});}state.serverInstance = status.serverInstance || null; state.demo = !!status.demo; setConnected(status.connected, status.demo ? '演示模式 · 不调用模型' : undefined); if(state.desktop){await loadDesktopState();preferencesView.syncHostTheme();} $('mode-info').textContent = status.demo ? '演示模式，不消耗额度' : '本地 Codex app-server';
+  const status = await api('/api/status'); applyAccessMode(state.lan || status.access === 'lan'); state.cliVersion = typeof status.version==='string'&&status.version ? boundedText(status.version,300) : null; state.desktop = status.desktop === true; state.canImportSkill = status.canImportSkill === true; state.runtimeTarget=status.runtimeTarget==='wsl'?'wsl':'native';applyRuntimeTarget(); if($('version-info'))$('version-info').textContent=state.cliVersion||'未知'; document.body.classList.toggle('native-desktop',state.desktop); $('runtime-close-info').textContent='停止服务会中断正在运行的本应用任务。'; $('reopen-info').textContent=state.desktop?'重新打开窗口可查看对话历史。':status.reopenAvailable===true?'可通过启动器重新打开本地界面。':status.reopenAvailable===false?'关闭后可能需要重新运行启动器。':''; if(!state.desktop&&status.reopenError)$('reopen-info').textContent+=' '+boundedText(status.reopenError,800); if(state.serverInstance !== (status.serverInstance || null)){resetContext();sessionControls.reset();deactivatePendingReconciler();historyCaps.unsupported.clear();pluginPanel.reset();configPanel.reset();resetUsage();resetRuntimePanel();dshLive.reset();if(state.serverInstance)remoteReset({statusMessage:'本地服务已切换。',pairMessage:'服务已切换，旧配对码已隐藏。',devicesMessage:'刷新后可查看当前服务的设备。'});}state.serverInstance = status.serverInstance || null; state.demo = !!status.demo; setConnected(status.connected, status.demo ? '演示模式 · 不调用模型' : undefined); if(state.desktop){await loadDesktopState();preferencesView.syncHostTheme();} preferencesView.offerFirstTheme(); $('mode-info').textContent = status.demo ? '演示模式，不消耗额度' : '本地 Codex app-server';
   // Replace with the server's current set; unchanged instances keep their card and draft.
   if(status.nodeUpdate&&!state.lan)updateNodeRuntime(status.nodeUpdate);
   if(status.appUpdate&&!state.lan&&aboutView.revision===updateRevision)applyAutomaticUpdate(status.appUpdate);
@@ -1940,7 +1963,7 @@ function selectSettingsSection(section = 'general') {
   if(page==='remote'&&!state.lan)lanView.activate();else lanView.deactivate();
   if(page==='about')aboutView.activate();else aboutView.deactivate();
   if(page==='storage'&&!state.lan)storageView.activate();else storageView.deactivate();
-  if (page === 'remote'){if(state.connected)refreshRemote();else remoteReset({statusMessage:'尚未连接 Codex，无法读取远控状态。',pairMessage:'尚未连接，本机配对码显示已清除；不会撤销已配对设备。',devicesMessage:'未连接时设备列表不可用；不会撤销旧环境设备。'});}
+  if (page === 'remote'){if(state.connected)refreshRemote();else remoteReset({statusMessage:'尚未连接 Codex，无法读取远控状态。',pairMessage:'连接已断开，配对码已隐藏。',devicesMessage:'未连接时设备列表不可用；不会撤销旧环境设备。'});}
   syncRuntimePanelActivity();
   if(currentRoute==='settings')recordNavigation();
   return ready;
@@ -2084,15 +2107,15 @@ async function restoreArchived(thread) {
   catch (e) { showMutationFailure(e, '恢复归档'); }
   finally { state.sending = false; updateControls(); renderArchived(); }
 }
-async function forkCurrentThread() {
-  closeThreadMenu(); if (!canManageThread()) return; const target = state.thread; const generation = state.openGeneration;
+async function forkCurrentThread(lastTurnId=null, threadId=state.thread?.id) {
+  closeThreadMenu(); if(threadId!==state.thread?.id||!canManageThread()){notice('当前对话暂时无法创建分支，请在连接恢复或任务结束后重试。',true);return;} const target = state.thread; const generation = state.openGeneration;
   state.sending = true; updateControls();
-  try { const result = await performMutation('thread/fork', {threadId:target.id,excludeTurns:true}); await loadThreads(); if (generation === state.openGeneration && result.thread?.id) await openThread(result.thread); }
+  try { const result = await performMutation('thread/fork', {threadId:target.id,excludeTurns:true,...(lastTurnId?{lastTurnId}:{})}); if (generation === state.openGeneration && result.thread?.id) await openThread(result.thread); await refreshThreadListAfterMutation(); }
   catch (e) { showMutationFailure(e, '创建分支'); }
   finally { state.sending = false; updateControls(); }
 }
 $('thread-menu-button').addEventListener('click', () => { if ($('thread-menu').classList.contains('hidden')) { closeWindowMenu(); $('thread-menu').classList.remove('hidden'); $('thread-menu-button').setAttribute('aria-expanded','true'); $('rename-thread').focus(); } else closeThreadMenu(true); });
-$('rename-thread').addEventListener('click',()=>openRename()); $('fork-thread').addEventListener('click',forkCurrentThread); $('archive-thread').addEventListener('click',()=>{closeThreadMenu();removeThread(state.thread,'archive',$('thread-menu-button'));});
+$('rename-thread').addEventListener('click',()=>openRename()); $('fork-thread').addEventListener('click',()=>forkCurrentThread()); $('archive-thread').addEventListener('click',()=>{closeThreadMenu();removeThread(state.thread,'archive',$('thread-menu-button'));});
 $('rename-form').addEventListener('submit',renameThread); $('rename-input').addEventListener('input',()=>$('rename-input').setCustomValidity(''));
 for (const id of ['rename-close','rename-cancel']) $(id).addEventListener('click',()=>{if(!state.sending)$('rename-dialog').close();});
 $('rename-dialog').addEventListener('cancel',event=>{if(state.sending)event.preventDefault();});

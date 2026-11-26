@@ -16,6 +16,7 @@ import com.google.zxing.common.HybridBinarizer;
 /** Camera is active only on this visible scan screen. Frames never leave the device. */
 @SuppressWarnings("deprecation")
 public final class QrScanActivity extends Activity implements SurfaceHolder.Callback {
+    @Override protected void attachBaseContext(android.content.Context base) { super.attachBaseContext(DeviceAppearance.apply(base)); }
  private Camera camera;private SurfaceView preview;private TextView hint;private boolean surfaceReady=false,decoding=false,finished=false;
  @Override public void onCreate(Bundle b){super.onCreate(b);getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
   LinearLayout root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);root.setPadding(24,24,24,24);

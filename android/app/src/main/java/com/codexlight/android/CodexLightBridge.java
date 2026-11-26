@@ -43,6 +43,18 @@ public class CodexLightBridge {
     }
 
     @JavascriptInterface
+    public String getPreferredTheme() {
+        return activity instanceof MainActivity && ((MainActivity)activity).trustedTaskNotificationPage()
+            ? DeviceAppearance.theme(activity) : "";
+    }
+
+    @JavascriptInterface
+    public void setPreferredTheme(String theme) {
+        if (activity instanceof MainActivity && ((MainActivity)activity).trustedTaskNotificationPage())
+            DeviceAppearance.save(activity,theme);
+    }
+
+    @JavascriptInterface
     public void openServerManager() {
         if (activity instanceof MainActivity) {
             activity.runOnUiThread(() -> ((MainActivity) activity).openWorkbenchServerManager());

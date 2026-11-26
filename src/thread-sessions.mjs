@@ -3,11 +3,11 @@
 const fail=(message,code)=>Object.assign(new Error(message),{code,outcome:'notExecuted',status:409});
 const workMethods=new Set(['turn/start','review/start','thread/compact/start']);
 export class ThreadSessions {
- constructor(rpc,{onEvent=()=>{},onThreadLoaded=()=>{},closeTimeout=1000}={}){Object.assign(this,{rpc,onEvent,onThreadLoaded,closeTimeout});this.entries=new Map();this.queues=new Map();this.closed=false;}
+ constructor(rpc,{onEvent=()=>{},onThreadLoaded=()=>{},contextWindows=null,closeTimeout=1000}={}){Object.assign(this,{rpc,onEvent,onThreadLoaded,contextWindows,closeTimeout});this.entries=new Map();this.queues=new Map();this.closed=false;}
  serial(id,run){const previous=this.queues.get(id)||Promise.resolve();const current=previous.catch(()=>{}).then(run);this.queues.set(id,current);current.finally(()=>{if(this.queues.get(id)===current)this.queues.delete(id);}).catch(()=>{});return current;}
  runIdle(id,run){return this.serial(id,async()=>{
   if(this.closed)throw fail('Light 正在关闭，此请求未发送','CLIENT_CLOSING');
-  const check=()=>{const entry=this.entries.get(id);if(entry?.activeTurnId||entry?.unknown)throw fail('对话正在运行或结果待核对，请稍后再试','TURN_ACTIVE');};
+  const check=()=>{const entry=this.entries.get(id);if(entry?.activeTurnId||entry?.unknown)throw fail('对话正在运行或等待引擎确认，请稍后再试','TURN_ACTIVE');};
   check();
   let current;
   try{current=await this.rpc.call('thread/read',{threadId:id,includeTurns:false});}
@@ -20,7 +20,24 @@ export class ThreadSessions {
  changed(){this.onEvent({method:'bridge/threadSessions',params:this.snapshot()});}
  snapshot(){return {threads:[...this.entries].map(([threadId,e])=>({threadId,activeTurnId:e.activeTurnId||null,state:e.unknown?'unknown':e.activeTurnId?'active':'idle',releaseError:e.releaseError||null}))};}
  entry(id){let e=this.entries.get(id);if(!e){e={loaded:false,unpersisted:false,activeTurnId:null,completed:new Set()};this.entries.set(id,e);}return e;}
- async ensureLoaded(id){const e=this.entry(id);if(!e.loaded){try{const result=await this.rpc.call('thread/resume',{threadId:id,excludeTurns:true});e.loaded=true;this.onThreadLoaded(result);}catch(error){
+ async resume(params){
+  // The engine can acknowledge unsubscribe before the previous session finishes closing.
+  for(let attempt=0;;attempt++){
+   if(this.closed)throw fail('Light 正在关闭，此请求未发送','CLIENT_CLOSING');
+   try{return await this.rpc.call('thread/resume',params);}
+   catch(error){
+    if(error.code!==-32600||!error.message.includes('is closing; retry thread/resume')||attempt>=5)throw error;
+    await new Promise(resolve=>setTimeout(resolve,50*(attempt+1)));
+   }
+  }
+ }
+ async ensureLoaded(id,work){const e=this.entry(id);if(!e.loaded){try{
+  const base={threadId:id,excludeTurns:true};
+  const params=this.contextWindows?await this.contextWindows.sessionParams(this.rpc,base,work):base;
+  const result=await this.resume(params);
+  this.entries.set(id,e);
+  e.loaded=true;e.contextWindow=params.config?.model_context_window;e.model=result.model||params.model;this.onThreadLoaded(result);
+ }catch(error){
   if(typeof error.code==='number'||error.outcome==='notExecuted'||['NOT_CONNECTED','INPUT_BACKPRESSURE','TOO_MANY_REQUESTS'].includes(error.code))this.entries.delete(id);
   else{e.loaded=true;e.unknown=true;this.changed();}
   // The work RPC has not been sent even if the resume outcome is uncertain.
@@ -43,6 +60,8 @@ export class ThreadSessions {
    if(this.closed)throw fail('Light 正在关闭，此请求未发送','CLIENT_CLOSING');
    const entry=this.entries.get(id);
    if(!entry?.loaded||entry.unknown||!entry.activeTurnId||entry.activeTurnId!==params.turnId)return {status:'targetUnavailable'};
+   if(params.model && params.model!==entry.model && this.contextWindows?.sizes.get(params.model)!==entry.contextWindow)
+    throw fail('两个模型的上下文窗口设置不同，可在本轮结束后切换。','CONTEXT_WINDOW_ACTIVE');
    let result;
    try{result=await this.rpc.call(method,params);}
    catch(error){
@@ -51,6 +70,7 @@ export class ThreadSessions {
     throw error;
    }
    if(!['applied','targetUnavailable'].includes(result?.status))throw Object.assign(new Error('Codex 未确认本次运行设置的结果'),{code:'UNCONFIRMED_TURN_SETTINGS',outcome:'unknown'});
+   if(result.status==='applied'&&params.model)entry.model=params.model;
    return result;
   });
   if(method==='turn/steer')return this.serial(id,async()=>{
@@ -61,9 +81,11 @@ export class ThreadSessions {
   });
   if(workMethods.has(method))return this.serial(id,async()=>{
    if(this.closed)throw fail('Light 正在关闭，此请求未发送','CLIENT_CLOSING');
-   const e=await this.ensureLoaded(id);
+   const e=await this.ensureLoaded(id,params);
    if(this.closed)throw fail('Light 正在关闭，此请求未发送','CLIENT_CLOSING');
-   if(e.activeTurnId||e.unknown)throw fail('此对话已有运行任务或结果待核对，请使用立即发送或排队','TURN_ACTIVE');
+   if(e.activeTurnId||e.unknown)throw fail('上一轮仍在运行或等待引擎确认。可以立即发送或排队','TURN_ACTIVE');
+   if(params.model && this.contextWindows?.sizes.get(params.model)!==e.contextWindow)
+    throw fail('模型的上下文配置已变化，请重新打开对话后发送。','CONTEXT_WINDOW_CHANGED');
    if(method==='thread/compact/start')e.unknown=true;
    try{
     beforeSend?.();
@@ -86,9 +108,10 @@ export class ThreadSessions {
     throw error;
    }
   });
+  if(method==='thread/start'&&this.contextWindows)params=await this.contextWindows.sessionParams(this.rpc,params);
   const result=await this.rpc.call(method,params);
   if(['thread/start','thread/fork'].includes(method)&&result?.thread?.id){
-   const created=this.entry(result.thread.id);created.loaded=true;created.unpersisted=method==='thread/start';this.changed();
+   const created=this.entry(result.thread.id);created.loaded=true;created.unpersisted=method==='thread/start';created.contextWindow=params.config?.model_context_window;created.model=result.model||params.model;this.changed();
    // A new empty thread has no rollout until its first turn. Unloading it here
    // makes that first send impossible to resume. Frontends create on first send.
    if(method==='thread/fork')await this.serial(result.thread.id,()=>this.release(result.thread.id)).catch(()=>{});

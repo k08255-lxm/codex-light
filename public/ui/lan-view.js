@@ -2,7 +2,7 @@
 // authenticated local management response; it is shown on demand and never stored.
 import { confirmLanPersistence } from '../lan-confirm-dialog.js';
 import { createAccessPairing } from './access-pairing-view.js';
-import { el } from './format.js';
+import { el, switchInput, onAsyncSwitchChange } from './format.js';
 import { mountTunnelAccess } from './tunnel-view.js';
 
 const ALL_ADDRESSES = 'auto';
@@ -13,10 +13,10 @@ export function mountLanAccess(host, { api, notice = () => {} }) {
   let consent = null, selectedAddress = '', selectedEndpoint = '', cancellation = null;
   const intro = el(document, 'p', 'fine', '让同一网络中的手机连接此电脑。局域网使用未加密的 HTTP，请在可信网络中开启。');
   const panel = el(document, 'div', 'panel lan-panel');
-  const state = el(document, 'div', 'pref-row');
+  const state = el(document, 'label', 'pref-row');
   const stateText = el(document, 'div'); const stateTitle = el(document, 'strong', '', '局域网访问'); const stateSub = el(document, 'small', 'fine');
   stateText.append(stateTitle, stateSub);
-  const toggle = el(document, 'input', 'switch'); toggle.type = 'checkbox'; toggle.setAttribute('aria-label', '局域网访问');
+  const toggle = switchInput(document); toggle.setAttribute('aria-label', '局域网访问');
   state.append(stateText, toggle);
   const addressRow = el(document, 'label', 'pref-row lan-address-row');
   const addressText = el(document, 'div');
@@ -180,7 +180,7 @@ export function mountLanAccess(host, { api, notice = () => {} }) {
     catch (error) { if (mine === generation) say(error.message, true); throw error; }
     finally { if (mine === generation) { busy = false; render(); } }
   }
-  toggle.addEventListener('change', async () => {
+  onAsyncSwitchChange(toggle, async () => {
     if (consent || busy) { render(); return; }
     const wanted = toggle.checked; toggle.checked = !wanted; // reflect actual state only after the server confirms
     say('');

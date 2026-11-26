@@ -20,7 +20,7 @@ export function percent(fraction, digits = 1) { return finite(fraction) ? (fract
 export function usd(value) {
   if (!finite(value)) return UNKNOWN;
   if (value === 0) return '$0';
-  return value < 0.01 ? '<$0.01' : '$' + value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: value < 10 ? 4 : 2 });
+  return value < 0.01 ? '$'+Number(value.toPrecision(5)).toString() : '$'+value.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:value<10?4:2});
 }
 export function seconds(ms) {
   if (!finite(ms)) return UNKNOWN;
@@ -59,4 +59,25 @@ export function el(document, tag, className, text) {
   if (className) node.className = className;
   if (text !== undefined && text !== null) node.textContent = String(text);
   return node;
+}
+
+export function switchInput(document) {
+  const input = el(document, 'input', 'switch');
+  input.type = 'checkbox';
+  input.setAttribute('role', 'switch');
+  return input;
+}
+
+// Native disabled controls lose focus while a save or refresh is in flight.
+export function onAsyncSwitchChange(input, update) {
+  input.addEventListener('change', async () => {
+    const document = input.ownerDocument;
+    const hadFocus = document.activeElement === input;
+    try {
+      await update();
+    } finally {
+      if (hadFocus && document.activeElement === document.body && input.isConnected && !input.disabled)
+        input.focus({ preventScroll: true });
+    }
+  });
 }

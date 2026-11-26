@@ -14,6 +14,7 @@ const ICONS = {
   usage: [['path', { d: 'M4.8 17a7.5 7.5 0 1 1 14.4 0' }], ['path', { d: 'M12 15.5l3.4-4.2' }], ['circle', { cx: '12', cy: '15.6', r: '1.2', fill: DOT }]],
   user: [['circle', { cx: '12', cy: '8.5', r: '3.5' }], ['path', { d: 'M5 19.5a7 7 0 0 1 14 0' }]],
   terminal: [['rect', { x: '3.5', y: '5', width: '17', height: '14', rx: '2.5' }], ['path', { d: 'M7.5 10l2.5 2-2.5 2' }], ['path', { d: 'M12.5 14.5h4' }]],
+  copy: [['rect',{x:'8',y:'8',width:'12',height:'13',rx:'2.5'}],['path',{d:'M15.5 5.5V5a2 2 0 0 0-2-2h-8a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2H6'}]],
   branch: [['circle', { cx: '7', cy: '6', r: '2' }], ['circle', { cx: '7', cy: '18', r: '2' }], ['circle', { cx: '17', cy: '9', r: '2' }], ['path', { d: 'M7 8v8' }], ['path', { d: 'M17 11a4 4 0 0 1-4 4H7.2' }]],
   plug: [['path', { d: 'M9.5 3.5v4M14.5 3.5v4' }], ['path', { d: 'M6.5 7.5h11v3a5.5 5.5 0 0 1-11 0z' }], ['path', { d: 'M12 16v4.5' }]],
   settings: [['path', { d: 'M4.5 7.5h8.5M17 7.5h2.5M4.5 16.5h2.5M11 16.5h8.5' }], ['circle', { cx: '15', cy: '7.5', r: '2' }], ['circle', { cx: '9', cy: '16.5', r: '2' }]],

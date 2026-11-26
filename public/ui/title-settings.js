@@ -1,9 +1,9 @@
-import {el} from './format.js';
+import {el,switchInput} from './format.js';
 
 export function mountTitleSettings(host,{api}){
  const document=host.ownerDocument;let busy=false;
  const panel=el(document,'div','panel');
- const enabled=el(document,'input','switch');enabled.type='checkbox';enabled.setAttribute('aria-label','自动总结对话标题');
+ const enabled=switchInput(document);enabled.setAttribute('aria-label','自动总结对话标题');
  const toggle=el(document,'label','pref-row');const copy=el(document,'div');copy.append(el(document,'strong','','自动总结对话标题'),el(document,'small','fine','默认从首条消息提炼本地标题。开启后，首轮结束和手动选择“摘要标题”时使用所选模型，失败或超时会保留本地标题。'));toggle.append(copy,enabled);
  const model=el(document,'select');model.id='title-summary-model';model.setAttribute('aria-label','标题总结模型');
  const modelLabel=el(document,'label');modelLabel.htmlFor=model.id;modelLabel.append(el(document,'strong','','总结模型'));

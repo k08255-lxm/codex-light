@@ -175,7 +175,7 @@ export function mountSkillsView(host, { read, write, pending, onCatalogChanged, 
     toggle.type = 'button';
     toggle.setAttribute('role', 'switch');
     toggle.setAttribute('aria-describedby', `${fullPath.id} ${feedback.id}`);
-    const track = make('span', 'skills-switch-track');
+    const track = make('span', 'switch');
     track.setAttribute('aria-hidden', 'true');
     toggle.append(track);
     toggle.addEventListener('click', () => { void change(path); });

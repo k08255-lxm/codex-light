@@ -1,5 +1,6 @@
 // Codex plugin inventory, catalog, and explicit install/uninstall confirmations.
 import { icon } from './icons.js';
+import { switchInput, onAsyncSwitchChange } from './ui/format.js';
 import { mountPluginActionsPanel, pluginActionVerb } from './plugin-actions-panel.js';
 const UNKNOWN='未知（服务未提供）';
 const plain=value=>value&&typeof value==='object'&&!Array.isArray(value);
@@ -82,7 +83,7 @@ export function mountPluginsPanel(container,{rpc,getContext=()=>({connected:fals
  const toolbar=make('div','plugins-toolbar'),views=make('div','plugins-views');views.setAttribute('role','group');views.setAttribute('aria-label','插件视图');
  const installed=button('已安装','plugins-view'),catalog=button('插件目录','plugins-view');views.append(installed,catalog);
  const controls=make('div','plugins-controls'),search=make('input');search.type='search';search.maxLength=200;
- const remote=make('input');remote.type='checkbox';const remoteLabel=make('label','plugins-remote');remoteLabel.append(remote,doc.createTextNode('包含远程目录'));
+ const remote=switchInput(doc);const remoteLabel=make('label','plugins-remote');remoteLabel.append(remote,doc.createTextNode('包含远程目录'));
  controls.append(search,remoteLabel);toolbar.append(views,controls);
  const overview=make('div','plugins-overview'),subtitle=make('h2','plugins-overview-title'),note=make('p','plugins-note');overview.append(subtitle,note);
  const status=make('p','plugins-status');status.setAttribute('role','status');
@@ -224,7 +225,7 @@ export function mountPluginsPanel(container,{rpc,getContext=()=>({connected:fals
          setNotice(`${row.title}：${verb}已返回成功，正在刷新插件列表。`,'good');
          // Refresh read-only in the current view, even if details were closed after submission.
          if(busy){generation++;busy=false;}
-         void refreshList().then(ok=>{if(!active||disposed||contextKey(getContext())!==key)return;setNotice(`${row.title}：${verb}已返回成功。`+(ok?(hasPending?'安装时有应用需要授权，后续可在官方 Codex 检查。':'列表已刷新。'):'未能刷新列表，请手动刷新核对。'),ok&&!hasPending?'good':'attention');});
+         void refreshList().then(ok=>{if(!active||disposed||contextKey(getContext())!==key)return;setNotice(`${row.title}：${verb}已返回成功。`+(ok?(hasPending?'安装时有应用需要授权，后续可在官方 Codex 检查。':'列表已刷新。'):'列表刷新失败，可点「刷新」。'),ok&&!hasPending?'good':'attention');});
         }
        }else if(result?.outcome!=='not-executed'&&active&&contextKey(getContext())===key){
         setNotice(`${row.title}：操作结果未知。请核查官方已安装状态；不会自动重试。`,'attention');render();
@@ -234,13 +235,13 @@ export function mountPluginsPanel(container,{rpc,getContext=()=>({connected:fals
      },
      onChanged:()=>{status.textContent='插件信息已变化，请刷新列表并重新查看，不会自动继续操作。';},
      onCancel:()=>{if(requestedAction)closeDetail();else{confirmation.hidden=true;actions.firstElementChild?.focus();}},
-     onResult:result=>{setChoicesDisabled(true);if(result?.outcome==='not-executed')setNotice('插件操作未提交，请刷新后重新核对。','attention');}
+     onResult:result=>{setChoicesDisabled(true);if(result?.outcome==='not-executed')setNotice('插件操作未提交，请重新选择插件。','attention');}
     });
     if(requestedAction&&allowed(row,requestedAction)&&!uncertainActions.has(itemKey))await actionPanel.select({handle:row.actionHandle,action:requestedAction});
    }
   }catch(e){if(valid(g,key)&&d===detailGeneration)showDetail(make('p','',errorLabel(e,'插件详情')));}
  }
- refresh.addEventListener('click',()=>refreshList());search.addEventListener('input',()=>{page=0;render();});installed.addEventListener('click',()=>switchView('installed'));catalog.addEventListener('click',()=>switchView('catalog'));remote.addEventListener('change',()=>refreshList());
+ refresh.addEventListener('click',()=>refreshList());search.addEventListener('input',()=>{page=0;render();});installed.addEventListener('click',()=>switchView('installed'));catalog.addEventListener('click',()=>switchView('catalog'));onAsyncSwitchChange(remote,refreshList);
  detail.addEventListener('keydown',e=>{if(e.key==='Escape'){e.stopPropagation();closeDetail();}});
  render();
  return {activate(){if(disposed)return;active=true;return refreshList();},refresh:refreshList,deactivate(){disposeAction();active=false;generation++;detailGeneration++;busy=false;refresh.disabled=false;remote.disabled=false;},reset(){disposeAction();generation++;detailGeneration++;rows=[];loaded=false;busy=false;refresh.disabled=false;remote.disabled=false;detail.hidden=true;pendingAuth.clear();setNotice('');render();status.textContent='连接或工作目录已改变，请刷新目录。';},destroy(){disposeAction();disposed=true;active=false;generation++;detailGeneration++;container.replaceChildren();}};

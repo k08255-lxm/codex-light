@@ -11,8 +11,8 @@ function harness(responses) {
   const api = async (path, body) => { calls.push([path, structuredClone(body)]); const next = responses.shift(); if (next instanceof Error) throw next; return next; };
   const view = mountDshConfig(host, { api });
   const buttons = () => host.querySelectorAll('button'); const byText = text => buttons().find(b => b.textContent === text);
-  const boxes = () => host.querySelectorAll('input').filter(i => i.type === 'checkbox' && !i.classList.contains('switch'));
-  return { host, view, calls, byText, boxes, toggle: () => host.querySelectorAll('input').find(i => i.classList.contains('switch')) };
+  const boxes = () => host.querySelector('.dshcfg-sources').querySelectorAll('[role="switch"]');
+  return { host, view, calls, byText, boxes, toggle: () => host.querySelector('#dshcfg-auto-follow') };
 }
 
 test('pendingRestart is stated explicitly; saving never claims the running bridge changed', async () => {
@@ -24,6 +24,7 @@ test('pendingRestart is stated explicitly; saving never claims the running bridg
   assert.equal(h.boxes()[2].disabled, true, 'an invalid source cannot be newly selected');
   assert.equal(h.byText('保存选择').disabled, true, 'nothing to save before a change');
   h.boxes()[1].checked = true; h.boxes()[1].dispatch('change');
+  assert.equal(h.host.ownerDocument.activeElement, h.boxes()[1], 'choosing a source preserves keyboard focus after the list updates');
   assert.match(h.host.textContent, /\d 个来源/);
   h.byText('保存选择').click(); await settle();
   assert.deepEqual(h.calls[1], ['/api/dsh/config-sources/configure', { sourceIds: ['profile:desktop', 'profile:work'], autoFollow: true, expectedRevision: 'r1' }]);
@@ -57,7 +58,7 @@ test('register sends only the path and does not select it', async () => {
   input.value = 'D:/cfg/cordis.patch.yml'; h.host.querySelector('form').dispatch('submit');
   await settle();
   assert.deepEqual(h.calls[1], ['/api/dsh/config-sources/register', { path: 'D:/cfg/cordis.patch.yml' }]);
-  assert.equal(h.boxes().at(-1).checked, false); assert.match(h.host.textContent, /勾选后保存才会使用/);
+  assert.equal(h.boxes().at(-1).checked, false); assert.match(h.host.textContent, /选中后保存才会使用/);
 });
 test('selection rules and shared providers', () => {
   const s = status();

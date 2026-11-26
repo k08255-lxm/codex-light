@@ -1,10 +1,11 @@
 import fs from 'node:fs/promises';
+import {isUtf8} from 'node:buffer';
 import {constants} from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import zlib from 'node:zlib';
 import {promisify} from 'node:util';
-import {parseLocalCodexUsage,mergeLocalCodexUsage} from './local-usage.mjs';
+import {parseLocalCodexUsage,mergeLocalCodexUsage,MAX_RECOVERY_LOG_BYTES} from './local-usage.mjs';
 import {openLocalUsageIndex} from './local-usage-cache.mjs';
 
 export const LOCAL_SCAN_LIMITS = Object.freeze({files:1000,fileBytes:32*1024*1024,totalBytes:128*1024*1024,expandedFileBytes:32*1024*1024,expandedTotalBytes:128*1024*1024,depth:8});
@@ -27,7 +28,7 @@ export async function discoverLocalCodexUsageDirectories({env=process.env,home=o
  return {directory:directories[0]||null,directories};
 }
 /** Explicit, read-only scan. Never chooses a default directory or changes permissions. */
-export async function scanLocalCodexUsage(directory, {signal,cacheRoot} = {}) {
+export async function scanLocalCodexUsage(directory, {signal,cacheRoot,priorityThreads,onlyPriority=false} = {}) {
  if(typeof directory!=='string'||!path.isAbsolute(directory))throw new TypeError('Explicit absolute directory required');
  const diagnostics=[],counts={},results=[];
  let cacheHits=0,diskBytesRead=0;let partial=false,filesRead=0,bytesRead=0,expandedBytes=0,candidates=0,entriesVisited=0,stop=false;const files=[];
@@ -46,25 +47,28 @@ export async function scanLocalCodexUsage(directory, {signal,cacheRoot} = {}) {
  function finish(){return {source:'local-codex-jsonl-scan',...mergeLocalCodexUsage(results),scanSource:'explicit-directory',partial,diagnostics,diagnosticCounts:counts,filesRead,bytesRead,diskBytesRead,cacheHits,expandedBytes,candidates,
   limits:LOCAL_SCAN_LIMITS,coverage:'仅读取所选目录内 .jsonl、.jsonl.gz、.jsonl.zst，按最近修改时间优先；受文件、输入及解压总量限制。不含官方接口数据，不与其他来源相加。',
   raceProtection:'拒绝符号链接并校验 realpath、文件身份和大小；支持时使用 O_NOFOLLOW。此为尽力校验，不能消除所有跨平台文件替换竞态。'};}
- async function readFile(filename,id){
+ async function readFile(filename,id,prioritized){
+  const fileLimit=prioritized?MAX_RECOVERY_LOG_BYTES:LOCAL_SCAN_LIMITS.fileBytes;
+  const expandedFileLimit=prioritized?MAX_RECOVERY_LOG_BYTES:LOCAL_SCAN_LIMITS.expandedFileBytes;
   let handle;
   try{
    const before=await fs.lstat(filename,{bigint:true});
    if(before.isSymbolicLink()){issue('symlink-refused',id);return;}
    if(!before.isFile()){issue('not-regular-file',id);return;}
-   if(before.size>LOCAL_SCAN_LIMITS.fileBytes){issue('file-size-limit',id);return;}
+   if(before.size>fileLimit){issue('file-size-limit',id);return;}
    if(bytesRead+Number(before.size)>LOCAL_SCAN_LIMITS.totalBytes){issue('total-size-limit',id);stop=true;return;}
    const resolved=await fs.realpath(filename);if(!within(root,resolved)||resolved!==filename){issue('path-changed-or-outside-root',id);return;}
    handle=await fs.open(filename,constants.O_RDONLY|(constants.O_NOFOLLOW??0));
    const opened=await handle.stat({bigint:true});
    if(!opened.isFile()||opened.dev!==before.dev||opened.ino!==before.ino){issue('file-replaced',id);return;}
-   if(opened.size>LOCAL_SCAN_LIMITS.fileBytes){issue('file-size-limit',id);return;}
+   if(opened.size>fileLimit){issue('file-size-limit',id);return;}
    const afterPath=await fs.realpath(filename);
    if(!within(root,afterPath)||afterPath!==resolved||(await fs.lstat(filename)).isSymbolicLink()){issue('path-changed-or-outside-root',id);return;}
    const size=Number(opened.size);
    if(bytesRead+size>LOCAL_SCAN_LIMITS.totalBytes){issue('total-size-limit',id);stop=true;return;}
    const cached=cacheRoot?index?.get(id):parsedCache.get(filename);
    if(cached?.identity===stamp(opened)){
+    if(cached.expanded>expandedFileLimit){issue('expanded-file-size-limit',id);return;}
     const final=await handle.stat({bigint:true}),finalPath=await fs.lstat(filename,{bigint:true});
     if(stamp(final)!==stamp(opened)||finalPath.isSymbolicLink()||stamp(finalPath)!==stamp(opened)||await fs.realpath(filename)!==resolved){issue('file-changed-during-read',id);return;}
     if(signal?.aborted){issue('cancelled',id);stop=true;return;}
@@ -89,15 +93,14 @@ export async function scanLocalCodexUsage(directory, {signal,cacheRoot} = {}) {
     if(typeof decompress!=='function'){issue('compression-runtime-unsupported',id);return;}
     const remaining=LOCAL_SCAN_LIMITS.expandedTotalBytes-expandedBytes;
     if(remaining<=0){issue('expanded-total-size-limit',id);stop=true;return;}
-    const allowance=Math.min(LOCAL_SCAN_LIMITS.expandedFileBytes,remaining);
+    const allowance=Math.min(expandedFileLimit,remaining);
     try{decoded=await promisify(decompress)(buffer,{maxOutputLength:allowance});}catch(error){expandedBytes+=allowance;issue(error.code==='ERR_BUFFER_TOO_LARGE'?'expanded-size-limit':'decompression-failed',id);if(expandedBytes>=LOCAL_SCAN_LIMITS.expandedTotalBytes)stop=true;return;}
    }
-   if(decoded.length>LOCAL_SCAN_LIMITS.expandedFileBytes){issue('expanded-file-size-limit',id);return;}
+   if(decoded.length>expandedFileLimit){issue('expanded-file-size-limit',id);return;}
    if(expandedBytes+decoded.length>LOCAL_SCAN_LIMITS.expandedTotalBytes){issue('expanded-total-size-limit',id);stop=true;return;}expandedBytes+=decoded.length;
    if(signal?.aborted){issue('cancelled',id);stop=true;return;}
-   let text;
-   try{text=new TextDecoder('utf-8',{fatal:true}).decode(decoded);}catch{issue('invalid-utf8',id);return;}
-   const parsed=parseLocalCodexUsage(text,{sourceId:id});
+   if(!isUtf8(decoded)){issue('invalid-utf8',id);return;}
+   const parsed=parseLocalCodexUsage(decoded,{sourceId:id});
    if(index)index.remember(stamp(opened),decoded.length,parsed);
    else if(!cacheRoot)remember(filename,stamp(opened),parsed,decoded.length);
    results.push(parsed);filesRead++;
@@ -128,11 +131,16 @@ export async function scanLocalCodexUsage(directory, {signal,cacheRoot} = {}) {
   }catch(error){fail(error,relativeId(root,folder));}
  }
  await walk(root,0);
- if(candidates>LOCAL_SCAN_LIMITS.files)issue('file-count-limit');
  // A bounded directory walk collects metadata first, so older entries cannot consume the read budget first.
  const cancelled=signal?.aborted;stop=false;if(cancelled){if(!counts.cancelled)issue('cancelled');return finish();}
  index=await openLocalUsageIndex(cacheRoot,root,report);
- for(const file of files.sort((a,b)=>b.mtime-a.mtime||a.id.localeCompare(b.id)).slice(0,LOCAL_SCAN_LIMITS.files)){if(stop)break;await readFile(file.filename,file.id);}
- if(!signal?.aborted)await index?.finish();
+ const priority=file=>priorityThreads?.get?.(file.threadId)??(priorityThreads?.has(file.threadId)?1:0);
+ if(priorityThreads?.size||onlyPriority)for(const file of files)file.threadId=/([0-9a-f-]{36})\.jsonl(?:\.(?:gz|zst))?$/i.exec(file.filename)?.[1];
+ // Older/custom filenames do not carry a thread ID. Read those to establish
+ // ownership, but skip identifiable native files unrelated to the pending repair.
+ const selected=onlyPriority?files.filter(file=>!file.threadId||priority(file)>0):files;
+ candidates=selected.length;if(candidates>LOCAL_SCAN_LIMITS.files)issue('file-count-limit');
+ for(const file of selected.sort((a,b)=>priority(b)-priority(a)||b.mtime-a.mtime||a.id.localeCompare(b.id)).slice(0,LOCAL_SCAN_LIMITS.files)){if(stop)break;await readFile(file.filename,file.id,priority(file)>0);}
+ if(!signal?.aborted)await index?.finish({keepUnvisited:onlyPriority});
  return finish();
 }

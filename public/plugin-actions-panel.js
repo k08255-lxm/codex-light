@@ -43,10 +43,10 @@ export function mountPluginActionsPanel(container,{plan,apply,onChanged=()=>{},o
  }
  async function prepareAction(){
   if(busy||!selection||uncertain.has(selection.handle)||disposed)return;
-  const current=selection,version=++generation;prepared=null;busy=true;disabled();status.textContent='正在重新核对目录、来源、版本与声明…';
+  const current=selection,version=++generation;prepared=null;busy=true;disabled();status.textContent='正在读取插件信息…';
   try{const response=await plan(current.handle,current.action);if(disposed||version!==generation)return;
    if(response?.status==='changed'){status.textContent='插件信息已变化。未执行操作，请重新选择更新后的条目。';details.replaceChildren();selection=null;onChanged(response);}
-   else if(response?.status==='ready'&&typeof response.planId==='string'&&Number.isFinite(response.expiresAt)&&response.summary?.action===current.action){prepared=response;showSummary(response);status.textContent=response.summary.mustShowInstallationInterstitial===true&&current.action==='install'?'此插件要求官方安装提示，不能以本页摘要替代，请在官方客户端处理。':'核对下方信息后再确认。';}
+   else if(response?.status==='ready'&&typeof response.planId==='string'&&Number.isFinite(response.expiresAt)&&response.summary?.action===current.action){prepared=response;showSummary(response);status.textContent=response.summary.mustShowInstallationInterstitial===true&&current.action==='install'?'此插件要求官方安装提示，不能以本页摘要替代，请在官方客户端处理。':'请选择是否继续。';}
    else status.textContent='未取得有效确认计划，未执行操作。';
   }catch{if(!disposed&&version===generation)status.textContent='无法创建计划。插件可能受策略限制、需要官方安装提示或来源已变化；未执行插件操作。';}
   finally{if(!disposed&&version===generation){busy=false;disabled();if(prepared&&!cancel.disabled)cancel.focus();}}
@@ -62,7 +62,7 @@ export function mountPluginActionsPanel(container,{plan,apply,onChanged=()=>{},o
    if(disposed||version!==generation)return;
    if(result?.outcome==='unknown'){uncertain.add(current.handle);status.textContent='操作结果未知。已禁止重试；请先核查官方已安装状态，不能认定未执行。';}
    else if(result?.outcome==='succeeded'){uncertain.delete(current.handle);status.textContent=current.action==='install'?'安装请求已成功返回；授权与实际可用性仍需分别验证。':current.action==='uninstall'?'卸载请求已成功返回；不代表 OAuth 权限已撤销。':pluginActionVerb(current.action)+'请求已成功返回；正在重新读取当前状态。';selection=null;}
-   else if(result?.outcome==='not-executed') {uncertain.delete(current.handle);status.textContent='执行前检查未通过，未提交插件操作。请重新核对条目。';selection=null;}
+   else if(result?.outcome==='not-executed') {uncertain.delete(current.handle);status.textContent='插件信息已变化。请重新选择插件。';selection=null;}
    else {status.textContent='未取得有效执行结果，禁止重试；请核查实际状态。';}
    if(result?.refresh?.status==='failed')details.append(el('p','已安装列表刷新失败，不能据此推断操作未执行。'));
    onResult(result);if(result?.status==='changed')onChanged(result);

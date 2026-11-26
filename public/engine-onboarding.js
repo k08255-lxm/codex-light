@@ -42,16 +42,16 @@ export function mountEngineOnboarding(host,{read,discover,complete,isLocal=()=>t
  async function finish(input){
   if(busy||finished||!isLocal())return;busy=true;render();live.textContent='正在保存运行环境…';
   try{const result=await complete(input);if(!result?.completed)throw new Error('保存未确认，请重新检测');finished=true;close();notice(result.restartRequired?'环境已保存。完全退出并重新打开码舱后生效。':input.defer?'可随时在设置中配置 Codex 环境。':'已选用检测到的 Codex 运行环境。');}
-  catch(e){uncertain=true;show();live.textContent=`保存结果未确认：${e.message}。请重新检测核对，不会自动重复保存。`;}
+  catch(e){uncertain=true;busy=false;await load(false,`运行环境未保存：${e.message}`);}
   finally{busy=false;render();}
  }
- async function load(scanning=false){
+ async function load(scanning=false,saveMessage=''){
   if(busy||finished||!isLocal())return;busy=true;render();live.textContent=scanning?'正在检测 WSL 环境…':'正在检测 Windows 和已运行的 WSL…';
   try{const next=await(scanning?discover():read());if(!next||typeof next.needed!=='boolean'||typeof next.supported!=='boolean')throw new Error('运行环境状态无效');snapshot=next;
    const decision=engineSetupDecision(snapshot);if(decision.kind==='done'){finished=true;close();return;}
    selected=null;render();
    if(decision.kind==='automatic'&&!uncertain){busy=false;await finish({id:decision.candidate.id,automatic:true});return;}
-   uncertain=false;show();live.textContent='';
+   uncertain=false;show();live.textContent=saveMessage;
   }catch(e){show();live.textContent=`检测未完成：${e.message}。可以重试或稍后配置。`;}
   finally{busy=false;render();}
  }

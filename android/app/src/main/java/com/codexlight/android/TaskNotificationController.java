@@ -93,9 +93,23 @@ final class TaskNotificationController {
                 == PackageManager.PERMISSION_GRANTED);
     }
 
+    boolean hasNotificationChoice() { return prefs.contains("enabled") || prefs.contains("questionNotificationDenied"); }
+
+    void enableForFirstConnection(Activity activity) {
+        prefs.edit().putBoolean("enableOnFirstConnection",true).apply();
+        setEnabled(true,activity);
+    }
+
+    void bindFirstNotificationChoice(ServerConfig config) {
+        if (prefs.getBoolean("enableOnFirstConnection",false) && permissionGranted()) {
+            MobileNotificationService.remember(context,config,true,true);
+            prefs.edit().remove("enableOnFirstConnection").apply();
+        }
+    }
+
     void setEnabled(boolean enabled, Activity activity) {
         prefs.edit().putBoolean("enabled", enabled).apply();
-        if (!enabled) { clear(); return; }
+        if (!enabled) { prefs.edit().remove("enableOnFirstConnection").apply(); clear(); return; }
         if (Build.VERSION.SDK_INT >= 33 && activity.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
                 != PackageManager.PERMISSION_GRANTED) {
             activity.requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, PERMISSION_REQUEST);

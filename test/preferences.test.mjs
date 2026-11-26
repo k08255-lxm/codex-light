@@ -35,14 +35,14 @@ test('system theme/motion, explicit override and visual style resolve determinis
 
 
 // ---- Real preferences view over a minimal DOM ----
-async function view({desktop=false,storage=memory(),api=async()=>{throw new Error('unexpected api');}}={}){
+async function view({desktop=false,storage=memory(),androidBridge,api=async()=>{throw new Error('unexpected api');}}={}){
  const document=createDocument();document.documentElement=document.createElement('html');
  const nodes=new Map(),calls=[],notices=[];
  const $=id=>{if(!nodes.has(id)){const node=document.createElement(id.startsWith('preference-')&&!['preference-status','preference-native-reload'].includes(id)?'input':'div');node.id=id;nodes.set(id,node);}return nodes.get(id);};
  const choices=[...['system','light','dark'].map(theme=>{const b=document.createElement('button');b.dataset.themeChoice=theme;return b;}),...['codex','claude','dsh'].map(style=>{const b=document.createElement('button');b.dataset.styleChoice=style;return b;})];
  document.querySelectorAll=selector=>choices.filter(button=>selector==='[data-theme-choice]'?button.dataset.themeChoice:button.dataset.styleChoice);
  const media={matches:false,addEventListener(){}};
- const prefs=createPreferences({document,window:{localStorage:storage,matchMedia:()=>media},state:{desktop,serverInstance:'i'},$,el:(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n;},
+ const prefs=createPreferences({document,window:{localStorage:storage,matchMedia:()=>media,CodexLightNative:androidBridge},state:{desktop,serverInstance:'i'},$,el:(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n;},
   api:async(path,body)=>{calls.push([path,body]);return api(path,body);},notice:(text,error)=>notices.push([text,!!error]),confirm:()=>true});
  const settle=()=>new Promise(resolve=>setImmediate(resolve));
  return {prefs,document,$,calls,notices,storage,settle,click:async value=>{choices.find(b=>b.dataset.styleChoice===value||b.dataset.themeChoice===value).click();await settle();},pressed:()=>choices.map(b=>b.getAttribute('aria-pressed'))};
@@ -55,6 +55,21 @@ test('browser appearance choices apply to the root, persist locally and never to
  assert.deepEqual([root.theme,root.visualStyle],['light','dsh']);assert.deepEqual(h.pressed(),['false','true','false','false','false','true']);
  assert.deepEqual(JSON.parse(h.storage.raw),{...DEFAULT_PREFERENCES,theme:'light',visualStyle:'dsh'});h.prefs.syncHostTheme();await h.settle();assert.deepEqual(h.calls,[]);
  const reloaded=await view({storage:h.storage});assert.equal(reloaded.document.documentElement.dataset.visualStyle,'dsh','choice restores independently of theme');
+});
+
+test('the phone theme follows the device across paired origins and keeps each origin’s visual style',async()=>{
+ let theme='light';
+ const androidBridge={getPreferredTheme:()=>theme,setPreferredTheme:value=>{theme=value;}};
+ const a=await view({androidBridge});a.prefs.offerFirstTheme();
+ assert.equal(a.document.documentElement.dataset.theme,'light');
+ await a.click('claude');await a.click('dark');
+ const b=await view({androidBridge});b.prefs.offerFirstTheme();
+ assert.equal(b.document.documentElement.dataset.theme,'dark');
+ await b.click('dsh');await b.click('light');
+ const reopened=await view({androidBridge,storage:a.storage});reopened.prefs.offerFirstTheme();
+ assert.deepEqual([reopened.document.documentElement.dataset.theme,reopened.document.documentElement.dataset.visualStyle],['light','claude']);
+ const otherPhone=await view({androidBridge:{getPreferredTheme:()=>'dark'}});otherPhone.prefs.offerFirstTheme();
+ assert.equal(otherPhone.document.documentElement.dataset.theme,'dark');
 });
 
 test('desktop preferences load from and save to the native state API and sync the caption theme',async()=>{

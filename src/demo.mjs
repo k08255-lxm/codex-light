@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 export class DemoClient extends EventEmitter {
  constructor(){super();this.connected=true;this.requests=new Map();this.threads=new Map();this.items=new Map();this.turns=new Map();this.timers=new Map();this.version='Demo · 无模型调用';this.modelTurns=[];}
  async start(){return {};}
+ supportsTurnFork(){return true;}
  page(items,p={}){const offset=p.cursor?Number(p.cursor):0;if(!Number.isSafeInteger(offset)||offset<0)throw new Error('演示分页游标无效');const limit=p.limit||30;return {data:items.slice(offset,offset+limit),nextCursor:offset+limit<items.length?String(offset+limit):null};}
  async call(method,p){
   switch(method){
@@ -23,7 +24,21 @@ export class DemoClient extends EventEmitter {
     this.items.delete(p.threadId);this.turns.delete(p.threadId);
     this.emit('event',{method:'thread/deleted',params:{threadId:p.threadId}});return {};
    }
-   case 'thread/fork':{const source=this.threads.get(p.threadId);if(!source)throw new Error('对话不存在');const thread={...source,id:randomUUID(),name:(source.name||'对话')+' · 分支',archived:false};this.threads.set(thread.id,thread);this.items.set(thread.id,structuredClone(this.items.get(source.id)||[]));this.turns.set(thread.id,structuredClone((this.turns.get(source.id)||[]).filter(t=>t.status!=='inProgress')));return {thread};}
+   case 'thread/fork':{
+    const source=this.threads.get(p.threadId);if(!source)throw new Error('对话不存在');
+    let turns=this.turns.get(source.id)||[];
+    if(p.lastTurnId!==undefined){
+     const index=turns.findIndex(turn=>turn.id===p.lastTurnId);
+     if(index<0||turns[index].status==='inProgress')throw new Error('只能从已有且已结束的回合创建分支');
+     turns=turns.slice(0,index+1);
+    }
+    turns=turns.filter(turn=>turn.status!=='inProgress');
+    const ids=new Set(turns.map(turn=>turn.id));
+    const thread={...source,id:randomUUID(),name:(source.name||'对话')+' · 分支',archived:false};
+    this.threads.set(thread.id,thread);
+    this.items.set(thread.id,structuredClone((this.items.get(source.id)||[]).filter(row=>ids.has(row.turnId))));
+    this.turns.set(thread.id,structuredClone(turns));return {thread};
+   }
    case 'thread/list':return this.page([...this.threads.values()].filter(t=>!!t.archived===!!p.archived).filter(t=>!p.searchTerm||(t.name||'').includes(p.searchTerm)).sort((a,b)=>b.updatedAt-a.updatedAt),p);
    case 'thread/start':{const createdAt=Date.now()/1000,thread={id:randomUUID(),cwd:p.cwd,model:p.model||'demo',reasoningEffort:null,name:'新对话',preview:'',createdAt,updatedAt:createdAt};this.threads.set(thread.id,thread);this.items.set(thread.id,[]);this.turns.set(thread.id,[]);return {thread,model:thread.model,reasoningEffort:thread.reasoningEffort};}
    case 'thread/resume':case 'thread/read':{const thread=this.threads.get(p.threadId);if(!thread)throw new Error('对话不存在');return {thread:{...thread,turns:p.excludeTurns?[]:this.turns.get(p.threadId)},model:thread.model,reasoningEffort:thread.reasoningEffort};}

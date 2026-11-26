@@ -3,7 +3,7 @@ namespace CodexLight.Desktop;
 internal enum CloseChoice { Cancel, Exit, Tray }
 internal sealed class CloseChoiceDialog : Form {
  public CloseChoice Choice { get; private set; }=CloseChoice.Cancel;
- readonly CheckBox remember=new(){UseCompatibleTextRendering=false,AutoSize=true,Text="记住我的选择",AccessibleName="记住我的选择",Margin=new Padding(0,0,0,16)};
+ readonly CodexLight.Shared.ToggleSwitch remember=new(){Text="记住我的选择",AccessibleName="记住我的选择",Margin=new Padding(0,0,0,16)};
  public bool RememberChoice=>Choice!=CloseChoice.Cancel&&remember.Checked;
  // Windows 11 dialog body size (9 pt = 12 px at 96 DPI) with one native GDI text renderer; 10.5 pt looked oversized.
  readonly Font dialogFont=new("Microsoft YaHei UI",9f,FontStyle.Regular,GraphicsUnit.Point);

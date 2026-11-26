@@ -262,11 +262,19 @@
                 android:textSize="13sp" />
         </LinearLayout>
 
-        <CheckBox
+        <Switch
             android:id="@+id/autoConnect"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:minHeight="48dp"
+            android:showText="false"
+            android:splitTrack="false"
+            android:switchPadding="12dp"
+            android:switchMinWidth="44dp"
+            android:track="@drawable/toggle_track"
+            android:trackTint="@null"
+            android:thumb="@drawable/toggle_thumb"
+            android:thumbTint="@null"
             android:layout_marginBottom="12dp"
             android:text="打开 App 时连接上次配对的电脑"
             android:textColor="@color/text_primary"

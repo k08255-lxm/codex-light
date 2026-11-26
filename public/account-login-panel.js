@@ -59,7 +59,7 @@ export function mountAccountLoginPanel(container,{api,onAccountChanged=()=>{},co
    // api must inject the existing durable requestId; it must never auto-retry mutations.
    const result=await api('/api/account/start',{type});
    if(disposed||!active||g!==generation)return;
-   if(!validId(result?.loginId)||result.type!==type||(loginId&&loginId!==result.loginId))throw new Error('官方登录响应需核对。');
+   if(!validId(result?.loginId)||result.type!==type||(loginId&&loginId!==result.loginId))throw new Error('登录服务返回的请求标识或类型不匹配。');
    if(finished.has(result.loginId))return;
    loginId=result.loginId;state='waiting';if(result.redacted===true){clear();message='临时登录链接与设备码已清除；不会自动新建登录流程。请刷新状态或取消当前流程。';}else present(result);
   }catch{if(g===generation&&!disposed){state='unknown';clear();}}

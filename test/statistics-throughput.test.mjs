@@ -43,3 +43,12 @@ test('inconsistent token snapshots cannot leave a stale complete rate',()=>{
   assert.equal(row.performance.turnOutputTokensPerSecond,null);assert.equal(row.outputTokensComplete,false);assert.equal(row.tokens.outputTokens,null);
  }
 });
+
+test('covered turn with equal write/input tariffs is completely priced, while missing baseline stays partial',async()=>{
+ for(const baseline of [true,false]){
+  const f=fixture({baseline});await f.service.pricing.configure({mode:'manual',model:'fixture',input:3,output:8,cacheWrite:3});
+  if(!baseline)f.service.rows.values().next().value.model='fixture';
+  f.usage(5);f.usage(10);f.finish();const row=f.data().details.data[0];
+  assert.equal(row.tokensComplete,false);assert.equal(row.estimatedCost.complete,baseline);assert.equal(row.estimatedCost.reference.scope,'model');
+ }
+});

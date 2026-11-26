@@ -68,7 +68,10 @@ export function mountWslRuntimePanel(host, { read, discoverRunning, discover, se
     picker.disabled=busy||!allowed;refresh.disabled=busy||!local;scan.disabled=busy||!allowed;
     save.disabled=!canSave();
   }
-  async function load(mode='status'){
+  function matchesSelection(selection,target){
+    return selection&&selection.target===target.target&&selection.distribution===target.distribution&&(!target.user||selection.user===target.user)&&(selection.codexPath||'')===(target.codexPath||'');
+  }
+  async function load(mode='status',saveAttempt=null){
     if(busy||!active||!isLocal())return;
     const mine=++generation;busy=true;render();say(mode==='manual'?'正在检测 WSL 环境…':mode==='auto'?'正在自动检测已运行的 WSL…':'正在读取运行环境…');
     try{
@@ -79,19 +82,21 @@ export function mountWslRuntimePanel(host, { read, discoverRunning, discover, se
       if(mode!=='status')candidates=Array.isArray(next.candidates)?next.candidates:[];
       if(mode==='auto')autoChecked=true;
       const checked=mode!=='status';
-      say(!checked?'':next.diagnostic|| (candidates.some(c=>c.available)?'已发现可用的 WSL Codex。当前运行环境未改变。':candidates.some(c=>c.probePending)?'自动检测未确认可用的 WSL Codex；未运行的发行版需要手动检测。':'未检测到可用的 WSL Codex。当前环境未改变。'));
-    }catch(error){if(mine===generation){if(mode==='status')snapshot=null;say(message(error));}}
+      if(saveAttempt)say(matchesSelection(next.selected,saveAttempt.target)?'运行环境已保存。':'运行环境未保存：'+saveAttempt.message);
+      else say(!checked?'':next.diagnostic|| (candidates.some(c=>c.available)?'已发现可用的 WSL Codex。当前运行环境未改变。':candidates.some(c=>c.probePending)?'自动检测未确认可用的 WSL Codex；未运行的发行版需要手动检测。':'未检测到可用的 WSL Codex。当前环境未改变。'));
+    }catch(error){if(mine===generation){if(mode==='status')snapshot=null;say(saveAttempt?'保存后读取运行环境失败：'+message(error):message(error));}}
     finally{if(mine===generation){busy=false;render();}}
   }
   async function saveSelection(){
     if(!active||!canSave())return;
+    let errorMessage=null;
     const mine=++generation;const {probePending:_pending,...target}=draft;if(!target.codexPath)delete target.codexPath;busy=true;saving=true;render();say('正在保存下次启动的环境…');
     try{
       const next=await select(target);if(mine!==generation||!active||!isLocal())return;
-      if(!next?.selected||next.selected.target!==target.target||next.selected.distribution!==target.distribution||(target.user&&next.selected.user!==target.user)||(next.selected.codexPath||'')!==(target.codexPath||''))throw new Error('保存结果与选择不一致，请刷新状态核对。');
+      if(!matchesSelection(next?.selected,target))throw new Error('服务返回的运行环境与所选环境不同');
       snapshot=next;draft=next.selected;say(next.restartRequired?'已保存，完全退出并重新打开码舱后生效。当前任务保持原环境。':'已保存。');
-    }catch(error){if(mine===generation){snapshot={...snapshot,canSelect:false};say(`保存结果未确认：${message(error)} 请刷新状态核对，不会自动重试保存。`);}}
-    finally{saving=false;if(mine===generation){busy=false;render();}else if(active){busy=false;void load();}}
+    }catch(error){errorMessage=message(error);}
+    finally{saving=false;if(mine===generation){busy=false;if(errorMessage!==null)await load('status',{target,message:errorMessage});else render();}else if(active){busy=false;void load();}}
   }
   picker.addEventListener('change',()=>{draft=targets().find(value=>key(value)===picker.value)||snapshot?.selected;pathLabel.hidden=draft?.target!=='wsl';path.value=draft?.codexPath||'';save.disabled=!canSave();});
   path.addEventListener('input',()=>{if(draft?.target!=='wsl')return;draft={...draft};if(path.value.trim())draft.codexPath=path.value.trim();else delete draft.codexPath;save.disabled=!canSave();});

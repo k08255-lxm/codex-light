@@ -8,6 +8,7 @@ import {StorageMaintenance} from './storage-maintenance.mjs';
 import http from 'node:http';
 import {VISUAL_STYLES} from '../public/preferences.js';
 import {ConfigSettingsService} from './config-settings.mjs';
+import {ModelContextWindows,readModelWindowCatalog} from './model-context-windows.mjs';
 import {createSkillsManagement} from './skills-management.mjs';
 import {createSkillImporter} from './skill-import.mjs';
 import {EngineOnboarding,EngineSetupStore} from './engine-onboarding.mjs';
@@ -77,6 +78,7 @@ function requireLocalManagement(access) {
 const publicDir=fileURLToPath(new URL('../public/',import.meta.url));
 const publicFiles={'/config-settings-panel.js':'config-settings-panel.js','/preferences.js':'preferences.js','/plugin-actions-panel.js':'plugin-actions-panel.js','/account-login-panel.js':'account-login-panel.js','/local-usage-panel.js':'local-usage-panel.js','/usage-statistics.js':'usage-statistics.js','/token-pricing.js':'token-pricing.js','/plugins.js':'plugins.js','/plugins.css':'plugins.css','/pr-review-panel.js':'pr-review-panel.js','/terminal.js':'terminal.js','/vendor/xterm.mjs':'vendor/xterm.mjs','/vendor/addon-fit.mjs':'vendor/addon-fit.mjs','/vendor/xterm.css':'vendor/xterm.css','/approval-schemas.js':'approval-schemas.js','/':'index.html','/index.html':'index.html','/app.js':'app.js','/styles.css':'styles.css','/style.css':'style.css','/store.js':'store.js','/dsh.js':'dsh.js','/dsh-live.js':'dsh-live.js','/runtime-panel.js':'runtime-panel.js','/markdown.js':'markdown.js','/submissions.js':'submissions.js','/attachments.js':'attachments.js','/account.js':'account.js','/reasoning.js':'reasoning.js','/remote.js':'remote.js','/icons.js':'icons.js','/state.js':'state.js','/icon.svg':'icon.svg'};
 publicFiles['/code-format.js']='code-format.js';
+publicFiles['/ui/select.css']='ui/select.css';publicFiles['/ui/select.js']='ui/select.js';
 publicFiles['/vendor/qrcode.js']='vendor/qrcode.js';publicFiles['/ui/pairing.js']='ui/pairing.js';publicFiles['/ui/back-navigation.js']='ui/back-navigation.js';publicFiles['/ui/auto-update.js']='ui/auto-update.js';publicFiles['/ui/welcome-greeting.js']='ui/welcome-greeting.js';
 publicFiles['/ui/update-indicator.js']='ui/update-indicator.js';
 publicFiles['/ui/desktop-close-preference.js']='ui/desktop-close-preference.js';
@@ -89,8 +91,10 @@ publicFiles['/ui/skills-view.js']='ui/skills-view.js';
 publicFiles['/context-usage.js']='context-usage.js';
 publicFiles['/ui/context-details.js']='ui/context-details.js';
 publicFiles['/ui/conversation-scroll.js']='ui/conversation-scroll.js';
+publicFiles['/ui/turn-timeline.js']='ui/turn-timeline.js';
 publicFiles['/ui/offline-snapshot.js']='ui/offline-snapshot.js';
 publicFiles['/ui/file-preview.js']='ui/file-preview.js';publicFiles['/ui/file-preview.css']='ui/file-preview.css';
+publicFiles['/ui/turn-actions.js']='ui/turn-actions.js';
 publicFiles['/ui/dsh-theme.css']='ui/dsh-theme.css';
 const types={'.mjs':'text/javascript; charset=utf-8','.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml'};
 publicFiles['/session-controls.js']='session-controls.js';publicFiles['/session-controls.css']='session-controls.css';
@@ -200,7 +204,12 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
  }
  const rpc=client || (demo?new DemoClient():new RpcClient(wslLaunch?{...wslLaunch,mapRequest:params=>mapWslRequest(params,value=>wslRuntime.toLinux(value,wslCandidate)),mapResponse:value=>mapWslResponse(value,wslCandidate.distribution)}:{command,cwd:cwd||os.homedir()}));
  if(runtimeStartupError){rpc.connected=false;rpc.start=async()=>{throw runtimeStartupError;};}
- const sessions=new ThreadSessions(rpc,{onEvent:message=>{desktopSleep?.update();broadcast(message);},onThreadLoaded:result=>statistics.thread(result?.thread,result)});
+ const metadataRoot=statisticsRoot??(!demo&&!client?defaultStatisticsRoot():null);
+ const contextWindows=new ModelContextWindows(metadataRoot,runtimeProfile||['native',process.env.CODEX_HOME||os.homedir()]);
+ await contextWindows.load();
+ const modelWindowCatalog=()=>readModelWindowCatalog(wslActive
+  ? (wslCandidate?wslPathToHost(wslCandidate.codexHome,wslCandidate.distribution):null) : rpc.codexHome);
+ const sessions=new ThreadSessions(rpc,{contextWindows,onEvent:message=>{desktopSleep?.update();broadcast(message);},onThreadLoaded:result=>statistics.thread(result?.thread,result)});
  const threadReads=new ThreadReads();
  const mobileNotifications=new MobileNotificationFeed();
  const threadList=new ThreadListService(rpc);
@@ -208,7 +217,6 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
  const files=new FilePreviewService({projects,...(wslCandidate?{wslDistribution:wslCandidate.distribution}:{})});
  const git=new GitService(wslCandidate?{run:(directory,args)=>wslRuntime.gitRead(directory,args,wslCandidate),validateDirectory:async directory=>{await wslRuntime.toLinux(directory,wslCandidate);await projects.directory(directory);}}:{});
  const gitActions=new GitCommandActions();
- const metadataRoot=statisticsRoot??(!demo&&!client?defaultStatisticsRoot():null);
  const sessionPermissions=new SessionPermissions(metadataRoot,runtimeProfile||['native',process.env.CODEX_HOME||os.homedir()]);
  let observedPermissionIdentity;
  async function permissionIdentity(){
@@ -267,8 +275,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
   if(usageScanPromise){
    const exact=wslActive||process.platform!=='win32';
    if(exact?path.resolve(directory)===path.resolve(usageScanDirectory):path.resolve(directory).toLowerCase()===path.resolve(usageScanDirectory).toLowerCase()){
-    if(!recoveryOnly)publishLocalScan=true;
-    return usageScanPromise;
+    if(recoveryOnly||publishLocalScan)return usageScanPromise;
    }
    if(!recoveryOnly&&!publishLocalScan)return usageScanPromise.catch(()=>{}).then(()=>{
     if(stopping)throw new Error('应用正在关闭。');
@@ -279,7 +286,8 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
   const controller=new AbortController();usageScan=controller;usageScanDirectory=directory;publishLocalScan=!recoveryOnly;
   const timeout=setTimeout(()=>controller.abort(),60000);
   usageScanPromise=(async()=>{
-   const scan=await scanLocalCodexUsage(directory,{signal:controller.signal,cacheRoot:metadataRoot});
+   const priorityThreads=recoveryOnly?statistics.recoveryThreads():undefined;
+   const scan=await scanLocalCodexUsage(directory,{signal:controller.signal,cacheRoot:metadataRoot,priorityThreads,onlyPriority:recoveryOnly});
    if(controller.signal.aborted)throw new Error('扫描已取消，请重试');
    if(!scan.filesRead&&(scan.partial||scan.candidates))throw new Error(scan.diagnosticCounts?.['access-denied']?'无法读取 Codex 日志目录':scan.diagnosticCounts?.cancelled?'扫描已取消，请重试':'目录中没有可读取的 Codex 日志');
    const {recovered}=statistics.importLocal(scan,{publishLocal:publishLocalScan});modelRecoveryError=null;
@@ -287,6 +295,26 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
    return scan;
   })().finally(()=>{clearTimeout(timeout);usageScan=null;usageScanPromise=null;usageScanDirectory=null;});
   return usageScanPromise;
+ }
+ function recoverUsage(){
+  return modelRecovery.run(async()=>{
+   try{
+    const location=wslCandidate?{env:{CODEX_HOME:wslPathToHost(wslCandidate.codexHome,wslCandidate.distribution)},home:wslPathToHost(wslCandidate.home,wslCandidate.distribution)}:wslActive?{env:{},home:''}:{};
+    const found=await discoverLocalCodexUsageDirectories(location);
+    if(found.directory&&!stopping){
+     const before=statistics.recoveryThreads();
+     if(!before.size)return;
+     const first=await importUsageDirectory(found.directory,{recoveryOnly:true});
+     const after=statistics.recoveryThreads();
+     // Move newly resolved threads behind the remaining ones on a single bounded
+     // follow-up. A fixed budget must not permanently starve older large sessions.
+     const limited=['total-size-limit','expanded-total-size-limit','expanded-size-limit','file-count-limit'].some(code=>first.diagnosticCounts[code]);
+     const progressed=[...before].some(([thread,rank])=>(after.get(thread)??0)<rank);
+     if(!stopping&&limited&&after.size&&progressed)await importUsageDirectory(found.directory,{recoveryOnly:true});
+    }
+    modelRecoveryError=null;
+   }catch(error){modelRecoveryError=error.message;}
+  });
  }
  const terminal=new TerminalService(rpc,wslActive?{shellCommand:['/bin/sh']}:{});
  const accountLogin=new AccountLoginService(rpc);
@@ -385,9 +413,9 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
     if(url.pathname==='/api/projects'&&req.method==='GET'){json(res,200,{...await projects.list({initialCwd:cwd}),canPickFolder:requestDesktop&&typeof onDesktopPickFolder==='function'});return;}
     if(url.pathname==='/api/desktop/preferences'&&req.method==='GET'){
      if(!desktopState)throw new Error('仅桌面模式支持本机状态');
-     const preferences=await desktopState.preferences();
-     if(desktopSleep&&!desktopSleep.preferences)applySleepPreferences(preferences);
-     json(res,200,{preferences});return;
+     const snapshot=await desktopState.preferenceSnapshot();
+     if(desktopSleep&&!desktopSleep.preferences)applySleepPreferences(snapshot.preferences);
+     json(res,200,snapshot);return;
     }
     if(req.method!=='POST'){json(res,405,{error:'不支持的操作'});return;}
     if(url.pathname==='/api/thread-reads'){
@@ -594,13 +622,19 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
     if(url.pathname.startsWith('/api/config-settings/')){
      if(demo)throw new Error('演示模式不读取或更改真实配置');if(!input||typeof input!=='object'||Array.isArray(input))throw new Error('配置参数无效');
      const action=url.pathname.slice('/api/config-settings/'.length);
-     if(action==='read'){if(Object.keys(input).some(k=>k!=='cwd'))throw new Error('配置读取参数无效');json(res,200,await configSettings.read(input));return;}
+     if(action==='read'){
+      if(Object.keys(input).some(k=>k!=='cwd'))throw new Error('配置读取参数无效');
+      const settings=await configSettings.read(input);
+      json(res,200,{...settings,contextWindows:contextWindows.snapshot(),windowCatalog:await modelWindowCatalog()});return;
+     }
+     if(action==='window-catalog'){if(Object.keys(input).length)throw new Error('模型目录读取参数无效');json(res,200,await modelWindowCatalog());return;}
+     if(action==='context-window'){json(res,200,{contextWindows:await contextWindows.update(input)});return;}
      if(action==='plan'){if(Object.keys(input).some(k=>k!=='edits'))throw new Error('配置计划参数无效');json(res,200,configSettings.plan(input.edits));return;}
      if(action==='apply'){const {requestId,...params}=input;json(res,200,await operations.execute(requestId,'config/apply',params,()=>configSettings.apply(params)));return;}
      throw new Error('未知配置操作');
     }
     if(url.pathname==='/api/plugins/status'){
-     if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).length!==1||typeof input.handle!=='string'||!/^[a-f0-9-]{36}$/i.test(input.handle))throw new Error('插件状态核对参数无效');
+     if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).length!==1||typeof input.handle!=='string'||!/^[a-f0-9-]{36}$/i.test(input.handle))throw new Error('插件状态查询参数无效');
      if(demo)throw new Error('演示模式不读取真实插件状态');
      json(res,200,await pluginActions.checkStatus(input.handle,{allowToggle:requestAccess==='local'}));return;
     }
@@ -638,17 +672,18 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      res.setHeader('Content-Security-Policy',"sandbox; default-src 'none'; script-src 'none'; object-src 'none'; frame-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'");
      res.writeHead(200,{'Content-Type':image.mime,'Content-Length':image.bytes.length,'Content-Disposition':'attachment; filename="artifact.'+({'image/png':'png','image/jpeg':'jpg','image/webp':'webp','image/gif':'gif','image/vnd.microsoft.icon':'ico','image/svg+xml':'svg'})[image.mime]+'"','X-Artifact-Width':String(image.width),'X-Artifact-Height':String(image.height)});res.end(image.bytes);return;
     }
+    if(url.pathname==='/api/statistics/turns'){
+     const result=statistics.turnUsage(input);
+     if(!demo&&!stopping&&requestAccess==='local'&&result.turns.some(turn=>!turn.model||!turn.tokensComplete))void recoverUsage();
+     json(res,200,result);return;
+    }
     if(url.pathname==='/api/statistics/query'){
      // Account RPC must not stall local usage rendering while the engine is slow.
      await Promise.race([readStatisticsAccount(),new Promise(resolve=>{const timer=setTimeout(resolve,200);timer.unref?.();})]);
      const result=statistics.query(input);
      if(!demo&&!stopping&&requestAccess==='local'&&!input.cursor&&input.scope!=='local'&&(result.coverage?.unknownModelRows>0||result.coverage?.completeTokenRows<result.coverage?.observedTurns)){
       // Serve committed observations immediately. A completed reconciliation notifies the visible first page.
-      void modelRecovery.run(async()=>{
-       try{const found=await discoverLocalCodexUsageDirectories(wslCandidate?{env:{CODEX_HOME:wslPathToHost(wslCandidate.codexHome,wslCandidate.distribution)},home:wslPathToHost(wslCandidate.home,wslCandidate.distribution)}:wslActive?{env:{},home:''}:{});
-       if(found.directory&&!stopping)await importUsageDirectory(found.directory,{recoveryOnly:true});modelRecoveryError=null;
-       }catch(error){modelRecoveryError=error.message;}
-      });
+      void recoverUsage();
       if(modelRecoveryError)result.coverage.modelRecoveryError=modelRecoveryError;
      }
      json(res,200,result);return;
@@ -668,7 +703,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
     if(url.pathname==='/api/pricing/ensure'){if(Object.keys(input).length)throw new Error('价格参数无效');json(res,200,demo?pricing.status():await pricing.ensureFresh());return;}
     if(url.pathname==='/api/pricing/status'){if(Object.keys(input).length)throw new Error('价格参数无效');json(res,200,pricing.status());return;}
     if(url.pathname==='/api/pricing/refresh'){if(Object.keys(input).length)throw new Error('价格参数无效');if(demo)throw new Error('演示模式不请求真实价格服务');json(res,200,await pricing.refresh());return;}
-    if(url.pathname==='/api/pricing/model'){if(Object.keys(input).some(k=>!['model','provider'].includes(k)))throw new Error('价格参数无效');json(res,200,{...pricing.get(input.model,input.provider),candidates:pricing.candidates(input.model)});return;}
+    if(url.pathname==='/api/pricing/model'){if(Object.keys(input).some(k=>!['model','provider'].includes(k)))throw new Error('价格参数无效');json(res,200,{...pricing.get(input.model,input.provider??null),candidates:pricing.candidates(input.model)});return;}
     if(url.pathname==='/api/pricing/configure'){json(res,200,await pricing.configure(input));return;}
     if(url.pathname.startsWith('/api/title-summary/')){
      if(requestAccess!=='local')throw Object.assign(new Error('标题设置仅限本机访问'),{status:403});
@@ -778,6 +813,10 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
       }catch(error){error.outcome='notExecuted';throw error;}}
       if(!rpc.connected)throw Object.assign(new Error(rpc.lastError || 'Codex 正在连接，请稍后重试'),{code:'NOT_CONNECTED',outcome:'notExecuted'});
       let effective=params;
+      if(input.method==='thread/fork'&&params.lastTurnId){
+       const toEnginePath=wslCandidate?dir=>wslRuntime.toLinux(dir,wslCandidate):undefined;
+       if(!await rpc.supportsTurnFork?.(toEnginePath))throw Object.assign(new Error('当前引擎未提供按回合分支，请更新 Codex 引擎后重试。'),{code:'TURN_FORK_UNSUPPORTED',outcome:'notExecuted'});
+      }
       if(input.method==='thread/start'&&!params.cwd){
        try{effective={...params,cwd:await newProjectlessDirectory()};}
        catch{throw Object.assign(new Error('无法创建无项目对话的独立工作目录。'),{outcome:'notExecuted'});}
@@ -849,7 +888,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
     }
     if(url.pathname==='/api/shutdown'){
      if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).length)throw new Error('关闭参数无效');
-     try{await shutdownServices();}catch(error){throw Object.assign(new Error('关闭未完成，请查看关闭状态核对引擎是否退出'),{code:error.code||'SHUTDOWN_FAILED',outcome:'unknown',status:500});}
+     try{await shutdownServices();}catch(error){throw Object.assign(new Error('引擎尚未确认退出，请查看关闭状态'),{code:error.code||'SHUTDOWN_FAILED',outcome:'unknown',status:500});}
      res.once('finish',()=>setTimeout(()=>{close().catch(reportShutdownFailure);},50));
      json(res,200,{engineStopped:true,shutdownAccepted:true});return;
     }

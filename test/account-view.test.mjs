@@ -144,7 +144,7 @@ test('thread usage failure keeps account totals and quota, exposes safe codes an
   assert.deepEqual(view.calls.filter(([method]) => method === 'account/usage/read').map(([, params]) => params), [{}, { threadId: 'current' }]);
   fail = false; await view.account.refresh();
   assert.doesNotMatch(section.textContent, /读取失败|HTTP 500/);
-  assert.match(section.textContent, /官方尚未提供当前对话的用量估算/);
+  assert.match(section.textContent, /暂无当前对话的官方用量/);
   assert.equal(section.querySelector('.inline-error'), null);
 });
 
@@ -158,7 +158,8 @@ test('account usage failure does not hide a successful current-thread estimate',
   });
   await view.account.activate();
   const section = view.host.querySelector('.acct-usage');
-  assert.match(section.textContent, /估算 Credits1/);
+  assert.match(section.textContent, /Credits1/);
+  assert.match(section.textContent, /来自官方用量估算，实际扣款以账单为准/);
   assert.match(section.textContent, /官方账户汇总.*HTTP 503.*RPC -32603/);
   assert.doesNotMatch(section.textContent, /SECRET|服务没有返回账户用量统计/);
   assert.match(section.querySelector('.acct-usage-caption').textContent, /当前对话/);

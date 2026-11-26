@@ -58,6 +58,8 @@ test('explicit fresh first request anchors zero only with identical complete las
  const usage={type:'event_msg',timestamp:'2030-01-01T00:00:01Z',payload:{type:'token_count',info:{total_token_usage:full,last_token_usage:full}}};
  const done={type:'event_msg',timestamp:'2030-01-01T00:00:02Z',payload:{type:'task_complete',turn_id:tid}};
  const result=run([meta(),start,ctx,usage,done]);assert.equal(result.increments[0].tokens.totalTokens,13);assert.equal(result.turns[0].coverageComplete,true);
+ const empty={...usage,payload:{type:'token_count',info:null}};
+ const placeholder=run([meta(),start,ctx,empty,usage,done]);assert.equal(placeholder.turns[0].coverageComplete,true);
  const broken=run([meta(),start,ctx,usage,{...usage,payload:{...usage.payload,info:{total_token_usage:{...full,total_tokens:null},last_token_usage:full}}},done]);assert.equal(broken.turns[0].coverageComplete,false);
  for(const records of [[meta(),ctx,usage,done],[meta({parent_thread_id:id}),start,ctx,usage,done],[meta({history_base:1}),start,ctx,usage,done],[meta(),start,ctx,{...usage,payload:{...usage.payload,info:{total_token_usage:full,last_token_usage:{...full,total_tokens:4}}}},done],[meta(),start,ctx,usage]]){const r=run(records);assert.ok(r.turns.every(t=>!t.coverageComplete));}
 });
@@ -69,4 +71,22 @@ test('subagent lineage accepted only for own timestamped exact request deltas, c
  const u={type:'event_msg',timestamp:'2030-01-01T00:00:02Z',payload:{type:'token_count',info:{total_token_usage:full,last_token_usage:full}}},done={type:'event_msg',timestamp:'2030-01-01T00:00:03Z',payload:{type:'task_complete',turn_id:t}};
  const good=run([m,start,ctx,u,done]);assert.equal(good.turns[0].coverageComplete,true);assert.equal(good.increments[0].tokens.totalTokens,13);
  for(const records of [[m,start,ctx,{...u,timestamp:'2029-12-31T23:59:59Z'},done],[m,start,ctx,{...u,payload:{...u.payload,info:{total_token_usage:full,last_token_usage:{...full,input_tokens:1}}}},done],[{...m,payload:{...m.payload,history_base:1}},start,ctx,u,done],[m,ctx,u,done]]){const r=run(records);assert.equal(r.increments.length,0);assert.ok(r.turns.every(x=>!x.coverageComplete));}
+});
+
+test('forked subagent ignores copied parent IDs, models and counters until its own settings',()=>{
+ const parent='22222222-2222-4222-8222-222222222222',time='2030-01-01T00:00:00Z';
+ const root=meta({parent_thread_id:parent,forked_from_id:parent,timestamp:time,model_provider:'p',source:{subagent:{thread_spawn:{parent_thread_id:parent}}}});
+ const event=(type,fields)=>({type:'event_msg',timestamp:'2030-01-01T00:00:01Z',payload:{type,...fields}});
+ const settings=thread_id=>event('thread_settings_applied',{thread_id,thread_settings:{model:'child-model',model_provider_id:'child-route'}});
+ const full={input_tokens:6,cached_input_tokens:1,cache_write_input_tokens:0,output_tokens:2,reasoning_output_tokens:1,total_tokens:8};
+ const child=[event('task_started',{turn_id:'child'}),event('token_count',{info:{last_token_usage:full,total_token_usage:full}}),event('task_complete',{turn_id:'child'})];
+ const prefix=[root,meta({id:parent}),settings(parent),event('task_started',{turn_id:'parent'}),context('parent-model'),token(80),event('task_complete',{turn_id:'parent'})];
+ const original=[...prefix,settings(id),...child];
+ for(const result of [run(original),run(Buffer.from('\ufeff'+original.map(r=>JSON.stringify(r)).join('\n')))]){
+  assert.deepEqual(result.turns.map(t=>[t.turnId,t.model,t.provider,t.coverageComplete]),[['child','child-model','child-route',true]]);
+  assert.equal(result.increments[0].tokens.totalTokens,8);
+ }
+ const noMarker=run([...prefix,...child]);assert.equal(noMarker.attribution,'deferred');assert.deepEqual(noMarker.turns,[]);
+ const contradictory=run([...prefix,settings(id),child[0],event('token_count',{info:{last_token_usage:{...full,total_tokens:2},total_token_usage:full}}),child[2]]);
+ assert.equal(contradictory.attribution,'deferred');assert.deepEqual(contradictory.increments,[]);
 });

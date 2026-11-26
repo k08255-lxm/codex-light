@@ -31,6 +31,15 @@ test('gzip and supported zstd logs import the same usage without exposing messag
  if(typeof zlib.zstdCompressSync==='function')await fs.writeFile(path.join(root,'two.jsonl.zst'),zlib.zstdCompressSync(fixture));
  const r=await scan(root);assert.equal(r.filesRead,typeof zlib.zstdCompressSync==='function'?2:1);assert.ok(r.sessions.every(row=>row.snapshot.totalTokens===3));assert.ok(!JSON.stringify(r).includes('PRIVATE MESSAGE'));
 });
+test('targeted repair reads a large compressed native thread within its separate bound',async t=>{
+ const root=await temp(t),cache=await temp(t),threadId='11111111-1111-4111-8111-111111111111';
+ const padding=(' '.repeat(1023)+'\n').repeat(32768);
+ await fs.writeFile(path.join(root,'rollout-'+threadId+'.jsonl.gz'),zlib.gzipSync(padding+fixture,{level:1}));
+ const options={cacheRoot:cache,priorityThreads:new Map([[threadId,3]])};
+ const repair=await scan(root,options);assert.equal(repair.filesRead,1);assert.equal(repair.sessions[0].snapshot.totalTokens,3);
+ assert.equal((await scan(root,options)).cacheHits,1);
+ const ordinary=await scan(root,{cacheRoot:cache});assert.equal(ordinary.filesRead,0);assert.ok(ordinary.diagnosticCounts['expanded-file-size-limit']);
+});
 test('file count hard cap and total bytes hard cap with sparse synthetic files',async t=>{
  const root=await temp(t);for(let i=0;i<1001;i++)await fs.writeFile(path.join(root,`${i}.jsonl`),'');
  const r=await scan(root);assert.equal(r.filesRead,1000);assert.equal(r.diagnosticCounts['file-count-limit'],1);

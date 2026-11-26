@@ -24,7 +24,7 @@ namespace CodexLight.SetupWrapper {
   readonly Label status=new Label{AutoSize=false,Dock=DockStyle.Fill};
   readonly Button start=new Button{Text="检查并安装",AutoSize=true};
   readonly Button cancel=new Button{Text="取消下载",AutoSize=true,Enabled=false};
-  readonly CheckBox consent=new CheckBox{Text="我已保存工作并结束所有相关任务；确认开始实际安装",AutoSize=true};
+  readonly CodexLight.Shared.ToggleSwitch consent=new CodexLight.Shared.ToggleSwitch{Text="我已保存工作并结束所有相关任务；确认开始实际安装"};
   readonly CancellationTokenSource cancellation=new CancellationTokenSource();
   readonly string target=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"CodexLightDesktop");
   string? extracted;FileStream? verifiedLease;bool busy,nodeUpgradeRequired;string existingNode="";
@@ -41,7 +41,7 @@ namespace CodexLight.SetupWrapper {
   void Progress(string text){if(IsDisposed)return;if(InvokeRequired){BeginInvoke(new Action<string>(Progress),text);return;}status.Text=text;}
   void AllowCancel(bool value){if(InvokeRequired){BeginInvoke(new Action<bool>(AllowCancel),value);return;}cancel.Enabled=value;}
   async Task Start(){
-   if(!consent.Checked){MessageBox.Show("请先保存工作、结束任务，再勾选确认。","码舱 CodeCang");return;}
+   if(!consent.Checked){MessageBox.Show("请先保存工作、结束任务，再打开安装确认开关。","码舱 CodeCang");consent.Focus();return;}
    busy=true;start.Enabled=false;consent.Enabled=false;
    try{
     ExitCode=await InstallFlow.Run(this);

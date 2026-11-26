@@ -20,18 +20,18 @@ namespace CodexLight.PublicSetup {
  internal sealed class SetupWindow:Form {
   readonly Label title=new Label{Text="准备更新 Codex Light",AutoSize=true,Font=new Font("Microsoft YaHei UI",18,FontStyle.Bold)};
   readonly Label detail=new Label{Dock=DockStyle.Fill,AutoEllipsis=false,Text="自动识别已有安装。旧版将先保留，待新版健康检查通过后再切换。不会修改 Codex 配置或账号。"};
-  readonly CheckBox consent=new CheckBox{Text="我已保存工作并结束所有任务，允许安装并自动替换旧版",AutoSize=true};
+  readonly CodexLight.Shared.ToggleSwitch consent=new CodexLight.Shared.ToggleSwitch{Text="我已保存工作并结束所有任务，允许安装并自动替换旧版"};
   readonly Button start=new Button{Text="开始",AutoSize=true,MinimumSize=new Size(104,38)};
   readonly Button close=new Button{Text="取消",AutoSize=true,MinimumSize=new Size(88,38)};
   readonly ProgressBar bar=new ProgressBar{Dock=DockStyle.Fill,Height=4,Style=ProgressBarStyle.Marquee,Visible=false};
   internal int ExitCode {get;private set;}=1602; string legacyRoot=""; string workerError=""; bool busy,waitingForExit; readonly CancellationTokenSource cancellation=new CancellationTokenSource(); string? extracted;
   internal SetupWindow(){Text="Codex Light";Font=new Font("Microsoft YaHei UI",10);AutoScaleMode=AutoScaleMode.Dpi;ClientSize=new Size(620,360);MinimumSize=new Size(600,380);StartPosition=FormStartPosition.CenterScreen;BackColor=Color.FromArgb(250,250,250);
    var layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(28),ColumnCount=1,RowCount=5};layout.RowStyles.Add(new RowStyle(SizeType.Absolute,54));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,12));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,44));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,46));
-   layout.Controls.Add(title);layout.Controls.Add(detail);layout.Controls.Add(bar);layout.Controls.Add(consent);var actions=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft};actions.Controls.Add(start);actions.Controls.Add(close);layout.Controls.Add(actions);Controls.Add(layout);AcceptButton=start;CancelButton=close;
+   layout.Controls.Add(title,0,0);layout.Controls.Add(detail,0,1);layout.Controls.Add(bar,0,2);layout.Controls.Add(consent,0,3);var actions=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft};actions.Controls.Add(start);actions.Controls.Add(close);layout.Controls.Add(actions,0,4);Controls.Add(layout);AcceptButton=start;CancelButton=close;
    start.Click+=async(_,__)=>await Run();close.Click+=(_,__)=>{if(waitingForExit)cancellation.Cancel();else Close();};FormClosing+=(_,e)=>{if(waitingForExit){cancellation.Cancel();e.Cancel=true;}else if(busy){e.Cancel=true;detail.Text="安装或健康检查进行中，请等待完成。不会强制结束任何任务。";}};
   }
   void Progress(string text){if(IsDisposed)return;if(InvokeRequired){BeginInvoke(new Action<string>(Progress),text);return;}detail.Text=text;}
-  async Task Run(){if(!consent.Checked){detail.Text="请先保存工作并结束任务，再勾选确认。安装器不会强制终止应用或任务。";consent.Focus();return;}busy=true;start.Enabled=false;close.Enabled=false;consent.Enabled=false;bar.Visible=true;
+  async Task Run(){if(!consent.Checked){detail.Text="请先保存工作并结束任务，再打开安装确认开关。安装器不会强制终止应用或任务。";consent.Focus();return;}busy=true;start.Enabled=false;close.Enabled=false;consent.Enabled=false;bar.Visible=true;
    try{var route=Detect();if(route==Route.Blocked)throw new IOException("检测到不完整、冲突或未知安装，未开始安装。旧版和数据保持不动，请保留现场。");if(route==Route.Velopack)throw new IOException("当前已经是新版安装格式。请在应用内使用检查更新，避免绕过任务保护。");
     if(route==Route.Migrate){waitingForExit=true;close.Enabled=true;Progress("请正常退出旧版 Codex Light（包括托盘），完成或停止其中任务。此窗口会在退出后自动继续，不需要再次打开安装包。");while(LegacyRunning()){await Task.Delay(500,cancellation.Token);}cancellation.Token.ThrowIfCancellationRequested();waitingForExit=false;close.Enabled=false;}
     Progress("正在校验并准备安装文件…");extracted=await Task.Run(()=>Extract());

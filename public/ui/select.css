@@ -1,0 +1,85 @@
+/* Preserve native form semantics. Chromium's customizable picker is a DOM top-layer
+   popup, so it also stays above settings dialogs and scroll containers. */
+select:not([multiple]):is(:not([size]),[size="0"],[size="1"]) {
+  cursor:pointer;
+  color:var(--text);
+  background-color:var(--control-bg);
+  border:1px solid var(--control-border,var(--border-strong));
+  border-radius:var(--r-sm);
+  min-inline-size:0;
+  text-overflow:ellipsis;
+  -webkit-tap-highlight-color:transparent;
+}
+select:disabled { opacity:.55; cursor:not-allowed; }
+@media (hover:hover) {
+  select:not(:disabled):hover { border-color:var(--secondary); }
+}
+@supports (appearance:base-select) and selector(::picker(select)) {
+  select:not([multiple]):is(:not([size]),[size="0"],[size="1"]), ::picker(select) { appearance:base-select; }
+  select:not([multiple]) { column-gap:8px; }
+  select::picker-icon {
+    content:""; flex:none; align-self:center; width:.48em; height:.48em;
+    margin-inline:auto 2px; border:solid var(--secondary); border-width:0 1.5px 1.5px 0;
+    transform:translateY(-20%) rotate(45deg);
+  }
+  select:open::picker-icon { transform:translateY(20%) rotate(225deg); }
+  ::picker(select) {
+    box-sizing:border-box; margin-block:3px; padding:4px;
+    min-inline-size:min(max(8rem,anchor-size(width)),calc(100vw - 16px));
+    max-inline-size:min(max(24rem,anchor-size(width)),calc(100vw - 16px));
+    max-block-size:min(44vh,22rem); overflow:auto; overscroll-behavior:contain;
+    border:1px solid var(--border-strong); border-radius:var(--r-lg); box-shadow:var(--shadow-popover);
+    background:var(--raised); color:var(--text); scrollbar-color:var(--scrollbar) transparent;
+  }
+  select:where(:not([multiple]):is(:not([size]),[size="0"],[size="1"])) option {
+    min-block-size:var(--select-option-height,32px); padding:6px 10px; gap:8px; border-radius:var(--r-sm);
+    color:var(--text); background:transparent; font:inherit; white-space:normal; overflow-wrap:anywhere;
+    cursor:pointer;
+  }
+  select option::checkmark { content:none; }
+  select option:checked::checkmark {
+    content:""; order:1; flex:none; align-self:center; margin-inline-start:auto;
+    box-sizing:border-box; width:6px; height:6px; border:3px solid var(--accent); border-radius:50%;
+  }
+  select:not([multiple]) option:checked { background:var(--selected); }
+  select:not([multiple]) option:focus-visible { outline:2px solid var(--focus); outline-offset:-2px; }
+  @media(hover:hover) { select:not([multiple]) option:not(:disabled):hover { background:var(--selected); } }
+  select option:disabled, select optgroup:disabled option { color:var(--muted); cursor:not-allowed; }
+  @media(pointer:coarse) { select { --select-option-height:44px; } }
+}
+/* Older WebViews render the same list in a positioned panel. The underlying select
+   retains its label, value, validity and form submission behavior. */
+:root[data-select-fallback] select:not([multiple]):is(:not([size]),[size="0"],[size="1"]) {
+  appearance:none; padding-inline-end:28px;
+  background-image:linear-gradient(45deg,transparent 50%,var(--secondary) 50%),linear-gradient(135deg,var(--secondary) 50%,transparent 50%);
+  background-position:calc(100% - 13px) 52%,calc(100% - 9px) 52%; background-size:4px 4px; background-repeat:no-repeat;
+}
+.app-select-list {
+  position:fixed; z-index:2147483600; box-sizing:border-box; padding:4px;
+  width:max-content;
+  min-width:min(max(8rem,var(--select-anchor-width)),var(--select-viewport-width));
+  max-width:min(max(24rem,var(--select-anchor-width)),var(--select-viewport-width));
+  border:1px solid var(--border-strong); border-radius:var(--r-lg); box-shadow:var(--shadow-popover);
+  color:var(--text); background:var(--raised); overflow:auto; overscroll-behavior:contain;
+  font-size:.875rem; line-height:1.5; scrollbar-color:var(--scrollbar) transparent;
+}
+.app-select-list [role="option"] {
+  display:flex; align-items:center; gap:8px; min-height:32px; padding:6px 10px;
+  border-radius:var(--r-sm); cursor:pointer; overflow-wrap:anywhere;
+}
+.app-select-list [aria-selected="true"] { background:var(--selected); }
+.app-select-list [aria-selected="true"]::after {
+  content:""; flex:none; margin-inline-start:auto;
+  box-sizing:border-box; width:6px; height:6px; border:3px solid var(--accent); border-radius:50%;
+}
+.app-select-list[data-keyboard] [data-active] { outline:2px solid var(--focus); outline-offset:-2px; }
+@media(hover:hover) { .app-select-list [role="option"]:not([aria-disabled="true"]):hover { background:var(--selected); } }
+.app-select-list [aria-disabled="true"], .app-select-group { color:var(--muted); }
+.app-select-group { padding:5px 10px; font-size:.8125rem; }
+@media(pointer:coarse) { .app-select-list [role="option"] { min-height:44px; } }
+@media(prefers-reduced-motion:no-preference) {
+  :root:not([data-reduced-motion="true"]) select::picker-icon { transition:transform 120ms ease; }
+  :root:not([data-reduced-motion="true"]) select:open::picker(select) { animation:select-appear 100ms ease-out; }
+  :root:not([data-reduced-motion="true"]) .app-select-list { animation:select-appear 100ms ease-out; }
+  @keyframes select-appear { from{opacity:.35} to{opacity:1} }
+}

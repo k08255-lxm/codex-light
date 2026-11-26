@@ -33,6 +33,9 @@ docs/legacy-repair-v7-evidence.json
 /docs/assets/*
 !/docs/assets/conversation-demo.png
 !/docs/assets/narrow-layout-demo.png
+!/docs/assets/first-theme.png
+!/docs/assets/engine-updates.png
+!/docs/assets/turn-usage.png
 
 # Generated installers, inspections and previews.
 /desktop/**/out*/

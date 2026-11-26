@@ -42,6 +42,22 @@ test('first unknown cumulative baseline is omitted; reset/replay cannot be bille
  time(3000);event('turn/completed',{turn:{id:'t',status:'completed'}});assert.equal(service.query().totals.performance.firstTextLatencyMs.count,0);
 });
 
+test('turn usage is scoped to exact turn IDs, separates the context snapshot and excludes account identity',async t=>{
+ const root=await directory(t),{service,event,start}=fixture({root});start();
+ event('thread/tokenUsage/updated',{tokenUsage:{total:total(),last:{totalTokens:19},modelContextWindow:200}});
+ event('turn/completed',{turn:{id:'t',status:'completed'}});
+ event('turn/started',{turnId:'next',turn:{id:'next',status:'inProgress'}});
+ event('thread/tokenUsage/updated',{turnId:'next',tokenUsage:{total:total(110,25),last:{totalTokens:9},modelContextWindow:200}});
+ const request={threadId:THREAD,turnIds:['next','missing','t','next']}, {turns}=service.turnUsage(request);
+ assert.deepEqual(turns.map(row=>[row.turnId,row.tokens.totalTokens,row.context.used]),[['next',15,9],['t',120,19]]);
+ assert.equal(turns[1].estimatedCost.complete,true);
+ assert.ok(!turns.some(row=>Object.hasOwn(row,'account')||Object.hasOwn(row,'cwd')));
+ assert.deepEqual(service.turnUsage({...request,threadId:'other'}),{turns:[]});
+ assert.throws(()=>service.turnUsage({...request,turnIds:Array(101).fill('t')}));
+ await service.close();const restored=fixture({root}).service;await restored.load();
+ assert.deepEqual(restored.turnUsage(request).turns[1],turns[1]);await restored.close();
+});
+
 test('ack-before-start ordering, steer submission, one-chunk speed and duplicate started events remain truthful',()=>{
  const {service,event,time}=fixture();service.acknowledge('turn/start',{threadId:THREAD,model:'m'},{turn:{id:'t'}});
  time(10);event('turn/started',{turn:{id:'t'}});time(20);event('turn/started',{turn:{id:'t'}});

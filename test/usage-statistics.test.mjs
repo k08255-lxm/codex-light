@@ -44,7 +44,7 @@ const descendants=el=>[el,...el.children.flatMap(descendants)];
 test('mount has accessible tables, safe text trend, explicit source and no network', () => {
   const root=new Element('section',doc), panel=mountOfficialUsageStatistics(root);
   panel.update({dailyUsageBuckets:[{startDate:'<script>bad</script>',tokens:0},{startDate:'server date',tokens:100},{startDate:null,tokens:null}],threadUsage:{threadId:'t',groups:[]}});
-  assert.match(text(root),/来源：Codex 账户用量数据/);assert.match(text(root),/官方接口数据/); assert.match(text(root),/不与本地扫描统计相加/); assert.match(text(root),/<script>bad<\/script>/);
+  assert.match(text(root),/来源：Codex 账户用量数据/);assert.match(text(root),/实际扣款以账单为准/); assert.match(text(root),/<script>bad<\/script>/);
   assert.ok(descendants(root).some(el=>el.tagName==='caption'&&el.textContent.includes('日桶')));
   const bars=descendants(root).filter(el=>el.className==='usage-statistics-bar'); assert.deepEqual(bars.map(el=>el.style.width),['0%','100%']); assert.equal(bars[0].attributes['aria-hidden'],'true');
   assert.ok(descendants(root).some(el=>el.attributes.scope==='row'));
@@ -55,7 +55,7 @@ test('mount has accessible tables, safe text trend, explicit source and no netwo
 test('different thread snapshot is not rendered and missing costs do not invent prices', () => {
   const root=new Element('section',doc),panel=mountOfficialUsageStatistics(root);
   panel.update({threadUsage:{threadId:'selected',groups:[]}}, {tokenSnapshot:{threadId:'other',totalTokens:12345}});
-  assert.ok(!text(root).includes('实时累计'));assert.ok(!text(root).includes('12,345'));assert.match(text(root),/未知/);
+  assert.ok(!text(root).includes('实时累计'));assert.ok(!text(root).includes('12,345'));assert.match(text(root),/—/);
 });
 test('bounds are explicit and do not recompute global totals from partial rows', () => {
   const data=normalizeOfficialUsageStatistics({summary:{lifetimeTokens:99},dailyUsageBuckets:Array(3661).fill({tokens:1}),threadUsage:{groups:Array(501).fill({totalTokens:1})}});
@@ -63,6 +63,6 @@ test('bounds are explicit and do not recompute global totals from partial rows',
 });
 test('account and thread scopes render separately without fabricated unknown sections',()=>{
  const root=new Element('section',doc),panel=mountOfficialUsageStatistics(root);
- panel.update({summary:{lifetimeTokens:2}},{scope:'account'});assert.match(text(root),/全局汇总/);assert.ok(!text(root).includes('当前会话估算'));
- panel.update({threadUsage:{threadId:'t',groups:[]}},{scope:'thread'});assert.match(text(root),/当前会话估算/);assert.ok(!text(root).includes('全局汇总'));assert.ok(!text(root).includes('日趋势：'));
+ panel.update({summary:{lifetimeTokens:2}},{scope:'account'});assert.match(text(root),/全局汇总/);assert.ok(!text(root).includes('当前会话用量'));
+ panel.update({threadUsage:{threadId:'t',groups:[]}},{scope:'thread'});assert.match(text(root),/当前会话用量/);assert.ok(!text(root).includes('全局汇总'));assert.ok(!text(root).includes('日趋势：'));
 });

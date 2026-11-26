@@ -52,7 +52,7 @@ export function createComposer({ document, session, drafts, ledger, thread, view
       const article=el('article','message userMessage optimistic-message');article.dataset.submission=row.id;article.dataset.status=row.status;
       const body=el('div','message-text');if(row.text)body.append(el('div','message-bubble',row.text));
       const names=[...row.images,...row.files].map(x=>x.name||'附件');if(names.length)body.append(el('div','optimistic-attachments',names.join(' · ')));
-      const labels={sending:'正在发送…',accepted:'已发送，正在同步…',notExecuted:'未发送',failed:'发送失败，请核对结果',unknown:'结果待确认，请勿重复发送'};
+      const labels={sending:'正在发送…',accepted:'已发送，正在同步…',notExecuted:'未发送',failed:'发送失败',unknown:'结果待确认，请勿重复发送'};
       const status=el('div','optimistic-status',labels[row.status]);status.setAttribute('role','status');if(row.error)status.title=row.error;
       article.append(body,status);
       if(row.status==='notExecuted'){const retry=el('button','btn ghost small','重新发送');retry.type='button';retry.disabled=state.sending||!state.connected;retry.addEventListener('click',()=>retryOptimistic(row));article.append(retry);}

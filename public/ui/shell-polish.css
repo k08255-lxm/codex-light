@@ -115,10 +115,22 @@ body .app{height:calc(100dvh - 38px)}
 #settings-dialog .pref-row>button{flex:none}
 #settings-dialog .panel+.panel{margin-top:12px}
 #settings-dialog .config-settings-status{color:var(--secondary);margin:10px 0}
+#settings-appearance > .panel { container-type: inline-size; }
+@container (max-width: 35rem) {
+ #settings-dialog .pref-row:has(.style-cards) { align-items: stretch; flex-direction: column; gap: 12px; }
+ .style-cards button { flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 8px; min-width: 0; padding: 8px; }
+ .style-cards .style-preview { width: 100%; height: 34px; }
+ .style-cards .style-choice-copy { overflow-wrap: anywhere; }
+}
+@container (max-width: 17rem) {
+ .style-cards { grid-template-columns: 1fr; }
+ .style-cards button { flex-direction: row; align-items: center; gap: 12px; }
+ .style-cards .style-preview { width: 46px; }
+}
 @media(max-width:600px){
  #settings-dialog .settings-content{padding:16px 14px 36px}
  #settings-dialog .section-title,#settings-dialog .runtime-panel>h2{margin-top:22px}
- #settings-dialog .pref-row:has(.style-cards),#settings-dialog .title-settings-model{align-items:stretch;flex-direction:column;gap:8px}
+ #settings-dialog .title-settings-model{align-items:stretch;flex-direction:column;gap:8px}
  #settings-dialog .setting-row-path{min-width:0;flex-basis:36%}
  #settings-dialog .config-settings-field label{gap:8px;align-items:stretch;flex-direction:column}
  #settings-dialog .config-settings-field :is(select,input){width:100%;max-width:100%;font-size:1rem}

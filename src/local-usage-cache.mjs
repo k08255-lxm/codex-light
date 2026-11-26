@@ -2,9 +2,10 @@ import {createHash, randomUUID} from 'node:crypto';
 import {constants} from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import {MAX_RECOVERY_LOG_BYTES} from './local-usage.mjs';
 
 // Bump the version whenever the parser changes the meaning or shape of its projection.
-const header = 'CodeCang local usage index v1 ';
+const header = 'CodeCang local usage index v2 ';
 const indexName = 'local-usage-index.cache';
 const maxBytes = 16 * 1024 * 1024;
 const maxEntries = 1000;
@@ -56,12 +57,13 @@ async function load(directory, file) {
     if (!sameFile(before, await regularFile(file)) || !sameFile(before, await handle.stat({bigint:true}))) throw unsafe();
   } finally { await handle.close(); }
   const body = data.subarray(header.length + 65);
+  if(data.subarray(0,header.length).toString('ascii')==='CodeCang local usage index v1 ')return [];
   if (data.subarray(0, header.length + 65).toString('ascii') !== header + digest(body) + '\n') throw invalid();
   let entries;
   try { entries = JSON.parse(body.toString('utf8')); } catch { throw invalid(); }
   if (!Array.isArray(entries) || entries.length > maxEntries || entries.some(entry =>
     !entry || !/^[a-f0-9]{64}$/.test(entry.root) || typeof entry.identity !== 'string' ||
-    !Number.isSafeInteger(entry.expanded) || entry.expanded < 0 || entry.expanded > 32 * 1024 * 1024 ||
+    !Number.isSafeInteger(entry.expanded) || entry.expanded < 0 || entry.expanded > MAX_RECOVERY_LOG_BYTES ||
     entry.parsed?.source !== 'local-codex-jsonl' || typeof entry.parsed.sourceId !== 'string' ||
     !Array.isArray(entry.parsed.increments) || !Array.isArray(entry.parsed.turns) ||
     !Array.isArray(entry.parsed.diagnostics) || !entry.parsed.diagnosticCounts)) throw invalid();
@@ -126,9 +128,11 @@ export async function openLocalUsageIndex(cacheRoot, sourceRoot, report) {
       if (old?.identity === identity) current.push(old);
       else { dirty = true; current.push({root, identity, expanded, parsed}); }
     },
-    async finish() {
+    async finish({keepUnvisited=false}={}) {
       if (!dirty && existing.size === current.length) return;
-      try { await save(directory, file, [...current, ...entries.filter(entry => entry.root !== root)]); }
+      if(keepUnvisited&&!dirty)return;
+      const touched=new Set(current.map(entry=>entry.parsed.sourceId));
+      try { await save(directory, file, [...current, ...entries.filter(entry => entry.root !== root||keepUnvisited&&!touched.has(entry.parsed.sourceId))]); }
       catch (error) { report(error.code === 'UNSAFE_CACHE_PATH' ? 'usage-index-unsafe' : 'usage-index-write-failed'); }
     },
   };

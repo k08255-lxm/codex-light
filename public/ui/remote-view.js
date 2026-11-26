@@ -18,9 +18,9 @@ export function createRemoteView({ document, state, $, el, rpc, notice, confirm,
    $('remote-status').replaceChildren(remoteStatusRows(status));remoteControls();
   }
   function remoteReset({statusMessage='尚未读取远控状态。',pairMessage='本机配对码显示已清除；不会撤销已配对设备。',devicesMessage='远控状态未读取，请刷新设备列表。'}={}){
-   remote.generation++;remote.busy=false;remote.status=null;clearRemotePair(pairMessage);$('remote-status').textContent=statusMessage;$('remote-devices').replaceChildren(el('p','',devicesMessage));remoteControls();
+   remote.generation++;remote.busy=false;remote.status=null;clearRemotePair(remote.pair ? pairMessage : '');$('remote-status').textContent=statusMessage;$('remote-devices').replaceChildren(el('p','',devicesMessage));remoteControls();
   }
-  function clearRemotePair(message='本机配对码显示已清除；这不会撤销已配对设备。'){clearTimeout(remote.timer);remote.timer=null;remote.pair=null;$('remote-pair-code').textContent='';$('remote-pair-expiry').textContent='';$('remote-pairing').classList.add('hidden');$('remote-pair-status').textContent=message;remoteControls();}
+  function clearRemotePair(message='配对码已隐藏。'){clearTimeout(remote.timer);remote.timer=null;remote.pair=null;$('remote-pair-code').textContent='';$('remote-pair-expiry').textContent='';$('remote-pairing').classList.add('hidden');$('remote-pair-status').textContent=message;remoteControls();}
   async function refreshRemote(){
    if(state.lan){remoteReset({statusMessage:'请在电脑上管理官方远控设备和配对。',pairMessage:'配对码仅在电脑上显示。',devicesMessage:'设备列表仅在电脑上显示。'});return;}
    if(remote.busy)return;
@@ -44,13 +44,14 @@ export function createRemoteView({ document, state, $, el, rpc, notice, confirm,
    const consentGeneration=remote.generation,consentInstance=state.serverInstance,consentEnvironment=remoteEnvironmentId(remote.status);
    if(!await confirm(question)||remote.busy||consentGeneration!==remote.generation||consentInstance!==state.serverInstance||consentEnvironment!==remoteEnvironmentId(remote.status))return;
    const generation=++remote.generation,instance=state.serverInstance,environment=remoteEnvironmentId(remote.status);
+   let refreshDevices=false;
    remote.busy=true;remoteControls();
    const current=()=>generation===remote.generation&&state.connected&&state.serverInstance===instance&&remoteEnvironmentId(remote.status)===environment;
    try{const result=await performMutation(method,params,{confirmed:true});
-   if(!current()){notice('远控环境、账户或连接已变化；未渲染旧状态或旧配对码，请刷新核对。',true);return;}
-   if(method==='remoteControl/pairing/start'){clearRemotePair('');remote.pair=safePairing(result);if(!remote.pair){$('remote-pair-status').textContent='服务未返回有效且未过期的配对码。不会显示无效码，也未自动重试。';return;}$('remote-pair-code').textContent=remote.pair.manualPairingCode||remote.pair.pairingCode;$('remote-pair-expiry').textContent='有效期至 '+new Date(remote.pair.expiresAt).toLocaleString()+'。仅在官方配对流程中输入；不要公开分享。';$('remote-pairing').classList.remove('hidden');remote.timer=setTimeout(()=>clearRemotePair('配对码已过期并清除；已授权设备仍需单独撤销。'),Math.min(2147483647,remote.pair.expiresAt-Date.now()));remoteControls();}
-   else {if(method==='remoteControl/disable')clearRemotePair();if(method==='remoteControl/enable'||method==='remoteControl/disable')applyRemoteStatus(result);notice('远控操作已返回。请手动刷新状态与设备确认实际结果；尚未验证手机端。');}
-   }catch(error){if(generation===remote.generation)notice('远控操作未确认完成：'+error.message+'。没有自动重试；连接正常时会自动同步原请求状态。',true);}finally{if(generation===remote.generation){remote.busy=false;remoteControls();}}
+   if(!current()){notice('远控连接已切换，请在当前连接中重试。',true);return;}
+   if(method==='remoteControl/pairing/start'){clearRemotePair('');remote.pair=safePairing(result);if(!remote.pair){$('remote-pair-status').textContent='服务未返回有效的配对码。请重新创建。';return;}$('remote-pair-code').textContent=remote.pair.manualPairingCode||remote.pair.pairingCode;$('remote-pair-expiry').textContent='有效期至 '+new Date(remote.pair.expiresAt).toLocaleString()+'。仅在官方配对流程中输入；不要公开分享。';$('remote-pairing').classList.remove('hidden');remote.timer=setTimeout(()=>clearRemotePair('配对码已过期并清除；已授权设备仍需单独撤销。'),Math.min(2147483647,remote.pair.expiresAt-Date.now()));remoteControls();}
+   else {if(method==='remoteControl/disable')clearRemotePair('');if(method==='remoteControl/enable'||method==='remoteControl/disable')applyRemoteStatus(result);refreshDevices=true;}
+   }catch(error){if(generation===remote.generation){refreshDevices=error.outcome==='unknown';notice((refreshDevices?'未收到远控结果：':'远控操作失败：')+error.message,true);}}finally{if(generation===remote.generation){remote.busy=false;remoteControls();if(refreshDevices)await refreshRemote();}}
   }
   $('remote-refresh').addEventListener('click',refreshRemote);
   $('remote-enable').addEventListener('click',()=>remoteChange('remoteControl/enable',{ephemeral:true},'通过官方协议仅为本次会话启用远程控制？这不会改变已有持久偏好；此期间配对的设备仍可能保存授权，需要单独撤销。'));
@@ -65,9 +66,9 @@ export function createRemoteView({ document, state, $, el, rpc, notice, confirm,
    remote.busy=true;remoteControls();
    const current=()=>generation===remote.generation&&state.connected&&state.serverInstance===instance&&remoteEnvironmentId(remote.status)===environment;
    try{const result=await rpc('remoteControl/pairing/status',params);
-    if(!current()){notice('远控环境、账户或连接已变化；未更新旧配对状态，请刷新核对。',true);return;}
+    if(!current()){notice('远控连接已切换，请在当前连接中查询。',true);return;}
     if(!pairingQuery(remote.pair)){clearRemotePair('配对码已过期。');return;}
-    if(result.claimed===true)clearRemotePair('服务报告已领取配对授权；不等于手机连接已实测成功。请刷新设备列表核对。');
+    if(result.claimed===true)clearRemotePair('配对码已领取。可在设备列表查看授权。');
     else $('remote-pair-status').textContent=result.claimed===false?'服务报告尚未领取；不会自动轮询。':'服务未返回明确配对状态。';
    }catch(error){if(generation===remote.generation)$('remote-pair-status').textContent='查询失败：'+error.message;}
    finally{if(generation===remote.generation){remote.busy=false;remoteControls();}}

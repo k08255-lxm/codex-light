@@ -3,6 +3,7 @@
 // carries the bridge instance token, and a request that ended or was replaced cannot be answered.
 // Cards are cached per request instance so drafts survive other requests arriving or resolving.
 import { permissionOptions, permissionResponse, formDefinition, formResponse, userInputDefinition, userInputResponse, requestKey, requestThread, approvalDecisions } from '../approval-schemas.js';
+import { switchInput } from './format.js';
 
 const caches = new WeakMap();
 let sequence = 0;
@@ -218,17 +219,17 @@ function permissionsApproval(ctx, p) {
   const { title, line, boundedText, el, body, button, respond, uid, document, showError } = ctx;
   title.textContent = '授予额外权限？';
   if (p.reason) line(boundedText(p.reason, 4000));
-  line('仅授予勾选的权限；可以选择本轮或当前对话范围。', 'approval-scope');
+  line('仅授予选中的权限，可选择本轮或当前对话范围。', 'approval-scope');
   const definition = permissionOptions(p);
   if (!p.threadId || !p.turnId || !definition.supported) line(definition.reason || '缺少对话或任务标识，不能授予权限。', 'inline-error');
   else if (!definition.options.length) line('请求中没有可以选择的额外权限。');
   else {
     const fields = el('fieldset', 'approval-permissions'); fields.append(el('legend', '', '选择允许的权限'));
     const checks = [];
-    for (const option of definition.options) { const label = el('label', 'permission-choice'); const input = document.createElement('input'); input.type = 'checkbox'; input.checked = false; label.append(input, el('span', '', boundedText(option.label, 1200))); fields.append(label); checks.push({ id: option.id, input }); }
+    for (const option of definition.options) { const label = el('label', 'permission-choice'); const input = switchInput(document); label.append(input, el('span', '', boundedText(option.label, 1200))); fields.append(label); checks.push({ id: option.id, input }); }
     for (const restriction of definition.restrictions) fields.append(el('p', 'permission-restriction', '始终保留：' + boundedText(restriction.label, 1200)));
     body.append(fields);
-    const hint = el('p', 'approval-scope', '至少勾选一项才能授予。'); hint.id = uid + '-grant-hint'; body.append(hint);
+    const hint = el('p', 'approval-scope', '至少选择一项才能授予。'); hint.id = uid + '-grant-hint'; body.append(hint);
     const scope=document.createElement('select');scope.className='approval-scope-select';scope.setAttribute('aria-label','权限有效范围');for(const [value,label]of [['turn','仅本轮'],['session','本对话']]){const option=document.createElement('option');option.value=value;option.textContent=label;scope.append(option);}ctx.actions.append(scope);
     const scopeHint=el('p','approval-scope','本轮结束后授权失效。');scopeHint.id=uid+'-scope-description';body.append(scopeHint);scope.setAttribute('aria-describedby',scopeHint.id);scope.addEventListener('change',()=>{scopeHint.textContent=scope.value==='session'?'所选权限持续至当前 Codex 会话结束，不保存为永久权限。':'本轮结束后授权失效。';});
     const grant = button('允许所选', async () => {
@@ -277,7 +278,7 @@ function mcpElicitation(ctx, p) {
     let control, read;
     if (field.multiple) {
       wrap.append(el('legend', '', caption)); const boxes = [];
-      for (const option of field.options) { const label = el('label', 'permission-choice'); const box = document.createElement('input'); box.type = 'checkbox'; box.value = option.value; label.append(box, el('span', '', boundedText(option.label, 1000))); wrap.append(label); boxes.push(box); }
+      for (const option of field.options) { const label = el('label', 'permission-choice'); const box = switchInput(document); box.value = option.value; label.append(box, el('span', '', boundedText(option.label, 1000))); wrap.append(label); boxes.push(box); }
       // Required: nothing checked is an explicit [] (minItems decides). Optional: nothing checked omits the property.
       control = boxes[0]; read = () => { const values = boxes.filter(box => box.checked).map(box => box.value); return values.length || field.required ? values : undefined; };
     } else {

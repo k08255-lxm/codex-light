@@ -2,7 +2,7 @@
 // cordis.patch.yml files feed the DSH bridge, and whether new runtimes follow source changes.
 // Truthful states: saving configures the NEXT runtime; running/reused runtimes keep their version,
 // and `pendingRestart` means the running bridge has not loaded this capability yet.
-import { el } from './format.js';
+import { el, switchInput } from './format.js';
 import { icon } from '../icons.js';
 
 const ACTIVATION = {
@@ -67,7 +67,7 @@ export function mountDshConfig(host, { api, onSourcesChanged = () => {} }) {
   function header() {
     const head = el(document, 'div', 'dshcfg-head');
     const titles = el(document, 'div');
-    titles.append(el(document, 'h2', 'section-title', 'DSH 模型来源'), el(document, 'p', 'fine', '这里决定 DSH 从哪里读取模型服务配置，不是选择本次任务的模型。默认使用 DSH 随包提供的服务配置；如需自己的服务商，可勾选下方配置文件额外导入。源文件不会被修改。'));
+    titles.append(el(document, 'h2', 'section-title', 'DSH 模型来源'), el(document, 'p', 'fine', '这里决定 DSH 从哪里读取模型服务配置，不是选择本次任务的模型。默认使用 DSH 随包提供的服务配置；如需自己的服务商，可选择下方配置文件额外导入。源文件不会被修改。'));
     const reload = el(document, 'button', 'btn icon-only ghost'); reload.type = 'button'; reload.setAttribute('aria-label', '重新读取状态'); reload.title = '重新读取状态'; reload.append(icon(document, 'refresh', { size: 16 }));
     reload.disabled = busy; reload.addEventListener('click', () => { message = { text: '', error: false }; load(); });
     head.append(titles, reload);
@@ -96,27 +96,28 @@ export function mountDshConfig(host, { api, onSourcesChanged = () => {} }) {
     // Explicit "built-in only" choice: an empty selection, saved like any other.
     const row = el(document, 'li', 'dshcfg-source dshcfg-builtin'); row.dataset.valid = 'true';
     const label = el(document, 'label', 'dshcfg-pick');
-    const box = el(document, 'input'); box.type = 'radio'; box.name = 'dshcfg-builtin'; box.checked = draft.selected.size === 0; box.disabled = busy;
+    const box = el(document, 'input'); box.type = 'radio'; box.name = box.id = 'dshcfg-builtin'; box.checked = draft.selected.size === 0; box.disabled = busy;
     box.setAttribute('aria-describedby', 'dshcfg-builtin-detail');
-    box.addEventListener('change', () => { if (box.checked) { draft.selected.clear(); message = { text: '', error: false }; render(); } });
+    box.addEventListener('change', () => { if (box.checked) { draft.selected.clear(); message = { text: '', error: false }; render(box.id); } });
     const text = el(document, 'div', 'dshcfg-source-text');
     const name = el(document, 'div', 'dshcfg-source-name'); name.append(el(document, 'strong', '', '使用 DSH 默认服务配置'), el(document, 'span', 'plan-badge', '不额外导入'));
-    const detail = el(document, 'div', 'fine', '不额外导入你自己的服务商配置。“默认”指 DSH 随包预设，不表示模型在本机离线运行。勾选下方文件可添加自己的服务商和模型。'); detail.id = 'dshcfg-builtin-detail';
+    const detail = el(document, 'div', 'fine', '不额外导入你自己的服务商配置。“默认”指 DSH 随包预设，不表示模型在本机离线运行。选择下方文件可添加自己的服务商和模型。'); detail.id = 'dshcfg-builtin-detail';
     text.append(name, detail); label.append(box, text); row.append(label);
     return row;
   }
-  function sourceRow(source) {
+  function sourceRow(source, index) {
     const row = el(document, 'li', 'dshcfg-source'); row.dataset.valid = String(!!source.valid);
     const label = el(document, 'label', 'dshcfg-pick');
-    const box = el(document, 'input'); box.type = 'checkbox'; box.checked = draft.selected.has(source.id); box.disabled = busy || (!source.valid && !box.checked);
-    box.setAttribute('aria-describedby', 'dshcfg-src-' + source.id.replace(/[^\w-]/g, '_'));
-    box.addEventListener('change', () => { if (box.checked) draft.selected.add(source.id); else draft.selected.delete(source.id); message = { text: '', error: false }; render(); });
+    const box = switchInput(document); box.id = 'dshcfg-source-' + index; box.checked = draft.selected.has(source.id); box.disabled = busy || (!source.valid && !box.checked);
+    box.setAttribute('aria-label', source.label || source.id);
+    box.setAttribute('aria-describedby', box.id + '-path ' + box.id + '-detail');
+    box.addEventListener('change', () => { if (box.checked) draft.selected.add(source.id); else draft.selected.delete(source.id); message = { text: '', error: false }; render(source.valid ? box.id : 'dshcfg-builtin'); });
     const text = el(document, 'div', 'dshcfg-source-text');
     const name = el(document, 'div', 'dshcfg-source-name');
     name.append(el(document, 'strong', '', source.label || source.id), el(document, 'span', 'plan-badge', source.kind === 'profile' ? 'profile' : source.kind === 'desktop' ? '桌面' : '自定义'));
     if (!source.valid) { const bad = el(document, 'span', 'agent-state', '无效'); bad.dataset.tone = 'fail'; name.append(bad); }
-    const path = el(document, 'div', 'dshcfg-path mono', source.path || ''); path.title = source.path || '';
-    const meta = el(document, 'div', 'fine'); meta.id = 'dshcfg-src-' + source.id.replace(/[^\w-]/g, '_');
+    const path = el(document, 'div', 'dshcfg-path mono', source.path || ''); path.title = source.path || ''; path.id = box.id + '-path';
+    const meta = el(document, 'div', 'fine'); meta.id = box.id + '-detail';
     meta.textContent = source.valid ? `${(source.providers || []).length} 个 provider · 修改于 ${when(source.modifiedAt)} · ${shortHash(source.hash)}` : (source.error?.message || '无法读取或校验');
     text.append(name, path, meta);
     if (source.valid && source.providers?.length) {
@@ -127,22 +128,22 @@ export function mountDshConfig(host, { api, onSourcesChanged = () => {} }) {
     label.append(box, text); row.append(label);
     return row;
   }
-  function render() {
+  function render(focusId) {
     root.replaceChildren(header());
     if (!status) { root.append(el(document, 'p', 'empty-line', busy ? '正在读取…' : '尚未读取')); appendMessage(); return; }
     if (!status.available) { root.append(el(document, 'p', 'empty-line', status.error?.message || '当前未读取到模型来源。MCP 连接状态见上方。')); appendMessage(); return; }
     root.append(activationBanner());
     const list = el(document, 'ul', 'dshcfg-sources');
     list.append(builtinRow());
-    for (const source of status.sources || []) list.append(sourceRow(source));
+    (status.sources || []).forEach((source, index) => list.append(sourceRow(source, index)));
     if (!(status.sources || []).length) list.append(el(document, 'li', 'empty-line', '没有发现 profile。可只使用内置模型，或在下方注册自定义 cordis.patch.yml。'));
     root.append(list);
     const shared = sharedProviders(status, draft.selected);
     if (shared.length) root.append(el(document, 'p', 'dshcfg-warn', `多个来源声明了同一 provider：${shared.map(row => `${row.id}（${row.owners.join('、')}）`).join('；')}。内容相同会去重，不同会被拒绝保存。`));
     const follow = el(document, 'label', 'pref-row');
     const followText = el(document, 'div'); followText.append(el(document, 'strong', '', '自动跟随来源更新'), el(document, 'small', 'fine', draft.autoFollow ? '每个新 runtime 创建前重新读取所选文件；无效或冲突时阻止启动，不回退旧版本。' : '新 runtime 使用上次有效的冻结快照，只有手动更新才变化。'));
-    const toggle = el(document, 'input', 'switch'); toggle.type = 'checkbox'; toggle.checked = draft.autoFollow; toggle.disabled = busy; toggle.setAttribute('aria-label', '自动跟随来源更新');
-    toggle.addEventListener('change', () => { draft.autoFollow = toggle.checked; render(); });
+    const toggle = switchInput(document); toggle.id = 'dshcfg-auto-follow'; toggle.checked = draft.autoFollow; toggle.disabled = busy; toggle.setAttribute('aria-label', '自动跟随来源更新');
+    toggle.addEventListener('change', () => { draft.autoFollow = toggle.checked; render(toggle.id); });
     follow.append(followText, toggle);
     const actions = el(document, 'div', 'work-row');
     const save = el(document, 'button', 'btn primary', '保存选择'); save.type = 'button'; save.disabled = busy || !dirty();
@@ -162,9 +163,10 @@ export function mountDshConfig(host, { api, onSourcesChanged = () => {} }) {
     const input = el(document, 'input'); input.placeholder = '自定义 cordis.patch.yml 的绝对路径'; input.setAttribute('aria-label', '自定义配置文件路径'); input.autocomplete = 'off'; input.spellcheck = false; input.disabled = busy;
     const add = el(document, 'button', 'btn', '注册来源'); add.type = 'submit'; add.disabled = busy;
     register.append(icon(document, 'file', { size: 16 }), input, add);
-    register.addEventListener('submit', event => { event.preventDefault(); const path = input.value.trim(); if (!path) return; call('/api/dsh/config-sources/register', { path }, '已注册并校验；勾选后保存才会使用。'); });
+    register.addEventListener('submit', event => { event.preventDefault(); const path = input.value.trim(); if (!path) return; call('/api/dsh/config-sources/register', { path }, '已注册并校验，选中后保存才会使用。'); });
     root.append(register, el(document, 'p', 'fine', '注册只记录并校验该文件，不会自动选中，也不会修改它。'));
     appendMessage();
+    if (focusId) root.querySelector('#' + focusId)?.focus({ preventScroll: true });
   }
   function appendMessage() { if (!message.text) return; const p = el(document, 'p', message.error ? 'inline-error' : 'fine', message.text); p.setAttribute('role', 'status'); root.append(p); }
   render();

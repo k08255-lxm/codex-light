@@ -10,6 +10,6 @@ export function validatePreferences(value){
  if(['completionNotice','approvalNotice','keepAwakeDuringTask','keepAwakeDuringRemote'].some(key=>typeof normalized[key]!=='boolean'))throw invalid();
  return normalized;
 }
-export function readPreferences(storage){try{const raw=storage.getItem(PREFERENCE_KEY);return{preferences:raw?validatePreferences(JSON.parse(raw)):{...DEFAULT_PREFERENCES},error:null};}catch{return{preferences:{...DEFAULT_PREFERENCES},error:'本地偏好无法读取，已使用默认设置；原记录未删除。'};}}
+export function readPreferences(storage){try{const raw=storage.getItem(PREFERENCE_KEY);return{preferences:raw?validatePreferences(JSON.parse(raw)):{...DEFAULT_PREFERENCES},error:null,...(raw===null?{firstRun:true}:{})};}catch{return{preferences:{...DEFAULT_PREFERENCES},error:'本地偏好无法读取，已使用默认设置；原记录未删除。'};}}
 export function savePreferences(storage,value){const prefs=validatePreferences(value);storage.setItem(PREFERENCE_KEY,JSON.stringify(prefs));return prefs;}
 export function effectiveAppearance(preferences,{dark=false,reduced=false}={}){return{theme:preferences.theme==='system'?(dark?'dark':'light'):preferences.theme,fontScale:String(preferences.fontScale),reducedMotion:preferences.motion==='system'?reduced:preferences.motion==='on',visualStyle:preferences.visualStyle??'codex'};}

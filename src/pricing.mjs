@@ -12,13 +12,14 @@ async function noLinks(target){for(let p=path.resolve(target);;p=path.dirname(p)
 export class PricingService {
  constructor({fetchImpl=globalThis.fetch,clock=()=>Date.now(),root=null,manualPrices=[],aliases=[]}={}){if(root!==null&&(typeof root!=='string'||!path.isAbsolute(root)))throw new Error('价格缓存目录须为绝对路径');this.root=root;this.queue=Promise.resolve();this.persistenceWarning=null;this.fetch=fetchImpl;this.clock=clock;this.catalog=null;this.fetchedAt=null;this.pending=null;this.manual=new Map();this.aliases=aliases;this.modelCount=0;for(const entry of manualPrices)this.setManual(entry);}
  setManual(entry){
-  if(!entry||!validProvider(entry.provider)||!validModel(entry.model)||Object.keys(entry).some(key=>!['provider','model','input','output','cacheRead','cacheWrite','reasoning'].includes(key)))throw new Error('手工价格参数无效');
+  if(!entry||(entry.provider!=null&&!validProvider(entry.provider))||!validModel(entry.model)||Object.keys(entry).some(key=>!['provider','model','input','output','cacheRead','cacheWrite','reasoning'].includes(key)))throw new Error('手工价格参数无效');
   for(const key of ['input','output','cacheRead','cacheWrite','reasoning'])if(entry[key]!==null&&entry[key]!==undefined&&(typeof entry[key]!=='number'||!Number.isFinite(entry[key])||entry[key]<0))throw new Error('手工单价须为非负数或未知');
   if(typeof entry.input!=='number'||typeof entry.output!=='number')throw new Error('请填写输入和输出单价');
   this.manual.set(identity(entry),Object.freeze({...Object.fromEntries(['input','output','cacheRead','cacheWrite','reasoning'].map(key=>[key,entry[key]??null])),provider:entry.provider,model:entry.model,currency:'USD',unit:'per-million-tokens',source:'manual',kind:'manual-reference',matchedBy:'manual',unsupportedReason:null}));
  }
  async configure(entry){
-  if(!entry||typeof entry!=='object'||Array.isArray(entry)||!validProvider(entry.provider)||!validModel(entry.model))throw new Error('价格参数无效');
+  if(!entry||typeof entry!=='object'||Array.isArray(entry)||(entry.provider!=null&&!validProvider(entry.provider))||!validModel(entry.model))throw new Error('价格参数无效');
+  entry={...entry,provider:entry.provider??null};
   if(entry.mode==='manual'){if(this.manual.size>=1000&&!this.manual.has(identity(entry)))throw new Error('手工价格数量已达上限');const {mode,...manual}=entry;this.setManual(manual);}
   else if(entry.mode==='catalog'){
    if(Object.keys(entry).some(key=>!['mode','provider','model','catalogProvider','catalogModel','referenceTier'].includes(key))||!validProvider(entry.catalogProvider)||!validModel(entry.catalogModel)||!['standard','base'].includes(entry.referenceTier))throw new Error('参考价格源参数无效');
@@ -40,7 +41,7 @@ export class PricingService {
    const data=JSON.parse(bytes.subarray(0,count).toString('utf8'));if(data.version!==1||!Array.isArray(data.manual)||!Array.isArray(data.aliases)||data.manual.length>1000||data.aliases.length>1000)throw new Error('价格缓存无效');
    const restored=new PricingService();if(data.catalog){restored.acceptCatalog(data.catalog);if(typeof data.fetchedAt!=='string'||!Number.isFinite(Date.parse(data.fetchedAt)))throw new Error('价格缓存时间无效');restored.fetchedAt=data.fetchedAt;}
    for(const entry of data.manual)restored.setManual(entry);
-   for(const entry of data.aliases){if(!validProvider(entry.provider)||!validModel(entry.model)||!validProvider(entry.catalogProvider)||!validModel(entry.catalogModel)||!['base','standard'].includes(entry.referenceTier))throw new Error('价格映射无效');restored.aliases.push({provider:entry.provider,model:entry.model,catalogProvider:entry.catalogProvider,catalogModel:entry.catalogModel,referenceTier:entry.referenceTier});}
+   for(const entry of data.aliases){if((entry.provider!==null&&!validProvider(entry.provider))||!validModel(entry.model)||!validProvider(entry.catalogProvider)||!validModel(entry.catalogModel)||!['base','standard'].includes(entry.referenceTier))throw new Error('价格映射无效');restored.aliases.push({provider:entry.provider,model:entry.model,catalogProvider:entry.catalogProvider,catalogModel:entry.catalogModel,referenceTier:entry.referenceTier});}
    Object.assign(this,{catalog:restored.catalog,modelCount:restored.modelCount,fetchedAt:restored.fetchedAt,manual:restored.manual,aliases:restored.aliases});
   }catch(error){if(error.code!=='ENOENT'){this.persistenceWarning='价格缓存无法安全读取，原文件已保留；请重新导入。';this.writeBlocked=true;}}
   finally{await handle?.close();}
@@ -93,7 +94,16 @@ export class PricingService {
    this.catalog=catalog;this.modelCount=modelCount;
  }
  status(){return {source:URL,fetchedAt:this.fetchedAt,available:this.catalog!==null||this.manual.size>0,modelCount:this.modelCount,manualCount:this.manual.size,providerCount:Object.keys(this.catalog||{}).length,matching:'manual; explicit-source; exact-provider-and-model; publisher-model-reference; consistent-model-reference',priceEffectiveAt:null,persistenceWarning:this.persistenceWarning,refreshWarning:this.refreshWarning||null,notice:'社区参考估算，非账单；路由与账户独立。默认使用模型原厂条目的参考价；分段模型按基础档估算，不代表实际扣款。'};}
- get(model,provider='openai'){return this.manual.get(JSON.stringify([provider,model]))||modelPriceFromCatalog(this.catalog,model,{provider,aliases:this.aliases,fetchedAt:this.fetchedAt});}
+ get(model,provider='openai'){
+  for(const route of new Set([provider,null])){
+   const scope=route===null?'model':'provider';
+   const manual=this.manual.get(identity({model,provider:route}));
+   if(manual)return {...manual,provider,scope};
+   const alias=this.aliases.find(row=>row.model===model&&row.provider===route);
+   if(alias)return {...modelPriceFromCatalog(this.catalog,model,{provider,aliases:[{...alias,provider}],fetchedAt:this.fetchedAt}),scope};
+  }
+  return modelPriceFromCatalog(this.catalog,model,{provider,fetchedAt:this.fetchedAt});
+ }
  candidates(model){if(!validModel(model))throw new Error('模型标识无效');return catalogPriceCandidates(this.catalog,model).map(row=>modelPriceFromCatalog(this.catalog,row.model,{provider:row.provider,fetchedAt:this.fetchedAt}));}
  async close(){await this.queue;}
 }
