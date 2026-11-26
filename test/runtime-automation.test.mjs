@@ -30,6 +30,21 @@ test('defaults only check; opting in persists the source and a version for the n
  assert.equal((await f.make()).snapshot().queuedVersion,null);
 });
 
+test('one click queues only the displayed version for the next npm startup',async t=>{
+ const f=await fixture(t),available={...status(),canQueueUpgrade:true};
+ await assert.rejects(f.automation.configure({queueVersion:'1.0.0'},available));
+ await f.automation.configure({queueVersion:newVersion},available);
+ await f.automation.configure({queueVersion:null},available);
+ assert.equal((await f.make()).snapshot().queuedVersion,null);
+ await f.automation.configure({queueVersion:newVersion},available);
+ const restarted=await f.make(),calls=[];
+ assert.equal(restarted.snapshot().installOnRestart,false);
+ await restarted.beforeEngineStart({check:async()=>status(),upgrade:async input=>{calls.push(input);return {outcome:'succeeded',installedVersion:newVersion};},status:async()=>status(newVersion)},'npm');
+ assert.deepEqual(calls,[{version:newVersion,confirmed:true}]);
+ const next=await f.make();assert.equal(next.snapshot().queuedVersion,null);
+ await next.consider(status());assert.equal(next.snapshot().queuedVersion,null);
+});
+
 test('external sources never auto-install and an occupied npm installation remains deferred',async t=>{
  const f=await fixture(t);await f.automation.configure({installOnRestart:true},status());
  const never={check(){assert.fail('must not check');},upgrade(){assert.fail('must not install');}};

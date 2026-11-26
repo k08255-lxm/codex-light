@@ -179,7 +179,6 @@ export class RuntimeManager {
   if(this.upgrading)blockedReason='正在升级 npm CLI，请等待完成';
   else if(this.busy())blockedReason='有运行中的任务、待处理审批或未完成操作，暂不能升级';
   else if(this.platform!=='win32')blockedReason='当前平台暂不支持 npm CLI 事务升级';
-  else if(inUse)blockedReason='当前正在使用 npm 安装的 Codex CLI，不能就地替换；请关闭当前引擎，或改从桌面内置引擎启动后再升级';
   else if(!latest)blockedReason='请先检查更新';
   else if(latest.stale||!this._latestFresh())blockedReason='检查结果已过期，请重新检查';
   else if(!npm.available)blockedReason='未发现 npm 安装的 Codex CLI';
@@ -190,8 +189,10 @@ export class RuntimeManager {
   else if(compareVersions(npm.version,latest.version)>0)blockedReason='最近检查结果低于已安装的 npm CLI，请重新检查';
   else if(compareVersions(npm.version,latest.version)===0)blockedReason=null;
   else if(!this._npmCli())blockedReason='未找到可信的 npm-cli.js，暂不能升级';
+  const newer=blockedReason===null&&!!latest&&compareVersions(npm.version,latest.version)<0;
+  if(newer&&inUse)blockedReason='当前正在使用 npm CLI，可在下次启动前升级。';
   this.lastDiagnostics=diagnostics;
-  const result={current,npm,desktop,latest,canUpgrade:blockedReason===null&&!!latest&&compareVersions(npm.version,latest.version)<0,blockedReason,upgrading:this.upgrading};
+  const result={current,npm,desktop,latest,canUpgrade:newer&&!inUse,canQueueUpgrade:newer&&inUse,blockedReason,upgrading:this.upgrading};
   if(diagnostics.length)result.diagnostics=diagnostics;
   return result;
  }

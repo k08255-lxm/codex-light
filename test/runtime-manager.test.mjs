@@ -15,7 +15,7 @@ const response=(version,{ok=true,status=200,body,headers={}}={})=>({
  text:async()=>body===undefined?JSON.stringify({version}):body,
 });
 const fetchVersion=version=>async()=>response(version);
-const STATUS_KEYS=['blockedReason','canUpgrade','current','desktop','latest','npm','upgrading'];
+const STATUS_KEYS=['blockedReason','canQueueUpgrade','canUpgrade','current','desktop','latest','npm','upgrading'];
 function assertStatusShape(status){
  for(const key of STATUS_KEYS)assert.ok(Object.hasOwn(status,key),`missing status.${key}`);
  assert.deepEqual(Object.keys(status).filter(key=>!STATUS_KEYS.includes(key)).sort(),Object.hasOwn(status,'diagnostics')?['diagnostics']:[]);

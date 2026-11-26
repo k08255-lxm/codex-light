@@ -82,8 +82,13 @@ internal static class WorkerProgram {
     WriteResult(output,exitCode,"Updater exited; no application restart requested. "+string.Join("; ",shortcutResults));
    }finally{if(owned)mutex.ReleaseMutex();}
    progress.Complete(exitCode==0,exitCode==0
-    ? $"v{heldPackage.Version} 已安装并校验。可以从开始菜单重新打开码舱 CodeCang。"
-    : $"安装程序返回代码 {exitCode}。诊断文件：{output}");
+    ? $"v{heldPackage.Version} 已安装并校验。"
+    : $"安装程序返回代码 {exitCode}。诊断文件：{output}",()=>{
+      var current=heldPackage.Installed.CurrentDirectory;
+      var installed=VelopackPackage.ReadInstalled(current);
+      if(installed.Version!=heldPackage.Version)throw new InvalidDataException("安装版本已改变，请从开始菜单打开码舱。");
+      using var app=Process.Start(new ProcessStartInfo(Path.Combine(current,"CodexLight.exe")){UseShellExecute=false,WorkingDirectory=current})??throw new IOException("无法启动码舱。");
+     });
    progress.WaitForClose();
    return exitCode;
   }catch(Exception e){

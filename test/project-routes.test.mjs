@@ -44,6 +44,18 @@ test('project route parameters are strict and never create operation receipts', 
   assert.equal(app.operations.entries.size, 0);
 });
 
+test('a fresh server reloads project order without relying on its previous port',async t=>{
+ const projectsRoot=await directory(t);
+ const app=await fixture(t,{projectsRoot});
+ const order=['@projectless','/history/alpha','@other'];
+ assert.equal((await request(app,'/api/projects/navigation',{order,depth:120})).status,200);
+ assert.equal((await request(app,'/api/projects/navigation',{order,depth:301})).status,400);
+ assert.equal((await request(app,'/api/projects/navigation',{order:['bad relative path']})).status,400);
+ const restarted=await fixture(t,{projectsRoot});
+ const reopened=await (await request(restarted,'/api/projects')).json();
+ assert.deepEqual(reopened.navigationOrder,order);assert.equal(reopened.navigationDepth,120);
+});
+
 test('add deduplicates; selection and remove preserve project files, chats and config', async t => {
   const root = await directory(t), first = path.join(root, 'first'), second = path.join(root, 'second');
   await Promise.all([mkdir(first), mkdir(second)]);

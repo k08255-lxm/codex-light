@@ -118,7 +118,7 @@ namespace CodexLight.Bootstrap {
    int separator = message.IndexOf(" · ", StringComparison.Ordinal); string name = separator < 0 ? "" : message.Substring(0, separator) + " · ";
    if (message.Contains("下载官方依赖")) return name + "正在下载…";
    if (message.Contains("下载进度：")) return name + message.Substring(message.IndexOf("下载进度：", StringComparison.Ordinal));
-   if (message.Contains("核验固定哈希")) return name + "正在验证下载文件…";
+   if (message.Contains("核验下载哈希")) return name + "正在验证下载文件…";
    if (message.Contains("正在安装已验证")) return name + "正在安装，请等待系统授权或安装完成…";
    return message.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
   }

@@ -96,6 +96,21 @@ const sessionControls=createSessionControls({document,defaults:()=>sessionDefaul
 const queuedPreviews = new Map();
 let runtimePanel=null,pendingReconciler=null,pendingReconcilerSignature='',pendingReconcilerActive=false,pendingReconcileQueued=false;
 const projectsState={projects:[],selectedId:null,draftCwd:'',canPickFolder:false,busy:false,error:'',generation:0,dialogGeneration:0};
+let navigationDepth=30, restoredOrder=null, savedOrder=null, desiredOrder=null, failedOrder=null, savingOrder=false;
+let projectsLoaded=false, normalThreadsLoaded=false, animateProjectOrder=false;
+async function saveProjectOrder(order) {
+  desiredOrder=JSON.stringify({order,depth:navigationDepth});
+  if(savingOrder||desiredOrder===savedOrder||desiredOrder===failedOrder)return;
+  savingOrder=true;
+  try {
+    while(desiredOrder!==savedOrder){
+      const next=desiredOrder;
+      await api('/api/projects/navigation',JSON.parse(next));
+      savedOrder=next;failedOrder=null;
+    }
+  } catch(error) { failedOrder=desiredOrder;notice('项目排列未能保存：'+error.message,true); }
+  finally { savingOrder=false; }
+}
 const recentThreads = new Map();
 const taskbarBadge = createTaskbarBadge(message => window.chrome?.webview?.postMessage(message));
 const threadCompletion = createThreadCompletion(taskbarBadge.setCompleted);
@@ -333,7 +348,7 @@ async function pluginApi(path,body){
  const logicalId=body?.requestId;if(typeof logicalId!=='string')throw new Error('缺少插件逻辑请求标识');
  if(pluginLogicalCalls.has(logicalId))return pluginLogicalCalls.get(logicalId);
  if(pendingMutations.storageError||scopedPending('plugin').length)throw new Error('插件状态仍在自动同步；暂停相同的重复操作');
- if(pluginLogicalCalls.size>=100)throw new Error('本窗口插件操作记录已达上限，请核对后重新打开');
+ if(pluginLogicalCalls.size>=100)pluginLogicalCalls.delete(pluginLogicalCalls.keys().next().value);
  const {requestId,...params}=body;const operation=performMutation('plugin/apply',params);pluginLogicalCalls.set(logicalId,operation);return operation;
 }
 const pluginPanel = mountPluginsPanel($('settings-plugins'), {rpc,api:pluginApi,getContext:()=>({connected:state.connected,cwd:state.cwd,serverInstance:state.serverInstance})});
@@ -379,7 +394,7 @@ const engineOnboarding=mountEngineOnboarding(document.body,{read:()=>api('/api/r
 runtimePanel=createRuntimePanel();
 runtimePanel.reset({pending:!!runtimePendingMarker()});
 function resetRuntimePanel(){wslRuntimePanel.reset();runtimePanel?.setActive?.(false);runtimePanel?.reset({pending:!!runtimePendingMarker()});}
-function runtimePanelShouldBeActive(){return state.runtimeTarget!=='wsl'&&!state.lan&&!!state.serverInstance&&!state.demo&&document.visibilityState==='visible'&&!$('settings-dialog').classList.contains('hidden')&&state.settingsPage==='general';}
+function runtimePanelShouldBeActive(){return state.runtimeTarget!=='wsl'&&!state.lan&&!!state.serverInstance&&!state.demo&&document.visibilityState==='visible'&&!$('settings-dialog').classList.contains('hidden')&&state.settingsPage==='engines';}
 function syncRuntimePanelActivity(){runtimePanel?.setActive?.(runtimePanelShouldBeActive());wslRuntimePanel.setActive(!state.lan&&state.desktop===true&&document.visibilityState==='visible'&&!$('settings-dialog').classList.contains('hidden')&&state.settingsPage==='general');}
 function pendingLedgerSignature(){return reconcilableRecords().map(row=>`${row.requestId}:${row.status}`).sort().join('|');}
 function deactivatePendingReconciler(){pendingReadGeneration++;pendingReconciler?.setActive(false);pendingReconcilerActive=false;pendingReconcilerSignature='';}
@@ -474,7 +489,7 @@ async function handlePendingReconcileResult(marker,response,decision){
  pendingMutations.settle(marker.requestId);
  mutationContexts.delete(marker.requestId);
  if(resolved==='failed')notice('原操作已确认失败：'+(response?.error||'服务返回失败，请检查实际结果。'),true);
- if(marker.method==='runtime/upgrade'&&state.settingsPage==='general'&&!$('settings-dialog').classList.contains('hidden'))runtimePanel?.refresh();
+ if(marker.method==='runtime/upgrade'&&state.settingsPage==='engines'&&!$('settings-dialog').classList.contains('hidden'))runtimePanel?.refresh();
  if(marker.method.startsWith('account/')&&currentRoute==='account')refreshAccount().catch(error=>notice('无法刷新账户状态：'+error.message,true));
  if(marker.method.startsWith('remoteControl/'))remoteControls();
  if(marker.method==='skills/config/write'){
@@ -518,7 +533,14 @@ const updateHost=document.querySelector('.rail');
 const androidUpdateHost=document.documentElement.dataset.mobileShell==='android';
 const updateIndicator = !androidUpdateHost&&!access.lan ? mountUpdateIndicator(updateHost, {onOpen:()=>route('settings',{section:'about'})}) : null;
 if(androidUpdateHost)mountAndroidUpdateIndicator(updateHost,window,$('mobile-app-update'));
-let announcedUpdate='';
+let announcedUpdate='',announcedNode='';
+function updateNodeRuntime(status){
+  aboutView.updateNode(status);
+  if(status?.available&&status.latest!==announcedNode){
+    announcedNode=status.latest;
+    notice('Node.js v'+status.latest+' 可用，在「设置 → 关于」查看运行环境更新。');
+  }
+}
 function applyAutomaticUpdate(status) {
   aboutView.update(status);
   const version=status?.latest?.available&&status.supported&&!status.demo&&status.latest.version;
@@ -528,7 +550,7 @@ function applyAutomaticUpdate(status) {
   }
 }
 const aboutView = mountAbout($('about-root'), { api, onStatus:status=>updateIndicator?.update(status), mutate: (method, params) => {
-  if(pendingMutations.storageError||scopedPending('app-update').length)throw Object.assign(new Error('应用更新操作仍待确认，请先核对已有操作。'),{outcome:'notExecuted'});
+  if(pendingMutations.storageError||scopedPending('app-update').length)throw Object.assign(new Error('上一次更新请求尚未结束，请稍后查看更新状态。'),{outcome:'notExecuted'});
   return performMutation(method, params);
 } });
 // Local-only: the LAN page never mounts requests for DSH config management (server also refuses with 403).
@@ -680,16 +702,31 @@ function renderThreads() {
     for (const [threadId, turnId] of state.activeTurns) track(threadId, turnId);
     if (state.busy && !state.activeTurns.has(state.thread?.id)) track(state.thread?.id, state.turnId);
   }
-  projectNavigation.render({projects:projectsState.projects,threads:state.threads,selectedPath:state.cwd,activeThreadId:state.thread?.id||'',runningThreadIds,unreadThreadIds:threadCompletion.unread,searchStatus,searching:!!$('search').value.trim(),busy:projectsState.busy||state.sending,error:projectsState.error});
+  const searching=!!$('search').value.trim();
+  const order=projectNavigation.render({projects:projectsState.projects,threads:state.threads,selectedPath:state.cwd,activeThreadId:state.thread?.id||'',runningThreadIds,unreadThreadIds:threadCompletion.unread,searchStatus,searching,busy:projectsState.busy||state.sending,error:projectsState.error,
+    restoredOrder:!normalThreadsLoaded&&!searching?restoredOrder:null,animateOrder:animateProjectOrder&&!searching});
+  if(!searching&&projectsLoaded&&normalThreadsLoaded){
+    animateProjectOrder=true;
+    restoredOrder=order;
+    if(!state.lan)void saveProjectOrder(order);
+  }
   $('more-threads').classList.toggle('hidden', !state.nextThreads);
   $('refresh').ariaBusy=String(searchStatus.busy&&!$('search').value.trim());
   $('add-project').disabled=projectsState.busy||state.sending;
 }
 async function loadProjects({restore=false}={}) {
   const generation=++projectsState.generation;
+  failedOrder=null;
   try {
     const result=await api('/api/projects');
     if(generation!==projectsState.generation)return;
+    if(!projectsLoaded){
+      restoredOrder=Array.isArray(result.navigationOrder)?result.navigationOrder:null;
+      navigationDepth=result.navigationDepth??30;
+      savedOrder=JSON.stringify({order:restoredOrder,depth:navigationDepth});
+      animateProjectOrder=!!restoredOrder;
+    }
+    projectsLoaded=true;
     applyProjectList(result);projectsState.canPickFolder=result.canPickFolder===true;
     if(restore&&!state.cwd&&!state.thread)setCwd(projectsState.draftCwd);
   } catch(error) {if(generation===projectsState.generation)projectsState.error=error.message;}
@@ -843,7 +880,20 @@ async function loadThreads(more = false, current = ()=>true) {
   if ($('search').value.trim()) params.searchTerm = $('search').value.trim();
   if (!more) { searchStatus = { text: params.searchTerm ? '正在搜索全部对话…' : '', busy: true }; renderThreads(); }
   try {
-  const result = await rpc('thread/list', params,{signal:controller.signal}); if (generation !== state.searchGeneration || !current()) return;
+  // Restore the previous browsing depth before comparing group positions. A single
+  // default page can omit projects the user reached by scrolling last time.
+  const depth = more || params.searchTerm ? 30 : navigationDepth;
+  params.limit = Math.min(depth, 100);
+  let result = await rpc('thread/list', params,{signal:controller.signal});
+  if (generation !== state.searchGeneration || !current()) return;
+  const cursors = new Set();
+  while (result.nextCursor && !cursors.has(result.nextCursor) && result.data?.length && result.data.length < depth && depth > 30) {
+    cursors.add(result.nextCursor);
+    const page = await rpc('thread/list', {...params, cursor:result.nextCursor, limit:Math.min(depth-result.data.length,100)}, {signal:controller.signal});
+    if (generation !== state.searchGeneration || !current()) return;
+    result = {...page, data:[...result.data,...(page.data||[])]};
+    if (!page.data?.length) break;
+  }
   const anchor = more ? captureHistoryAnchor($('thread-scroll'), ['.project-group-thread', '[data-project-key]']) : null;
   const listed = (result.data || []).map(withSubmittedActivity);
   for (const row of listed) {
@@ -864,6 +914,7 @@ async function loadThreads(more = false, current = ()=>true) {
     state.threads=[...protectedRows.slice(0,300),...(slots?state.threads.filter(row=>!protectedIds.has(row.id)).slice(-slots):[])];
     notice('侧栏仅保留最近加载的 300 个对话，可用搜索查找其他对话。');
   }
+  if(!search){normalThreadsLoaded=true;navigationDepth=Math.max(30,Math.min(300,state.threads.length));}
   state.nextThreads = result.nextCursor;
   threadSearchCache.set(search, { rows: state.threads.slice(), nextCursor: result.nextCursor });
   if(threadSearchCache.size>20)threadSearchCache.delete(threadSearchCache.keys().next().value);
@@ -1160,10 +1211,10 @@ async function performMutation(method, params, extras = {}) {
       : method.startsWith('app-update/') ? await api('/api/'+method,{...envelope.params,requestId:envelope.requestId},{timeoutMs:method==='app-update/download'?960000:60000})
       : method==='skills/config/write' ? await api('/api/skills/set-enabled',{...envelope.params,requestId:envelope.requestId})
       : await (method==='config/apply' ? api('/api/config-settings/apply',{...envelope.params,requestId:envelope.requestId}) : method==='plugin/apply' ? api('/api/plugins/apply',{...envelope.params,requestId:envelope.requestId}) : ['account/start','account/cancel','account/logout'].includes(method) ? api('/api/'+method,{...envelope.params,requestId:envelope.requestId}) : api('/api/rpc', envelope));
-    if(method==='skills/config/write'&&typeof result?.effectiveEnabled!=='boolean')throw Object.assign(new Error('Codex 未返回生效状态，请刷新技能目录核对。'),{outcome:'unknown'});
+    if(method==='skills/config/write'&&typeof result?.effectiveEnabled!=='boolean')throw Object.assign(new Error('Codex 未返回生效状态，正在重新读取技能目录。'),{outcome:'unknown'});
     if(method.startsWith('app-update/')){
       const marker=pendingMutations.values().find(row=>row.requestId===envelope.requestId);
-      if(!marker||lookupDecision(marker,{serverInstance:state.serverInstance,method,state:'succeeded',result})!=='succeeded')throw Object.assign(new Error('应用更新结果尚未确认，请先核对已有操作。'),{outcome:'unknown'});
+      if(!marker||lookupDecision(marker,{serverInstance:state.serverInstance,method,state:'succeeded',result})!=='succeeded')throw Object.assign(new Error('未收到完整的更新结果，正在同步更新状态。'),{outcome:'unknown'});
     }
     if(method==='thread/delete'&&result?.threadId!==envelope.params.threadId)throw Object.assign(new Error('删除结果缺少目标对话标识'),{outcome:'unknown'});
     if(method==='turn/start'&&result?.turn?.id){
@@ -1530,6 +1581,7 @@ function onEvent(message) {
   if(message.method==='bridge/threadSessions'){applyThreadSessions(message.params);return;}
   if(message.method==='skills/changed'){slashMenu.invalidateSkills();void skillsView.invalidate();return;}
   if (message.method === 'remoteControl/status/changed') { applyRemoteStatus(message.params); return; }
+  if (message.method === 'bridge/nodeUpdate') { if(!state.lan)updateNodeRuntime(message.params); return; }
   if (message.method === 'bridge/appUpdate') { if(!state.lan)applyAutomaticUpdate(message.params); return; }
   if (message.method === 'bridge/dshSnapshot') { ingestDshSnapshot(message.params); return; }
   if (message.method === 'bridge/threadSubmission') { const {threadId,submittedAt}=message.params||{};recordThreadSubmission(threadId,submittedAt);return; }
@@ -1592,6 +1644,7 @@ async function syncStatus() {
   const updateRevision=aboutView.revision;
   const status = await api('/api/status'); applyAccessMode(state.lan || status.access === 'lan'); state.cliVersion = typeof status.version==='string'&&status.version ? boundedText(status.version,300) : null; state.desktop = status.desktop === true; state.canImportSkill = status.canImportSkill === true; state.runtimeTarget=status.runtimeTarget==='wsl'?'wsl':'native';applyRuntimeTarget(); if($('version-info'))$('version-info').textContent=state.cliVersion||'未知'; document.body.classList.toggle('native-desktop',state.desktop); $('runtime-close-info').textContent='停止服务会中断正在运行的本应用任务。'; $('reopen-info').textContent=state.desktop?'重新打开窗口可查看对话历史。':status.reopenAvailable===true?'可通过启动器重新打开本地界面。':status.reopenAvailable===false?'关闭后可能需要重新运行启动器。':''; if(!state.desktop&&status.reopenError)$('reopen-info').textContent+=' '+boundedText(status.reopenError,800); if(state.serverInstance !== (status.serverInstance || null)){resetContext();sessionControls.reset();deactivatePendingReconciler();historyCaps.unsupported.clear();pluginPanel.reset();configPanel.reset();resetUsage();resetRuntimePanel();dshLive.reset();remoteReset({statusMessage:'本地服务实例已变化，请重新读取远控状态。',pairMessage:'本地服务实例已变化，本机配对码显示已清除；不会撤销旧环境设备。',devicesMessage:'本地服务实例已变化，旧设备显示已清除；不会撤销旧环境设备。'});}state.serverInstance = status.serverInstance || null; state.demo = !!status.demo; setConnected(status.connected, status.demo ? '演示模式 · 不调用模型' : undefined); if(state.desktop){await loadDesktopState();preferencesView.syncHostTheme();} $('mode-info').textContent = status.demo ? '演示模式，不消耗额度' : '本地 Codex app-server';
   // Replace with the server's current set; unchanged instances keep their card and draft.
+  if(status.nodeUpdate&&!state.lan)updateNodeRuntime(status.nodeUpdate);
   if(status.appUpdate&&!state.lan&&aboutView.revision===updateRevision)applyAutomaticUpdate(status.appUpdate);
   applyThreadSessions(status.threadSessions); const pending = new Map(); for (const request of status.pendingRequests || []) if (validRequestId(request?.id)) { const key = requestKey(request.id), known = state.requests.get(key); pending.set(key, known && known.bridgeRequestToken === request.bridgeRequestToken ? known : request); } state.requests = pending; renderRequests();
   if (status.demo) notice('当前是演示模式：仅测试界面和协议，不会调用真实模型。'); engineOnboarding.start(); return status;
@@ -1735,6 +1788,7 @@ $('refresh-dsh').addEventListener('click', refreshDsh); $('refresh-dsh-settings'
 for (const button of document.querySelectorAll('[data-prompt]')) button.addEventListener('click', () => { $('prompt').value = button.dataset.prompt; $('prompt').focus(); updateControls(); });
 let searchTimer; $('search').addEventListener('input', () => {
   clearTimeout(searchTimer);state.searchGeneration++;threadSearchController?.abort();threadAutoLoad?.reset();
+  normalThreadsLoaded=false;animateProjectOrder=false;
   const query=$('search').value.trim().toLocaleLowerCase(),cached=threadSearchCache.get(query);
   const known=new Map([...threadSearchCache.values()].flatMap(value=>value.rows).concat(state.threads).map(row=>[row.id,row]));
   state.threads=cached?cached.rows.slice():[...known.values()].filter(row=>!query||[row.name,row.preview].some(text=>String(text||'').toLocaleLowerCase().includes(query))).slice(0,300);
@@ -1871,8 +1925,8 @@ for (const button of document.querySelectorAll('[data-settings-section]')) butto
 function selectSettingsSection(section = 'general') {
   if(section==='account'||section==='usage'){route(section);return;}
   if(section==='lan')section='remote';
-  const sections = ['general','dsh','archived','remote','plugins','skills','appearance','notifications','shortcuts','configuration','about','storage'];
-  const page = (['about','storage'].includes(section) && state.lan) || !sections.includes(section) ? 'general' : section; state.settingsPage = page;
+  const sections = ['general','engines','dsh','archived','remote','plugins','skills','appearance','notifications','shortcuts','configuration','about','storage'];
+  const page = (['about','storage','engines'].includes(section) && state.lan) || !sections.includes(section) ? 'general' : section; state.settingsPage = page;
   for (const name of sections) $('settings-' + name).classList.toggle('hidden', name !== page);
   for (const item of document.querySelectorAll('[data-settings-section]')) item.classList.toggle('active', item.dataset.settingsSection === section);
   document.querySelector('.settings-content').scrollTop = 0;

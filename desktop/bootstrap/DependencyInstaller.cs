@@ -14,12 +14,32 @@ using System.Threading;
 namespace CodexLight.Bootstrap {
  internal static class DependencyInstaller {
   static LockedDependency Locked(string key){var assembly=Assembly.GetExecutingAssembly();using(var stream=assembly.GetManifestResourceStream(assembly.GetManifestResourceNames().Single(x=>x.EndsWith("dependencies.lock.json",StringComparison.Ordinal)))){var root=(DependencyLock)new DataContractJsonSerializer(typeof(DependencyLock)).ReadObject(stream)!;switch(key){case "dotnet":return root.Dotnet;case "node":return root.Node;case "webview":return root.Webview;default:throw new InvalidOperationException("未知依赖");}}}
+  internal static LockedDependency ResolveNodeRelease(string manifest,LockedDependency minimum){
+   var floor=Regex.Match(minimum.Url,@"^https://nodejs\.org/dist/v(\d+\.\d+\.\d+)/node-v\1-x64\.msi$");
+   if(!floor.Success)throw new InvalidOperationException("Node.js 安装基线无效。");
+   var baseline=Version.Parse(floor.Groups[1].Value);
+   var matches=Regex.Matches(manifest,@"(?m)^([a-fA-F0-9]{64})[ \t]+node-v("+baseline.Major+@"\.\d+\.\d+)-x64\.msi\r?$");
+   if(matches.Count!=1)throw new InvalidOperationException("Node.js 官方清单缺少唯一的 Windows x64 安装包。");
+   var release=matches[0];var version=Version.Parse(release.Groups[2].Value);var hash=release.Groups[1].Value;
+   if(version<baseline || (version==baseline && !hash.Equals(minimum.Hash,StringComparison.OrdinalIgnoreCase)))throw new InvalidOperationException("Node.js 官方清单与安装基线不一致。");
+   return new LockedDependency{Url=$"https://nodejs.org/dist/v{version}/node-v{version}-x64.msi",Algorithm="SHA256",Hash=hash};
+  }
+  static async Task<LockedDependency> LatestNode(LockedDependency minimum,CancellationToken cancellation){
+   var baseline=new Uri(minimum.Url).Segments[2].Trim('/','v');
+   using(var client=new HttpClient(new HttpClientHandler{AllowAutoRedirect=false}){Timeout=TimeSpan.FromSeconds(15),MaxResponseContentBufferSize=128*1024})
+   using(var response=await client.GetAsync("https://nodejs.org/dist/latest-v"+Version.Parse(baseline).Major+".x/SHASUMS256.txt",cancellation)){
+    response.EnsureSuccessStatusCode();
+    return ResolveNodeRelease(await response.Content.ReadAsStringAsync(),minimum);
+   }
+  }
   static bool Official(Uri uri)=>uri.Scheme=="https"&&(uri.Host=="nodejs.org"||uri.Host=="go.microsoft.com"||uri.Host.EndsWith(".microsoft.com",StringComparison.OrdinalIgnoreCase)||uri.Host=="dotnetcli.azureedge.net");
   public static async Task Install(string key,Action<string> progress,CancellationToken cancellation,Action<bool> allowCancel){await Install(key,progress,cancellation,allowCancel,false);}
   internal static string PassiveArguments(string key,string file){switch(key){case "node":return "/i \""+file+"\" /passive /norestart";case "dotnet":return "/install /passive /norestart";case "webview":return "/silent /install";default:throw new InvalidOperationException("未知依赖");}}
   public static async Task<int> Install(string key,Action<string> progress,CancellationToken cancellation,Action<bool> allowCancel,bool passive,Action<long,long?>? downloadProgress=null){
    allowCancel(true);cancellation.ThrowIfCancellationRequested();
-   var locked=Locked(key);if(!Uri.TryCreate(locked.Url,UriKind.Absolute,out var uri)||!Official(uri))throw new InvalidOperationException("下载地址不在官方白名单内。");
+   var locked=Locked(key);
+   if(key=="node"){progress("正在检查 Node.js LTS 补丁版本…");locked=await LatestNode(locked,cancellation);}
+   if(!Uri.TryCreate(locked.Url,UriKind.Absolute,out var uri)||!Official(uri))throw new InvalidOperationException("下载地址不在官方白名单内。");
    var directory=Path.Combine(Path.GetTempPath(),"CodexLight-Dependency-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(directory);var file=Path.Combine(directory,key+(key=="node"?".msi":".exe"));
    try{
     progress("下载官方依赖（仅 HTTPS）："+uri.GetLeftPart(UriPartial.Path));
@@ -51,10 +71,10 @@ namespace CodexLight.Bootstrap {
       throw new TimeoutException("下载超过 5 分钟总时限（包括响应正文），已停止且未执行文件。",e);
      }
     }
-    progress("核验固定哈希及 Windows 代码签名…");
+    progress("核验下载哈希及 Windows 代码签名…");
     await Task.Run(()=>{
      using(HashAlgorithm hash=locked.Algorithm=="SHA512"?(HashAlgorithm)SHA512.Create():locked.Algorithm=="SHA256"?SHA256.Create():throw new InvalidOperationException("未知哈希算法"))using(var stream=File.OpenRead(file)){
-      if(!string.Equals(BitConverter.ToString(hash.ComputeHash(stream)).Replace("-",""),locked.Hash,StringComparison.OrdinalIgnoreCase))throw new InvalidOperationException("依赖哈希不匹配，未执行任何文件。官方文件更新时需重新审核并发布安装器。");
+      if(!string.Equals(BitConverter.ToString(hash.ComputeHash(stream)).Replace("-",""),locked.Hash,StringComparison.OrdinalIgnoreCase))throw new InvalidOperationException("依赖哈希与官方校验值不匹配，未执行安装程序。");
      }
      cancellation.ThrowIfCancellationRequested();Signature.Verify(file);cancellation.ThrowIfCancellationRequested();
      using(var certificate=new X509Certificate2(X509Certificate.CreateFromSignedFile(file))){string pattern=key=="node"?@"(^|,\s*)O=(OpenJS Foundation|Node\.js Foundation)(,|$)":@"(^|,\s*)O=Microsoft Corporation(,|$)";if(!Regex.IsMatch(certificate.Subject,pattern))throw new InvalidOperationException("签名发布者不是预期官方组织，未执行。");}

@@ -80,6 +80,7 @@
       <nav id="settings-nav" class="settings-nav">
         <div class="side-section"><span>应用</span></div>
         <button class="settings-nav-item active" data-settings-section="general"><span data-icon="computer"></span><span>连接与运行</span></button>
+        <button class="settings-nav-item local-only" data-settings-section="engines"><span data-icon="grid"></span><span>引擎更新</span></button>
         <button class="settings-nav-item" data-settings-section="appearance"><span data-icon="spark"></span><span>外观</span></button>
         <button class="settings-nav-item" data-settings-section="notifications"><span data-icon="bell"></span><span>通知</span></button>
         <button class="settings-nav-item" data-settings-section="shortcuts"><span data-icon="keyboard"></span><span>快捷键</span></button>
@@ -203,7 +204,6 @@
             <div class="work-row end"><button id="settings-cwd-browse" type="button" class="btn local-only" hidden>选择文件夹…</button><button id="settings-cancel" type="button" class="btn">取消</button><button id="save-settings" type="submit" class="btn primary">保存工作目录</button></div>
           </div>
           <div id="wsl-runtime-panel" class="local-only"></div>
-          <div id="runtime-panel"></div>
           <div class="local-only"><h2 class="section-title">窗口与后台服务</h2>
             <div class="panel">
               <div id="desktop-close-preference" class="hidden">
@@ -219,6 +219,7 @@
           </div>
         </form>
       </section>
+      <section id="settings-engines" class="settings-section hidden"><div id="runtime-panel"></div></section>
       <section id="settings-dsh" class="settings-section hidden">
           <h1 id="settings-dsh-heading">DSH 与 MCP</h1>
           <div class="panel row-panel dsh-settings-lan-summary"><div><strong id="dsh-settings-label">尚未检查 DSH 连接</strong><small id="dsh-settings-details" class="fine">只读检查，不发送任务。</small></div><button id="refresh-dsh-settings" type="button" class="btn"><span data-icon="refresh"></span>检查</button></div>

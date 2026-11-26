@@ -22,7 +22,7 @@ namespace CodexLight.Runtime {
     if(runtime!=null){detail=runtime.Version+" — "+runtime.Path+(failures.Count==0?"":Environment.NewLine+string.Join(Environment.NewLine,failures));return runtime;}
     failures.Add(candidate+"："+failure);
    }
-   detail=failures.Count==0?"未发现可启动的 Node.js 20+；可安装锁定的官方 Node.js 运行时。":string.Join(Environment.NewLine,failures)+Environment.NewLine+"未发现兼容版本；可安装锁定的官方 Node.js 运行时。";
+   detail=failures.Count==0?"未发现可启动的 Node.js 20+；可安装官方 Node.js LTS 运行时。":string.Join(Environment.NewLine,failures)+Environment.NewLine+"未发现兼容版本；可安装官方 Node.js LTS 运行时。";
    return null;
   }
   internal static IEnumerable<string> CandidatePaths(string applicationDirectory,List<string>? diagnostics=null){

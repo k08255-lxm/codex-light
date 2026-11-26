@@ -1,4 +1,4 @@
-import test from 'node:test';import assert from 'node:assert/strict';import {DEFAULT_PREFERENCES,PREFERENCE_KEY,validatePreferences,readPreferences,savePreferences,effectiveAppearance,receiptDisplay} from '../public/preferences.js';
+import test from 'node:test';import assert from 'node:assert/strict';import {DEFAULT_PREFERENCES,PREFERENCE_KEY,validatePreferences,readPreferences,savePreferences,effectiveAppearance} from '../public/preferences.js';
 import {createDocument} from './mini-dom.mjs';import {createPreferences} from '../public/ui/preferences-view.js';
 const memory=(raw=null)=>({raw,getItem(){return this.raw;},setItem(key,value){assert.equal(key,PREFERENCE_KEY);this.raw=value;}});
 const {visualStyle:_omit,keepAwakeDuringTask:_task,keepAwakeDuringRemote:_remote,...LEGACY}=DEFAULT_PREFERENCES;
@@ -33,11 +33,6 @@ test('system theme/motion, explicit override and visual style resolve determinis
  assert.equal(effectiveAppearance({...DEFAULT_PREFERENCES,visualStyle:'claude'}).visualStyle,'claude');
 });
 
-test('receipt projection retains only metadata and never permits active-instance pending ack',()=>{
- const row={requestId:'instance:123:abc',method:'git/apply',createdAt:123,state:'pending',outcome:'pending',prompt:'do not retain',secret:'x'};
- const shown=receiptDisplay(row,'instance');assert.equal(shown.acknowledgeable,false);assert.deepEqual(Object.keys(shown).sort(),['acknowledgeable','createdAt','method','outcome','requestId','state']);
- assert.equal(receiptDisplay(row,'other').acknowledgeable,true);assert.throws(()=>receiptDisplay({...row,state:'unexpected'},'other'));
-});
 
 // ---- Real preferences view over a minimal DOM ----
 async function view({desktop=false,storage=memory(),api=async()=>{throw new Error('unexpected api');}}={}){
@@ -64,7 +59,7 @@ test('browser appearance choices apply to the root, persist locally and never to
 
 test('desktop preferences load from and save to the native state API and sync the caption theme',async()=>{
  let saved={...DEFAULT_PREFERENCES,theme:'light'};
- const h=await view({desktop:true,api:async(path,body)=>{if(path==='/api/desktop/preferences')return body?{preferences:saved=body.preferences}:{preferences:saved};if(path==='/api/desktop/receipts')return {receipts:[]};if(path==='/api/desktop/theme')return body;throw new Error(path);}});
+ const h=await view({desktop:true,api:async(path,body)=>{if(path==='/api/desktop/preferences')return body?{preferences:saved=body.preferences}:{preferences:saved};if(path==='/api/desktop/theme')return body;throw new Error(path);}});
  await h.prefs.loadDesktopState();await h.settle();
  assert.equal(h.document.documentElement.dataset.theme,'light');
  await h.click('claude');
@@ -75,7 +70,7 @@ test('desktop preferences load from and save to the native state API and sync th
 
 test('a failed desktop preference read uses defaults explicitly instead of browser storage',async()=>{
  const storage=memory(JSON.stringify({...DEFAULT_PREFERENCES,theme:'light'}));
- const h=await view({desktop:true,storage,api:async path=>{if(path==='/api/desktop/receipts')return {receipts:[]};if(path==='/api/desktop/theme')return {};throw new Error('state unavailable');}});
+ const h=await view({desktop:true,storage,api:async path=>{if(path==='/api/desktop/theme')return {};throw new Error('state unavailable');}});
  await h.prefs.loadDesktopState();
  assert.equal(h.document.documentElement.dataset.theme,'dark');assert.match(h.$('preference-status').textContent,/无法读取本机偏好.*默认外观/);assert.equal(h.notices.at(-1)[1],true);
 });

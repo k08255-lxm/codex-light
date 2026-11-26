@@ -34,7 +34,7 @@ function harness(options = {}) {
   };
   $('project-dialog').open = options.dialogOpen === true;
   const functions = runInNewContext(`${app.slice(start, end)}\n({loadProjects, saveProjectSelection, selectProject, addProject, handleProjectAction});`, {
-    state, projectsState, $, projectPathKey,
+    state, projectsState, $, projectPathKey, projectsLoaded:false, navigationDepth:30, restoredOrder:null, savedOrder:null, animateProjectOrder:false, failedOrder:null,
     api: async (...args) => {
       calls.api.push(args);
       return options.api ? options.api(...args) : savedResult();

@@ -322,7 +322,7 @@ test('unknown launch outcomes lock out retries, including new operation ids',asy
  const operations=new OperationStore();const makeId=n=>`${operations.serverInstance}:${Date.now()}:update_test_${n}`;
  const params={version:'0.4.0',confirmed:true};const first=makeId(1);await assert.rejects(operations.execute(first,'app-update/install',params,()=>service.install(params)),/timed out/);assert.equal(operations.get(first).state,'unknown');assert.equal(service.status().phase,'launchUnknown');
  await assert.rejects(operations.execute(first,'app-update/install',params,()=>service.install(params)),/timed out/);
- await assert.rejects(operations.execute(makeId(2),'app-update/install',params,()=>service.install(params)),/未知/);await assert.rejects(service.check(),/未知/);assert.equal(launches,1);
+ await assert.rejects(operations.execute(makeId(2),'app-update/install',params,()=>service.install(params)),{code:'APP_UPDATE_LAUNCH_UNKNOWN',outcome:'unknown'});await assert.rejects(service.check(),{code:'APP_UPDATE_LAUNCH_UNKNOWN',outcome:'unknown'});assert.equal(launches,1);
 });
 test('known pre-launch failure can be retried without falsely claiming installer opened',async t=>{
  let launches=0;const {service}=await fixture(t,{launchFn:async()=>{launches++;if(launches===1)throw Object.assign(new Error('process unavailable'),{outcome:'notExecuted'});}});await service.check();await service.download({version:'0.4.0'});

@@ -6,13 +6,13 @@ import { createThreadCompletion } from '../public/ui/thread-completion.js';
 const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
 const source = app.slice(app.indexOf('function withSubmittedActivity('), app.indexOf('const CONVERSATION_ITEMS ='));
 const thread = { id: 'new', cwd: '/project', preview: '首条消息', turns: [{ id: 'turn', items: [] }] };
-function harness() {
+function harness(depth=30) {
   const state = { threads: [], activeTurns: new Map(), searchGeneration: 0, nextThreads: null };
   const unindexedThreads = new Map(), recentThreads = new Map(), search = { value: '' };
   let list = { data: [], nextCursor: null };
   const threadCompletion = createThreadCompletion();
-  const ports = { state, unindexedThreads, threadCompletion, threadSearchCache:new Map(),searchStatus:{}, $: () => search, threadAutoLoad: {reset() {}}, captureHistoryAnchor: () => null, restoreHistoryAnchor() {}, sessionFor: () => null, renderThreads() {}, notice() {}, rpc: async () => list };
-  return { state, search, unindexedThreads, threadCompletion, setList(value) { list = value; }, ...new Function('recentThreads',...Object.keys(ports), 'let threadSearchController=null;'+source + ';return {rememberThread,loadThreads};')(recentThreads,...Object.values(ports)) };
+  const ports = { state, unindexedThreads, threadCompletion, threadSearchCache:new Map(),searchStatus:{}, $: () => search, threadAutoLoad: {reset() {}}, captureHistoryAnchor: () => null, restoreHistoryAnchor() {}, sessionFor: () => null, renderThreads() {}, notice() {}, rpc: async (_method,params) => typeof list==='function'?list(params):list };
+  return { state, search, unindexedThreads, threadCompletion, setList(value) { list = value; }, ...new Function('recentThreads','navigationDepth',...Object.keys(ports), 'let normalThreadsLoaded=false,threadSearchController=null;'+source + ';return {rememberThread,loadThreads};')(recentThreads,depth,...Object.values(ports)) };
 }
 
 test('native history classifies child sessions before background completions are counted', async () => {
@@ -76,6 +76,17 @@ test('without protected rows the sidebar retains the native history tail window 
   h.setList({data:Array.from({length:30},(_,i)=>({id:'older-'+i})),nextCursor:'page-3'});await h.loadThreads(true);
   assert.equal(h.state.threads.length,300);assert.equal(h.state.nextThreads,'page-3');
   assert.equal(h.state.threads[0].id,'old-30');assert.equal(h.state.threads.at(-1).id,'older-29');
+});
+
+test('reopening a paged sidebar reads its previous depth before replacing the group order',async()=>{
+  const h=harness(120), queries=[];
+  h.setList(({cursor,limit})=>{
+    queries.push([cursor,limit]);const offset=Number(cursor||0);
+    return {data:Array.from({length:limit},(_,i)=>({id:String(offset+i)})),nextCursor:String(offset+limit)};
+  });
+  await h.loadThreads();
+  assert.deepEqual(queries,[[undefined,100],['100',20]]);
+  assert.equal(h.state.threads.length,120);assert.equal(h.state.nextThreads,'120');
 });
 
 test('an older list response cannot overwrite a newer search', async () => {

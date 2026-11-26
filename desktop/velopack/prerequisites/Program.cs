@@ -43,7 +43,15 @@ namespace CodexLight.Prerequisites {
    try{string file=Path.Combine(root,"fixture.bin");File.WriteAllBytes(file,new byte[2]);if(IsX64(file))throw new Exception("short PE accepted");
     using(var w=new BinaryWriter(File.Create(file))){w.Write(new byte[128]);w.BaseStream.Position=0;w.Write((ushort)0x5a4d);w.BaseStream.Position=60;w.Write(64);w.BaseStream.Position=64;w.Write(0x4550u);w.Write((ushort)0x8664);}
     if(!IsX64(file))throw new Exception("x64 PE rejected");using(var w=new BinaryWriter(File.OpenWrite(file))){w.BaseStream.Position=68;w.Write((ushort)0x14c);}if(IsX64(file))throw new Exception("x86 PE accepted");
-    Console.WriteLine("PASS: truncated, x64, x86 PE detection; no runtime or installer executed.");return 0;
+    var floor=new CodexLight.Bootstrap.LockedDependency{Url="https://nodejs.org/dist/v24.22.2/node-v24.22.2-x64.msi",Hash=new string('b',64)};
+    string Line(string version)=>new string('a',64)+"  node-v"+version+"-x64.msi\r\n";
+    var resolved=CodexLight.Bootstrap.DependencyInstaller.ResolveNodeRelease(Line("24.22.3"),floor);
+    if(resolved.Url!="https://nodejs.org/dist/v24.22.3/node-v24.22.3-x64.msi"||resolved.Hash!=new string('a',64))throw new Exception("Invalid MSI selection");
+    foreach(string invalid in new[]{Line("24.22.1"),Line("24.22.2"),Line("26.0.0"),Line("24.22.3")+Line("24.22.4")}){
+     try{CodexLight.Bootstrap.DependencyInstaller.ResolveNodeRelease(invalid,floor);}catch(InvalidOperationException){continue;}
+     throw new Exception("Invalid Node manifest accepted");
+    }
+    Console.WriteLine("PASS: PE detection and official Node patch manifest selection, floor and ambiguity checks.");return 0;
    }finally{File.Delete(Path.Combine(root,"fixture.bin"));Directory.Delete(root);}
   }
  }

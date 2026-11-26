@@ -6,11 +6,13 @@ import path from 'node:path';
 import {randomBytes} from 'node:crypto';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-import {projectName} from '../public/projects.js';
+import {projectName,projectPathKey} from '../public/projects.js';
 
 const MAX_BYTES = 384 * 1024;
 const MAX_PROJECTS = 50;
 const MAX_SUBMISSIONS = 1000;
+const validNavigationDepth = value => Number.isInteger(value) && value >= 30 && value <= 300;
+const validNavigation = order => Array.isArray(order) && order.length <= 350 && new Set(order).size === order.length && order.every(key => typeof key === 'string' && key.length <= 4096 && (/^@(?:saved:[a-f0-9]{32}|other|projectless)$/.test(key) || !!projectPathKey(key)));
 const stateError = () => new Error('项目列表无法安全读取或保存；原有列表未被替换。');
 const keysAre = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join(',') === keys;
 const activityAt = value => Number.isSafeInteger(value) && value > 0;
@@ -80,7 +82,9 @@ export class ProjectStore {
   }
 
   validate(value) {
-    const {awaitingSelection, ...fields} = value ?? {};
+    const {awaitingSelection, navigationOrder, navigationDepth, ...fields} = value ?? {};
+    if (navigationOrder !== undefined && !validNavigation(navigationOrder)) throw stateError();
+    if (navigationDepth !== undefined && (!navigationOrder || !validNavigationDepth(navigationDepth))) throw stateError();
     if ((awaitingSelection !== undefined && (awaitingSelection !== true || fields.selectedId !== null)) ||
       (!keysAre(fields, 'projects,selectedId,version') && !keysAre(fields, 'projects,selectedId,submissions,version')) || value.version !== 1 || !Array.isArray(value.projects) || value.projects.length > MAX_PROJECTS) throw stateError();
     if (value.submissions !== undefined && (!value.submissions || typeof value.submissions !== 'object' || Array.isArray(value.submissions) || Object.keys(value.submissions).length > MAX_SUBMISSIONS || Object.entries(value.submissions).some(([id, at]) => !validThread(id) || !activityAt(at)))) throw stateError();
@@ -184,6 +188,11 @@ export class ProjectStore {
       await this.directory(project.path);
       snapshot.selectedId = project.id;
     });
+  }
+
+  saveNavigationOrder(order, depth = 30) {
+    if (!validNavigationDepth(depth) || !validNavigation(order) || Buffer.byteLength(JSON.stringify(order)) > 96 * 1024) throw new Error('项目排列数据无效或过大。');
+    return this.update(snapshot => { snapshot.navigationOrder = order; snapshot.navigationDepth = depth; });
   }
 
   recordSubmission(id, at) {

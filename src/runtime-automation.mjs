@@ -33,7 +33,8 @@ export class RuntimeAutomationStore {
    const {source,checkAutomatically,installOnRestart,queuedVersion}=state;
    const result=state.result;
    if(result!==null&&(!result||!['installing','succeeded','failed','unknown','deferred'].includes(result.outcome)||!isVersion(result.version)||!Number.isFinite(Date.parse(result.at))||(result.message!==undefined&&(typeof result.message!=='string'||result.message.length>500))))throw failure('运行引擎更新记录无效');
-   return {source,checkAutomatically,installOnRestart,queuedVersion,result};
+   if(state.queueOnce!==undefined&&typeof state.queueOnce!=='boolean')throw failure('运行引擎设置文件无效');
+   return {source,checkAutomatically,installOnRestart,queuedVersion,result,...(state.queueOnce&&queuedVersion?{queueOnce:true}:{})};
   }catch(error){if(error.code==='ENOENT')return defaults();throw error;}
   finally{await handle?.close();}
  }
@@ -59,12 +60,21 @@ export class RuntimeAutomation {
  change(update){
   const job=this.queue.then(async()=>{
    if(this.error)throw failure(this.error);
-   const next={...this.state};update(next);await this.store.save(next);this.state=next;this.emit();
+   const next={...this.state};update(next);if(!next.queuedVersion)delete next.queueOnce;await this.store.save(next);this.state=next;this.emit();
   });this.queue=job.catch(()=>{});return job;
  }
  snapshot(){return {...this.state,phase:this.phase,error:this.error||this.checkError||null};}
  async configure(input,status){
   if(this.phase==='installing'||this.phase==='preflight')throw failure('启动前的引擎更新正在进行，请稍候');
+  if(input&&Object.keys(input).join(',')==='queueVersion'){
+   const version=input.queueVersion;
+   await this.change(next=>{
+    if(version!==null&&(!isVersion(version)||this.explicit||next.source==='desktop'||status.current?.source!=='npm'||status.canQueueUpgrade!==true||status.latest?.version!==version))throw failure('引擎或可升级版本已变化，请重新检查。');
+    if(version===null&&!next.queueOnce)throw failure('没有待取消的单次升级。');
+    next.queuedVersion=version;next.queueOnce=version!==null;
+   });
+   return this.snapshot();
+  }
   if(!input||typeof input!=='object'||Array.isArray(input)||!Object.keys(input).length||Object.keys(input).some(key=>!['source','checkAutomatically','installOnRestart'].includes(key)))throw failure('运行引擎设置参数无效');
   if(Object.hasOwn(input,'source')&&!SOURCES.includes(input.source))throw failure('Windows 引擎来源无效');
   if(Object.hasOwn(input,'source')&&this.explicit)throw failure('此运行环境由显式路径指定');
@@ -74,7 +84,7 @@ export class RuntimeAutomation {
   if(input.installOnRestart===true&&(this.explicit||(source!=='npm'&&(source!=='auto'||status.current?.source!=='npm'))))throw failure('请先选择全局 npm CLI 作为下次启动引擎');
   await this.change(next=>{
    Object.assign(next,input);
-   if(!next.installOnRestart||next.source==='desktop')next.queuedVersion=null;
+   if((!next.installOnRestart&&!next.queueOnce)||next.source==='desktop')next.queuedVersion=null;
    if(input.installOnRestart===true&&['failed','unknown'].includes(next.result?.outcome)&&status.npm?.available&&status.npm.version)next.result=null;
   });
   await this.consider(status);
@@ -83,12 +93,12 @@ export class RuntimeAutomation {
   return this.snapshot();
  }
  async consider(status){
-  if(this.error||this.explicit||this.phase==='installing'||this.phase==='preflight')return;
+  if(this.error||this.explicit||this.state.queueOnce||this.phase==='installing'||this.phase==='preflight')return;
   const {latest,npm,current}=status;
   if(!this.state.installOnRestart||!(this.state.source==='npm'||(this.state.source==='auto'&&current?.source==='npm'))||!latest||latest.stale||!isVersion(latest.version)||!npm?.version)return;
   let version=compareVersions(latest.version,npm.version)>0?latest.version:null;
   if(this.state.result?.outcome==='unknown'||(this.state.result?.outcome==='failed'&&this.state.result.version===version))version=null;
-  if(version!==this.state.queuedVersion)await this.change(next=>{if(next.installOnRestart&&next.source!=='desktop')next.queuedVersion=version;});
+  if(version!==this.state.queuedVersion)await this.change(next=>{if(next.installOnRestart&&!next.queueOnce&&next.source!=='desktop')next.queuedVersion=version;});
  }
  start(runtime,source){this.runtime=runtime;this.currentSource=source;this.schedule(3500);}
  schedule(delay=this.interval){
@@ -103,7 +113,7 @@ export class RuntimeAutomation {
  }
  async beforeEngineStart(runtime,source){
   const queued=this.state.queuedVersion;
-  if(this.closed||this.error||this.explicit||!this.state.installOnRestart||!queued)return null;
+  if(this.closed||this.error||this.explicit||(!this.state.installOnRestart&&!this.state.queueOnce)||!queued)return null;
   if(source!=='npm'){
    if(source==='desktop')await this.change(next=>{next.queuedVersion=null;}).catch(()=>{this.error='运行引擎更新记录无法保存。';});
    return null;

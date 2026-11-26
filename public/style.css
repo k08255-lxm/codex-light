@@ -499,8 +499,6 @@ dialog::backdrop { background: var(--overlay); }
 .settings-card { padding: 14px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); }
 .settings-card p { font-size: .8125rem; color: var(--tertiary); margin: 0 0 10px; }
 .settings-card h3 { font-size: .875rem; font-weight: 600; margin: 16px 0 8px; } .settings-card h3:first-child { margin-top: 0; }
-.receipt-row { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; font-size: .8125rem; }
-#desktop-receipts-list { max-height: 280px; overflow: auto; }
 
 /* Runtime / config / login panels rendered by retained protocol modules */
 .runtime-panel { margin-top: 20px; }
@@ -509,19 +507,50 @@ dialog::backdrop { background: var(--overlay); }
 .runtime-setting-rows { display: flex; flex-direction: column; padding: 0 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); }
 .setting-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--border); }
 .setting-row:last-child { border-bottom: 0; }
-.setting-row-copy { flex: 1 1 240px; min-width: 0; }
-.setting-row-copy strong { display: block; font-size: .875rem; font-weight: 500; }
-.setting-row-copy p { margin: 2px 0 0; color: var(--tertiary); font-size: .8125rem; overflow-wrap: anywhere; }
-.setting-row-path { flex: 0 1 46%; min-width: 150px; color: var(--tertiary); }
-.setting-row-path summary { cursor: pointer; font-size: .8125rem; }
-.setting-row-path code { display: block; max-height: 120px; margin-top: 6px; padding: 8px; overflow: auto; background: var(--code-bg); border-radius: var(--r-sm); font-size: .75rem; white-space: pre-wrap; overflow-wrap: anywhere; }
-.runtime-actions, .runtime-confirm-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
-.runtime-actions button, .runtime-confirm-actions button { height: 30px; padding: 0 11px; background: var(--raised); border: 1px solid var(--border-strong); font-size: .8125rem; }
-.runtime-confirm { margin-top: 10px; padding: 12px 14px; background: var(--warning-bg); border: 1px solid var(--warning-border); border-radius: var(--r-lg); }
-.runtime-confirm strong { display: block; font-size: .875rem; font-weight: 600; }
-.runtime-confirm p { margin: 4px 0 0; color: var(--secondary); font-size: .8125rem; overflow-wrap: anywhere; }
-.runtime-confirm code { padding: 1px 4px; background: var(--code-bg); border-radius: 4px; font-size: .75rem; overflow-wrap: anywhere; }
-.runtime-confirm-upgrade { background: var(--accent) !important; color: var(--accent-contrast); border-color: transparent !important; }
+.runtime-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+.runtime-actions button { height:30px; padding:0 11px; background:var(--raised); border:1px solid var(--border-strong); font-size:.8125rem; }
+#settings-engines { container-type:inline-size; }
+#settings-engines .runtime-panel { margin:0; }
+.engine-header,.engine-toolbar,.engine-name,.engine-identity { display:flex; align-items:center; }
+.engine-header { justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:26px; }
+#settings-dialog .engine-header h1 { margin:0; }
+.engine-toolbar { gap:12px; flex-wrap:wrap; }
+.engine-checked,.engine-columns,.engine-version small,.engine-path { color:var(--secondary); font-size:.8125rem; }
+.engine-check,.engine-upgrade { display:inline-flex; justify-content:center; align-items:center; gap:6px; white-space:nowrap; }
+.engine-columns,.engine-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(100px,auto) 108px; align-items:center; gap:16px; padding:0 16px; }
+.engine-columns { margin-bottom:8px; }
+.engine-columns > :nth-child(2),.engine-version { text-align:right; }
+.engine-list { border:1px solid var(--border); border-radius:var(--r-lg); overflow:hidden; background:var(--surface); }
+.engine-list:empty { display:none; }
+.engine-row { min-height:72px; padding-block:12px; }
+.engine-row + .engine-row { border-top:1px solid var(--border); }
+.engine-identity { gap:12px; min-width:0; }
+.engine-copy { min-width:0; }
+.engine-name { gap:7px; flex-wrap:wrap; }
+.engine-name strong { font-size:.95rem; font-weight:600; }
+.engine-source,.engine-active { font-size:.75rem; white-space:nowrap; }
+.engine-source { color:var(--secondary); border:1px solid var(--border-strong); border-radius:999px; padding:1px 6px; }
+.engine-active { color:var(--accent); }
+.engine-path { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top:4px; }
+.engine-version strong { font:600 .875rem/1.4 var(--mono,monospace); font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+.engine-version small { display:block; margin-top:3px; }
+.engine-action { justify-self:end; }
+.engine-action button { white-space:nowrap; }
+.engine-action [hidden],.engine-options[hidden] { display:none !important; }
+.engine-empty,.engine-list .runtime-blocked { margin:0; padding:12px 16px; }
+.engine-options { margin-top:20px; color:var(--secondary); }
+.engine-options summary { cursor:pointer; font-size:.875rem; }
+.engine-options[open] summary { margin-bottom:10px; }
+#runtime-panel .runtime-status:not(:empty) { margin-top:10px; }
+@container (max-width:520px) {
+ .engine-header { margin-bottom:18px; }
+ .engine-row,.engine-columns { grid-template-columns:minmax(0,1fr) auto; gap:6px 10px; padding-inline:12px; }
+ .engine-row { grid-template-areas:"identity version" "identity action"; }
+ .engine-identity { grid-area:identity; gap:7px; }
+ .engine-version { grid-area:version; }
+ .engine-action { grid-area:action; }
+ .engine-columns > :last-child { display:none; }
+}
 .config-settings-panel { padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface); }
 .config-settings-fields { display: grid; gap: 14px; margin-block: 16px; }
 .config-settings-field label { display: flex; justify-content: space-between; gap: 16px; align-items: center; font-size: .875rem; }
@@ -557,7 +586,7 @@ dialog::backdrop { background: var(--overlay); }
 /* ---------- Access mode ---------- */
 :root:not([data-access="lan"]) .dsh-settings-lan-summary { display: none; }
 /* A phone on the LAN cannot manage this computer: hide local-only controls (server also refuses them). */
-:root[data-access="lan"] .local-only, :root[data-access="lan"] #shutdown, :root[data-access="lan"] #runtime-panel, :root[data-access="lan"] #desktop-receipts, :root[data-access="lan"] #project-browse, :root[data-access="lan"] #preference-native-reload, :root[data-access="lan"] .row-panel:has(#shutdown) { display: none !important; }
+:root[data-access="lan"] .local-only, :root[data-access="lan"] #shutdown, :root[data-access="lan"] #runtime-panel, :root[data-access="lan"] #project-browse, :root[data-access="lan"] #preference-native-reload, :root[data-access="lan"] .row-panel:has(#shutdown) { display: none !important; }
 
 /* ---------- Responsive ---------- */
 @media (max-width:1200px) { .inspector { position: absolute; top: 0; right: 0; bottom: 0; z-index: 30; width: min(360px, calc(100vw - 52px)); box-shadow: var(--shadow-popover); } }

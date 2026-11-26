@@ -8,6 +8,7 @@ const bytes=value=>Number.isFinite(value)?`${(value/1024/1024).toFixed(1)} MiB`:
 export function mountAbout(host,{api,mutate,onStatus=()=>{}}){
  const document=host.ownerDocument;
  let active=false,generation=0,revision=0,status=null,busy=null,error=null,readError=null,timer=null,currentRead=null,confirmInstall=false,uncertainInstall=false;
+ let nodeRuntime=null,nodeChecking=false;
  host.classList.add('about-page');
  function button(text,action,{primary=false,disabled=false}={}){
   const node=el(document,'button','btn'+(primary?' primary':''),text);node.type='button';node.disabled=disabled;node.addEventListener('click',action);return node;
@@ -51,7 +52,7 @@ export function mountAbout(host,{api,mutate,onStatus=()=>{}}){
    }
   }
   if(error||readError||status?.error){const failure=el(document,'p','inline-error',error||readError||status.error);failure.setAttribute('role','alert');update.append(failure);}
-  if(uncertainInstall||phase==='launchUnknown')update.append(el(document,'p','about-update-message','请先核对安装程序是否已打开。为避免重复启动，此次操作不会自动重试。'));
+  if(uncertainInstall||phase==='launchUnknown')update.append(el(document,'p','about-update-message','未收到安装程序的启动回执。如果已看到更新窗口，请在该窗口继续。'));
   else if(phase==='launched')update.append(el(document,'p','about-update-message',inPlace?'请在更新窗口查看安装进度和结果。':'请完全退出码舱（包括系统托盘），在安装程序中完成更新后重新打开应用。'));
   else if(status?.demo)update.append(el(document,'p','about-update-message','演示模式可检查发布信息，不能下载或安装应用更新。'));
   else if(status&&!status.supported)update.append(el(document,'p','about-update-message','应用内安装目前支持 Windows x64。可前往发布页面查看安装包。'));
@@ -66,7 +67,32 @@ export function mountAbout(host,{api,mutate,onStatus=()=>{}}){
   }
   const footer=el(document,'div','about-links');const releases=el(document,'a','','GitHub 发布页面');releases.href=RELEASES;releases.target='_blank';releases.rel='noopener noreferrer';footer.append(releases);
   if(status?.checkedAt)footer.append(el(document,'span','',`上次检查 ${localTime(status.checkedAt)}`));
-  host.replaceChildren(header,intro,update,footer);
+  const sections=[header,intro,update];
+  if(nodeRuntime){
+   const section=el(document,'section','about-update');
+   section.append(el(document,'h2','','Node.js 运行环境'));
+   const {current,latest,error,available,endOfLife}=nodeRuntime;
+   let description='码舱正在使用 v'+current+'。';
+   if(error)description+=' '+error;
+   else if(endOfLife)description+=' 此版本已结束官方支持，可升级到 v'+latest+' LTS。';
+   else if(available)description+=' 同一主版本有更新 v'+latest+'。';
+   else if(latest)description+=' 当前主版本已是最新。';
+   section.append(el(document,'p','about-update-message',description));
+   const actions=el(document,'div','about-update-controls');
+   actions.append(button(nodeChecking?'正在检查…':'检查 Node.js 更新',async()=>{
+    if(nodeChecking)return;nodeChecking=true;render();
+    try{nodeRuntime=await api('/api/app-update/node-check',{});}
+    catch(error){nodeRuntime={...nodeRuntime,error:error.message};}
+    finally{nodeChecking=false;if(active)render();}
+   },{disabled:nodeChecking}));
+   if(available&&/^\d+\.\d+\.\d+$/.test(latest)){
+    const link=el(document,'a','btn','下载官方 Windows 安装包');
+    link.href='https://nodejs.org/dist/v'+latest+'/node-v'+latest+'-x64.msi';link.target='_blank';link.rel='noopener noreferrer';actions.append(link);
+    section.append(el(document,'p','about-update-message','使用系统 MSI 安装的用户可下载更新。使用版本管理器的用户请通过原工具更新。更新后重新打开码舱。'));
+   }
+   section.append(actions);sections.push(section);
+  }
+  host.replaceChildren(...sections,footer);
  }
  function schedule(){
   clearTimeout(timer);timer=null;
@@ -105,7 +131,8 @@ export function mountAbout(host,{api,mutate,onStatus=()=>{}}){
   },
   deactivate(){active=false;clearTimeout(timer);timer=null;confirmInstall=false;},
   refresh,update,
+  updateNode(status){if(JSON.stringify(nodeRuntime)===JSON.stringify(status))return;nodeRuntime=status;if(active)render();},
   get revision(){return revision;},
-  reset(){generation++;revision++;currentRead=null;clearTimeout(timer);timer=null;status=null;error=null;readError=null;confirmInstall=false;uncertainInstall=false;busy=null;onStatus(null);render();if(active)refresh();},
+  reset(){nodeRuntime=null;generation++;revision++;currentRead=null;clearTimeout(timer);timer=null;status=null;error=null;readError=null;confirmInstall=false;uncertainInstall=false;busy=null;onStatus(null);render();if(active)refresh();},
  };
 }

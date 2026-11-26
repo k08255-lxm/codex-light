@@ -1,9 +1,9 @@
 # Node prerequisite gate
 
-`NodePrerequisite.csproj` produces a .NET Framework 4.8 x64 console helper, available on supported Windows 10/11 without needing the .NET 10 runtime first. It links the existing MSI prerequisite downloader and pinned `desktop/installer/dependencies.lock.json`; no floating version lookup or additional dependency installer implementation.
+`NodePrerequisite.csproj` produces a .NET Framework 4.8 x64 console helper, available on supported Windows 10/11 without needing the .NET 10 runtime first. It links the existing MSI prerequisite downloader and its release floor in `desktop/installer/dependencies.lock.json`. The shared downloader resolves the latest patch in that Node LTS major from the official checksum manifest, then downloads the immutable versioned MSI.
 
 - `--check-node ABSOLUTE_APPLICATION_DIRECTORY`: read-only detection. Searches system Program Files, registry and PATH before app-local runtime. Requires x64 PE and successful bounded Node version probe >=20. Existing compatible Node is reused; nothing downloaded.
-- `--install-node ABSOLUTE_APPLICATION_DIRECTORY`: explicit consent-required entrypoint, not an automatic fallback. Rechecks first. Only clearly missing Node triggers the existing official Node MSI interactive installer; fixed hash, Windows trust and OpenJS/Node Foundation publisher checks apply. Uncertain/inaccessible/broken/old detected runtime fails closed rather than silently replacing it.
+- `--install-node ABSOLUTE_APPLICATION_DIRECTORY`: explicit consent-required entrypoint, not an automatic fallback. Rechecks first. Only clearly missing Node triggers the existing official Node MSI interactive installer; official SHA256, Windows trust and OpenJS/Node Foundation publisher checks apply. Uncertain/inaccessible/broken/old detected runtime fails closed rather than silently replacing it.
 - Exit 0: compatible; 20: missing; 21: uncertain/error/unsupported command; 1602: cancellation; 3010: reboot required. Only 0 permits the wrapper to continue. Reboot and failure must not launch vendor Setup.
 
 ## Integration contract

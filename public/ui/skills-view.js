@@ -71,12 +71,6 @@ export function mountSkillsView(host, { read, write, pending, onCatalogChanged, 
   const guidance = make('p', 'fine skills-guidance', '按技能路径修改 Codex 的启用状态。相同路径出现在其他项目中时也会生效。');
   const status = make('p', 'fine skills-status');
   status.setAttribute('role', 'status');
-  const recovery = make('button', 'btn ghost small skills-recovery', '刷新并解除锁定');
-  recovery.type = 'button';
-  recovery.hidden = true;
-  const recoveryFeedback = make('p', 'fine skills-status');
-  recoveryFeedback.setAttribute('role', 'status');
-  recoveryFeedback.hidden = true;
   const warnings = make('details', 'skills-warnings');
   const warningsTitle = make('summary');
   const warningList = make('ul');
@@ -85,7 +79,7 @@ export function mountSkillsView(host, { read, write, pending, onCatalogChanged, 
   const list = make('ul', 'skills-list');
   list.setAttribute('aria-label', '技能列表');
   host.classList.add('skills-settings');
-  host.append(header, contextLine, guidance, importFeedback, search, status, recovery, recoveryFeedback, warnings, list);
+  host.append(header, contextLine, guidance, importFeedback, search, status, warnings, list);
 
   const rendered = new Map();
   const saves = new Map();
@@ -99,8 +93,6 @@ export function mountSkillsView(host, { read, write, pending, onCatalogChanged, 
   let loadError = '';
   let active = false;
   let pendingSignature = '';
-  let recovering = false;
-  let recoveryMessage = '';
   let nextId = 0;
   let importAttempt = null;
 
@@ -200,12 +192,6 @@ export function mountSkillsView(host, { read, write, pending, onCatalogChanged, 
     const records = pending();
     const canWrite = context.connected && !!context.serverInstance && !loadError;
     const restored = records.some(record => !record.path);
-    const unknown = records.find(record => record.status === 'unknown');
-    recovery.hidden = !releaseUnknown || !unknown;
-    recovery.disabled = !context.connected || !!loading || recovering;
-    recovery.textContent = recovering ? '正在核对…' : '刷新并解除锁定';
-    recoveryFeedback.hidden = !recoveryMessage;
-    if (recoveryFeedback.textContent !== recoveryMessage) recoveryFeedback.textContent = recoveryMessage;
     const locked = new Set(records.map(record => record.path));
     const writing = new Set([...saves.keys(), ...locked]);
     const words = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -224,7 +210,7 @@ export function mountSkillsView(host, { read, write, pending, onCatalogChanged, 
     const message = !context.connected ? 'Codex 连接已断开，无法读取技能目录。'
       : loadError ? `技能目录读取失败：${loadError}${rows.length ? '。下方为上次读取结果。' : ''}`
       : loading ? '正在读取技能…'
-      : restored ? (unknown ? '原技能操作结果未知。可刷新实际状态并解除锁定，不会重发原操作。' : '原技能操作正在核对，请等待。')
+      : restored ? '正在同步技能状态…'
       : !rows.length ? (catalog?.errors.length ? '没有读到可用的技能。' : '未发现技能。')
       : !visible.length ? '没有匹配的技能。'
       : '';
@@ -247,7 +233,7 @@ export function mountSkillsView(host, { read, write, pending, onCatalogChanged, 
       source.textContent = skill.source + ' · 路径';
       const busy = writing.has(skill.path);
       const toggleMessage = saves.has(skill.path) ? '正在更新…'
-        : busy ? '正在核对更新结果…'
+        : busy ? '正在同步技能状态…'
         : messages.get(skill.path)?.text || (typeof skill.enabled === 'boolean' ? '' : 'Codex 未报告启用状态。');
       if (feedback.textContent !== toggleMessage) feedback.textContent = toggleMessage;
       feedback.hidden = !toggleMessage;
@@ -281,7 +267,8 @@ export function mountSkillsView(host, { read, write, pending, onCatalogChanged, 
     loadError = '';
     render();
     try {
-      const next = skillCatalog(await read(context.cwd, { forceReload, signal: controller.signal }));
+      const unknown = releaseUnknown ? pending().filter(record => record.status === 'unknown') : [];
+      const next = skillCatalog(await read(context.cwd, { forceReload:forceReload || unknown.length > 0, signal: controller.signal }));
       if (mine !== generation) return;
       catalog = next;
       invalidated = false;
@@ -290,6 +277,14 @@ export function mountSkillsView(host, { read, write, pending, onCatalogChanged, 
         if (typeof message.enabled === 'boolean' && next.rows.get(path)?.enabled !== message.enabled) messages.delete(path);
       }
       renderWarnings();
+      const current=()=>active && mine===generation && !controller.signal.aborted;
+      for(const marker of unknown){
+        if(!current())return;
+        if(await releaseUnknown(marker.requestId,current)){
+          if(marker.path)messages.delete(marker.path);
+          onCatalogChanged();
+        }
+      }
       return true;
     } catch (error) {
       if (mine !== generation) return;
@@ -357,7 +352,6 @@ export function mountSkillsView(host, { read, write, pending, onCatalogChanged, 
       forceNextRead = false;
     }
     context = next;
-    recoveryMessage = '';
     cancelRead();
     catalog = null;
     loadError = '';
@@ -372,37 +366,12 @@ export function mountSkillsView(host, { read, write, pending, onCatalogChanged, 
     onCatalogChanged();
     void invalidate();
   });
-  recovery.addEventListener('click', async () => {
-    const marker = pending().find(record => record.status === 'unknown');
-    if (!active || recovery.disabled || !marker || !releaseUnknown) return;
-    const scope = context;
-    const focused = document.activeElement === recovery;
-    recovering = true;
-    recoveryMessage = '';
-    render();
-    try {
-      if (!await invalidate()) return;
-      const mine = generation;
-      const current = () => active && scope === context && mine === generation && !loadError;
-      const released = await releaseUnknown(marker.requestId, current);
-      if (!current()) return;
-      recoveryMessage = released ? '已刷新技能并解除这条锁定记录，未重发原操作。'
-        : '这条操作仍在核对或已完成，没有手动解除锁定。';
-      if (released) onCatalogChanged();
-    } catch (error) {
-      if (active && scope === context) recoveryMessage = `无法核对原操作：${error.message || String(error)}`;
-    } finally {
-      recovering = false;
-      render();
-      if (active && focused && recovery.hidden) refresh.focus({ preventScroll: true });
-    }
-  });
   search.addEventListener('input', render);
   return {
     setContext,
     activate() {
       active = true;
-      if (invalidated && !loading && context.connected) return load(forceNextRead);
+      if ((invalidated || pending().some(row=>row.status==='unknown')) && !loading && context.connected) return load(forceNextRead);
       render();
     },
     deactivate() {
@@ -425,7 +394,8 @@ export function mountSkillsView(host, { read, write, pending, onCatalogChanged, 
       const signature = JSON.stringify(pending());
       if (signature === pendingSignature) return;
       pendingSignature = signature;
-      render();
+      if(releaseUnknown && context.connected && pending().some(row=>row.status==='unknown'))void invalidate();
+      else render();
     },
   };
 }

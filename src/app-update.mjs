@@ -114,7 +114,7 @@ export class AppUpdateService{
   if(this.downloading||this.installing)throw fail('正在处理应用更新，请稍后检查','APP_UPDATE_BUSY');
   if(this.phase==='launchUnknown'){
    if(automatic)return this.status();
-   throw fail('安装程序启动结果未知，请先核对，不能自动重试','APP_UPDATE_LAUNCH_UNKNOWN','unknown');
+   throw fail('未收到安装程序的启动回执。如果已出现更新窗口，请在该窗口继续。','APP_UPDATE_LAUNCH_UNKNOWN','unknown');
   }
   if(this.phase==='launched')return this.status();
   if(automatic&&['available','ready','upToDate'].includes(this.phase)&&this.checkedAt&&this.now()-Date.parse(this.checkedAt)<5*60*1000)return this.status();
@@ -287,7 +287,7 @@ export class AppUpdateService{
   this._release(params);
   if(!this.nativeLaunchAvailable)throw fail('Velopack requires the trusted native update launcher','APP_UPDATE_NATIVE_REQUIRED');
   if(this.phase==='launched')return this.status();
-  if(this.phase==='launchUnknown')throw fail('安装程序启动结果未知，请人工核对；不会再次启动','APP_UPDATE_LAUNCH_UNKNOWN','unknown');
+  if(this.phase==='launchUnknown')throw fail('未收到安装程序的启动回执。如果已出现更新窗口，请在该窗口继续。','APP_UPDATE_LAUNCH_UNKNOWN','unknown');
   if(this.installing)return this.installing;
   if(this.downloading||this.checking)throw fail('安装包尚未准备完成','APP_UPDATE_BUSY');
   this.installing=(async()=>{

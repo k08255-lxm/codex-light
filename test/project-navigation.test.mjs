@@ -18,6 +18,21 @@ const groups = host => all(host).filter(child => child.classList.contains('proje
 const projects = [{ id: 'a', path: 'C:\\Work\\A', name: 'Alpha' }, { id: 'b', path: '/work/b', name: 'Beta' }];
 const threads = [{ id: 'c', cwd: '/history/c', name: 'History' }, { id: 'a1', cwd: 'c:/work/a/', name: 'Alpha thread' }, { id: 'unknown', name: 'Unknown directory' }];
 
+test('restore saved and history-only groups before history arrives and animate only a real reorder',()=>{
+ const view=setup(), order=['/history/c','@saved:b','@saved:a','@other'];
+ assert.deepEqual(view.render({projects,restoredOrder:order}),order);
+ const animation=[];
+ for(const node of groups(view.host)){
+   node.getBoundingClientRect=()=>({top:groups(view.host).indexOf(node)*40});
+   node.animate=()=>animation.push(node);
+ }
+ const history=threads.map(row=>({...row,createdAt:row.id==='c'?50:row.id==='a1'?10:1}));
+ const live=[...history,{id:'b1',cwd:'/work/b',createdAt:30}];
+ assert.deepEqual(view.render({projects,threads:live}),order);assert.equal(animation.length,0);
+ view.render({projects,threads:live.map(row=>row.id==='a1'?{...row,submittedAt:70}:row)});
+ assert.ok(animation.length>0);
+});
+
 test('saved projects lead historical directories; unknown cwd cannot select a project', () => {
   const view = setup();
   view.render({ projects, threads, selectedPath: 'c:/WORK/a/', activeThreadId: 'a1' });

@@ -126,7 +126,7 @@ test('an unknown skill update only reads back the state and holds its row until 
   ]);
   assert.equal(repo.getAttribute('aria-disabled'), 'true');
   assert.equal(user.getAttribute('aria-disabled'), 'false');
-  assert.match(visibleText(host), /正在核对更新结果/);
+  assert.match(visibleText(host), /正在同步技能状态/);
   rows[0].enabled = false;
   records.length = 0;
   view.recover(repoPath, { effectiveEnabled: false }, 'succeeded');
@@ -244,28 +244,20 @@ test('unknown skill recovery refreshes actual catalog before releasing one recor
   });
   view.setContext(context());
   await view.activate();
-  const recovery = host.querySelectorAll('button').find(button => button.textContent.includes('解除锁定'));
-  assert.equal(recovery.hidden,true);
+  assert.equal(host.querySelector('.skills-recovery'),null);
   assert.equal(toggles()[1].getAttribute('aria-disabled'),'false');
-
+  rejectRefresh = true;
   records.unshift({requestId:'unknown',status:'unknown'});
   view.syncPending();
-  assert.equal(recovery.hidden,false);
-  assert.ok(toggles().every(toggle=>toggle.getAttribute('aria-disabled')==='true'));
-  assert.match(visibleText(host),/结果未知/);
-
-  rejectRefresh = true;
-  recovery.click();
   await flush();
   assert.equal(records.length,2);
   assert.deepEqual(calls,[['read',false],['read',true]]);
-
+  assert.ok(toggles().every(toggle=>toggle.getAttribute('aria-disabled')==='true'));
   rejectRefresh = false;
-  recovery.click();
-  await flush();
+  await view.invalidate();
   assert.deepEqual(calls,[['read',false],['read',true],['read',true],['release','unknown']]);
   assert.deepEqual(records.map(row=>row.requestId),['pending']);
   assert.equal(toggles()[0].getAttribute('aria-disabled'),'true');
   assert.equal(toggles()[1].getAttribute('aria-disabled'),'false');
-  assert.match(visibleText(host),/未重发原操作/);
+  assert.doesNotMatch(visibleText(host),/解除锁定/);
 });

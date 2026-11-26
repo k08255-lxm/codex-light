@@ -1,4 +1,4 @@
-import { projectPathKey, projectThreadGroups } from './projects.js';
+import { navigationKey, projectPathKey, projectThreadGroups } from './projects.js';
 import { icon } from './icons.js';
 
 let nextNavigationId = 0;
@@ -245,7 +245,7 @@ export function mountProjectNavigation(host, { onSelect, onOpenThread, onRemove,
     }
   }
 
-  function render({ projects = [], threads = [], selectedPath = '', activeThreadId = '', runningThreadIds = new Set(), unreadThreadIds = new Set(), recent = {}, searching = false, searchStatus = '', busy: isBusy = false, error = '' }) {
+  function render({ projects = [], threads = [], selectedPath = '', activeThreadId = '', runningThreadIds = new Set(), unreadThreadIds = new Set(), recent = {}, searching = false, searchStatus = '', restoredOrder = null, animateOrder = true, busy: isBusy = false, error = '' }) {
     const focused = document.activeElement;
     const keepFocus = focused && host.contains(focused);
     const scrollTop = host.scrollTop;
@@ -253,7 +253,7 @@ export function mountProjectNavigation(host, { onSelect, onOpenThread, onRemove,
     const selectedKey = projectPathKey(selectedPath);
     const selectionChanged = selectedKey !== previousSelectedKey;
     previousSelectedKey = selectedKey;
-    const groups = projectThreadGroups(projects, threads, { selectedPath, searching, runningThreadIds, recent });
+    const groups = projectThreadGroups(projects, threads, { selectedPath, searching, runningThreadIds, recent, restoredOrder });
     const keys = new Set();
     const nodes = [];
     for (const group of groups) {
@@ -287,7 +287,7 @@ export function mountProjectNavigation(host, { onSelect, onOpenThread, onRemove,
     // A newly used or pinned project moves to its new position with a short FLIP slide.
     const order = groups.map(group => group.key).join('\n');
     const before = new Map();
-    if (previousOrder && order !== previousOrder && !reducedMotion()) for (const node of nodes) if (node.isConnected) { const top = node.getBoundingClientRect?.().top; if (Number.isFinite(top)) before.set(node, top); }
+    if (animateOrder && previousOrder && order !== previousOrder && !reducedMotion()) for (const node of nodes) if (node.isConnected) { const top = node.getBoundingClientRect?.().top; if (Number.isFinite(top)) before.set(node, top); }
     previousOrder = order;
     reconcile(list, nodes);
     for (const [node, top] of before) {
@@ -305,6 +305,7 @@ export function mountProjectNavigation(host, { onSelect, onOpenThread, onRemove,
     empty.hidden = groups.length > 0 || !!status.busy;
     if (keepFocus && host.contains(focused) && document.activeElement !== focused) focused.focus({ preventScroll: true });
     if (host.scrollTop !== scrollTop) host.scrollTop = scrollTop;
+    return groups.map(navigationKey);
   }
 
   return { render };

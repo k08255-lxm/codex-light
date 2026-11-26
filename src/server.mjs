@@ -25,6 +25,7 @@ import {nativeCodex,resolveCodexRuntime,probeCodexVersion,parseCodexVersion} fro
 import {WslRuntime,WslSelectionStore,validateWslSelection,wslProfileId,wslPathToHost,hostPathToWsl,mapWslRequest,mapWslResponse} from './wsl-runtime.mjs';
 import {RuntimeManager,windowsRuntimeOccupied} from './runtime-manager.mjs';
 import {RuntimeAutomation,RuntimeAutomationStore} from './runtime-automation.mjs';
+import {NodeUpdateCheck} from './node-update.mjs';
 import {AppUpdateService} from './app-update.mjs';
 import {startUpdateChecks} from '../public/ui/auto-update.js';
 import {assertUpdateIdle,UpdateReservation} from './app-update-safety.mjs';
@@ -307,11 +308,13 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
  const appVersion=JSON.parse(await readFile(new URL('../package.json',import.meta.url),'utf8')).version;
  const updateReservation=new UpdateReservation();
  const storageReservation=new StorageOperationReservation();
+ const nodeUpdates=desktop&&!demo&&process.platform==='win32'?new NodeUpdateCheck():null;
+ let stopNodeUpdates;
  const appUpdates=appUpdateService||new AppUpdateService({currentVersion:appVersion,updateTransport:desktop?desktopUpdateTransport:'msi',...(desktop?{launchFn:async(file,metadata)=>{
   if(typeof onDesktopLaunchInstaller!=='function')throw Object.assign(new Error('当前桌面宿主不支持启动应用安装程序'),{outcome:'notExecuted',code:'APP_UPDATE_HOST_UNAVAILABLE'});
   return onDesktopLaunchInstaller(file,metadata);
  }}:{})});
- const dsh=new DshReadService(rpc);const uploads=new UploadStore();const streams=new Map();const operations=new OperationStore({hooks:desktopState?{before:r=>desktopState.before(r),after:r=>desktopState.after(r)}:undefined});const runtime=runtimeManager||new RuntimeManager({currentPath:runtimeStartupError?'':command,currentSource:runtimeSource,operations,rpc,...(process.platform==='win32'&&!client?{occupancy:windowsRuntimeOccupied}:{})});let origin;let stopping=false;let closing;let serviceShutdown;let shutdownError=null;let engineStopped=false;let reopener;let reopenError=null;let remoteEnvironment=null;const remoteClients=new Set();let remotePairing=null;let pairingTimer;let stopAutomaticUpdates;
+ const dsh=new DshReadService(rpc);const uploads=new UploadStore();const streams=new Map();const operations=new OperationStore();const runtime=runtimeManager||new RuntimeManager({currentPath:runtimeStartupError?'':command,currentSource:runtimeSource,operations,rpc,...(process.platform==='win32'&&!client?{occupancy:windowsRuntimeOccupied}:{})});let origin;let stopping=false;let closing;let serviceShutdown;let shutdownError=null;let engineStopped=false;let reopener;let reopenError=null;let remoteEnvironment=null;const remoteClients=new Set();let remotePairing=null;let pairingTimer;let stopAutomaticUpdates;
  const desktopSleep=desktop&&onDesktopKeepAwake?new DesktopSleep({apply:onDesktopKeepAwake,sessions,streams,readDsh:(threadId,agentId)=>dsh.read({threadId,agentId,kind:'status'})}):null;
  const sleepPreferenceWarning='无法读取本机偏好，任务与远控防休眠尚未启用。';
  function applySleepPreferences(preferences){
@@ -367,7 +370,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
     if(url.pathname==='/api/status' && req.method==='GET'){
      const identity=await remoteIdentity(requestAccess!=='local');
      if(identity.remoteHostId)res.setHeader('X-CodeCang-Remote-Host-Id',identity.remoteHostId);
-     json(res,200,{...identity,connected:rpc.connected,runtimeTarget:wslActive?'wsl':'native',runtimeUnsupported:wslActive?['gitWrite','dshConfigSources','runtimeUpgrade',...(!wslCandidate?['dshConnection','gitRead']:[])]:[],demo,desktop:requestDesktop,access:requestAccess,canImportSkill:requestDesktop&&!!skillImporter,stopping,engineStopped,shutdownError,threadSessions:sessions.snapshot(),persistenceWarning:operations.persistenceWarning||desktopState?.persistenceWarning||null,version:rpc.version||null,error:rpc.lastError||null,dshError:dsh.releaseError||dshResetError,dshWakeup:dshWakeup?.status()||{automaticWakeup:false,error:dshWakeupError},pendingRequests:availableRequests(requestAccess).map(([,request])=>presentRequest(request)),serverInstance:operations.serverInstance,operationRetentionMs:operations.retentionMs,reopenAvailable:requestAccess==='local'&&!!reopener,reopenError:requestAccess==='local'?reopenError:null,...(requestDesktop?{appUpdate:{...appUpdates.status(),demo}}:{})});return;
+     json(res,200,{...identity,connected:rpc.connected,runtimeTarget:wslActive?'wsl':'native',runtimeUnsupported:wslActive?['gitWrite','dshConfigSources','runtimeUpgrade',...(!wslCandidate?['dshConnection','gitRead']:[])]:[],demo,desktop:requestDesktop,access:requestAccess,canImportSkill:requestDesktop&&!!skillImporter,stopping,engineStopped,shutdownError,threadSessions:sessions.snapshot(),persistenceWarning:desktopState?.persistenceWarning||null,version:rpc.version||null,error:rpc.lastError||null,dshError:dsh.releaseError||dshResetError,dshWakeup:dshWakeup?.status()||{automaticWakeup:false,error:dshWakeupError},pendingRequests:availableRequests(requestAccess).map(([,request])=>presentRequest(request)),serverInstance:operations.serverInstance,operationRetentionMs:operations.retentionMs,reopenAvailable:requestAccess==='local'&&!!reopener,reopenError:requestAccess==='local'?reopenError:null,...(requestDesktop?{appUpdate:{...appUpdates.status(),demo},nodeUpdate:nodeUpdates?.status}:{})});return;
     }
     if(url.pathname==='/api/lan/tunnel/status'&&req.method==='GET'){
      if(requestAccess!=='local')throw Object.assign(new Error('此操作仅限本机窗口'),{status:403});
@@ -386,7 +389,6 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      if(desktopSleep&&!desktopSleep.preferences)applySleepPreferences(preferences);
      json(res,200,{preferences});return;
     }
-    if(url.pathname==='/api/desktop/receipts'&&req.method==='GET'){if(!desktopState)throw new Error('仅桌面模式支持本机状态');json(res,200,{receipts:await desktopState.list(),persistenceWarning:operations.persistenceWarning||desktopState.persistenceWarning});return;}
     if(req.method!=='POST'){json(res,405,{error:'不支持的操作'});return;}
     if(url.pathname==='/api/thread-reads'){
      if(requestAccess!=='lan'){json(res,403,{error:'仅配对设备可上报对话已读',code:'LAN_ONLY'});return;}
@@ -436,9 +438,14 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
     if(url.pathname.startsWith('/api/app-update/')){
      const action=url.pathname.slice('/api/app-update/'.length);
      if(!input||typeof input!=='object'||Array.isArray(input))throw new Error('应用更新参数无效');
+     if(action==='node-check'&&requestDesktop&&nodeUpdates){
+      if(Object.keys(input).length)throw new Error('Node.js 更新参数无效');
+      await nodeUpdates.check().catch(()=>{ /* The status includes the concrete lookup failure. */ });
+      json(res,200,nodeUpdates.status);return;
+     }
      if(action==='network-restored'&&requestDesktop&&stopAutomaticUpdates){
       if(Object.keys(input).length)throw new Error('应用更新参数无效');
-      stopAutomaticUpdates.reconnect();json(res,200,{});return;
+      stopAutomaticUpdates.reconnect();stopNodeUpdates?.reconnect();json(res,200,{});return;
      }
      if(action==='status'||action==='check'){
       if(Object.keys(input).length)throw new Error('应用更新参数无效');
@@ -508,6 +515,11 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      await openProjectFolder(await projects.directory(folder));
      json(res,200,{opened:true});return;
     }
+    if(url.pathname==='/api/projects/navigation'){
+     if(requestAccess!=='local')throw Object.assign(new Error('项目排列仅由本机保存'),{status:403});
+     if(!Array.isArray(input?.order)||Object.keys(input).some(key=>!['order','depth'].includes(key)))throw new Error('项目排列参数无效');
+     await projects.saveNavigationOrder(input.order,input.depth);json(res,200,{});return;
+    }
     if(url.pathname==='/api/projects/update'){
      if(!input||typeof input!=='object'||Array.isArray(input)||typeof input.id!=='string'||Object.keys(input).some(key=>!['id','name','pinned'].includes(key)))throw new Error('项目参数无效');
      const {id,...changes}=input;json(res,200,projectListSnapshot(await projects.updateMetadata(id,changes),cwd));return;
@@ -551,11 +563,6 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      if(!desktopState||!input||Object.keys(input).join(',')!=='preferences')throw new Error('本机偏好参数无效');
      const preferences=await desktopState.preferences(input.preferences);
      applySleepPreferences(preferences);json(res,200,{preferences});return;
-    }
-    if(url.pathname==='/api/desktop/receipts/ack'){
-     if(!desktopState||!input||Object.keys(input).sort().join(',')!=='confirmed,requestIds'||input.confirmed!==true)throw new Error('需明确确认具体待核对记录');
-     if(input.requestIds?.some(id=>operations.entries.get(id)?.state==='pending'))throw new Error('操作仍在执行，不能移除记录');
-     await desktopState.ack(input.requestIds);for(const id of input.requestIds){const entry=operations.entries.get(id);if(entry)delete entry.persistenceWarning;}if(![...operations.entries.values()].some(entry=>entry.persistenceWarning)){operations.persistenceWarning=null;desktopState.persistenceWarning=null;}json(res,200,{acknowledged:input.requestIds});return;
     }
     if(url.pathname.startsWith('/api/skills/import/')){
      if(!requestDesktop)throw Object.assign(new Error('技能导入仅限本机桌面'),{status:403,outcome:'notExecuted'});
@@ -920,6 +927,9 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
  });
  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',resolve);});
  origin=`http://127.0.0.1:${server.address().port}`;
+ if(nodeUpdates&&!client){
+  stopNodeUpdates=startUpdateChecks({check:()=>nodeUpdates.check(),onStatus:status=>broadcast({method:'bridge/nodeUpdate',params:status},{localOnly:true}),setTimer:(fn,ms)=>setTimeout(fn,ms).unref()});
+ }
  if(desktop&&!demo&&appUpdates.status().supported){
   stopAutomaticUpdates=startUpdateChecks({
    check:()=>{updateReservation.assertOpen();return appUpdates.check({automatic:true});},
@@ -935,7 +945,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
  function reportShutdownFailure(error){shutdownError={code:error.code||'SHUTDOWN_FAILED',message:'本地服务关闭失败，不能确认所有资源已释放'};broadcast({method:'bridge/shutdown',params:{state:'failed',...shutdownError,engineStopped}});}
  function shutdownServices(){
   if(serviceShutdown)return serviceShutdown;
-  stopping=true;desktopSleep?.close();stopAutomaticUpdates?.();runtimeAutomation?.close();dshWakeup?.close();configSettings.clear();gitActions.plans.clear();pluginActions.clear();
+  stopping=true;desktopSleep?.close();stopAutomaticUpdates?.();stopNodeUpdates?.();runtimeAutomation?.close();dshWakeup?.close();configSettings.clear();gitActions.plans.clear();pluginActions.clear();
   for(const timer of loginTimers)clearTimeout(timer);loginTimers.clear();usageScan?.abort();clearPairing();
   const stopEngine=(async()=>{try{await Promise.all([sessions.close(),dsh.close(),titleSummary.close()]);}finally{await rpc.close();engineStopped=true;}})();
   const closeTunnel=async()=>{await tunnel.close();await tunnelQueue;await sshRelay?.close();};
