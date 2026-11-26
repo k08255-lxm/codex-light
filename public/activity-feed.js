@@ -307,7 +307,7 @@ export function retentionOf(item, keys) {
   for (const key of keys) { omitted += item?._omitted?.[key] || 0; released += item?._released?.[key] || 0; }
   return { complete: !omitted && !released, omitted, released };
 }
-function longTextView(document, { render, label = '正文', onCopy, initialWindow = null }) {
+function longTextView(document, { render, label = '正文', onCopy, scrollController, initialWindow = null }) {
   const node = el(document, 'div', 'long-text');
   const bar = el(document, 'div', 'long-text-bar'); bar.setAttribute('role', 'group'); bar.setAttribute('aria-label', label + '分段浏览');
   const position = el(document, 'span', 'long-text-position'); position.setAttribute('aria-live', 'polite');
@@ -328,15 +328,20 @@ function longTextView(document, { render, label = '正文', onCopy, initialWindo
   const more = button('继续阅读下一段', '显示后一段', () => go(start + 1, false)); more.classList.add('long-text-more');
   node.append(body);
   let split = splitSegments(''); let start = 0; let follow = true; let streaming = false; let seen = false;
+  let followHere = false;
   let retention = { complete: true, omitted: 0, released: 0 };
   const cache = new Map(); // index -> {start, end, open, fence, windowed, node}
   const copyLabel = () => retention.complete ? '复制全文' : '复制保留部分';
   function go(target, tail) {
+    scrollController?.pause();
     const max = Math.max(0, split.segments.length - LONG_TEXT.window);
     start = Math.max(0, Math.min(max, target === Infinity ? max : target));
-    follow = !!tail;
+    follow = !!tail; followHere = tail && streaming;
     paint(); copy.textContent = copyLabel();
-    node.scrollIntoView?.({ block: 'start' });
+    node.scrollIntoView?.({ block: 'start', behavior: 'instant' });
+    // The output pane scrolls independently inside a tool. Subsequent transcript
+    // layout changes keep that pane in place while its own contents remain scrollable.
+    scrollController?.pause(node.closest('.step-command') || node, {keepVisible:false});
   }
   function paintRetention() {
     const chars = split.length.toLocaleString('zh-CN');
@@ -398,15 +403,18 @@ function longTextView(document, { render, label = '正文', onCopy, initialWindo
     retention = nextRetention;
     const wasStreaming = streaming; streaming = live;
     const max = Math.max(0, split.segments.length - LONG_TEXT.window);
-    if (!seen) { start = initialWindow ? initialWindow.start : live ? max : 0; follow = initialWindow ? initialWindow.follow : live; seen = true; }
-    else if (live && follow && followTail) start = max;
-    else if (!live && wasStreaming && follow && followTail) start = max; // finished while watching the tail: stay there
+    if (!seen) {
+      follow = initialWindow?.follow ?? (live && followTail);
+      start = initialWindow?.start ?? (follow ? max : 0);
+      seen = true;
+    }
+    else if ((live || wasStreaming) && follow && (followTail || followHere)) start = max;
     start = Math.min(start, max);
     // The open (last) segment is re-rendered each update; a finished body re-renders it once.
     if (wasStreaming !== live) for (const entry of cache.values()) entry.open = true;
     paint();
   }
-  return { node, update, resumeTail() { if(!streaming)return;const max=Math.max(0,split.segments.length-LONG_TEXT.window);if(start!==max||!follow){start=max;follow=true;paint();} }, get window() { return { start, end: Math.min(split.segments.length, start + LONG_TEXT.window), count: split.segments.length, follow, rendered: cache.size }; }, release() { cache.clear(); body.replaceChildren(); } };
+  return { node, update, resumeTail() { if(!streaming)return;followHere=false;const max=Math.max(0,split.segments.length-LONG_TEXT.window);if(start!==max||!follow){start=max;follow=true;paint();} }, get window() { return { start, end: Math.min(split.segments.length, start + LONG_TEXT.window), count: split.segments.length, follow, rendered: cache.size }; }, release() { cache.clear(); body.replaceChildren(); } };
 }
 
 // ---------- View ----------
@@ -472,7 +480,7 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
       const media = (item.content || []).filter(part => ['image', 'localImage'].includes(part?.type));
       const bubble = el(document, 'div', 'message-bubble');
       if (text) {
-        view.long ||= longTextView(document, { render: source => document.createTextNode(source), label: '消息', onCopy, initialWindow: longPositions.get(item.id) });
+        view.long ||= longTextView(document, { render: source => document.createTextNode(source), label: '消息', onCopy, scrollController, initialWindow: longPositions.get(item.id) });
         view.long.update(text, { retention }); bubble.append(view.long.node);
       }
       parts.push(bubble);
@@ -504,7 +512,7 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     view.item = item; view.text = text; view.complete = item._complete; view.kept = kept;
     view.body.classList.add('markdown-body');
     view.node.classList.toggle('streaming', item._complete === false);
-    if (!view.long) { view.long = longTextView(document, { render: markdownSegment, label: '答复', onCopy, initialWindow: longPositions.get(item.id) }); view.body.replaceChildren(view.long.node); }
+    if (!view.long) { view.long = longTextView(document, { render: markdownSegment, label: '答复', onCopy, scrollController, initialWindow: longPositions.get(item.id) }); view.body.replaceChildren(view.long.node); }
     view.long.update(text, { streaming: item._complete === false, retention, followTail: scrollController?.following !== false });
   }
 
@@ -554,7 +562,7 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
         view.pre?.remove();
         const box = el(document, 'div', 'step-detail step-command');
         const head = createConsoleCode(document, 'step-output-head');
-        view.output = { box, head, long: longTextView(document, { render: source => createConsoleCode(document, 'step-output', source), label: '输出', onCopy }) };
+        view.output = { box, head, long: longTextView(document, { render: source => createConsoleCode(document, 'step-output', source), label: '输出', onCopy, scrollController }) };
         box.append(head, view.output.long.node); view.pre = box; view.node.append(box);
       }
       const item = view.item; const meta = commandHeading(item);
@@ -659,8 +667,19 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     node.append(head, list, more);
     const view = { node, title, stats, toggleAll, list, more, rows: new Map(), summary: null };
     const ui = () => { if (!fileState.has(turnId)) fileState.set(turnId, { expanded: false, all: false, open: new Set() }); return fileState.get(turnId); };
-    toggleAll.addEventListener('click', () => { const s = ui(); s.all = !s.all; s.open = new Set(s.all ? view.summary.rows.map(row => row.path) : []); if (s.all) s.expanded = true; updateFiles(view, view.summary, turnId); });
-    more.addEventListener('click', () => { const s = ui(); s.expanded = !s.expanded; updateFiles(view, view.summary, turnId); });
+    toggleAll.addEventListener('click', () => {
+      scrollController?.pause(toggleAll);
+      const s = ui(); s.all = !s.all; s.open = new Set(s.all ? view.summary.rows.map(row => row.path) : []);
+      if (s.all) s.expanded = true;
+      updateFiles(view, view.summary, turnId);
+    });
+    more.addEventListener('click', () => {
+      const s = ui();
+      // New rows appear above this button. Keep the end of the existing preview in view.
+      if (s.expanded) scrollController?.pause(more);
+      else scrollController?.pause(list, {keepVisible:false});
+      s.expanded = !s.expanded; updateFiles(view, view.summary, turnId);
+    });
     view.ui = ui;
     return view;
   }
@@ -686,7 +705,11 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
       let row = view.rows.get(file.path);
       if (!row) {
         row = fileRow(file.path); view.rows.set(file.path, row);
-        row.button.addEventListener('click', () => { const st = view.ui(); if (st.open.has(row.path)) st.open.delete(row.path); else st.open.add(row.path); updateFiles(view, view.summary, turnId); });
+        row.button.addEventListener('click', () => {
+          scrollController?.pause(row.button);
+          const st = view.ui(); if (st.open.has(row.path)) st.open.delete(row.path); else st.open.add(row.path);
+          updateFiles(view, view.summary, turnId);
+        });
       }
       const slash = file.path.lastIndexOf('/');
       row.name.replaceChildren(el(document, 'span', 'file-dir', slash >= 0 ? file.path.slice(0, slash + 1) : ''), el(document, 'span', 'file-base', slash >= 0 ? file.path.slice(slash + 1) : file.path));

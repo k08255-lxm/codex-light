@@ -52,6 +52,7 @@ import {validServerRequestId,findServerRequest} from './server-requests.mjs';
 import {ThreadSessions} from './thread-sessions.mjs';
 import {ThreadReads} from './thread-reads.mjs';
 import {MobileNotificationFeed} from './mobile-notification-feed.mjs';
+import {validTaskId} from './mobile-task-routes.mjs';
 import {ThreadListService} from './thread-list.mjs';
 import { DemoClient } from './demo.mjs';
 import { validateRpc, validateResponse } from './security.mjs';
@@ -209,9 +210,35 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
  await contextWindows.load();
  const modelWindowCatalog=()=>readModelWindowCatalog(wslActive
   ? (wslCandidate?wslPathToHost(wslCandidate.codexHome,wslCandidate.distribution):null) : rpc.codexHome);
- const sessions=new ThreadSessions(rpc,{contextWindows,onEvent:message=>{desktopSleep?.update();broadcast(message);},onThreadLoaded:result=>statistics.thread(result?.thread,result)});
+ const sessions=new ThreadSessions(rpc,{contextWindows,onEvent:message=>{desktopSleep?.update();broadcast(message);scheduleMobileTasks();},onThreadLoaded:result=>{statistics.thread(result?.thread,result);mobileNotifications.routes.remember(result?.thread);}});
  const threadReads=new ThreadReads();
- const mobileNotifications=new MobileNotificationFeed();
+ const mobileNotifications=new MobileNotificationFeed({
+  readThread:async threadId=>(await rpc.call('thread/read',{threadId,includeTurns:false})).thread,
+  changed:scheduleMobileTasks,
+ });
+ const mobileTaskStreams=new Map();
+ let mobileTaskUpdate=null;
+ function mobileSnapshot(){
+  return mobileNotifications.snapshot({connected:rpc.connected===true&&!stopping,serverInstance:operations.serverInstance,
+   threads:sessions.snapshot().threads,requests:new Map(availableRequests('lan').map(([id,request])=>[id,presentRequest(request)]))});
+ }
+ function mobileTaskEvent(baseline=false){
+  const {connected,running,finished}=mobileSnapshot();
+  return 'data: '+JSON.stringify({method:'bridge/mobileTasks',params:{connected,running,finished,baseline}})+'\n\n';
+ }
+ function scheduleMobileTasks(){
+  if(!mobileTaskStreams.size||mobileTaskUpdate)return;
+  mobileTaskUpdate=setImmediate(()=>{
+   mobileTaskUpdate=null;
+   if(!mobileTaskStreams.size)return;
+   const event=mobileTaskEvent();
+   for(const [res,previous] of mobileTaskStreams) {
+    if(event===previous)continue;
+    if(res.destroyed||res.writableLength>4*1024*1024)res.destroy();
+    else {res.write(event);mobileTaskStreams.set(res,event);}
+   }
+  });
+ }
  const threadList=new ThreadListService(rpc);
  const artifacts=new ArtifactPreviewService({projects,...(wslCandidate?{wslDistribution:wslCandidate.distribution,rolloutRoots:['sessions','archived_sessions'].map(part=>wslPathToHost(wslCandidate.codexHome+'/'+part,wslCandidate.distribution))}:{})});
  const files=new FilePreviewService({projects,...(wslCandidate?{wslDistribution:wslCandidate.distribution}:{})});
@@ -387,13 +414,17 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      res.writeHead(200,{'Content-Type':'text/event-stream','Connection':'keep-alive'});res.write(': connected\n\n');streams.set(res,requestAccess);
      if(requestAccess==='lan')desktopSleep?.update();
      res.write(`data: ${JSON.stringify({method:'bridge/threadReads',params:threadReads.snapshot()})}\n\n`);
-     const heartbeat=setInterval(()=>{if(res.writableLength>4*1024*1024)res.destroy();else res.write(': keepalive\n\n');},15000);
-     res.once('close',()=>{streams.delete(res);clearInterval(heartbeat);if(requestAccess==='lan')desktopSleep?.update();});return;
+     if(url.searchParams.get('mobileTasks')==='1'){
+      mobileTaskStreams.set(res,null);
+      res.write(mobileTaskEvent(true));
+     }
+     const heartbeat=setInterval(()=>{if(res.writableLength>4*1024*1024)res.destroy();else res.write(': keepalive\n\n');if(mobileTaskStreams.has(res))scheduleMobileTasks();},15000);
+     res.once('close',()=>{streams.delete(res);mobileTaskStreams.delete(res);clearInterval(heartbeat);if(requestAccess==='lan')desktopSleep?.update();});return;
     }
     if(url.pathname==='/api/mobile/notification-state'){
      if(requestAccess!=='lan'){json(res,403,{error:'仅配对设备可读取手机通知状态',code:'LAN_ONLY'});return;}
      if(req.method!=='GET'){res.setHeader('Allow','GET');json(res,405,{error:'不支持的操作'});return;}
-     json(res,200,mobileNotifications.snapshot({connected:rpc.connected===true&&!stopping,serverInstance:operations.serverInstance,threads:sessions.snapshot().threads,requests:new Map(availableRequests(requestAccess).map(([id,request])=>[id,presentRequest(request)]))}));return;
+     json(res,200,mobileSnapshot());return;
     }
     if(url.pathname==='/api/status' && req.method==='GET'){
      const identity=await remoteIdentity(requestAccess!=='local');
@@ -454,6 +485,10 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      json(res,200,await uploads.add(req,{filename}));return;
     }
     const input=await body(req);
+    if(url.pathname==='/api/mobile/task-target'){
+     if(!validTaskId(input?.threadId)||Object.keys(input).length!==1)throw new Error('通知对话标识无效');
+     json(res,200,{threadId:await mobileNotifications.routes.target(input.threadId)});return;
+    }
     if(desktopUpdateTransport==='velopack'&&!['/api/app-update/status','/api/shutdown'].includes(url.pathname))updateReservation.assertOpen();
     if(storage.running)throw Object.assign(new Error('本机存储维护中，请稍后再试'),{code:'STORAGE_BUSY',status:409,outcome:'notExecuted'});
     if(url.pathname.startsWith('/api/storage/')){
@@ -828,6 +863,10 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
       const identityGeneration=accountIdentityGeneration;
       const forward=()=>input.method==='thread/summary'?titleSummary.summarizeSavedThread(currentThread):sessions.call(input.method,effective);
       const output=input.method==='thread/list'?await threadList.http(req,res,params):MUTATING_METHODS.has(input.method)?await threadList.mutate(forward):await forward();statistics.acknowledge(input.method,effective,output);if(output?.thread){artifacts.bindThread(output.thread);files.bindThread(output.thread);}
+      if(identityGeneration===accountIdentityGeneration){
+       if(input.method==='thread/list'&&!params.archived)for(const thread of output?.data||[])mobileNotifications.routes.remember(thread,true);
+       else if(output?.thread)mobileNotifications.routes.remember(output.thread,['thread/start','thread/fork'].includes(input.method));
+      }
       if(output?.thread?.id&&identityGeneration===accountIdentityGeneration)rememberContext(contextFiles,output.thread.id,output.thread.path||contextFiles.get(output.thread.id)||null);
       if(input.method==='account/read'&&identityGeneration===accountIdentityGeneration)observedPermissionIdentity=accountIdentityKey(output);
       if(input.permissionMode&&output?.thread?.id){
@@ -929,7 +968,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
   if(method==='remoteControl/pairing/status'&&result?.claimed)clearPairing();
  }
  function broadcast(message,{localOnly=false}={}){localOnly=localOnly||localManagement(message.method);const exposed=message.id!==undefined&&typeof message.method==='string'?presentRequest(message):message;const event=`data: ${JSON.stringify(exposed)}\n\n`;for(const [res,access] of streams){if(res.destroyed){streams.delete(res);continue;}if(localOnly&&access!=='local')continue;if(res.writableLength>4*1024*1024){streams.delete(res);res.destroy();}else res.write(event);}}
- function resetThreadReads(){threadReads.reset();broadcast({method:'bridge/threadReads',params:threadReads.snapshot()});}
+ function resetThreadReads(){threadReads.reset();mobileNotifications.reset();broadcast({method:'bridge/threadReads',params:threadReads.snapshot()});}
  accountLogin.on('event',event=>{if(['starting','loggingOut','completed','loggedOut','unknown','closed'].includes(event.params.state))clearStatisticsAccount();if(['completed','failed','canceled','loggedOut','unknown','closed'].includes(event.params.state)){for(const entry of operations.entries.values())if(entry.method==='account/start'&&entry.result){delete entry.result.authUrl;delete entry.result.verificationUrl;delete entry.result.userCode;entry.result.redacted=true;}}broadcast(event);if(event.params.state==='loggedOut')resetThreadReads();});
  terminal.on('event',broadcast);
  function clearDsh(){desktopSleep?.clearChildren();dsh.clear().then(()=>{dshResetError=null;},error=>{dshResetError=error?.message||'子代理读取会话清理失败';});}

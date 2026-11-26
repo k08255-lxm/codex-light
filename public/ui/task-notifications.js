@@ -1,64 +1,59 @@
-import {createTurnActivity} from './task-phase.js';
 const validId=value=>typeof value==='string'&&/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(value);
 const titleText=value=>Array.from(String(value||'Codex 任务').replace(/[\x00-\x1f\x7f]/g,' ')).slice(0,40).join('');
 
-// Only current, confirmed turns are monitored. Reconnect snapshots never invent completion.
-export function createTaskMonitor({post,title=()=>'',waiting=()=>false}){
-  const tasks=new Map(),settled=new Set(),known=new Set();
+// Foreground and background consume the same server-confirmed task projection.
+export function createTaskMonitor({post,title=()=>''}){
+  const active=new Map(),settled=new Set(),known=new Set();
   let connected=false,enabled=false;
-  const key=(threadId,turnId)=>threadId+'\n'+turnId;
-  function send(task){if(enabled){const data={threadId:task.threadId,turnId:task.turnId,title:titleText(title(task.threadId)),state:task.state};if(task.phase)data.phase=task.phase;post(data);known.add(task.threadId);if(known.size>1000)known.delete(known.values().next().value);}}
-  function update(task,force=false){
-    const wait=connected&&waiting(task.threadId,task.turnId);
-    const state=connected?(wait?'waiting':'running'):'disconnected';
-    const phase=state==='running'?task.activity.phase:state==='waiting'&&typeof wait==='string'?wait:undefined;
-    if(!force&&task.state===state&&task.phase===phase)return;
-    task.state=state;task.phase=phase;send(task);
+  const key=task=>task.threadId+'\n'+task.turnId;
+  const valid=task=>validId(task?.threadId)&&validId(task?.turnId);
+  function send(task){
+    if(!enabled)return;
+    const data={threadId:task.threadId,turnId:task.turnId,title:titleText(title(task.threadId)),state:task.state};
+    if(task.phase)data.phase=task.phase;
+    post(data);known.add(task.threadId);
+    if(known.size>1000)known.delete(known.values().next().value);
   }
-  function start(threadId,turnId){
-    if(!validId(threadId)||!validId(turnId)||settled.has(key(threadId,turnId)))return;
-    const old=tasks.get(threadId);
-    if(old&&old.turnId!==turnId)remember(old);
-    const task=old?.turnId===turnId?old:{threadId,turnId,activity:createTurnActivity(turnId)};
-    tasks.set(threadId,task);update(task);
-    if(tasks.size>1000)tasks.delete(tasks.keys().next().value);
+  function remember(id){settled.add(id);if(settled.size>1000)settled.delete(settled.values().next().value);}
+  function refresh(){if(connected)for(const task of active.values())send(task);}
+  function disconnected(){
+    if(connected)for(const task of active.values())send({...task,state:'disconnected',phase:null});
+    connected=false;
   }
-  function remember(task){settled.add(key(task.threadId,task.turnId));if(settled.size>1000)settled.delete(settled.values().next().value);}
-  function refresh(){
-    for(const task of tasks.values()){
-      if(task.state==='disconnected')continue;
-      update(task,true);
-    }
-  }
-  return {
-    setEnabled(value){if(enabled===(value===true))return;enabled=value===true;if(enabled)refresh();},
-    reconcile(rows,isConnected){
-      connected=isConnected===true;
-      const active=new Map(rows.filter(row=>validId(row?.threadId)&&validId(row?.activeTurnId)).map(row=>[row.threadId,row.activeTurnId]));
-      // The server emits its idle session snapshot before the terminal turn event.
-      // Stop the heartbeat, but retain identity so that event can still report its real outcome.
-      for(const [threadId,task]of tasks)if(!active.has(threadId)&&task.state!=='disconnected'){task.state='disconnected';task.phase=undefined;send(task);}
-      for(const [threadId,turnId]of active)start(threadId,turnId);
-    },
-    observe(message){
-      const p=message?.params||{},threadId=p.threadId,turnId=p.turn?.id||p.turnId;
-      if(message?.method==='turn/started'){connected=true;start(threadId,turnId);return;}
-      const task=tasks.get(threadId);if(!task||task.turnId!==turnId)return;
-      if(message?.method!=='turn/completed'){
-        if(connected&&task.state!=='disconnected'&&message.method?.startsWith('item/')){task.activity.observe(message);update(task);}
-        return;
+  function apply({connected:live,running,finished,baseline=false}){
+    if(!live){disconnected();return;}
+    if(!Array.isArray(running)||!Array.isArray(finished))return;
+    const next=new Map(running.filter(task=>valid(task)&&['running','waiting'].includes(task.state)).map(task=>[task.threadId,task]));
+    const results=new Map();
+    for(const task of finished){
+      if(!valid(task)||!['completed','failed','interrupted'].includes(task.state))continue;
+      const id=key(task),previous=active.get(task.threadId);
+      if(!settled.has(id)&&!next.has(task.threadId)&&(!baseline||previous)){
+        results.set(task.threadId,task);
       }
-      task.state=['completed','failed','interrupted'].includes(p.turn?.status)?p.turn.status:'disconnected';
-      task.phase=undefined;
-      send(task);remember(task);tasks.delete(threadId);
-    },
-    disconnected(){connected=false;for(const task of tasks.values())if(task.state!=='disconnected'){task.activity=createTurnActivity(task.turnId);update(task);}},
-    refresh,
-    reset(){for(const threadId of known)post({threadId,state:'idle'});tasks.clear();settled.clear();known.clear();connected=false;},
+      remember(id);
+    }
+    for(const [threadId,task] of active){
+      if(!next.has(threadId)&&!results.has(threadId)&&known.has(threadId)){
+        post({threadId,state:'idle'});known.delete(threadId);
+      }
+      if(next.has(threadId)&&next.get(threadId).turnId!==task.turnId)remember(key(task));
+    }
+    for(const task of results.values())send(task);
+    for(const [threadId,task] of next){
+      const previous=active.get(threadId);
+      if(!connected||previous?.turnId!==task.turnId||previous.state!==task.state||previous.phase!==task.phase)send(task);
+    }
+    active.clear();for(const [id,task] of next)active.set(id,task);
+    connected=true;
+  }
+  return {apply,refresh,disconnected,
+    setEnabled(value){if(enabled===value)return;enabled=value===true;if(enabled)refresh();},
+    reset(){for(const threadId of known)post({threadId,state:'idle'});active.clear();settled.clear();known.clear();connected=false;},
   };
 }
 
-export function mountTaskNotifications({document,window,snapshot,title,waiting,openThread,notice}){
+export function mountTaskNotifications({document,window,snapshot,title,resolveTarget,openThread,notice}){
   const bridge=window.CodexLightNative,panel=document.getElementById('mobile-task-notifications');
   if(!bridge||!['getTaskNotificationStatus','setTaskNotificationsEnabled','updateTaskNotification','openTaskNotificationSettings'].every(name=>typeof bridge[name]==='function'))return null;
   const toggle=document.getElementById('mobile-task-enabled'),status=document.getElementById('mobile-task-status');
@@ -68,14 +63,22 @@ export function mountTaskNotifications({document,window,snapshot,title,waiting,o
   const monitor=createTaskMonitor({post:data=>{
     if(!supportsTaskPhase)delete data.phase;
     bridge.updateTaskNotification(JSON.stringify(data));
-  },title,waiting});
-  let failed=false,pendingOpen=null,opening=false,lastOpenError=null;
+  },title});
+  let failed=false,pendingOpen=null,opening=false,lastOpenError=null,wasReady=false;
   async function tryOpen(){
     if(!pendingOpen||opening||!snapshot().canOpen)return;
     const threadId=pendingOpen;opening=true;
-    try{await openThread(threadId);bridge.taskNotificationOpened?.(threadId);if(pendingOpen===threadId)pendingOpen=null;lastOpenError=null;}
-    catch(error){if(lastOpenError!==threadId){notice('无法打开通知对应的对话：'+error.message,true);lastOpenError=threadId;}}
-    finally{opening=false;}
+    try{
+      const target=await resolveTarget(threadId);
+      if(pendingOpen!==threadId||!snapshot().canOpen)return;
+      if(target!==threadId)bridge.updateTaskNotification(JSON.stringify({threadId,state:'idle'}));
+      if(target)await openThread(target);
+      else notice('这条任务通知对应的对话已隐藏、已归档或已不存在。');
+      if(pendingOpen!==threadId)return;
+      bridge.taskNotificationOpened?.(threadId);pendingOpen=null;lastOpenError=null;
+    }
+    catch(error){if(pendingOpen===threadId&&lastOpenError!==threadId){notice('无法打开通知对应的对话：'+error.message,true);lastOpenError=threadId;}}
+    finally{opening=false;if(pendingOpen&&pendingOpen!==threadId)void tryOpen();}
   }
   function report(error){monitor.setEnabled(false);status.textContent='任务通知同步失败：'+(error?.message||'原生接口不可用');if(!failed)notice(status.textContent,true);failed=true;}
   function run(action){try{action();}catch(error){report(error);}}
@@ -108,7 +111,11 @@ export function mountTaskNotifications({document,window,snapshot,title,waiting,o
       background.checked=['connecting','active','engine_offline','network_error'].includes(result.background);
     }
   });}
-  const reconcile=()=>run(()=>{const data=snapshot();monitor.reconcile(data.threads,data.connected);void tryOpen();});
+  const reconcile=()=>{
+    const ready=snapshot().canOpen===true,released=ready&&!wasReady;
+    wasReady=ready;
+    if(released)void tryOpen();
+  };
   const refresh=()=>run(()=>{if(snapshot().connected)monitor.refresh();else monitor.disconnected();});
   toggle.addEventListener('change',()=>run(()=>{
     if(typeof bridge.setRealtimeNotifications==='function')
@@ -124,5 +131,5 @@ export function mountTaskNotifications({document,window,snapshot,title,waiting,o
   refreshStatus();reconcile();
   window.setInterval(refresh,30000);
   if(backgroundPanel)window.setInterval(()=>{if(!document.getElementById('settings-notifications')?.classList.contains('hidden'))refreshStatus();},5000);
-  return {observe:message=>run(()=>monitor.observe(message)),reconcile,refresh,disconnected:()=>run(()=>monitor.disconnected()),reset:()=>run(()=>{pendingOpen=null;monitor.reset();})};
+  return {apply:data=>run(()=>monitor.apply(data)),reconcile,refresh,disconnected:()=>run(()=>monitor.disconnected()),reset:()=>run(()=>{pendingOpen=null;monitor.reset();})};
 }

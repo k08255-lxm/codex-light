@@ -74,6 +74,7 @@ div.step-detail { white-space: normal; padding: 6px 0; }
 .step-detail pre.console-output code { font: inherit; }
 
 /* Long bodies: a few ordered segments in the DOM, the rest reachable through the navigator. */
+.long-text[data-long="true"] { scroll-margin-block-start: 16px; }
 .long-text-bar { position: sticky; top: 0; z-index: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 0 0 8px; padding: 4px 0; background: var(--canvas); border-bottom: 1px solid var(--border); font-size: .75rem; color: var(--tertiary); white-space: normal; }
 .message-bubble .long-text-bar { background: var(--bubble-bg); color: inherit; }
 .step-detail .long-text-bar { background: var(--code-bg); }

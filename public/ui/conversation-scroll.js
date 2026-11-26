@@ -60,13 +60,15 @@ export function mountConversationScroll(container) {
     layoutPending = true;
     if (frame === null) frame = window.requestAnimationFrame(() => { frame = null; restore(saved); });
   }
-  function pause(summary) {
+  function pause(control, { keepVisible = true } = {}) {
+    if (smoothUntil > Date.now()) container.scrollTo({ top:container.scrollTop, behavior:'instant' });
     following = false; smoothUntil = 0; userUntil = 0; disclosure = null;
-    if (summary) {
-      // The paragraph below the summary moves when its details change height. Keep the
-      // chosen summary at its current viewport position, including a sticky turn header.
-      const offset = summary.getBoundingClientRect().top - container.getBoundingClientRect().top;
-      disclosure = {node:summary, offset:Math.max(0, Math.min(container.clientHeight - summary.offsetHeight, offset))};
+    if (control) {
+      // A sticky summary's painted top stops moving with scrollTop. Restore against
+      // its details element in normal flow, including when closing from a sticky header.
+      const node = control.classList.contains('turn-work-summary') ? control.parentElement : control;
+      const offset = control.getBoundingClientRect().top - container.getBoundingClientRect().top;
+      disclosure = {node, offset:keepVisible ? Math.max(0, Math.min(container.clientHeight - control.offsetHeight, offset)) : offset};
     }
     saved = capture();
   }

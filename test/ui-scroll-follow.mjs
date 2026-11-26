@@ -25,7 +25,11 @@ try {
   const width = Number(process.env.SCROLL_VIEWPORT_WIDTH) || 1280, mobile = width < 760;
   page = await browser.newPage({ viewport: { width, height: 850 }, isMobile: mobile, hasTouch: mobile }); page.setDefaultTimeout(8000); page.on('pageerror', error => errors.push(error.message));
   if (mobile) await page.addInitScript(() => { window.CodexLightNative = { isNativeApp: () => true, setToolbarIntegrated() {} }; });
-  await page.goto(app.url); if (mobile) await page.locator('#rail-sidebar').click(); await page.locator('.project-group-thread').filter({ hasText: thread.name }).click();
+  await page.goto(app.url);
+  await page.getByRole('button', {name:'使用此主题'}).click();
+  if (mobile) await page.locator('#rail-sidebar').click();
+  const threadButton = page.locator('.project-group-thread').filter({ hasText: thread.name });
+  await threadButton.click();
   await page.locator('[data-item-id="live-answer"]').waitFor();
   const gap = () => page.locator('#conversation').evaluate(node => node.scrollHeight - node.scrollTop - node.clientHeight);
   await page.waitForFunction(() => { const c = document.querySelector('#conversation'); return c.scrollHeight - c.scrollTop - c.clientHeight < 3; });
@@ -51,6 +55,32 @@ try {
     return { text: node?.textContent.slice(0, 90), offset: node?.getBoundingClientRect().top - top, scrollTop: c.scrollTop };
   });
   const assertAnchor = async (before, label) => { const after = await anchor(); assert.equal(after.text, before.text, label + ': same paragraph'); assert.ok(Math.abs(after.offset - before.offset) < 3, label + ': offset ' + (after.offset - before.offset)); };
+  if (!mobile) {
+    const pending = Promise.withResolvers(), release = Promise.withResolvers();
+    const holdRead = async route => {
+      if (route.request().postDataJSON()?.method === 'thread/read') {
+        pending.resolve(); await release.promise;
+      }
+      await route.continue();
+    };
+    await page.route('**/api/rpc', holdRead);
+    await threadButton.click();
+    await pending.promise;
+    await page.locator('#conversation').focus();
+    await page.keyboard.press('PageUp');
+    await page.waitForTimeout(300);
+    const whileLoading = await anchor();
+    assert.ok(whileLoading.text && await gap() > 200);
+    release.resolve();
+    await page.waitForFunction(() => document.querySelector('#conversation').ariaBusy === 'false');
+    await page.waitForTimeout(220);
+    await assertAnchor(whileLoading, 'keyboard reading while the same thread reloads');
+    await page.unroute('**/api/rpc', holdRead);
+    await page.locator('.scroll-to-bottom').click();
+    await page.waitForFunction(() => { const c = document.querySelector('#conversation'); return c.scrollHeight - c.scrollTop - c.clientHeight < 3; });
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    checks.push('a delayed thread refresh keeps the position chosen with Page Up');
+  }
   await scrollUp(80); await page.waitForTimeout(180); const near = await anchor();
   const firstGap = await gap(); assert.ok(firstGap > 30 && firstGap < 160, `deliberate scroll gap=${firstGap}`);
   append('\n\n' + Array.from({ length: 8 }, (_, n) => paragraph(`new-${n}`)).join('\n\n'));

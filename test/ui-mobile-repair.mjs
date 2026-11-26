@@ -120,6 +120,7 @@ try{
  await page.locator('#mobile-task-enabled').check();
  await page.locator('#mobile-task-system-settings').click();
  assert.ok(await page.evaluate(()=>window.nativeCalls.some(call=>call[0]==='notifications'&&call[1]===true)));
+ client.emit('event',{method:'thread/started',params:{thread:{id:'notification-thread',source:'appServer'}}});
  client.emit('event',{method:'turn/started',params:{threadId:'notification-thread',turn:{id:'notification-turn',status:'inProgress'}}});
  await page.waitForFunction(()=>window.taskCalls.some(call=>call.state==='running'));
  client.emit('event',{method:'turn/completed',params:{threadId:'notification-thread',turn:{id:'notification-turn',status:'completed'}}});

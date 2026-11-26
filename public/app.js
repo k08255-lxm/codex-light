@@ -315,6 +315,7 @@ function notice(text, error = false) { notifications.show(text, error); }
 let taskNotifications=null;
 let questionNotifications=null;
 let lastEventAt=0;
+let taskNavigationReady=false;
 let offlineSnapshot=null;
 function activity(text, running = false) { $('activity').textContent = text; $('activity').classList.toggle('running', running); }
 async function api(path, body, {timeoutMs=90000,signal}={}) {
@@ -618,6 +619,7 @@ function updateControls() { syncSettingsFolderPicker();const availability=curren
  $('stop').classList.toggle('hidden', !state.busy); $('stop').disabled = state.loadingThread || !state.turnId || !state.connected || !state.serverInstance || state.interruptingTurns.has(state.turnId) || pendingMutations.has('turn/interrupt', state.thread?.id, state.turnId); $('new-thread').disabled = state.sending; $('add-project').disabled=state.sending||projectsState.busy; $('model').disabled = state.sending || state.loadingThread; $('effort').disabled = $('model').disabled; $('model-trigger').disabled = $('effort').disabled; if ($('effort').disabled) closeReasoning(false); $('add-attachment').disabled = state.sending || state.uploadingImages || !state.connected; $('add-file').disabled = $('add-attachment').disabled; $('thread-menu-button').disabled = !state.thread || state.sending || state.loadingThread || state.busy || !!pendingMutations.storageError || threadPendingRecords().length>0;
  syncSkillsContext();
  void questionNotifications?.flushOpen();
+ taskNotifications?.reconcile();
 }
 function setCwd(cwd) { if(state.cwd !== (cwd || '')){pluginPanel.reset();configPanel.reset();} state.cwd = cwd || ''; const label=state.cwd.split(/[\\/]/).filter(Boolean).at(-1)||'无项目';$('cwd-label').textContent=label; $('cwd-button').title=state.cwd||'选择项目'; $('project-name').textContent=label;syncSessionDefaults();updateControls();renderThreads(); }
 // ---------- Router: exactly one stage is visible; every page transition goes through here ----------
@@ -946,7 +948,6 @@ function setThreadLoading(thread) {
   }, 300);
 }
 async function openThread(thread) {
-  const savedScroll=state.thread?.id===thread.id?conversationScroll.capture():null;
   const wasOverlay = sidebarController.isOverlayOpen();
   route('chat',{back:true});
   const generation = ++state.openGeneration; setThreadLoading(thread); updateControls();
@@ -955,7 +956,14 @@ async function openThread(thread) {
     // History is read-only: never resume or subscribe just to look at a conversation.
     const [result] = await Promise.all([rpc('thread/read', { threadId: thread.id }),sessionControls.load(thread.id).catch(error=>{if(generation===state.openGeneration)notice('未能读取对话批准方式：'+error.message,true);})]);
     if (generation !== state.openGeneration) return;
-    state.thread = withSubmittedActivity(result.thread || thread); dshTasks.reset(state.thread.id); state.dshReadErrors.clear(); state.dshOpenDetails.clear(); state.dshConnection = null; renderDshConnection(); syncDshLiveContext(); renderDshTasks(); restoreThreadReasoning({ model: state.thread.model, reasoningEffort: state.thread.reasoningEffort, serviceTier: Object.hasOwn(result,'serviceTier') ? result.serviceTier : state.thread.serviceTier }); resetThreadView(); state.busy = false; state.turnId = null; renderRequests();
+    state.thread = withSubmittedActivity(result.thread || thread); dshTasks.reset(state.thread.id); state.dshReadErrors.clear(); state.dshOpenDetails.clear(); state.dshConnection = null; renderDshConnection(); syncDshLiveContext(); renderDshTasks(); restoreThreadReasoning({ model: state.thread.model, reasoningEffort: state.thread.reasoningEffort, serviceTier: Object.hasOwn(result,'serviceTier') ? result.serviceTier : state.thread.serviceTier });
+    if (previous !== state.thread.id) {
+      resetThreadView();
+      // Start the new transcript in follow mode before its first content arrives.
+      // Input during loading can then take ownership without a late jump to the end.
+      scrollBottom();
+    }
+    state.busy = false; state.turnId = null; renderRequests();
     void loadSavedContext(state.thread.id,generation);
     setCwd(threadProjectPath(state.thread)); $('thread-title').textContent = state.thread.name || state.thread.preview || '对话'; $('welcome').classList.add('hidden'); renderThreads(); renderContext(); renderQueue();
     let running = null;
@@ -964,10 +972,9 @@ async function openThread(thread) {
     await loadItems(false, generation);
     if (generation !== state.openGeneration) return;
     if (fileApprovalPending()) renderRequests();
-    if(savedScroll)conversationScroll.restore(savedScroll,{follow:false});else scrollBottom();
     const activeId = state.activeTurns.get(thread.id) || sessionFor(thread.id)?.activeTurnId || running?.id;
     if (activeId && !state.terminalTurns.has(activeId)) { state.activeTurns.set(thread.id,activeId);state.busy = true; state.turnId = activeId; state.ledger.activate(activeId); renderMessages(false); watchExternalTurn(); }
-    activity(''); sidebarController.closeForNavigation(); if(wasOverlay)$('conversation').focus();recordNavigation();
+    activity(''); sidebarController.closeForNavigation(); if(wasOverlay)$('conversation').focus({preventScroll:true});recordNavigation();
   } catch (error) {
     if (generation === state.openGeneration) throw error;
   } finally {
@@ -1064,7 +1071,7 @@ async function loadItems(earlier = false, generation = state.openGeneration, cur
   state.nextItems = pager.hasMore ? pager.mode : null;
   $('earlier').classList.toggle('hidden', !pager.hasMore);
   $('earlier').title = pager.nextNeedsFullRead ? '此 Codex CLI 不支持分页读取：加载更早内容需要再次完整读取对话' : '';
-  renderMessages(false);
+  renderMessages(!earlier);
   if (earlier) restoreHistoryAnchor($('conversation'), anchor);
 }
 function scrollBottom() { conversationScroll.toBottom(); }
@@ -1536,7 +1543,6 @@ async function loadModels(current=()=>true) {
 function renderRequests({notify=false}={}) {
   renderApprovals($('approvals'), { document, requests: state.requests, currentThreadId: state.thread?.id || null, api, notice, el, boundedText, lookupFileChange, rerender: renderRequests });
   questionNotifications?.sync(state.requests,{notify});
-  taskNotifications?.refresh();
 }
 // Files/diff for a modern fileChange approval come from its correlated item (loaded only for the open conversation).
 function lookupFileChange(threadId, itemId) {
@@ -1558,6 +1564,7 @@ function trackRequest(message) {
 }
 function dropRequests(match) { let changed = false; for (const [key, request] of state.requests) if (match(request)) { state.requests.delete(key); changed = true; } if (changed) renderRequests(); }
 function onEvent(message) {
+  if(message.method==='bridge/mobileTasks'){taskNotifications?.apply(message.params);return;}
   if(message.method==='bridge/runtimeUpdate'){runtimePanel?.updateAvailable();return;}
   if(message.method==='bridge/sessionPermissionChanged'){
     sessionControls.changed(message.params).catch(error=>notice('未能同步对话批准方式：'+error.message,true));
@@ -1614,7 +1621,6 @@ function onEvent(message) {
   if (message.id !== undefined && message.method) { if (trackRequest(message)) renderRequests({notify:true}); return; }
   const p = message.params || {};
   threadCompletion.observe(message,viewedThreadId());
-  taskNotifications?.observe(message);
   if (message.method === 'serverRequest/resolved') { if (validRequestId(p.requestId)) { state.requests.delete(requestKey(p.requestId)); renderRequests(); } return; }
   if (message.method === 'thread/closed' && typeof p.threadId === 'string' && p.threadId) {
     clearRunningTurn(p.threadId,state.activeTurns.get(p.threadId));
@@ -1659,7 +1665,6 @@ function applyThreadSessions(params) {
   // An idle bridge snapshot can precede turn/completed. Keep the turn until its
   // outcome arrives or watchExternalTurn reads it, so an interrupt cannot send the queue.
   for (const row of state.threadSessions) if (row.activeTurnId && !state.terminalTurns.has(row.activeTurnId)) state.activeTurns.set(row.threadId, row.activeTurnId);
-  taskNotifications?.reconcile();
   const failed = state.threadSessions.find(row => row.releaseError); if (failed) notice(failed.releaseError, true);
   updateControls(); renderThreads();watchExternalTurn();drainAll();
 }
@@ -1677,7 +1682,7 @@ async function events() {
   while (!state.shuttingDown) {
     let reader; const controller = new AbortController(); state.eventController = controller;
     try {
-      const response = await fetch('/api/events', { signal: controller.signal, headers: { Authorization: `Bearer ${token}` } }); if (!response.ok) throw new Error(`事件连接失败 (${response.status})`);
+      const response = await fetch(taskNotifications?'/api/events?mobileTasks=1':'/api/events', { signal: controller.signal, headers: { Authorization: `Bearer ${token}` } }); if (!response.ok) throw new Error(`事件连接失败 (${response.status})`);
       lastEventAt=Date.now();
       reader = response.body.getReader(); eventsReconnecting = false; const decoder = new TextDecoder(); let buffer = ''; await syncStatus(); delay = 1000;
       offlineSnapshot?.ready();
@@ -1685,6 +1690,7 @@ async function events() {
         try { await openThread(state.thread); }
         catch (error) { notice('已恢复连接，重新载入对话失败：'+error.message, true); }
       }
+      taskNavigationReady=true;taskNotifications?.reconcile();
       reconnected = true;
       while (true) {
         // The server sends a keepalive every 15 seconds. A silent socket must not keep stale task notifications alive.
@@ -1695,6 +1701,7 @@ async function events() {
         let split; while ((split = buffer.indexOf('\n\n')) >= 0) { const raw = buffer.slice(0, split); buffer = buffer.slice(split + 2); const data = raw.split('\n').filter(l => l.startsWith('data:')).map(l => l.slice(5).trimStart()).join('\n'); if (data) { try { onEvent(JSON.parse(data)); } catch (e) { notice('无法处理事件：' + e.message, true); } } }
       }
     } catch (error) {
+      taskNavigationReady=false;
       threadReadReporter.disconnect();
       if (!state.shuttingDown) {
         console.warn('本地事件连接重试', error.name, error.message);
@@ -2147,9 +2154,9 @@ questionNotifications=createQuestionNotifications({document,window,host:$('quest
   },
 });
 taskNotifications=mountTaskNotifications({document,window,notice,
-  snapshot:()=>({connected:state.connected&&lastEventAt>0&&Date.now()-lastEventAt<60000,canOpen:state.connected&&!state.loadingThread&&!state.sending,threads:state.threadSessions.filter(row=>!state.terminalTurns.has(row.activeTurnId))}),
+  snapshot:()=>({connected:state.connected&&lastEventAt>0&&Date.now()-lastEventAt<60000,canOpen:taskNavigationReady&&state.connected&&!state.loadingThread&&!state.sending}),
   title:id=>(state.thread?.id===id?state.thread:state.threads.find(thread=>thread.id===id))?.name||'Codex 任务',
-  waiting:(threadId,turnId)=>questionNotifications?.waitingPhase(threadId,turnId),
+  resolveTarget:async threadId=>(await api('/api/mobile/task-target',{threadId})).threadId,
   openThread:async threadId=>{if(state.sending||state.loadingThread)throw new Error('当前操作结束后请再打开。');await openThread(state.threads.find(thread=>thread.id===threadId)||{id:threadId});if(state.thread?.id!==threadId||state.loadingThread)throw new Error('对话加载被其他导航打断。');},
 });
 // Keep the caret visible when the phone keyboard opens.
