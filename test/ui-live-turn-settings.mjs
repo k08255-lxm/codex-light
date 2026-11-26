@@ -19,12 +19,13 @@ function deferred(){
  const promise=new Promise(done=>{resolve=done;});
  return {promise,resolve};
 }
-async function fixture(t,{beforeUpdate}={}){
+async function fixture(t,{beforeUpdate,nativeSettings=true}={}){
  const root=await mkdtemp(path.join(tmpdir(),'codex-live-turn-ui-'));
  const client=new DemoClient(),call=client.call.bind(client),calls=[],effects=[];
  const {thread:other}=await call('thread/start',{cwd:root,model:'demo'});
  other.name='另一段对话';
  client.call=async(method,params)=>{
+  if(method==='thread/settings/update'&&!nativeSettings)throw Object.assign(new Error('Method not found'),{code:-32601});
   if(method.startsWith('turn/'))calls.push({method,params:structuredClone(params)});
   if(method===update&&beforeUpdate)await beforeUpdate(params);
   const result=await call(method,params);
@@ -48,7 +49,8 @@ async function fixture(t,{beforeUpdate}={}){
   if(errors.length)throw new Error('Demo startup failed: '+errors.join(', '),{cause:error});
   throw error;
  });
- return {client,page,calls,effects,other};
+ if(await page.locator('#first-theme').evaluate(dialog=>dialog.open))await page.locator('#first-theme button[type=submit]').click();
+ return {client,page,calls,effects,other,url:app.url};
 }
 async function chooseModel(page,label){
  if(await page.locator('#model-trigger').getAttribute('aria-expanded')!=='true')await page.locator('#model-trigger').click();
@@ -123,10 +125,10 @@ test('model and slider clicks update the owned running turn in order and carry t
  await page.keyboard.press('Escape');
  await finish(f,owner);
  const next=await send(page,'下一轮使用刚选中的模型和强度');
- assert.equal(next.threadId,owner.threadId);assert.equal(next.model,'demo-five');assert.equal(next.effort,'max');
+ assert.equal(next.threadId,owner.threadId);assert.equal(next.model,'demo-five');assert.equal(f.client.modelTurns.at(-1).inheritedEffort,'max');
 });
 
-test('steering and reopening the thread preserve its new effort when history still reports the original one',async t=>{
+test('the native thread preference survives steering and reopening without changing the recorded starting effort',async t=>{
  const f=await fixture(t),{page}=f,owner=await startSix(f);
  await page.locator('#model-trigger').click();
  const [changed]=await Promise.all([onResponse(page,update),clickEffort(page,3)]);
@@ -137,7 +139,8 @@ test('steering and reopening the thread preserve its new effort when history sti
  const [steered]=await Promise.all([onResponse(page,'turn/steer'),page.locator('#send').click()]);
  assert.equal(steered.status(),200,await steered.text());
  const thread=f.client.threads.get(owner.threadId);
- assert.equal(thread.reasoningEffort,'ultra');
+ assert.equal(f.client.modelTurns[0].effort,'ultra');
+ assert.equal(thread.reasoningEffort,'xhigh');
  await finish(f,owner);
  await page.getByRole('button',{name:f.other.name,exact:true}).click();
  await page.waitForFunction(()=>document.querySelector('#model').value==='demo');
@@ -146,7 +149,7 @@ test('steering and reopening the thread preserve its new effort when history sti
  assert.equal(await page.locator('#reasoning-label').textContent(),'极高');
  const next=await send(page,'下一轮继续使用极高');
  assert.equal(next.threadId,owner.threadId);
- assert.equal(next.effort,'xhigh');
+ assert.equal(f.client.modelTurns.at(-1).inheritedEffort,'xhigh');
 });
 
 test('a late update receipt stays with the original turn after the user opens another conversation',async t=>{
@@ -189,7 +192,7 @@ test('Fast switch changes use the active turn and the explicit speed survives th
 });
 
 test('an older engine reports deferred settings and the next turn uses the requested model and effort',async t=>{
- const f=await fixture(t,{beforeUpdate:()=>{throw Object.assign(new Error('Method not found'),{code:-32601});}});
+ const f=await fixture(t,{nativeSettings:false,beforeUpdate:()=>{throw Object.assign(new Error('Method not found'),{code:-32601});}});
  const {page}=f,owner=await startSix(f);
  const [response]=await Promise.all([onResponse(page,update),chooseModel(page,'演示五档模型（不调用 AI）')]);
  assert.equal(response.request().postDataJSON().params.turnId,owner.turnId);
@@ -198,8 +201,12 @@ test('an older engine reports deferred settings and the next turn uses the reque
  assert.equal(f.effects.length,0);assert.deepEqual(f.calls.map(row=>row.method),['turn/start',update]);
  await page.keyboard.press('Escape');
  await finish(f,owner);
+ const name=f.client.threads.get(owner.threadId).name;
+ await page.reload();
+ await page.locator('.project-group-thread').filter({hasText:name}).click();
+ await page.waitForFunction(()=>document.querySelector('#effort').value==='medium');
  const next=await send(page,'旧引擎保留下一轮的设置');
- assert.equal(next.threadId,owner.threadId);assert.equal(next.model,'demo-five');assert.equal(next.effort,'medium');
+ assert.equal(next.threadId,owner.threadId);assert.equal(next.model,'demo-five');assert.equal(f.client.modelTurns.at(-1).inheritedEffort,'medium');
 });
 
 test('a completion racing a settings change keeps the selection for the next turn',async t=>{
@@ -216,6 +223,47 @@ test('a completion racing a settings change keeps the selection for the next tur
  assert.equal(f.effects[0].result.status,'targetUnavailable');
  await page.locator('#notice').filter({hasText:/本轮已结束.*下一轮/}).waitFor();
  const next=await send(page,'完成后的下一轮采用已选档位');
- assert.equal(next.threadId,owner.threadId);assert.equal(next.model,'demo-five');assert.equal(next.effort,'medium');
+ assert.equal(next.threadId,owner.threadId);assert.equal(next.model,'demo-five');assert.equal(f.client.modelTurns.at(-1).inheritedEffort,'medium');
  assert.deepEqual(f.calls.map(row=>row.method),['turn/start',update,'turn/start']);
+});
+
+test('two browser contexts share native choices in both directions and an immediate steer follows the settings update',async t=>{
+ const f=await fixture(t),owner=await startSix(f),thread=f.client.threads.get(owner.threadId);
+ const peer=await browser.newPage({viewport:{width:1440,height:900}});
+ peer.setDefaultTimeout(6000);
+ t.after(()=>peer.close());
+ await peer.goto(f.url);
+ await peer.locator('#first-theme button[type=submit]').click();
+ await peer.locator('.project-group-thread').filter({hasText:thread.name}).click();
+ await peer.locator('#model-trigger-effort').filter({hasText:'Ultra'}).waitFor();
+ await f.page.locator('#model-trigger').click();
+ await clickEffort(f.page,4);
+ await f.page.keyboard.press('Escape');
+ await f.page.locator('#prompt').fill('立即补充当前任务');
+ const [steered]=await Promise.all([onResponse(f.page,'turn/steer'),f.page.locator('#send').click()]);
+ assert.equal(steered.status(),200);
+ assert.deepEqual(f.calls.map(row=>row.method),['turn/start',update,'turn/steer']);
+ await peer.locator('#model-trigger-effort').filter({hasText:'Max'}).waitFor();
+ await finish(f,owner);
+ await peer.reload();
+ await peer.locator('.project-group-thread').filter({hasText:thread.name}).click();
+ await peer.locator('#model-trigger-effort').filter({hasText:'Max'}).waitFor();
+ const next=await send(peer,'另一端的下一轮');
+ assert.equal(next.threadId,owner.threadId);
+ assert.equal(f.client.modelTurns.at(-1).inheritedEffort,'max');
+ await peer.locator('#model-trigger').click();
+ await clickEffort(peer,3);
+ await f.page.locator('#model-trigger-effort').filter({hasText:'极高'}).waitFor();
+ assert.equal(f.client.modelTurns[0].effort,'ultra');
+});
+
+test('a rejected persistent change restores the confirmed effort and reports the failure',async t=>{
+ const f=await fixture(t);await startSix(f);
+ await f.page.route('**/api/session/reasoning',route=>route.request().postDataJSON().scope
+  ?route.fulfill({status:409,json:{error:'synthetic write failure'}}):route.continue());
+ await f.page.locator('#model-trigger').click();
+ await clickEffort(f.page,4);
+ await f.page.locator('#notice').filter({hasText:'未能保存对话模型设置'}).waitFor();
+ await f.page.locator('#reasoning-label').filter({hasText:'Ultra'}).waitFor();
+ assert.equal(f.effects.length,0);
 });

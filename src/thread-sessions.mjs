@@ -1,5 +1,5 @@
-// Reading history never loads a session. Only work submitted by this bridge owns
-// a subscription, and that subscription ends when its active turn finishes.
+// Reading history never loads a session. Work owns its subscription until its turn
+// finishes. An explicit settings change can briefly subscribe to an idle thread.
 const fail=(message,code)=>Object.assign(new Error(message),{code,outcome:'notExecuted',status:409});
 const workMethods=new Set(['turn/start','review/start','thread/compact/start']);
 export class ThreadSessions {
@@ -43,6 +43,29 @@ export class ThreadSessions {
   // The work RPC has not been sent even if the resume outcome is uncertain.
   error.outcome='notExecuted';throw error;
  }}return e;}
+ // Called only for an explicit change. Reading history must never acquire a subscription.
+ async saveReasoning(id,patch,checkScope){
+  let entry=this.entries.get(id);
+  if(entry?.unknown)return false;
+  const temporary=!entry?.loaded;
+  if(temporary){
+   const {thread}=await this.rpc.call('thread/read',{threadId:id,includeTurns:false});
+   if(thread?.id!==id)throw fail('未能确认目标对话','THREAD_NOT_CONFIRMED');
+   if(thread.status?.type==='active')return false; // Another process owns the running turn.
+   entry=await this.ensureLoaded(id,patch);
+  }
+  try{
+   checkScope();
+   const result=await this.rpc.call('thread/settings/update',{threadId:id,...patch});
+   if(!result || typeof result!=='object' || Array.isArray(result))throw new Error('引擎未确认对话设置。');
+   return true;
+  }catch(error){
+   if(error.code===-32601 || (error.code===-32600 && /unknown (variant|method).*thread\/settings\/update/i.test(error.message)))return false;
+   throw error;
+  }finally{
+   if(temporary)await this.release(id);
+  }
+ }
  async release(id,{shutdown=false}={}){
   const e=this.entries.get(id);if(!e)return {status:'notSubscribed'};
   if(!shutdown&&(e.activeTurnId||e.unknown))return {status:'retained',activeTurnId:e.activeTurnId||null,state:e.unknown?'unknown':'active'};

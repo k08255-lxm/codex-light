@@ -23,3 +23,19 @@ test('persisted permission choices are scoped to their thread, identified accoun
  store.resetAnonymous();assert.equal((await store.access(null,'original')).mode,null);
  await assert.rejects(store.access(null,'original',{scope:unknown.scope,mode:'full'}));
 });
+
+test('legacy reasoning choices are isolated by account, thread and runtime and persist across bridge restart',async t=>{
+ const root=await mkdtemp(path.join(tmpdir(),'codex-reasoning-'));
+ t.after(()=>rm(root,{recursive:true,force:true}));
+ const store=new SessionPermissions(root,'native'),saved={effort:'max'};
+ await store.reasoning('account-a','same',saved);
+ assert.deepEqual((await new SessionPermissions(root,'native').reasoning('account-a','same')).choice,saved);
+ assert.equal((await store.reasoning('account-b','same')).choice,null);
+ assert.equal((await store.reasoning('account-a','other')).choice,null);
+ assert.equal((await new SessionPermissions(root,'wsl').reasoning('account-a','same')).choice,null);
+ assert.equal((await store.access('account-a','same')).mode,null);
+ await store.reasoning(null,'same',saved);store.resetAnonymous();
+ assert.equal((await store.reasoning(null,'same')).choice,null);
+ await store.reasoning('account-a','same',null);
+ assert.equal((await store.reasoning('account-a','same')).choice,null);
+});

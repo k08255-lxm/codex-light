@@ -42,6 +42,13 @@ export class DemoClient extends EventEmitter {
    case 'thread/list':return this.page([...this.threads.values()].filter(t=>!!t.archived===!!p.archived).filter(t=>!p.searchTerm||(t.name||'').includes(p.searchTerm)).sort((a,b)=>b.updatedAt-a.updatedAt),p);
    case 'thread/start':{const createdAt=Date.now()/1000,thread={id:randomUUID(),cwd:p.cwd,model:p.model||'demo',reasoningEffort:null,name:'新对话',preview:'',createdAt,updatedAt:createdAt};this.threads.set(thread.id,thread);this.items.set(thread.id,[]);this.turns.set(thread.id,[]);return {thread,model:thread.model,reasoningEffort:thread.reasoningEffort};}
    case 'thread/resume':case 'thread/read':{const thread=this.threads.get(p.threadId);if(!thread)throw new Error('对话不存在');return {thread:{...thread,turns:p.excludeTurns?[]:this.turns.get(p.threadId)},model:thread.model,reasoningEffort:thread.reasoningEffort};}
+   case 'thread/settings/update':{
+    const thread=this.threads.get(p.threadId);if(!thread)throw new Error('对话不存在');
+    if(p.model!=null)thread.model=p.model;
+    if(p.effort!=null)thread.reasoningEffort=p.effort;
+    this.emit('event',{method:'thread/settings/updated',params:{threadId:p.threadId,threadSettings:{model:thread.model,effort:thread.reasoningEffort}}});
+    return {};
+   }
    case 'thread/turns/list':return this.page([...(this.turns.get(p.threadId)||[])].reverse(),p);
    case 'thread/items/list':{let items=[...(this.items.get(p.threadId)||[])];if(p.turnId)items=items.filter(e=>e.turnId===p.turnId);if(p.sortDirection!=='asc')items.reverse();return this.page(items,p);}
    case 'review/start':return this.call('turn/start',{threadId:p.threadId,input:[{type:'text',text:'演示：本地未提交改动审查，不运行真实模型'}]});

@@ -88,7 +88,8 @@ const sessionDefaults = new SessionDefaultsBridge(body => api('/api/session/defa
 const state = { connected: false, demo: false, desktop: false, reasoning: restoredReasoning(null), cwd: '', thread: null, threads: [], nextThreads: null, nextItems: null, models: [], modelGeneration: 0, turnId: null, sending: false, busy: false, openGeneration: 0, searchGeneration: 0, requests: new Map(), store: new ItemStore(Infinity, { preserveBodies: true }), nodes: new Map(), rendering: false, historyFallback: false, activeTurns: new Map(), terminalTurns: new Set(), shuttingDown: false, eventController: null, detailsTab: 'tools', dshConnection: null, dshRefreshing: false, serverInstance: null, pendingQueries: new Set(), interruptingTurns: new Set(), uploadingImages: false, loadingThread: false, dshReads: new Map(), dshReadErrors: new Map(), dshReadSequence: 0, dshReadGeneration: 0, dshOpenDetails: new Set(), settingsPage: 'general', archivedThreads: [], archivedCursor: null, archivedGeneration: 0, accountLoading: false, usageLoading: false, renameTarget: null, cliVersion: null, ledger: new TurnLedger(), nextTurns: null, contexts: new Map(), threadSessions: [] };
 // Follow-up messages typed while a task runs. Per thread, survives navigation, never persisted.
 const followUps = new FollowUpQueue();
-const nextTurnChoices = new Map();
+const reasoningWrites = new Map();
+let threadReasoning=null, openingReasoning=null;
 const liveSettingsUpdates = new Map();
 // Retain confirmed sends until native history catches up, including active background turns.
 const unindexedThreads = new Map();
@@ -568,7 +569,18 @@ $('dismiss-dsh-model').addEventListener('click', async () => {
 const dshConnectionView = mountDshConnection($('dsh-connection-root'), { api, runtimeTarget:()=>state.runtimeTarget, onChange: () => refreshDsh(), onModelSaved:() => { dshModelReminder.hidden = true; } });
 function resetUsage(){statsView.reset();accountView.reset();if(currentRoute==='usage')statsView.activate();if(currentRoute==='account')accountView.activate();}
 function resetAccountScopedViews(reason='账户已改变'){
-  nextTurnChoices.clear();
+  reasoningWrites.clear();openingReasoning=null;threadReasoning=null;
+  state.reasoning=restoredReasoning(null);
+  if(state.thread?.id){
+    const threadId=state.thread.id,view={threadId,events:0};
+    threadReasoning=view;renderThreadReasoning();
+    if(state.connected)Promise.all([rpc('thread/read',{threadId}),api('/api/session/reasoning',{threadId})]).then(([read,saved])=>{
+      if(threadReasoning!==view||state.thread?.id!==threadId)return;
+      view.scope=saved.scope;
+      if(!view.events)Object.assign(view,{model:read.thread.model,effort:read.thread.reasoningEffort,choice:saved.choice});
+      renderThreadReasoning();
+    }).catch(error=>{if(threadReasoning===view)notice('未能重新读取对话模型设置：'+error.message,true);});
+  }
   resetContext();
   sessionControls.reset();
   if(state.connected&&state.thread?.id)sessionControls.load(state.thread.id).catch(error=>notice(error.message,true));
@@ -952,11 +964,15 @@ async function openThread(thread) {
   route('chat',{back:true});
   const generation = ++state.openGeneration; setThreadLoading(thread); updateControls();
   const previous = state.thread?.id || null;
+  const changing={threadId:thread.id,events:[]};
+  openingReasoning=changing;
   try {
     // History is read-only: never resume or subscribe just to look at a conversation.
-    const [result] = await Promise.all([rpc('thread/read', { threadId: thread.id }),sessionControls.load(thread.id).catch(error=>{if(generation===state.openGeneration)notice('未能读取对话批准方式：'+error.message,true);})]);
+    const [result,reasoning] = await Promise.all([rpc('thread/read', { threadId: thread.id }),api('/api/session/reasoning',{threadId:thread.id}).catch(error=>{if(generation===state.openGeneration)notice('未能读取对话模型设置：'+error.message,true);return null;}),sessionControls.load(thread.id).catch(error=>{if(generation===state.openGeneration)notice('未能读取对话批准方式：'+error.message,true);})]);
     if (generation !== state.openGeneration) return;
-    state.thread = withSubmittedActivity(result.thread || thread); dshTasks.reset(state.thread.id); state.dshReadErrors.clear(); state.dshOpenDetails.clear(); state.dshConnection = null; renderDshConnection(); syncDshLiveContext(); renderDshTasks(); restoreThreadReasoning({ model: state.thread.model, reasoningEffort: state.thread.reasoningEffort, serviceTier: Object.hasOwn(result,'serviceTier') ? result.serviceTier : state.thread.serviceTier });
+    state.thread = withSubmittedActivity(result.thread || thread); dshTasks.reset(state.thread.id); state.dshReadErrors.clear(); state.dshOpenDetails.clear(); state.dshConnection = null; renderDshConnection(); syncDshLiveContext(); renderDshTasks(); restoreThreadReasoning({ model: state.thread.model, reasoningEffort: state.thread.reasoningEffort, sessionReasoning:reasoning, serviceTier: Object.hasOwn(result,'serviceTier') ? result.serviceTier : state.thread.serviceTier });
+    openingReasoning=null;
+    for(const change of changing.events)applyReasoningChange(change);
     if (previous !== state.thread.id) {
       resetThreadView();
       // Start the new transcript in follow mode before its first content arrives.
@@ -978,6 +994,7 @@ async function openThread(thread) {
   } catch (error) {
     if (generation === state.openGeneration) throw error;
   } finally {
+    if(openingReasoning===changing)openingReasoning=null;
     if (generation === state.openGeneration) { setThreadLoading(null); updateControls(); renderThreads(); offlineSnapshot?.ready(); }
     if (previous && previous !== state.thread?.id) releaseThread(previous);
   }
@@ -1209,6 +1226,13 @@ function renderPendingMutations() {
   container.replaceChildren(fragment);renderAccountPending();renderPluginPending();renderConfigPending();skillsView.syncPending();
 }
 async function performMutation(method, params, extras = {}) {
+  if(method==='turn/steer'){
+    const before=state.serverInstance,update=liveSettingsUpdates.get(JSON.stringify([before,params.threadId,params.expectedTurnId]));
+    if(update){
+      await update.finished;
+      if(state.serverInstance!==before || sessionFor(params.threadId)?.activeTurnId!==params.expectedTurnId)throw Object.assign(new Error('运行任务已变化，补充消息未发送。'),{outcome:'notExecuted'});
+    }
+  }
   let envelope;
   try { envelope = pendingMutations.begin(state.serverInstance, method, params, extras); }
   catch (error) { error.outcome = 'notExecuted'; renderPendingMutations(); throw error; }
@@ -1227,10 +1251,6 @@ async function performMutation(method, params, extras = {}) {
       if(!marker||lookupDecision(marker,{serverInstance:state.serverInstance,method,state:'succeeded',result})!=='succeeded')throw Object.assign(new Error('未收到完整的更新结果，正在同步更新状态。'),{outcome:'unknown'});
     }
     if(method==='thread/delete'&&result?.threadId!==envelope.params.threadId)throw Object.assign(new Error('删除结果缺少目标对话标识'),{outcome:'unknown'});
-    if(method==='turn/start'&&result?.turn?.id){
-      const choice=nextTurnChoices.get(params.threadId);
-      if(choice&&(params.model||'')===choice.model&&(params.effort||null)===(choice.effort||null))nextTurnChoices.delete(params.threadId);
-    }
     if(method==='thread/summary'&&!validSummaryResult(envelope.params.threadId,result))throw Object.assign(new Error('标题结果缺少目标对话标识或标题'),{outcome:'unknown'});
     if(['thread/archive','thread/delete'].includes(method))unindexedThreads.delete(envelope.params.threadId);
     if(method==='runtime/upgrade'){
@@ -1398,15 +1418,20 @@ function readDraftModelChoice() {
   }catch{}
   return {model};
 }
-function queueLiveTurnSettings(patch) {
+function queueLiveTurnSettings(patch,saved) {
   const threadId=state.thread?.id, turnId=state.turnId, instance=state.serverInstance;
   if(!state.busy||!threadId)return;
   if(!turnId||!instance||!state.connected||sessionFor(threadId)?.activeTurnId!==turnId){
-    notice('当前任务由其他窗口运行，所选设置将在下一轮使用。');return;
+    Promise.resolve(saved??true).then(ok=>{if(ok&&state.thread?.id===threadId)notice('当前任务由其他窗口运行，所选设置将在下一轮使用。');});return;
   }
   const key=JSON.stringify([instance,threadId,turnId]);
   let update=liveSettingsUpdates.get(key);
-  if(!update){update={fields:{},timer:null,pending:false,revision:0};liveSettingsUpdates.set(key,update);}
+  if(!update){
+    update={fields:{},timer:null,pending:false,revision:0};
+    update.finished=new Promise(resolve=>{update.finish=resolve;});
+    liveSettingsUpdates.set(key,update);
+  }
+  if(saved)update.saved=saved;
   Object.assign(update.fields,patch);
   update.revision++;
   clearTimeout(update.timer);
@@ -1419,6 +1444,7 @@ function queueLiveTurnSettings(patch) {
     const feedback=message=>{if(visible()&&revision===update.revision)notice(message);};
     try{
       update.pending=true;
+      if(update.saved && !await update.saved)return;
       if(state.serverInstance!==instance||!state.connected||sessionFor(threadId)?.activeTurnId!==turnId){
         feedback('本轮已结束或断开，所选设置将在下一轮使用。');return;
       }
@@ -1436,7 +1462,7 @@ function queueLiveTurnSettings(patch) {
       update.pending=false;
       clearTimeout(update.timer);
       if(Object.keys(update.fields).length)update.timer=setTimeout(flush,0);
-      else liveSettingsUpdates.delete(key);
+      else {liveSettingsUpdates.delete(key);update.finish();}
     }
   }
 }
@@ -1446,14 +1472,15 @@ function chooseEffort(effort, modelChanged=false) {
   try{localStorage.setItem('codex-light-draft-model',JSON.stringify(draftModelChoice));}
   catch{notice('模型和思考强度已应用于当前窗口，重新打开后可能需要重新选择。',true);}
   populateEfforts();
-  if(state.thread&&(state.busy||nextTurnChoices.has(state.thread.id))){
-    nextTurnChoices.set(state.thread.id,{model:$('model').value,effort:state.reasoning.override});
-  }
   const active=effectiveModel();
   const view=configuredReasoningView(active.model,state.reasoning,sessionDefaults.snapshot().value,active.id);
   const patch=modelChanged?{model:active.id,effort:view.effective??null}:{effort:view.effective??null};
+  // An empty selector inherits. The running step can use the resolved value, while the
+  // stored preference must never turn a config default into a fixed model or effort.
+  const selected=modelChanged?{model:$('model').value||null,effort}:{effort};
+  const saved=state.thread?saveThreadReasoning(selected):null;
   if(modelChanged&&active.id)patch.serviceTier=sessionControls.modelChangeTier();
-  queueLiveTurnSettings(patch);
+  queueLiveTurnSettings(patch,saved);
 }
 function chooseModel(value) {
   $('model').value=value;
@@ -1464,11 +1491,57 @@ function chooseModel(value) {
 }
 function restoreThreadReasoning(result, override) {
  sessionControls.restore(result.sessionPermission,result.serviceTier);
- // A history read can still report the turn's starting settings after a live change.
- const choice=nextTurnChoices.get(state.thread.id);
- const model=choice?.model??(typeof result.model==='string'?result.model:'');
+ threadReasoning={threadId:state.thread.id,scope:result.sessionReasoning?.scope??result.sessionPermission?.scope,
+  model:result.model,effort:result.reasoningEffort??override,choice:result.sessionReasoning?.choice,events:0};
+ renderThreadReasoning(override);
+}
+function renderThreadReasoning(override){
+ const {threadId,choice}=threadReasoning;
+ const selected={...choice,...reasoningWrites.get(threadId)?.patch};
+ const model=Object.hasOwn(selected,'model')?selected.model||'':threadReasoning.model||'';
  if(model&&![...$('model').options].some(option=>option.value===model))$('model').append(new Option(model+'（目录外）',model));
- $('model').value=model;state.reasoning=restoredReasoning(choice?null:result.reasoningEffort);if(choice||override)state.reasoning.override=choice?choice.effort:override;populateEfforts();
+ $('model').value=model;
+ state.reasoning=restoredReasoning(threadReasoning.effort);
+ state.reasoning.override=Object.hasOwn(selected,'effort')?selected.effort:override||null;
+ const catalog=effectiveModel().model;
+ if(choice?.effort && catalog && !reasoningChoices(catalog).includes(state.reasoning.override))state.reasoning.override=null;
+ populateEfforts();
+}
+function applyReasoningChange(change){
+ if(!threadReasoning || state.thread?.id!==change.threadId || threadReasoning.threadId!==change.threadId)return;
+ if(change.scope && threadReasoning.scope && change.scope!==threadReasoning.scope)return;
+ threadReasoning.events++;
+ for(const [field,value] of Object.entries(change.patch)){
+  if(Object.hasOwn(change.choice||{},field))continue;
+  if(field==='effort' && value===null && change.patch.model!==null)continue;
+  threadReasoning[field]=value;
+ }
+ if(Object.hasOwn(change,'choice'))threadReasoning.choice=change.choice;
+ renderThreadReasoning();
+}
+function saveThreadReasoning(patch){
+ const threadId=state.thread.id, instance=state.serverInstance,scope=threadReasoning?.scope;
+ let write=reasoningWrites.get(threadId);
+ if(!write){write={patch:{},unsent:{},queue:Promise.resolve(),revision:0};reasoningWrites.set(threadId,write);}
+ Object.assign(write.patch,patch);Object.assign(write.unsent,patch);
+ const revision=++write.revision;
+ write.queue=write.queue.then(async()=>{
+  if(reasoningWrites.get(threadId)!==write||state.serverInstance!==instance||revision!==write.revision)return false;
+  const changes=write.unsent;
+  write.unsent={};
+  const currentScope=scope||(await api('/api/session/reasoning',{threadId})).scope;
+  if(reasoningWrites.get(threadId)!==write||state.serverInstance!==instance)return false;
+  const events=threadReasoning?.events;
+  const saved=await api('/api/session/reasoning',{threadId,scope:currentScope,...changes});
+  if(saved.scope!==currentScope)throw new Error('对话设置的账户已变化。');
+  if(reasoningWrites.get(threadId)===write && threadReasoning?.events===events)applyReasoningChange({threadId,...saved,patch:changes});
+  return true;
+ }).catch(error=>{if(state.thread?.id===threadId&&reasoningWrites.get(threadId)===write)notice('未能保存对话模型设置：'+error.message,true);return false;})
+ .finally(()=>{if(reasoningWrites.get(threadId)===write&&revision===write.revision){
+   reasoningWrites.delete(threadId);
+   if(threadReasoning?.threadId===threadId && state.thread?.id===threadId)renderThreadReasoning();
+ }});
+ return write.queue;
 }
 function populateEfforts() {
  if(!state.thread){
@@ -1564,6 +1637,15 @@ function trackRequest(message) {
 }
 function dropRequests(match) { let changed = false; for (const [key, request] of state.requests) if (match(request)) { state.requests.delete(key); changed = true; } if (changed) renderRequests(); }
 function onEvent(message) {
+  if(message.method==='bridge/threadReasoningChanged'||message.method==='thread/settings/updated'){
+    const {threadId,threadSettings}=message.params||{};
+    const change=threadSettings?{threadId,patch:Object.fromEntries(['model','effort'].filter(key=>Object.hasOwn(threadSettings,key)).map(key=>[key,threadSettings[key]]))}:message.params;
+    if(change?.patch){
+      if(openingReasoning?.threadId===threadId)openingReasoning.events.push(change);
+      applyReasoningChange(change);
+    }
+    return;
+  }
   if(message.method==='bridge/mobileTasks'){taskNotifications?.apply(message.params);return;}
   if(message.method==='bridge/runtimeUpdate'){runtimePanel?.updateAvailable();return;}
   if(message.method==='bridge/sessionPermissionChanged'){
@@ -2057,7 +2139,7 @@ function updateThreadName(id, name) {
   renderThreads();
 }
 function removeListedThread(id, deleted) {
-  if(deleted)nextTurnChoices.delete(id);
+  if(deleted)reasoningWrites.delete(id);
   clearRunningTurn(id,state.activeTurns.get(id));
   state.contexts.delete(id);
   questionNotifications?.forgetThread(id);

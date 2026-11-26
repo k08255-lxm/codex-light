@@ -63,7 +63,7 @@ import {DshConfigSourcesService} from './dsh-config-sources.mjs';
 import {DshConnectionService} from './dsh-connection.mjs';
 import {PrReviewService} from './pr-review.mjs';
 import {SessionDefaultsService} from './session-defaults.mjs';
-import {SessionPermissions,validPermissionMode} from './session-permissions.mjs';
+import {SessionPermissions,validPermissionMode,validReasoningChoice} from './session-permissions.mjs';
 import {accountIdentityKey} from '../public/account-identity.js';
 import {REMOTE_METHODS,validateRemote} from './remote.mjs';
 import { createReopener } from './reopen.mjs';
@@ -608,6 +608,37 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      const writing=keys!=='threadId';
      const saved=await sessionPermissions.access(identity,input.threadId,writing?input:null);
      if(writing)broadcast({method:'bridge/sessionPermissionChanged',params:{threadId:input.threadId,scope:saved.scope}});
+     json(res,200,saved);return;
+    }
+    if(url.pathname==='/api/session/reasoning'){
+     if(!input || typeof input!=='object' || Array.isArray(input) || Object.keys(input).some(key=>!['threadId','scope','model','effort'].includes(key)))throw new Error('对话模型设置参数无效。');
+     const {threadId,scope,...patch}=input;
+     const identity=await permissionIdentity(),generation=accountIdentityGeneration;
+     const checkScope=()=>{if(generation!==accountIdentityGeneration || scope!==sessionPermissions.scope(identity))throw new Error('账户已变化，请重新打开此对话。');};
+     if(scope===undefined){
+      if(Object.keys(patch).length)throw new Error('缺少对话设置账户标识。');
+      json(res,200,await sessionPermissions.reasoning(identity,threadId));return;
+     }
+     checkScope();
+     const fields=Object.keys(patch);
+     if(!validReasoningChoice(patch,{allowInherit:true}))throw new Error('请选择有效的对话模型或思考强度。');
+     const saved=await sessions.serial(threadId,async()=>{
+      checkScope();
+      const previous=await sessionPermissions.reasoning(identity,threadId);
+      const native=Object.fromEntries(Object.entries(patch).filter(([,value])=>value!==null));
+      const applied=!Object.keys(native).length || await sessions.saveReasoning(threadId,native,checkScope);
+      checkScope();
+      const choice={...previous.choice};
+      for(const field of fields){
+       if(applied||patch[field]===null)delete choice[field];else choice[field]=patch[field];
+      }
+      const fallback=Object.keys(choice).length?choice:null;
+      if(previous.choice||fallback)await sessionPermissions.reasoning(identity,threadId,fallback);
+      checkScope();
+      const result={scope,choice:fallback};
+      broadcast({method:'bridge/threadReasoningChanged',params:{threadId,...result,patch}});
+      return result;
+     });
      json(res,200,saved);return;
     }
     if(url.pathname.startsWith('/api/pr/')){
