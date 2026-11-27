@@ -5,7 +5,7 @@ import {createTurnActions,createTurnUsageSource} from './ui/turn-actions.js';
 // Messages and compaction stay visible; consecutive operations form collapsible groups.
 import { boundedText, itemText } from './store.js';
 import { icon } from './icons.js';
-import { renderMarkdown } from './markdown.js';
+import { renderMarkdown, updateMarkdownSegment } from './markdown.js';
 import { createConsoleCode, updateConsoleCode } from './code-format.js';
 import { formatDuration, fileSummary } from './state.js';
 import { reasoningTimeLabel } from './reasoning-timing.js';
@@ -365,10 +365,15 @@ function longTextView(document, { render, label = '正文', onCopy, scrollContro
       const row = split.segments[index]; const open = index === count - 1 && streaming;
       let entry = cache.get(index);
       if (!entry || entry.start !== row.start || entry.end !== row.end || entry.open || fenceKey(entry.fence) !== fenceKey(row.fence) || entry.windowed !== windowed) {
-        const segment = render(segmentSource(split, index), index);
-        if (windowed) { const wrap = el(document, 'section', 'long-text-segment'); wrap.dataset.segment = String(index + 1); wrap.append(segment); entry = { node: wrap }; }
+        const segment = render(segmentSource(split, index), index, entry?.segment, open);
+        if (windowed) {
+          const wrap = entry?.windowed ? entry.node : el(document, 'section', 'long-text-segment');
+          wrap.dataset.segment = String(index + 1);
+          if (wrap.firstChild !== segment) wrap.replaceChildren(segment);
+          entry = { node: wrap };
+        }
         else entry = { node: segment };
-        Object.assign(entry, { start: row.start, end: row.end, open, fence: row.fence, windowed }); cache.set(index, entry);
+        Object.assign(entry, { segment, start: row.start, end: row.end, open, fence: row.fence, windowed }); cache.set(index, entry);
       }
       nodes.push(entry.node);
     }
@@ -376,7 +381,10 @@ function longTextView(document, { render, label = '正文', onCopy, scrollContro
     paintRetention();
     // Short complete bodies keep the plain structure: just the rendered content, no navigator.
     // An incomplete body always shows its status and the accurately labelled copy action.
-    if (!windowed && retention.complete) { body.replaceChildren(...nodes); bar.remove(); more.remove(); node.dataset.long = 'false'; return; }
+    if (!windowed && retention.complete) {
+      if (body.childNodes.length !== nodes.length || nodes.some((child,index)=>body.childNodes[index] !== child)) body.replaceChildren(...nodes);
+      bar.remove(); more.remove(); node.dataset.long = 'false'; return;
+    }
     node.dataset.long = String(windowed);
     if (bar.parentElement !== node) node.insertBefore(bar, body);
     for (const control of [first, prev, next, last]) control.hidden = !windowed;
@@ -447,9 +455,11 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
   document.defaultView?.addEventListener('resize', () => { heights.clear(); scheduleViewport(); });
 
 
-  const markdownSegment = source => {
-    const box = el(document, 'div', 'markdown-segment');
-    box.append(renderMarkdown(document, source, { onLocalLink, onCopy, cwd: getCwd(), complete: true }));
+  const markdownSegment = (source, index, previous, streaming) => {
+    const box = (streaming && previous) || el(document, 'div', 'markdown-segment');
+    const options = {onLocalLink, onCopy, cwd:getCwd(), complete:true};
+    if (streaming) updateMarkdownSegment(document, box, source, options);
+    else box.replaceChildren(renderMarkdown(document, source, options));
     return box;
   };
   const answerRefs = answer => {
@@ -825,6 +835,7 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
       keep.add(turn.id);
       let view = turns.get(turn.id);
       if (!view) { view = turnView(turn.id); turns.set(turn.id, view); }
+      view.turn = turn;
       view.node.dataset.state = turn.status;
       const children = []; const segmentKeys = new Set(); const messageIds = new Set();
       const chronological=turn.items||turn.segments.flatMap(segment=>[segment.user,...segment.process,...segment.answers].filter(Boolean));
@@ -978,6 +989,35 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     } finally { rendering = false; }
   }
 
+  function updateStreamingAnswer(item) {
+    const view = turns.get(item?._turnId);
+    const turn = view?.turn || lastList.at(-1);
+    const message = view?.messages.get(item?.id);
+    if (!turn || turn.id !== item?._turnId || turn.finished || (view && !message) ||
+        item.type !== 'agentMessage' || item._complete !== false ||
+        item.delivery === 'async' || typeof item.text !== 'string' || item.text.includes('![')) return false;
+    // The virtual viewport can remount from the last projection before a structural event arrives.
+    // Keep both of its item references current without mutating a store snapshot held by a history read.
+    const index = turn.items.findIndex(row => row.id === item.id);
+    const previous = turn.items[index];
+    if (!previous || previous.type !== item.type || previous.phase !== item.phase || previous._complete !== false) return false;
+    for (const segment of turn.segments) {
+      for (const group of [segment.answers, segment.process]) {
+        const position = group.indexOf(previous);
+        if (position < 0) continue;
+        turn.items[index] = item;
+        group[position] = item;
+        if (message) {
+          const snapshot = scrollController?.capture();
+          updateMessage(message, item);
+          scrollController?.restore(snapshot);
+        }
+        return true;
+      }
+    }
+    return false;
+  }
+
   /** Updates live elapsed labels without rebuilding the tree. */
   function tick(now = Date.now()) { for (const {process,items,footer,turn} of runningClocks) {
     if (footer) { setText(footer, timingLabel(turn, now)); continue; }
@@ -992,5 +1032,5 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     if (!turns.has(turn.id)) render(lastList, {follow:false, revealTurnId:turn.id});
     return turns.get(turn.id)?.messages.get(itemId)?.node ?? null;
   }
-  return { render, tick, clear, revealItem, refreshTurnUsage:(threadId,turnId)=>usageSource?.refresh(threadId,turnId), recoverTurnUsage:()=>usageSource?.recovered(), hasRunningClock: () => runningClocks.length > 0 };
+  return { render, updateStreamingAnswer, tick, clear, revealItem, refreshTurnUsage:(threadId,turnId)=>usageSource?.refresh(threadId,turnId), recoverTurnUsage:()=>usageSource?.recovered(), hasRunningClock: () => runningClocks.length > 0 };
 }

@@ -1112,7 +1112,27 @@ function renderMessages(follow = true) {
     scheduleThreadRead();
   }
 }
-function scheduleRender() { if (state.rendering) return; state.rendering = true; setTimeout(() => requestAnimationFrame(() => { state.rendering = false; renderMessages(); }), 32); }
+let pendingAnswer = null;
+function scheduleRender(answerId = null) {
+  if (state.rendering) {
+    if (pendingAnswer !== answerId) pendingAnswer = null;
+    return;
+  }
+  pendingAnswer = answerId;
+  state.rendering = true;
+  setTimeout(() => requestAnimationFrame(() => {
+    state.rendering = false;
+    const id = pendingAnswer;
+    pendingAnswer = null;
+    if (id && state.store.dirty.size === 1 && state.store.dirty.has(id) &&
+        conversation.updateStreamingAnswer(state.store.items.get(id))) {
+      state.store.dirty.delete(id);
+      scrollToBottom.update();
+    } else {
+      renderMessages();
+    }
+  }), 32);
+}
 function renderTools() {
   toolActivity.render(state.store.values(),state.thread?.id);
 }
@@ -1732,7 +1752,7 @@ function onEvent(message) {
   else if (message.method === 'item/mcpToolCall/progress') { if (dshTasks.progress(p.threadId, p.itemId, p.message)) scheduleRender(); }
   else if (message.method === 'turn/diff/updated') { state.ledger.setDiff(p.turnId, p.diff); scheduleRender(); }
   else if (message.method === 'item/fileChange/patchUpdated') { const item = state.store.items.get(p.itemId); state.store.upsert({ ...(item || { id: p.itemId, type: 'fileChange', status: 'inProgress' }), changes: p.changes, _turnId: p.turnId, _complete: false }); scheduleRender(); if (fileApprovalPending()) renderRequests(); }
-  else if (message.method === 'item/agentMessage/delta') { state.store.delta(p.itemId, p.delta); tagTurn(p.itemId, turnId); scheduleRender(); }
+  else if (message.method === 'item/agentMessage/delta') { state.store.delta(p.itemId, p.delta); tagTurn(p.itemId, turnId); scheduleRender(p.itemId); }
   else if (message.method === 'item/reasoning/summaryTextDelta') { const item = state.store.items.get(p.itemId) || { id: p.itemId, type: 'reasoning', summary: [] }; const summary = Array.isArray(item.summary) ? [...item.summary] : []; const index = Number.isSafeInteger(p.summaryIndex) && p.summaryIndex >= 0 && p.summaryIndex < 64 ? p.summaryIndex : summary.length; summary[index] = boundedText((summary[index] || '') + p.delta, 16000); state.store.upsert({ ...item, summary, _turnId: item._turnId || turnId, _complete: false }); scheduleRender(); }
   else if (message.method === 'item/commandExecution/outputDelta') { state.store.delta(p.itemId, p.delta, 'commandExecution', 'aggregatedOutput'); tagTurn(p.itemId, turnId); scheduleRender(); }
   else if (message.method === 'turn/started') { state.ledger.merge(p.turn, { observedStartMs: Date.now() }); state.turnId = p.turn?.id; state.busy = true; activity(''); renderMessages(); updateControls(); }

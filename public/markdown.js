@@ -157,11 +157,16 @@ const listItem = line => /^ {0,3}(?:([-+*])\s+|(\d{1,9})[.)]\s+)(.*)$/.exec(line
 const quoted = line => /^ {0,3}>\s?(.*)$/.exec(line);
 const separator = line => { const parts = cells(line); return parts.length > 0 && parts.every(x => /^:?-{3,}:?$/.test(x)); };
 const isTable = (lines, i) => i + 1 < lines.length && lines[i].includes('|') && separator(lines[i + 1]);
-function blocks(lines, context, depth = 0) {
+function blocks(lines, context, depth = 0, onBoundary) {
   const result = []; let i = 0;
   const add = value => { if (context.blockLeft-- > 0) result.push(value); else context.truncated = true; };
   while (i < lines.length && context.blockLeft > 0) {
-    if (!lines[i].trim()) { i++; continue; }
+    if (!lines[i].trim()) {
+      i++;
+      // A terminated blank line between top-level blocks cannot be changed by later deltas.
+      if (i < lines.length) onBoundary?.(i, result.length, context);
+      continue;
+    }
     const open = fence(lines[i]); const h = heading(lines[i]); const li = listItem(lines[i]); const quote = quoted(lines[i]);
     if (open) {
       const mark = open[1][0]; const length = open[1].length; const code = []; i++;
@@ -199,8 +204,12 @@ function blocks(lines, context, depth = 0) {
   if (i < lines.length) context.truncated = true;
   return result;
 }
+function parseContext(cwd) {
+  return { inlineLeft: MARKDOWN_LIMITS.inlineTokens, astLeft: MARKDOWN_LIMITS.nodes, blockLeft: MARKDOWN_LIMITS.blocks, truncated: false, cwd };
+}
 function parse(value, cwd) {
-  const original = safeText(value); const context = { inlineLeft: MARKDOWN_LIMITS.inlineTokens, astLeft: MARKDOWN_LIMITS.nodes, blockLeft: MARKDOWN_LIMITS.blocks, truncated: original.length > MARKDOWN_LIMITS.chars, cwd };
+  const original = safeText(value); const context = parseContext(cwd);
+  context.truncated = original.length > MARKDOWN_LIMITS.chars;
   const ast = blocks(original.slice(0, MARKDOWN_LIMITS.chars).replace(/\r\n?/g, '\n').split('\n'), context);
   return { ast, truncated: context.truncated };
 }
@@ -230,17 +239,53 @@ export function renderMarkdown(document, source, { onCopy, onLocalLink, cwd = ''
     const parsed = parse(source, cwd);
     const fragment = parsed.truncated ? null : renderAst(document, parsed.ast, { onCopy, onLocalLink });
     if (fragment && !fragment.exhausted) return fragment.node;
-    const plain = document.createDocumentFragment();
-    const note = document.createElement('p'); note.className = 'md-plain-note'; note.textContent = '此段格式超过渲染上限，按原文完整显示。';
-    const pre = document.createElement('pre'); pre.className = 'md-plain'; pre.textContent = safeText(source);
-    plain.append(note, pre); return plain;
+    return plainMarkdown(document, source);
   }
   const result = renderAst(document, parseMarkdown(source, { cwd }), { onCopy, onLocalLink });
   if (result.exhausted) { const notice = document.createElement('p'); notice.textContent = TRUNCATED; result.node.append(notice); }
   return result.node;
 }
-function renderAst(document, ast, { onCopy, onLocalLink }) {
-  const fragment = document.createDocumentFragment(); let remaining = MARKDOWN_LIMITS.nodes; let exhausted = false;
+function plainMarkdown(document, source) {
+  const plain = document.createDocumentFragment();
+  const note = document.createElement('p'); note.className = 'md-plain-note'; note.textContent = '此段格式超过渲染上限，按原文完整显示。';
+  const pre = document.createElement('pre'); pre.className = 'md-plain'; pre.textContent = safeText(source);
+  plain.append(note, pre);
+  return plain;
+}
+// Each mounted streaming segment keeps one checkpoint. Carry both budgets so an
+// incremental render has the same formatting limits as a single complete render.
+const checkpoints = new WeakMap();
+export function updateMarkdownSegment(document, target, source, options) {
+  const normalized = source.replace(/\r\n?/g, '\n');
+  let prior = checkpoints.get(target);
+  if (prior && (prior.context.cwd !== options.cwd || !normalized.startsWith(prior.prefix))) prior = null;
+  const prefix = prior?.prefix || '';
+  const lines = normalized.slice(prefix.length).split('\n');
+  const context = prior ? {...prior.context} : parseContext(options.cwd);
+  let boundary;
+  const ast = source.length <= MARKDOWN_LIMITS.chars && blocks(lines, context, 0, (line, count, budget) => {
+    boundary = {line, count, context:{...budget}};
+  });
+  if (ast && !context.truncated) {
+    const count = boundary?.count || 0;
+    const closed = renderAst(document, ast.slice(0, count), options, prior?.remaining);
+    const tail = renderAst(document, ast.slice(count), options, closed.remaining);
+    if (!closed.exhausted && !tail.exhausted) {
+      const keep = prior?.children || 0;
+      while (target.children.length > keep) target.children[target.children.length - 1].remove();
+      target.append(closed.node);
+      if (boundary) checkpoints.set(target, {prefix:prefix + lines.slice(0,boundary.line).join('\n') + '\n',
+        context:boundary.context, remaining:closed.remaining, children:target.children.length});
+      else if (!prior) checkpoints.delete(target);
+      target.append(tail.node);
+      return;
+    }
+  }
+  checkpoints.delete(target);
+  target.replaceChildren(plainMarkdown(document, source));
+}
+function renderAst(document, ast, { onCopy, onLocalLink }, remaining = MARKDOWN_LIMITS.nodes) {
+  const fragment = document.createDocumentFragment(); let exhausted = false;
   const create = (tag, className) => { if (--remaining < 0) { exhausted = true; return null; } const node = document.createElement(tag); if (className) node.className = className; return node; };
   const appendText = (parent, value) => { if (--remaining < 0) { exhausted = true; return; } parent.append(document.createTextNode(safeText(value))); };
   function fileControl(token) {
@@ -313,5 +358,5 @@ function renderAst(document, ast, { onCopy, onLocalLink }) {
     }
   }
   appendBlocks(fragment, ast);
-  return { node: fragment, exhausted };
+  return { node: fragment, exhausted, remaining };
 }

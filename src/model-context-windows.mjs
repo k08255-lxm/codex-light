@@ -85,9 +85,12 @@ export class ModelContextWindows {
  async sessionParams(rpc,params,work={}){
   if(!this.sizes.size)return params;
   let model=work.model||params.model,cwd=work.cwd||params.cwd;
-  if(!model&&params.threadId){
+  if(model&&!this.sizes.has(model))return params;
+  let savedModel;
+  if(params.threadId){
    const {thread}=await rpc.call('thread/read',{threadId:params.threadId,includeTurns:false});
-   model=thread?.model;cwd??=thread?.cwd;
+   savedModel=thread?.model;
+   model||=savedModel;cwd??=thread?.cwd;
   }
   if(!model){
    const result=await rpc.call('config/read',{includeLayers:false,...(cwd?{cwd}:{})});
@@ -104,6 +107,7 @@ export class ModelContextWindows {
    }
   }
   const size=this.sizes.get(model);
-  return size===undefined?params:{...params,model,config:{...params.config,model_context_window:size}};
+  // Re-selecting the thread's own model on resume can reset its saved reasoning effort.
+  return size===undefined?params:{...params,...(model!==savedModel?{model}:{}),config:{...params.config,model_context_window:size}};
  }
 }

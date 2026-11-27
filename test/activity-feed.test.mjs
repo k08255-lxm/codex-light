@@ -355,6 +355,27 @@ test('streaming and completed agent text render the same safe Markdown with loca
   assert.doesNotMatch(visibleText(host), /\]\(C:/, 'no literal markdown link syntax left');
 });
 
+test('streaming preserves closed Markdown blocks, updates the projected turn and reparses an unfinished fence', () => {
+  const ledger = new TurnLedger(); ledger.merge({id:'t',status:'inProgress'});
+  const {host,view} = mount();
+  const item = agent('a','t','参见 [a.md](C:/tmp/a.md)\n\n~~~js\nconst','final_answer',false);
+  const turns = buildTurns([item],ledger,{activeTurnId:'t'});
+  view.render(turns);
+  const link = q(host,'.md-file-link')[0];
+  assert.ok(link);
+  const updated = {...item,text:item.text+' n = 1;\n\nstill code\n~~~\n\n**end**'};
+  assert.ok(view.updateStreamingAnswer(updated));
+  assert.equal(q(host,'.md-file-link')[0],link);
+  assert.equal(q(host,'strong').at(-1).textContent,'end');
+  assert.match(q(host,'code').at(-1).textContent,/\n\nstill code/);
+  assert.equal(turns[0].items[0],updated);
+  assert.equal(turns[0].segments[0].answers[0],updated);
+  view.render(turns); // A scroll-driven viewport render must not bring back the old text.
+  assert.match(visibleText(host),/end/);
+  assert.equal(view.updateStreamingAnswer({...updated,text:updated.text+' ![image](C:/tmp/img.png)'}),false);
+  assert.equal(view.updateStreamingAnswer({...updated,delivery:'async',questions:[{title:'Proceed?'}]}),false);
+});
+
 test('step descriptions are concise and failures are explicit', () => {
   assert.deepEqual(describeItem({ type: 'commandExecution', command: 'git status', status: 'completed' }).verb, '已运行');
   assert.equal(describeItem({ type: 'commandExecution', command: 'cat a', commandActions: [{ type: 'read', path: 'C:/a/b.md', name: 'b.md' }], status: 'completed' }).target, 'b.md');

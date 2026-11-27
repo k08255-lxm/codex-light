@@ -1,7 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { performance } from 'node:perf_hooks';
-import { parseMarkdown, parseInline, renderMarkdown, safeLink, localPathRef, MARKDOWN_LIMITS } from '../public/markdown.js';
+import { parseMarkdown, parseInline, renderMarkdown, updateMarkdownSegment, safeLink, localPathRef, MARKDOWN_LIMITS } from '../public/markdown.js';
+import {createDocument} from './mini-dom.mjs';
+
+test('streamed Markdown matches one-shot rendering across block boundaries, corrections and formatting limits', () => {
+ const doc=createDocument(), target=doc.createElement('div'), options={cwd:'C:/project',complete:true};
+ const shape=node=>node.children.length?[node.tag,...node.children.map(shape)]:[node.tag,node.textContent];
+ function check(source){
+   updateMarkdownSegment(doc,target,source,options);
+   const reference=renderMarkdown(doc,source,options);
+   assert.deepEqual(target.children.map(shape),reference.children.map(shape));
+ }
+ const sample='首段\r\n\r\n| a | b |\n|---|---|\n| 1 | 2 |\n\n> quote\n\n~~~js\n\ncode\n~~~\n\n- list\n  line\n\n**end**';
+ for(let i=1;i<=sample.length;i++)check(sample.slice(0,i));
+ check(sample.replace('首段','更正'));
+ check('p\n\n'.repeat(MARKDOWN_LIMITS.blocks-1));
+ check('p\n\n'.repeat(MARKDOWN_LIMITS.blocks+1));
+});
 
 class Node {
  constructor(tag = '#fragment', text = '') { this.tag = tag; this.text = text; this.children = []; this.attributes = {}; this.listeners = {}; }

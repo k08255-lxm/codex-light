@@ -60,7 +60,8 @@ test('the native window follows the resolved default and the selected model on t
  await assert.rejects(session.call('turn/settings/update',{threadId:'t',turnId:'turn',model:'beta'}),{code:'CONTEXT_WINDOW_ACTIVE'});
  session.observe({method:'turn/completed',params:{threadId:'t',turn:{id:'turn'}}});
  await session.call('turn/start',{threadId:'t',model:'beta'});
- assert.deepEqual(calls.filter(([m])=>m==='thread/resume').at(-1)[1],{threadId:'t',excludeTurns:true,model:'beta',config:{model_context_window:65536}});
- assert.deepEqual(await store.sessionParams(rpc,{threadId:'t'}),{threadId:'t',model:'beta',config:{model_context_window:65536}});
+ assert.deepEqual(calls.filter(([m])=>m==='thread/resume').at(-1)[1],{threadId:'t',excludeTurns:true,config:{model_context_window:65536}});
+ assert.deepEqual(await store.sessionParams(rpc,{threadId:'t'}),{threadId:'t',config:{model_context_window:65536}});
+ assert.deepEqual(await store.sessionParams(rpc,{threadId:'t'},{model:'alpha'}),{threadId:'t',model:'alpha',config:{model_context_window:131072}});
  assert.deepEqual(await store.sessionParams(rpc,{threadId:'t'},{model:'other'}),{threadId:'t'});
 });

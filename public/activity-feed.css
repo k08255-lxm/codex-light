@@ -256,7 +256,7 @@ div.step-detail.step-files { max-height: none; overflow: visible; padding: 0; ba
 .optimistic-message[data-status="notExecuted"] .optimistic-status, .optimistic-message[data-status="failed"] .optimistic-status { color: var(--error); }
 .optimistic-attachments { max-width: 100%; overflow-wrap: anywhere; color: var(--secondary); font-size: .8rem; }
 .conversation-frame { flex:1; min-height:0; position:relative; display:flex; flex-direction:column; container-type:inline-size; }
-.turn-timeline { position:absolute; top:50%; left:3px; transform:translateY(-50%); z-index:7; display:flex; flex-direction:column; width:24px; max-height:min(74%,420px); }
+.turn-timeline { position:absolute; top:50%; left:12px; transform:translateY(-50%); z-index:7; display:flex; flex-direction:column; width:24px; max-height:min(74%,420px); }
 .turn-timeline[hidden],.turn-preview[hidden] { display:none; }
 .turn-marks { position:relative; min-height:0; overflow-y:auto; overscroll-behavior:contain; scrollbar-width:none; padding-block:4px; }
 .turn-marks::-webkit-scrollbar { display:none; }
@@ -266,6 +266,6 @@ div.step-detail.step-files { max-height: none; overflow: visible; padding: 0; ba
 .turn-marks button:focus-visible { outline:1px solid var(--focus); outline-offset:-1px; }
 @media (hover:hover) { .turn-marks button:hover::before { transform:scaleX(.85); opacity:1; } }
 .turn-preview { position:absolute; left:calc(100% + 6px); width:max-content; max-width:min(280px,60cqw); padding:8px 12px; border:1px solid var(--border); border-radius:8px; box-shadow:var(--shadow-popover); background:var(--raised); color:var(--text); font-size:.8125rem; overflow-wrap:anywhere; pointer-events:none; }
-@container (max-width:930px) { .conversation-frame:has(.turn-timeline:not([hidden])) > #conversation { padding-inline-start:max(32px,calc((100% - var(--content-width)) / 2)); } }
+@container (max-width:930px) { .conversation-frame:has(.turn-timeline:not([hidden])) > #conversation { padding-inline-start:max(44px,calc((100% - var(--content-width)) / 2)); } }
 @media (pointer:coarse) { .turn-marks button { height:24px; } }
 :root[data-reduced-motion="true"] .turn-marks button::before { transition:none; }
