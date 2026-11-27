@@ -27,9 +27,6 @@ export function mountMobileLayout(document,window) {
       document.getElementById('mobile-app-permissions-row').hidden=false;
       document.getElementById('mobile-app-permissions').addEventListener('click',()=>bridge.openApplicationSettings());
     }
-    if(typeof bridge.checkForUpdates==='function'){
-      document.getElementById('mobile-app-update-row').hidden=false;
-    }
     const compact=window.matchMedia('(max-width:760px) and (max-height:520px)');
     const settings=document.getElementById('rail-settings'),home=document.createComment('settings navigation position');
     settings.before(home);

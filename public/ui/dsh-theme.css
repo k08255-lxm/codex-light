@@ -454,7 +454,7 @@
 :root[data-visual-style="dsh"] .diff-add { background: var(--dsw-alias-file-diff-added-bg); }
 :root[data-visual-style="dsh"] .diff-del { background: var(--dsw-alias-file-diff-deleted-bg); }
 :root[data-visual-style="dsh"] :is(#permissions-info[data-warning="true"], .permission-danger) { color: var(--warning); }
-:root[data-visual-style="dsh"] :is(#context-details, .engine-setup)::backdrop { background: var(--overlay); }
+:root[data-visual-style="dsh"] .engine-setup::backdrop { background: var(--overlay); }
 :root[data-visual-style="dsh"] .send[data-mode="steer"]:not(:disabled),
 :root[data-visual-style="dsh"] .update-indicator-badge { background: var(--dsw-alias-button-info-fill); color: var(--dsw-alias-label-on-color); }
 :root[data-visual-style="dsh"] .update-indicator:hover .update-indicator-badge { background: var(--dsw-alias-button-info-hover); }

@@ -5,6 +5,10 @@ import re
 DEPENDENCY_PREFIX = 'app/components/dsh-bridge/node_modules/'
 
 
+def release_note_name(name):
+    return bool(re.fullmatch(r'[0-9]{1,9}(?:\.[0-9]{1,9}){2}\.md', name))
+
+
 def omitted_runtime_file(relative_path):
     """Drop TypeScript declarations only, never executable code or source maps.
 

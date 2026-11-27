@@ -105,7 +105,7 @@ remote.example.com {
 
 ### Windows 桌面客户端
 
-从本仓库 Release 下载 **`CodexLight-Setup-<version>-x64.exe`**（如 `CodexLight-Setup-0.4.19-x64.exe`），这是唯一需要手动下载的 Windows 安装入口。v0.4.6 起新安装内容已内嵌，不需要另下 ZIP；`full.nupkg` 和 `releases.win.json` 供应用自动更新使用。
+从本仓库 Release 下载 **`CodexLight-Setup-<version>-x64.exe`**（如 `CodexLight-Setup-0.4.20-x64.exe`），这是唯一需要手动下载的 Windows 安装入口。v0.4.6 起新安装内容已内嵌，不需要另下 ZIP；`full.nupkg` 和 `releases.win.json` 供应用自动更新使用。
 
 0.4.4 起使用 Velopack。已有 Velopack 安装优先使用应用内更新；旧 MSI 安装先经固定的 0.4.4 迁移桥，再按提示更新到新版。首次安装复用兼容运行环境，缺失依赖须确认后才安装；完整应用的安装检查要求 Windows Node.js 22.15+（仅核心后端支持 Node.js 20+），WSL 内的 Node 不替代它。未检测到 Windows Codex CLI 时可选择稍后在应用中配置 WSL 或其他已有引擎。
 

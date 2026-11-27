@@ -22,7 +22,7 @@ function setup(){
   const noop=()=>{};
   const state={cwd:'/project',lan:false,connected:false};
   const dependencies={document,$,state,createNavigationHistory,renderThreads:noop,configPanel:view('config'),closeWindowMenu:noop,closeThreadMenu:noop,
-    contextDetails:{close:noop},sidebarController:{setRoute:value=>calls.push(['sidebar',value]),open:()=>calls.push(['sidebar','open']),closeForNavigation:noop},
+    contextDetails:{close:noop},sessionSpeed:{close:noop},sidebarController:{setRoute:value=>calls.push(['sidebar',value]),open:()=>calls.push(['sidebar','open']),closeForNavigation:noop},
     statsView:view('stats'),accountView:view('account'),accountLoginPanel:view('login'),pluginPanel:view('plugins'),skillsView:view('skills'),aboutView:view('about'),storageView:view('storage'),
     slashMenu:{close:()=>calls.push(['slash','close'])},
     runtimePanel:null,wslRuntimePanel:view('wsl'),prReviewPanel:null,dshConnectionView:view('dsh'),dshConfigView:view('dsh-config'),lanView:view('lan'),
@@ -50,11 +50,12 @@ test('settings about is a real exclusive section and opens its dedicated sidebar
   h.route('chat');assert.equal(h.$('chat-sidebar').classList.contains('hidden'),false);
 });
 
-test('LAN settings cannot expose local-only About content',()=>{
+test('paired settings can navigate to About without falling back to General',()=>{
   const h=setup();h.state.lan=true;h.route('settings',{section:'about'});
-  assert.equal(h.state.settingsPage,'general');
-  assert.equal(h.$('settings-about').classList.contains('hidden'),true);
-  assert.ok(!h.calls.some(([view,action])=>view==='about'&&action==='activate'));
+  assert.equal(h.state.settingsPage,'about');
+  assert.equal(h.$('settings-general').classList.contains('hidden'),true);
+  assert.equal(h.$('settings-about').classList.contains('hidden'),false);
+  assert.ok(h.calls.some(([view,action])=>view==='about'&&action==='activate'));
 });
 
 test('leaving the conversation closes Activity without forgetting its selected tab',()=>{

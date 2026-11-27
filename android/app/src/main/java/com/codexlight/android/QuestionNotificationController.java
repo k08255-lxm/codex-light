@@ -111,6 +111,7 @@ final class QuestionNotificationController {
     }
 
     void show(String id, String threadId, String kind) {
+        if (TaskNotificationController.get(context).carries(id)) {clear(id);return;}
         if (pending.containsKey(id) || pending.size() >= 128 || !validId(id) || !"ready".equals(status(null)) || (!threadId.isEmpty() && !TaskNotificationState.validId(threadId))
                 || (!"question".equals(kind) && !"approval".equals(kind))) return;
         try {

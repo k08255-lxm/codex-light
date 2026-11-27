@@ -359,11 +359,16 @@ public final class AppUpdateChecker {
             case AVAILABLE:
                 prefs(activity).edit().putString("notified", release.version).apply();
                 builder.setTitle("码舱 CodeCang v" + release.version + " 可用")
-                    .setMessage(problem != null ? problem : "点击下载更新。完成校验后可通过 Android 系统安装器安装。")
+                    .setMessage(problem != null ? problem : release.notes.isEmpty() ? "可以下载并安装此版本。" : release.notes)
                     .setNegativeButton("稍后", (d, w) -> present = false).setPositiveButton("下载更新", (d, w) -> beginDownload());
                 break;
             case UP_TO_DATE:
                 builder.setTitle("检查更新").setMessage("暂无可用的 Android 新版本。")
+                    .setNeutralButton("更新日志", (d,w) -> {
+                        present = false;
+                        try { activity.startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/k08255-lxm/codex-light/releases"))); }
+                        catch (android.content.ActivityNotFoundException unavailable) { android.widget.Toast.makeText(activity,"未找到可以打开发布页面的浏览器",android.widget.Toast.LENGTH_SHORT).show(); }
+                    })
                     .setPositiveButton("知道了", (d, w) -> present = false);
                 break;
             case DOWNLOADING:

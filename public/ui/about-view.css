@@ -2,6 +2,16 @@
 .about-intro { margin: 8px 0 28px; }
 .about-brand { display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px; }
 .about-brand h2 { margin: 0; color: var(--text); font-size: 1.5rem; font-weight: 600; letter-spacing: -.0125em; }
+.mobile-about-brand { align-items:center; margin:8px 0 18px; }
+.mobile-about-versions { padding-inline:16px; border:1px solid var(--border); border-radius:var(--r-lg); background:var(--surface); }
+.mobile-about-versions small { font-variant-numeric:tabular-nums; }
+.mobile-notes-heading { display:flex; align-items:baseline; gap:10px; }
+.mobile-notes-heading h2 { color:var(--text); }
+#mobile-release-notes { padding:12px 0 8px; }
+#mobile-release-notes .mobile-notes-heading h2 { margin:0; font-size:1.05rem; }
+#mobile-notes-switch { margin-top:12px; }
+#mobile-about [hidden] { display:none; }
+#mobile-release-notes .release-body { margin-top:12px; }
 .about-version { color: var(--secondary); font-size: .9375rem; font-variant-numeric: tabular-nums; }
 .about-intro > p { margin: 8px 0 0; color: var(--secondary); line-height: 1.6; }
 .about-update { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface); padding: 20px; }

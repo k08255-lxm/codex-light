@@ -12,7 +12,7 @@ import {mountAccount} from '../public/ui/account-view.js';
 import {mountAccountLoginPanel} from '../public/account-login-panel.js';
 import {createDocument} from './mini-dom.mjs';
 
-test('phone account page keeps read-only quota and lists credits without a redemption or login action', async () => {
+test('phone opens a reset card confirmation without starting login or spending a card', async () => {
   const doc = createDocument(), host = doc.createElement('main'), login = doc.createElement('div');
   const controls = mountAccountLoginPanel(login, {readOnly:true, api:()=>assert.fail('remote login request')});
   await controls.activate();
@@ -26,7 +26,9 @@ test('phone account page keeps read-only quota and lists credits without a redem
   }});
   await page.activate();
   assert.match(host.textContent,/测试卡/);
-  assert.equal(host.querySelector('.acct-credit-row').querySelector('button'), null);
+  const use=host.querySelector('.acct-credit-row').querySelector('button');
+  assert.equal(use.textContent,'使用');use.click();
+  assert.ok(host.querySelector('[data-focus-key="credit-confirm"]'));
 });
 
 function open(target, path, body) {
@@ -54,6 +56,7 @@ test('paired HTTPS access can read the account but never receives desktop login,
   const originalCall = client.call.bind(client);
   client.call = async (method, params) => {
     calls.push(method);
+    if(method==='account/rateLimitResetCredit/consume')return {outcome:'reset'};
     if (method === 'account/login/start') return {type:'chatgptDeviceCode', loginId:'private-login-id',
       verificationUrl:'https://auth.openai.com/device', userCode:'PRIVATE-HANDOFF'};
     if (method === 'account/login/cancel') return {status:'canceled'};
@@ -80,8 +83,14 @@ test('paired HTTPS access can read the account but never receives desktop login,
   for (const method of ['account/read', 'account/rateLimits/read', 'account/usage/read']) {
     assert.equal((await call(remote,method)).status, 200, method);
   }
+  const consume='account/rateLimitResetCredit/consume', credit={creditId:'sample',idempotencyKey:'abcdefff-abcd-4012-baaa-0123456789ab'};
+  assert.equal((await call(remote,consume,credit,{requestId:requestId('no-confirm')})).status,400);
+  const attempt={requestId:requestId('use-credit'),confirmed:true};
+  assert.equal((await call(remote,consume,credit,attempt)).body.outcome,'reset');
+  assert.equal((await call(remote,consume,credit,attempt)).body.outcome,'reset');
+  assert.equal(calls.filter(method=>method===consume).length,1);
   const before = calls.length;
-  for (const method of [...REMOTE_METHODS, 'account/rateLimitResetCredit/consume']) {
+  for (const method of REMOTE_METHODS) {
     assert.equal((await call(remote,method,{}, {confirmed:true})).status, 403, method);
   }
   for (const action of ['start','cancel','logout','snapshot']) {

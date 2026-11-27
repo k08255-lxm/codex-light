@@ -74,10 +74,10 @@ final class TaskNotificationController {
         String reason = !enabled ? "disabled" : !permission ? "permission_required"
             : importance == NotificationManager.IMPORTANCE_NONE ? "channel_blocked" : "ready";
         try {
-            return new JSONObject().put("supported", manager != null).put("enabled", enabled).put("supportsTaskPhase", true)
+            return new JSONObject().put("supported", manager != null).put("enabled", enabled).put("supportsTaskPhase", true).put("supportsTaskDetails", true)
                 .put("permissionGranted", permission).put("promotedCandidate", Build.VERSION.SDK_INT >= 36)
                 .put("promotion", promotionStatus(reason, importance))
-                .put("background", MobileNotificationService.status()).put("reason", reason).toString();
+                .put("background", MobileNotificationService.status()).put("taskSummary", MobileNotificationService.lastTaskSummary()).put("reason", reason).toString();
         } catch (JSONException impossible) { return "{\"supported\":false}"; }
     }
 
@@ -161,10 +161,11 @@ final class TaskNotificationController {
         if (!prefs.getBoolean("enabled", false) || !permissionGranted() || json == null || json.length() > 4096) return;
         try {
             JSONObject data = new JSONObject(json);
-            if (data.length() > 5) return;
+            if (data.length() > 6) return;
             Iterator<String> keys = data.keys();
             while (keys.hasNext()) {
                 String key = keys.next();
+                if ("details".equals(key) && data.get(key) instanceof JSONObject) continue;
                 if (!"threadId".equals(key) && !"turnId".equals(key) && !"title".equals(key)
                         && !"state".equals(key) && !"phase".equals(key)) return;
                 if (!(data.get(key) instanceof String)) return;
@@ -182,7 +183,18 @@ final class TaskNotificationController {
             String turnId = data.optString("turnId", "");
             String title = data.optString("title", "");
             if (!TaskNotificationState.validId(turnId) || !TaskNotificationState.validTitle(title)) return;
-            if (prefs.getStringSet("dismissed", Collections.emptySet()).contains(origin() + "\n" + threadId + "\n" + turnId)) return;
+            if (ignored(threadId, turnId)) return;
+            JSONObject info = data.optJSONObject("details");
+            String noticeId = info == null ? "" : info.optString("noticeId");
+            String noticeThread = info == null ? "" : info.optString("noticeThread");
+            String preview = info == null ? "" : info.optString("preview");
+            String planStep = info == null ? "" : info.optString("step");
+            if (!noticeId.isEmpty() && (!"waiting".equals(state) || !QuestionNotificationController.validId(noticeId) || !TaskNotificationState.validId(noticeThread))) return;
+            if (preview.length() > 120 || preview.codePoints().anyMatch(Character::isISOControl)
+                    || planStep.length() > 120 || planStep.codePoints().anyMatch(Character::isISOControl)) return;
+            int done = info == null ? 0 : info.optInt("done"), total = info == null ? 0 : info.optInt("total");
+            int tools = info == null ? 0 : info.optInt("completedTools");
+            if (done < 0 || total < done || total > 1024 || tools < 0) return;
             // Expire old entries before enforcing the three-task cap.
             expireTasks();
             TaskNotificationState.Entry old = tasks.entries.get(threadId);
@@ -192,7 +204,9 @@ final class TaskNotificationController {
                 }
             }
             long now = SystemClock.elapsedRealtime();
-            TaskNotificationState.Entry entry = tasks.update(threadId, turnId, title, state, phase, now);
+            TaskNotificationState.Entry entry = tasks.update(threadId, turnId, title, state, phase, now, !noticeId.isEmpty());
+            if (entry != null) entry.details(info == null ? "" : info.optString("action"), done, total, tools, noticeId, noticeThread, preview);
+            if (entry != null && !entry.planStep.equals(planStep)) {entry.planStep=planStep; entry.postedAt=-1;}
             if (entry != null && entry.needsPost(now)) post(entry);
             scheduleExpiry();
         } catch (JSONException invalid) {
@@ -210,19 +224,23 @@ final class TaskNotificationController {
         String title = previous == null ? "Codex 任务" : previous.title;
         try {
             update(new JSONObject().put("threadId",threadId).put("turnId",turnId)
-                .put("state",state).put("phase",task.opt("phase")).put("title",title).toString());
+                .put("state",state).put("phase",task.opt("phase")).put("details",task.optJSONObject("details")).put("title",title).toString());
         } catch (JSONException impossible) { throw new IllegalStateException(impossible); }
     }
 
     private void post(TaskNotificationState.Entry entry) {
-        if (!permissionGranted() || prefs.getStringSet("dismissed", Collections.emptySet()).contains(origin() + "\n" + entry.key())) return;
-        boolean running = "running".equals(entry.state);
+        if (!permissionGranted() || ignored(entry.threadId,entry.turnId)) return;
+        boolean running = entry.active() && Build.VERSION.SDK_INT >= 26;
         // API 24-25 cannot expire notifications after process death. Never pin live state there.
-        if (running && Build.VERSION.SDK_INT < 26) return;
+        if ("running".equals(entry.state) && Build.VERSION.SDK_INT < 26) return;
         Intent open = new Intent(context, MainActivity.class).setAction(ACTION_OPEN).putExtra("origin", origin())
             .setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP)
             .putExtra("threadId", entry.threadId).putExtra("turnId", entry.turnId);
+        boolean questionAction = !entry.noticeId.isEmpty() && MobileNotificationService.questionAlertsEnabled();
+        if (questionAction) open.setAction(QuestionNotificationController.ACTION_OPEN)
+            .putExtra("threadId",entry.noticeThread).putExtra("questionId",entry.noticeId).putExtra("notificationId",entry.notificationId);
         Intent dismiss = new Intent(context, TaskNotificationReceiver.class).setAction(ACTION_DISMISS).putExtra("origin", origin())
+            .setData(new Uri.Builder().scheme("codecang").authority("unpin").appendPath(entry.threadId).appendPath(entry.turnId).build())
             .putExtra("threadId", entry.threadId).putExtra("turnId", entry.turnId)
             .putExtra("notificationId", entry.notificationId);
         int flags = PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE;
@@ -232,13 +250,14 @@ final class TaskNotificationController {
         Notification.Builder builder = Build.VERSION.SDK_INT >= 26
             ? new Notification.Builder(context, CHANNEL) : new Notification.Builder(context);
         builder.setSmallIcon(R.drawable.ic_task_notification)
-            .setContentTitle(entry.title).setContentText(text)
+            .setContentTitle("waiting".equals(entry.state) ? "Codex " + entry.phaseLabel() : entry.title).setContentText(text)
             .setStyle(new Notification.BigTextStyle().bigText(text))
             .setCategory(running ? Notification.CATEGORY_PROGRESS : Notification.CATEGORY_STATUS)
             .setVisibility(Notification.VISIBILITY_PRIVATE)
-            .setOnlyAlertOnce(true).setShowWhen(false).setOngoing(running).setAutoCancel(!running)
+            .setOnlyAlertOnce(!questionAction || entry.noticeId.equals(entry.alertedNotice)).setShowWhen(false).setOngoing(running).setAutoCancel(!running)
             .setContentIntent(contentIntent).setDeleteIntent(deleteIntent);
-        if (running) builder.addAction(new Notification.Action.Builder(
+        builder.getExtras().putString("com.codexlight.taskKey",entry.key());
+        if ("running".equals(entry.state)) builder.addAction(new Notification.Action.Builder(
             android.graphics.drawable.Icon.createWithResource(context, R.drawable.ic_launcher_foreground),
             "取消固定", deleteIntent).build());
         if (Build.VERSION.SDK_INT >= 26) {
@@ -246,10 +265,14 @@ final class TaskNotificationController {
                 : TaskNotificationState.FINISHED_AFTER_MS);
         }
         Notification notification = Build.VERSION.SDK_INT >= 36 && running
-            ? AndroidLiveUpdates.buildRunning(builder, entry.phaseLabel()) : builder.build();
+            ? AndroidLiveUpdates.buildRunning(builder, entry) : builder.build();
         try {
             manager.notify(TAG, entry.notificationId, notification);
             entry.postedAt = SystemClock.elapsedRealtime();
+            if (questionAction && channelImportance() != NotificationManager.IMPORTANCE_NONE) {
+                entry.alertedNotice = entry.noticeId;
+                QuestionNotificationController.get(context).clear(entry.noticeId);
+            }
         }
         catch (SecurityException denied) {
             android.util.Log.w("TaskNotifications", "Notification permission was revoked");
@@ -258,12 +281,33 @@ final class TaskNotificationController {
 
     private static String message(TaskNotificationState.Entry entry) {
         switch (entry.state) {
-            case "running": return entry.phaseLabel() + " · 点击返回对话";
-            case "waiting": return entry.phaseLabel() + " · 点击继续";
+            case "running": return entry.phaseLabel() + (entry.progressLabel().isEmpty() ? " · 点击返回对话" : " · " + entry.progressLabel());
+            case "waiting": return MobileNotificationService.questionAlertsEnabled() && !entry.preview.isEmpty() ? entry.preview
+                : entry.phaseLabel() + (entry.progressLabel().isEmpty() ? "" : " · " + entry.progressLabel()) + " · 点击继续";
             case "completed": return "本轮任务已完成 · 点击查看回答";
             case "failed": return "本轮任务失败 · 点击查看原因";
             case "interrupted": return "本轮任务已停止";
             default: return "任务状态暂未同步 · 返回应用重新连接";
+        }
+    }
+
+    boolean ignored(String threadId, String turnId) {
+        return prefs.getStringSet("dismissed", Collections.emptySet()).contains(TaskNotificationState.ignoreKey(origin(),threadId,turnId));
+    }
+
+    boolean carries(String noticeId) {
+        if (channelImportance() == NotificationManager.IMPORTANCE_NONE || !permissionGranted()) return false;
+        for (TaskNotificationState.Entry entry : tasks.entries.values())
+            if (entry.postedAt >= 0 && entry.active() && noticeId.equals(entry.noticeId)) return true;
+        return false;
+    }
+
+    void dismiss(String threadId, String turnId, int id) {
+        TaskNotificationReceiver.suppress(context, origin(), threadId, turnId);
+        TaskNotificationState.Entry entry = tasks.entries.get(threadId);
+        if (entry != null && entry.turnId.equals(turnId)) tasks.entries.remove(threadId);
+        if (manager != null) for (android.service.notification.StatusBarNotification posted : manager.getActiveNotifications()) {
+            if (TAG.equals(posted.getTag()) && (id <= 0 || posted.getId() == id) && (threadId + "\n" + turnId).equals(posted.getNotification().extras.getString("com.codexlight.taskKey"))) manager.cancel(TAG,posted.getId());
         }
     }
 
@@ -278,10 +322,10 @@ final class TaskNotificationController {
     }
 
     void reconcile(Set<String> activeThreads) {
-        for (TaskNotificationState.Entry entry : tasks.entries.values()) {
+        for (TaskNotificationState.Entry entry : new ArrayList<>(tasks.entries.values())) {
             if (entry.active() && !activeThreads.contains(entry.threadId)) {
-                entry.disconnect(SystemClock.elapsedRealtime());
-                post(entry);
+                tasks.entries.remove(entry.threadId);
+                manager.cancel(TAG,entry.notificationId);
             }
         }
         scheduleExpiry();
@@ -290,7 +334,7 @@ final class TaskNotificationController {
     private void expireTasks() {
         long now = SystemClock.elapsedRealtime();
         for (TaskNotificationState.Entry entry : new ArrayList<>(tasks.entries.values())) {
-            if (prefs.getStringSet("dismissed", Collections.emptySet()).contains(origin() + "\n" + entry.key())
+            if (ignored(entry.threadId,entry.turnId)
                     || entry.expired(now)) {
                 tasks.entries.remove(entry.threadId);
                 manager.cancel(TAG, entry.notificationId);

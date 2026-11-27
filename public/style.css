@@ -399,12 +399,11 @@ dialog::backdrop { background: var(--overlay); }
 .pending-inline { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0; padding: 8px 10px; border: 1px solid var(--warning-border); background: var(--warning-bg); border-radius: var(--r-md); font-size: .8125rem; }
 .pending-inline-status { flex: 1 1 200px; color: var(--secondary); }
 .pending-inline-error { border-color: var(--error-border); background: var(--error-bg); color: var(--error); }
-.attachment-tray { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 2px 8px; }
+.attachment-tray { display:flex; gap:6px; flex-wrap:nowrap; align-items:center; min-width:0; max-width:100%; overflow-x:auto; padding:2px 2px 6px; scrollbar-width:thin; overscroll-behavior-x:contain; }
+.attachment-tray > * { flex:none; }
 .composer-overlays { position:absolute;left:24px;right:24px;bottom:100%;display:flex;flex-direction:column;gap:8px;padding-bottom:10px;background:transparent;pointer-events:none;z-index:24; }
 .composer-overlays .live-changes { position:relative;left:auto;bottom:auto;transform:none;align-self:center;width:100%;max-width:none; }
 .composer-overlays .changes-panel { max-width:100%; }
-.composer-overlays .attachment-tray { padding:0;background:transparent;max-height:170px;overflow-y:auto;pointer-events:none; }
-.composer-overlays .attachment-chip,.composer-overlays .attachment-uploading { pointer-events:auto; }
 .attachment-chip.attachment-image { position:relative;display:block;width:76px;height:76px;padding:0;flex:none;border-radius:12px; }
 .attachment-image .attachment-preview,.attachment-image .attachment-preview img { width:100%;height:100%;border-radius:11px; }
 .attachment-image .icon-btn { position:absolute;right:3px;top:3px;width:22px;height:22px;min-width:22px;min-height:22px;border-radius:50%;background:var(--surface);box-shadow:0 1px 4px #0004; }

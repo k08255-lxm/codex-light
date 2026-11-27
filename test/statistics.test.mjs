@@ -143,3 +143,20 @@ test('unused new-thread baselines share the metadata retention bound',()=>{
  const {service}=fixture();for(let i=0;i<1100;i++)service.acknowledge('thread/start',{}, {thread:{id:'thread-'+i,model:'m'}});
  assert.equal(service.baselines.size,1000);assert.equal(service.threads.size,1000);assert.equal(service.query().totals.turnCount,0);
 });
+
+test('session speed pairs native token counts with the same message and never persists intermediate chunks',async t=>{
+ const root=await directory(t),{service,event,time,start}=fixture({root});
+ start();time(50);event('item/started',{item:{id:'a',type:'agentMessage'}});
+ time(100);event('item/agentMessage/delta',{itemId:'a',delta:'first'});const revision=service.revision;
+ time(200);event('item/agentMessage/delta',{itemId:'a',delta:'tail'});assert.equal(service.revision,revision);
+ time(300);const completed={item:{type:'agentMessage',id:'a'},contentTokenCount:20};
+ event('item/completed',completed);event('item/completed',completed);
+ event('item/completed',{item:{id:'b',type:'commandExecution',durationMs:400}});
+ event('turn/completed',{turn:{id:'t',status:'completed'}});
+ const result=service.sessionSpeed(THREAD,{ttftMs:20,partial:true});
+ assert.deepEqual(result,{replyMs:250,toolMs:400,tps:100,ttftMs:20,partialHistory:true,turnTps:null});
+ await service.close();
+ const reopened=fixture({root}).service;await reopened.load();
+ assert.equal(reopened.sessionSpeed(THREAD).tps,100);
+ assert.equal(reopened.sessionSpeed('other').tps,null);await reopened.close();
+});

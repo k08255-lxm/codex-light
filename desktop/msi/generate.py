@@ -1,5 +1,5 @@
 """Curate the already-built payload and author one HKCU-keyed component per file."""
-from payload_policy import omitted_runtime_file
+from payload_policy import omitted_runtime_file, release_note_name
 from bridge_bundle import validate as validate_bridge_bundle
 import argparse
 import hashlib
@@ -93,7 +93,8 @@ for file in sorted(a.payload.resolve().rglob('*')):
     rel = file.relative_to(a.payload.resolve()).as_posix()
     if file.is_symlink():
         raise SystemExit('Symlinks not allowed: '+rel)
-    if not (rel in allowed_roots or rel.startswith(('app/public/','app/src/','app/components/dsh-bridge/','licenses/')) or rel in {'app/package.json','runtimes/win-x64/native/WebView2Loader.dll'}):
+    note = rel.rpartition('/')[0] == 'app/releases' and release_note_name(file.name)
+    if not (note or rel in allowed_roots or rel.startswith(('app/public/','app/src/','app/components/dsh-bridge/','licenses/')) or rel in {'app/package.json','runtimes/win-x64/native/WebView2Loader.dll'}):
         continue
     forbidden_parts = {'.git','.codex','logs','sessions','projects'}
     if not rel.startswith('app/components/dsh-bridge/'):

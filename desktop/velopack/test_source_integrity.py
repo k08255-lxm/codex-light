@@ -5,7 +5,7 @@ from bridge_bundle import SOURCE_SCOPES,source_inventory
 class Tests(unittest.TestCase):
  def setUp(self):
   self.t=tempfile.TemporaryDirectory();self.r=Path(self.t.name)/'repo';self.p=Path(self.t.name)/'payload'
-  for n in ['src/backend-health.mjs','public/app.js','package.json','components/dsh-bridge/src/light-entry.mjs']:
+  for n in ['src/backend-health.mjs','public/app.js','package.json','releases/0.4.3.md','components/dsh-bridge/src/light-entry.mjs']:
    p=self.r/n;p.parent.mkdir(parents=True,exist_ok=True);p.write_text('{"version":"0.4.3"}' if n=='package.json' else 'current')
   b=self.r/'components/dsh-bridge';d=b/'dist';d.mkdir();
   for n in ['LICENSE','package.json','package-lock.json','entry.mjs','licenses.json']: (d/n).write_text('current')
@@ -15,11 +15,11 @@ class Tests(unittest.TestCase):
   sources={n:h(f.read_bytes()) for n,f in sorted(source_inventory(b).items())}
   m={'format':'codex-light-dsh-bundle-v1','component':'codex-light-dsh-bridge','entry':'entry.mjs','licenses':'licenses.json','lockSha256':h(b'current'),'sourceFiles':sources,'sourceSha256':h(json.dumps(sources,separators=(',',':')).encode()),'files':{f.name:h(f.read_bytes()) for f in d.iterdir()}}
   (d/'manifest.json').write_text(json.dumps(m))
-  for n in ['src','public']:shutil.copytree(self.r/n,self.p/'app'/n)
+  for n in ['src','public','releases']:shutil.copytree(self.r/n,self.p/'app'/n)
   shutil.copyfile(self.r/'package.json',self.p/'app/package.json')
   shutil.copytree(d,self.p/'app/components/dsh-bridge')
  def tearDown(self):self.t.cleanup()
- def test_valid(self):self.assertEqual(verify(self.r,self.p)['FileCount'],9)
+ def test_valid(self):self.assertEqual(verify(self.r,self.p)['FileCount'],10)
  def test_same_version_stale(self):
   (self.p/'app/src/backend-health.mjs').write_text('old')
   with self.assertRaises(ValueError):verify(self.r,self.p)
@@ -32,8 +32,15 @@ class Tests(unittest.TestCase):
  def test_current_build_output(self):
   (self.r/'components/dsh-bridge/dist/entry.mjs').write_text('new build')
   with self.assertRaises(ValueError):verify(self.r,self.p)
+ def test_paired_version_notes(self):
+  older='releases/0.4.2.md'
+  (self.r/older).write_text('older phone notes')
+  (self.r/'releases/draft.md').write_text('local draft')
+  with self.assertRaises(ValueError):verify(self.r,self.p)
+  shutil.copyfile(self.r/older,self.p/'app'/older)
+  self.assertIn(older,verify(self.r,self.p)['Scopes'])
  def test_filtered_policy(self):
-  self.assertEqual(verify(self.r,self.p,True)['FileCount'],9)
+  self.assertEqual(verify(self.r,self.p,True)['FileCount'],10)
  def test_fingerprint_changes(self):
   old=verify(self.r,self.p)['TreeSha256'];(self.r/'public/app.js').write_text('new');(self.p/'app/public/app.js').write_text('new');self.assertNotEqual(old,verify(self.r,self.p)['TreeSha256'])
 if __name__=='__main__':unittest.main()

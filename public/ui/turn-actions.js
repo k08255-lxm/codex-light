@@ -1,4 +1,5 @@
 import {icon} from '../icons.js';
+import {mountStatPopover} from './stat-popover.js';
 
 const count = value => Number.isSafeInteger(value) && value >= 0;
 const number = new Intl.NumberFormat('zh-CN',{maximumFractionDigits:9});
@@ -89,13 +90,11 @@ export function createTurnActions(document,{threadId,turnId,source,onCopy,onFork
   const amount=el('span','','本轮用量');usage.append(amount);
   const feedback=el('span','turn-actions-feedback');feedback.setAttribute('role','status');node.append(feedback);
   const panel=el('div','turn-usage-popover');panel.setAttribute('popover','auto');
-  const nativePopover=typeof panel.showPopover==='function';
-  if(!nativePopover)panel.hidden=true;
   panel.setAttribute('role','dialog');panel.setAttribute('aria-label','本轮用量');
   panel.id='turn-usage-'+(++nextPopoverId);
   usage.setAttribute('aria-controls',panel.id);usage.setAttribute('aria-expanded','false');usage.setAttribute('aria-haspopup','dialog');
   node.append(panel);
-  let text='',status=null,opened=false,released=false,feedbackTimer;
+  let text='',status=null,released=false,feedbackTimer;
   let pricesPending=false,pricesChecked=false,priceError='';
   function details(){
     const row=status?.value,cost=row?.estimatedCost;
@@ -119,50 +118,22 @@ export function createTurnActions(document,{threadId,turnId,source,onCopy,onFork
     if(count(context?.used)&&context?.window>0)
       panel.append(el('p','turn-usage-context','本轮结束时上下文占用 '+format(context.used)+' / '+format(context.window)+' tokens'));
   }
-  function position(){
-    const win=document.defaultView,visual=win.visualViewport;
-    const rect=usage.getBoundingClientRect(),box=panel.getBoundingClientRect();
-    const x=visual?.offsetLeft||0,y=visual?.offsetTop||0;
-    const width=visual?.width||win.innerWidth,height=visual?.height||win.innerHeight;
-    panel.style.left=Math.max(x+8,Math.min(rect.left,x+width-box.width-8))+'px';
-    const top=rect.top-box.height-8;
-    panel.style.top=Math.max(y+8,Math.min(top>=y+8?top:rect.bottom+8,y+height-box.height-8))+'px';
-  }
-  function dismiss(){
-    if(nativePopover)panel.hidePopover();else panel.hidden=true;
-    stop();
-  }
-  function outside(event){if(!panel.contains(event.target)&&!usage.contains(event.target))dismiss();}
-  function escape(event){if(event.key==='Escape'){event.preventDefault();dismiss();usage.focus();}}
-  function stop(){
-    opened=false;usage.setAttribute('aria-expanded','false');
-    document.removeEventListener('scroll',position,true);document.defaultView.removeEventListener('resize',position);
-    if(!nativePopover){document.removeEventListener('pointerdown',outside,true);document.removeEventListener('keydown',escape);}
-  }
-  panel.addEventListener('toggle',e=>{if(e.newState==='closed')stop();});
+  const popover=mountStatPopover(usage,panel,{onOpen(){
+    details();pricesChecked=false;source.refresh(threadId,turnId);void loadPrices();
+  }});
   const unwatch=source.watch(threadId,turnId,next=>{
     status=next;
     const total=next.value?.tokens?.totalTokens;
     amount.textContent=count(total)?format(total)+' tokens':'本轮用量';
-    if(opened){details();position();void loadPrices();}
+    if(popover.open){details();popover.position();void loadPrices();}
   });
   async function loadPrices(){
     if(!ensurePrices||pricesPending||pricesChecked||!status?.value?.model||status.value.estimatedCost?.usd!=null)return;
     pricesPending=true;pricesChecked=true;
     try{await ensurePrices();priceError='';if(!released)source.refresh(threadId,turnId);}
-    catch{priceError='参考价格暂时无法刷新。';if(opened){details();position();}}
+    catch{priceError='参考价格暂时无法刷新。';if(popover.open){details();popover.position();}}
     finally{pricesPending=false;}
   }
-  usage.addEventListener('click',()=>{
-    if(opened){dismiss();return;}
-    details();
-    if(nativePopover)panel.showPopover();
-    else {panel.hidden=false;document.addEventListener('pointerdown',outside,true);document.addEventListener('keydown',escape);}
-    opened=true;position();usage.setAttribute('aria-expanded','true');pricesChecked=false;
-    document.addEventListener('scroll',position,true);document.defaultView.addEventListener('resize',position);
-    source.refresh(threadId,turnId);
-    void loadPrices();
-  });
   copy.addEventListener('click',async()=>{
     try{if(onCopy)await onCopy(text);else await document.defaultView.navigator.clipboard.writeText(text);feedback.textContent='已复制';}
     catch{feedback.textContent='复制失败';}
@@ -174,6 +145,6 @@ export function createTurnActions(document,{threadId,turnId,source,onCopy,onFork
     try{await onFork(threadId,turnId);}finally{fork.disabled=false;}
   });
   return {node,update(value,complete){text=value;copy.title=complete?'复制回答':'复制已保留的回答';copy.setAttribute('aria-label',copy.title);},
-    release(){released=true;clearTimeout(feedbackTimer);unwatch();if(opened)dismiss();}};
+    release(){released=true;clearTimeout(feedbackTimer);unwatch();popover.close();}};
 }
 let nextPopoverId=0;

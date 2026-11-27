@@ -63,11 +63,14 @@ test('paired HTTP notification feed includes only active, terminal and pending r
   client.requests.clear();
   emit('turn/completed',{threadId,turn:{id:turnId,status:'completed'}});
   const finished=await (await request()).json();
-  assert.deepEqual(finished.running,[]);
-  assert.deepEqual(finished.finished,[{threadId,turnId,state:'completed'}]);
+  assert.deepEqual(finished.running,[{threadId,turnId,state:'waiting',phase:'question'}]);
+  assert.deepEqual(finished.finished,[]);
   assert.deepEqual(finished.pending,[active.pending[2]]);
   emit('item/completed',{threadId,turnId:'turn-2',item:{id:'answer',type:'userMessage',content:[{type:'text',text:'对提问的回答\n\n1. TOP_SECRET_QUESTION\n回答：yes'}]}});
-  assert.deepEqual((await (await request()).json()).pending,[]);
+  const answered=await (await request()).json();
+  assert.deepEqual(answered.pending,[]);
+  assert.deepEqual(answered.running,[]);
+  assert.deepEqual(answered.finished,[{threadId,turnId,state:'completed'}]);
   await app.lan.rotate();
   assert.equal((await request()).status,401);
 });
@@ -115,6 +118,26 @@ test('unanswered async notices survive terminal retention and engine reconnect u
   assert.deepEqual(snapshot(true,later+3).pending,original.pending);
   feed.observe({method:'thread/archived',params:{threadId}},later+4);
   assert.deepEqual(snapshot(true,later+5).pending,[]);
+});
+
+test('mid-turn recovery, plan updates and a delayed question keep the same task identity',()=>{
+  const feed=feedWithRoots('root');
+  const event=(method,fields)=>feed.observe({method,params:{threadId:'root',turnId:'turn',...fields}});
+  const snapshot=(details=true)=>feed.snapshot({connected:true,details,serverInstance:'x',threads:[{threadId:'root',state:'idle'}],requests:new Map()});
+  event('item/commandExecution/outputDelta',{itemId:'cmd',delta:'SECRET COMMAND OUTPUT'});
+  event('turn/plan/updated',{plan:[{step:'private task',status:'completed'},{step:'检查附件布局',status:'inProgress'}]});
+  assert.deepEqual(snapshot().running[0],{threadId:'root',turnId:'turn',state:'running',phase:'tool',details:{action:'commandExecution',done:1,total:2,step:'检查附件布局'}});
+  event('item/completed',{item:{id:'cmd',type:'commandExecution'}});
+  assert.equal(snapshot().running[0].details.completedTools,1);
+  event('turn/completed',{turn:{id:'turn',status:'completed'}});
+  event('item/commandExecution/outputDelta',{itemId:'cmd',delta:'late replay'});
+  assert.deepEqual(snapshot().running,[]);
+  event('item/completed',{item:{id:'ask',type:'agentMessage',delivery:'async',questions:[{title:'选哪个版本？'}]}});
+  const waiting=snapshot(), card=waiting.running[0];
+  assert.deepEqual([card.turnId,card.phase,card.details.preview],['turn','question','选哪个版本？']);
+  assert.equal(card.details.noticeId,waiting.pending[0].id);
+  assert.equal(waiting.pending[0].threadId,'root');
+  assert.doesNotMatch(JSON.stringify(snapshot(false)),/选哪个版本|检查附件布局|preview|private task|SECRET/);
 });
 
 test('unclassified turns stay silent until confirmed; nested agents, guardian and attached threads stay hidden',async()=>{

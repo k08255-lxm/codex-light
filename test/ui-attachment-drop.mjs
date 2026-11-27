@@ -26,6 +26,7 @@ try {
   page.on('request', request => {if (/\/api\/(file-)?uploads$/.test(request.url())) uploads.push(request.url());});
   await page.goto(app.url);
   await page.waitForFunction(() => !document.querySelector('#add-file').disabled && document.querySelector('#connection-text').textContent.includes('演示'));
+  if (await page.locator('#first-theme').evaluate(el=>el.open)) await page.locator('#first-theme button[type=submit]').click();
   async function drag(files, accepts) {
     const params = {x:350,y:280,data:{items:[],files,dragOperationsMask:1}};
     for(const type of ['dragEnter','dragOver']) await session.send('Input.dispatchDragEvent',{...params,type});
@@ -52,6 +53,12 @@ try {
   assert.match(await chips.filter({hasText:'posts-48h (2).jsonl'}).innerText(), /文本文件引用/);
   assert.equal(await chips.filter({hasText:'发送前需确认风险'}).count(), 0);
   assert.equal(await page.getByRole('button',{name:'预览 image.png'}).count(), 1);
+  for(const width of [407,1280]){
+    await page.setViewportSize({width,height:886});
+    const tray=await page.locator('#attachment-tray').boundingBox(), conversation=await page.locator('#conversation').boundingBox();
+    const prompt=await page.locator('#prompt').boundingBox();
+    assert.ok(tray.y >= conversation.y+conversation.height-1 && tray.y+tray.height <= prompt.y+1,'attachment space sits between conversation and input at width '+width);
+  }
   await drag([jsonl,jsonl,jsonl,jsonl], true);
   await page.locator('#notice').filter({hasText:'合计最多 5 个'}).waitFor();
   assert.equal(uploads.length, 2);

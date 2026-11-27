@@ -24,9 +24,15 @@ final class AndroidLiveUpdates {
         return (notification.flags & Notification.FLAG_PROMOTED_ONGOING) != 0;
     }
 
-    static Notification buildRunning(Notification.Builder builder, String phaseLabel) {
-        builder.setStyle(new Notification.ProgressStyle().setProgressIndeterminate(true))
-            .setShortCriticalText(phaseLabel);
+    static Notification buildRunning(Notification.Builder builder, TaskNotificationState.Entry entry) {
+        if (entry.total > 0) {
+            Notification.ProgressStyle progress = new Notification.ProgressStyle()
+                .addProgressSegment(new Notification.ProgressStyle.Segment(entry.total)).setProgress(entry.done);
+            builder.setStyle(progress);
+        } else if ("running".equals(entry.state)) {
+            builder.setStyle(new Notification.ProgressStyle().setProgressIndeterminate(true));
+        }
+        builder.setShortCriticalText(entry.phaseLabel());
         // The public extra was named in SDK 36.1. It can also be supplied on 36.0.
         builder.getExtras().putBoolean("android.requestPromotedOngoing", true);
         Notification notification = builder.build();

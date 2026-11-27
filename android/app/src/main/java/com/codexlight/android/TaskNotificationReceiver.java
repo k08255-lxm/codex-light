@@ -1,14 +1,13 @@
 package com.codexlight.android;
 
-import android.app.NotificationManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import java.util.LinkedHashSet;
+import java.util.Collections;
 import java.util.Set;
 
-/** Explicit, non-exported receiver for dismissal and the user-requested Unpin action. */
+/** Dismissing a single turn never interrupts the task on its host. */
 public final class TaskNotificationReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context context, Intent intent) {
@@ -18,16 +17,12 @@ public final class TaskNotificationReceiver extends BroadcastReceiver {
         if (!TaskNotificationState.validId(threadId) || !TaskNotificationState.validId(turnId)) return;
         String origin = intent.getStringExtra("origin");
         if (origin == null || !origin.equals(TaskNotificationController.get(context).origin())) return;
-        suppress(context, origin, threadId, turnId);
-        NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
-        if (manager != null) manager.cancel(TaskNotificationController.TAG, intent.getIntExtra("notificationId", -1));
+        TaskNotificationController.get(context).dismiss(threadId, turnId, intent.getIntExtra("notificationId", -1));
     }
 
     static void suppress(Context context, String origin, String threadId, String turnId) {
         SharedPreferences prefs = context.getSharedPreferences(TaskNotificationController.PREFS, Context.MODE_PRIVATE);
-        Set<String> dismissed = new LinkedHashSet<>(prefs.getStringSet("dismissed", new LinkedHashSet<>()));
-        dismissed.add(origin + "\n" + threadId + "\n" + turnId);
-        while (dismissed.size() > 32) dismissed.remove(dismissed.iterator().next());
+        Set<String> dismissed = TaskNotificationState.ignoring(prefs.getStringSet("dismissed", Collections.emptySet()),origin,threadId,turnId);
         prefs.edit().putStringSet("dismissed", dismissed).apply();
     }
 }

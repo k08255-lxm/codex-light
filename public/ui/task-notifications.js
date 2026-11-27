@@ -11,6 +11,7 @@ export function createTaskMonitor({post,title=()=>''}){
     if(!enabled)return;
     const data={threadId:task.threadId,turnId:task.turnId,title:titleText(title(task.threadId)),state:task.state};
     if(task.phase)data.phase=task.phase;
+    if(task.details && ['running','waiting'].includes(task.state))data.details=task.details;
     post(data);known.add(task.threadId);
     if(known.size>1000)known.delete(known.values().next().value);
   }
@@ -42,7 +43,7 @@ export function createTaskMonitor({post,title=()=>''}){
     for(const task of results.values())send(task);
     for(const [threadId,task] of next){
       const previous=active.get(threadId);
-      if(!connected||previous?.turnId!==task.turnId||previous.state!==task.state||previous.phase!==task.phase)send(task);
+      if(!connected||previous?.turnId!==task.turnId||previous.state!==task.state||previous.phase!==task.phase||JSON.stringify(previous.details)!==JSON.stringify(task.details))send(task);
     }
     active.clear();for(const [id,task] of next)active.set(id,task);
     connected=true;
@@ -59,9 +60,10 @@ export function mountTaskNotifications({document,window,snapshot,title,resolveTa
   const toggle=document.getElementById('mobile-task-enabled'),status=document.getElementById('mobile-task-status');
   const promotion=document.getElementById('mobile-task-promotion-status'),promotionSettings=document.getElementById('mobile-task-promotion-settings');
   const backgroundPanel=document.getElementById('mobile-task-background-panel'),background=document.getElementById('mobile-task-background'),backgroundStatus=document.getElementById('mobile-task-background-status');
-  let supportsTaskPhase=false;
+  let supportsTaskPhase=false,supportsTaskDetails=false;
   const monitor=createTaskMonitor({post:data=>{
     if(!supportsTaskPhase)delete data.phase;
+    if(!supportsTaskDetails)delete data.details;
     bridge.updateTaskNotification(JSON.stringify(data));
   },title});
   let failed=false,pendingOpen=null,opening=false,lastOpenError=null,wasReady=false;
@@ -85,10 +87,11 @@ export function mountTaskNotifications({document,window,snapshot,title,resolveTa
   function refreshStatus(){run(()=>{
     const result=JSON.parse(bridge.getTaskNotificationStatus());
     supportsTaskPhase=result.supportsTaskPhase===true;
+    supportsTaskDetails=result.supportsTaskDetails===true;
     panel.hidden=result.supported!==true;if(panel.hidden){monitor.setEnabled(false);return;}
     toggle.checked=result.enabled===true;monitor.setEnabled(result.enabled===true&&result.reason==='ready');
     const labels={disabled:'开启后显示运行任务、等待处理和任务结果。',permission_required:'尚未获得系统通知权限，请在系统设置中允许。',channel_blocked:'任务通知渠道已关闭，请在系统设置中开启。'};
-    status.textContent=labels[result.reason]||'任务通知已开启。';failed=false;
+    status.textContent=labels[result.reason]||result.taskSummary||'任务通知已开启。';failed=false;
     if(promotion){
       const messages = {
         promoted: 'Android 已将运行中的任务提升为实时通知。显示位置由手机系统决定。',
@@ -131,5 +134,5 @@ export function mountTaskNotifications({document,window,snapshot,title,resolveTa
   refreshStatus();reconcile();
   window.setInterval(refresh,30000);
   if(backgroundPanel)window.setInterval(()=>{if(!document.getElementById('settings-notifications')?.classList.contains('hidden'))refreshStatus();},5000);
-  return {apply:data=>run(()=>monitor.apply(data)),reconcile,refresh,disconnected:()=>run(()=>monitor.disconnected()),reset:()=>run(()=>{pendingOpen=null;monitor.reset();})};
+  return {get details(){return supportsTaskDetails;},apply:data=>run(()=>monitor.apply(data)),reconcile,refresh,disconnected:()=>run(()=>monitor.disconnected()),reset:()=>run(()=>{pendingOpen=null;monitor.reset();})};
 }

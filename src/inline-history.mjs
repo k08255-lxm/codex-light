@@ -61,7 +61,7 @@ const fromLog = values => Object.fromEntries(contextFields.map(([key])=>[
 ]));
 
 /** Recover only the verified thread's latest recorded token counters. */
-export async function readInlineHistoryContext({rollout,threadId,roots,caseSensitive=false}){
+export async function readInlineHistoryContext({rollout,threadId,roots,caseSensitive=false,onTimings}){
  const opened=await openThreadRollout({rollout,threadId,roots,caseSensitive});
  if(!opened)return null;
  const {handle,info}=opened;
@@ -85,11 +85,19 @@ export async function readInlineHistoryContext({rollout,threadId,roots,caseSensi
   if(tail===null)return null;
   const lines=tail.split('\n');
   let snapshot=null;
+  const ttfts=new Map(),meta=header.payload;
+  const collect=onTimings&&!meta.parent_thread_id&&!meta.forked_from_id&&!meta.history_base&&!meta.source?.subagent;
   // A tail window can start in a partially read JSONL record.
   for(let index=lines.length-1;index>0;index--){
-   if(!lines[index].includes('"session_meta"')&&(snapshot||!lines[index].includes('"token_count"')))continue;
+   if(!lines[index].includes('"session_meta"')&&(snapshot||!lines[index].includes('"token_count"'))&&
+     !(collect&&lines[index].includes('"time_to_first_token_ms"')))continue;
    let row;try{row=JSON.parse(lines[index]);}catch{continue;}
    if(row.type==='session_meta')return null;
+   if(collect&&row.type==='event_msg'&&row.payload?.type==='task_complete'){
+    const {turn_id:id,time_to_first_token_ms:value,duration_ms:duration}=row.payload;
+    if(typeof id==='string'&&id.length<=256&&id.length&&Number.isSafeInteger(value)&&value>=0&&
+       (!Number.isFinite(duration)||value<=duration)&&!ttfts.has(id))ttfts.set(id,value);
+   }
    const info=row.type==='event_msg'&&row.payload?.type==='token_count'?row.payload.info:null;
    if(snapshot||!info||typeof info!=='object')continue;
    const candidate=contextSnapshot({threadId,turnId:row.payload.turn_id,tokenUsage:{
@@ -97,8 +105,9 @@ export async function readInlineHistoryContext({rollout,threadId,roots,caseSensi
    }});
    if(candidate&&(candidate.window!==null||[...Object.values(candidate.last),...Object.values(candidate.total)].some(value=>value!==null)))snapshot=candidate;
   }
-  if(!snapshot)return null;
   const after=await handle.stat();
-  return after.size>=info.size&&after.nlink===1?{...snapshot,source:'history'}:null;
+  if(after.size<info.size||after.nlink!==1)return null;
+  if(onTimings)onTimings({ttftMs:ttfts.size?[...ttfts.values()].reduce((a,b)=>a+b,0)/ttfts.size:null,partial:offset>0||!collect});
+  return snapshot?{...snapshot,source:'history'}:null;
  }finally{await handle.close();}
 }

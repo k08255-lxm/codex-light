@@ -9,10 +9,10 @@ import {asyncInputDefinition,asyncInputBodyText,createAsyncInputCard,asyncAnswer
 import {captureHistoryAnchor,restoreHistoryAnchor,mountHistoryAutoLoad} from './history-auto-load.js';
 
 // One list, one detail view, one scrolling parent. Reads happen only on opening or refreshing.
-export function createAgentInspector({document,state,host,dshTasks,dshLive,rpc,readDshTask,el,onAnswerAsync,artifactFactory,onLocalLink}){
+export function createAgentInspector({document,state,host,dshTasks,dshLive,rpc,readDshTask,el,onAnswerAsync,questionIgnores,artifactFactory,onLocalLink}){
  const cache=new Map();let selected=null,scope=null,scopeServer=null,listScroll=0,olderRequest=null;
  const partKeys=new WeakMap();
- const asyncInputs=new Map();
+ const asyncInputs=new Map(), inputByNode=new WeakMap();
  const readQueue=[];
  let readGeneration=0,activeReads=0,nextRefresh=0;
  const visible=()=>document.visibilityState!=='hidden'&&!host.closest('.hidden');
@@ -36,6 +36,8 @@ export function createAgentInspector({document,state,host,dshTasks,dshLive,rpc,r
   draw(part);
   const retained=new Set(next);
   for(const node of [...parent.children])if(!retained.has(node)){
+   inputByNode.get(node)?.pause();
+   for(const card of node.querySelectorAll('.async-input-card'))inputByNode.get(card)?.pause();
    for(const strip of node.querySelectorAll('.artifact-strip'))strip.release?.();
    node.remove();
   }
@@ -202,8 +204,8 @@ export function createAgentInspector({document,state,host,dshTasks,dshLive,rpc,r
    if(text)part(itemKey,()=>{const content=markdown(text,cwd,threadId||state.thread?.id);if(item.type==='userMessage')content.classList.add('agent-user-input');content.dataset.itemId=itemKey;return content;},JSON.stringify([item.type,cwd,text]));
    if(asyncInputDefinition(item)){
     const inputKey=JSON.stringify([threadId,item.id]);let input=asyncInputs.get(inputKey);
-    const options={threadId,onAnswerAsync,confirmedAnswers:history?.answered.get(item.id)};
-    if(!input){input=createAsyncInputCard(document,item,options);asyncInputs.set(inputKey,input);}
+    const options={threadId,onAnswerAsync,questionIgnores,confirmedAnswers:history?.answered.get(item.id)};
+    if(!input){input=createAsyncInputCard(document,item,options);asyncInputs.set(inputKey,input);inputByNode.set(input.node,input);}
     else input.update(item,options);
     part(`${itemKey}:input`,()=>input.node);
    }

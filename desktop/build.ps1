@@ -27,6 +27,11 @@ New-Item -ItemType Directory -Path $app | Out-Null
 Copy-Item (Join-Path $root 'src') $app -Recurse
 Copy-Item (Join-Path $root 'public') $app -Recurse
 Copy-Item (Join-Path $root 'package.json') $app
+$releaseVersion=(Get-Content (Join-Path $root 'package.json') -Raw -Encoding utf8 | ConvertFrom-Json).version
+$releaseNotes=New-Item -ItemType Directory -Path (Join-Path $app 'releases')
+$notesFiles=@(Get-ChildItem -LiteralPath (Join-Path $root 'releases') -File | Where-Object { $_.Name -cmatch '^[0-9]{1,9}(\.[0-9]{1,9}){2}\.md$' })
+if ($notesFiles.Name -cnotcontains "$releaseVersion.md") { throw "Missing release notes for $releaseVersion" }
+Copy-Item -LiteralPath $notesFiles.FullName -Destination $releaseNotes.FullName -ErrorAction Stop
 $components=Join-Path $app 'components'
 New-Item -ItemType Directory -Path $components | Out-Null
 & python (Join-Path $PSScriptRoot 'msi/bridge_bundle.py') (Join-Path $bridge 'dist') --source $bridge

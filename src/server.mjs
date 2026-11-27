@@ -52,6 +52,7 @@ import {validServerRequestId,findServerRequest} from './server-requests.mjs';
 import {ThreadSessions} from './thread-sessions.mjs';
 import {ThreadReads} from './thread-reads.mjs';
 import {MobileNotificationFeed} from './mobile-notification-feed.mjs';
+import {IgnoredQuestions} from './ignored-questions.mjs';
 import {validTaskId} from './mobile-task-routes.mjs';
 import {ThreadListService} from './thread-list.mjs';
 import { DemoClient } from './demo.mjs';
@@ -68,7 +69,7 @@ import {accountIdentityKey} from '../public/account-identity.js';
 import {REMOTE_METHODS,validateRemote} from './remote.mjs';
 import { createReopener } from './reopen.mjs';
 
-const sharedAccountMethods=new Set(['account/read','account/usage/read','account/rateLimits/read','account/updated','account/rateLimits/updated']);
+const sharedAccountMethods=new Set(['account/read','account/usage/read','account/rateLimits/read','account/rateLimitResetCredit/consume','account/updated','account/rateLimits/updated']);
 function localManagement(method) {
  return typeof method==='string'&&(method.startsWith('remoteControl/')||method==='bridge/accountLogin'
   ||(method.startsWith('account/')&&!sharedAccountMethods.has(method)));
@@ -117,6 +118,7 @@ publicFiles['/ui/update-indicator.js']='ui/update-indicator.js';
 publicFiles['/ui/optimistic-messages.js']='ui/optimistic-messages.js';
 for(const file of ['about-view.js','about-view.css','notifications.js'])publicFiles['/ui/'+file]='ui/'+file;
 publicFiles['/ui/storage-view.js']='ui/storage-view.js';
+for(const file of ['stat-popover.js','session-speed.js','mobile-about.js','question-ignores.js'])publicFiles['/ui/'+file]='ui/'+file;
 publicFiles['/ui/panel-resize.js']='ui/panel-resize.js';publicFiles['/ui/panel-resize.css']='ui/panel-resize.css';publicFiles['/project-name-dialog.js']='project-name-dialog.js';
 for(const file of ['history-auto-load.js','format.js','chart.js','stats-view.js','account-view.js','live-changes.js','views.css','paste.js','artifacts.js','agents.js','access.js','lan-view.js','tunnel-view.js','access-pairing-view.js','viewport.js','approvals-view.js','composer.js','dsh-view.js','preferences-view.js','remote-view.js','slash-menu.js','dsh-config-view.js','dsh-connection-view.js'])publicFiles['/ui/'+file]='ui/'+file;
 for(const file of ['app-confirm-dialog.js','lan-confirm-dialog.js','history-viewport.js','engine-onboarding.js','engine-onboarding.css','activity-feed.js','activity-feed.css','projects.js','project-navigation.js','project-navigation.css'])publicFiles['/'+file]=file;
@@ -206,24 +208,27 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
  const rpc=client || (demo?new DemoClient():new RpcClient(wslLaunch?{...wslLaunch,mapRequest:params=>mapWslRequest(params,value=>wslRuntime.toLinux(value,wslCandidate)),mapResponse:value=>mapWslResponse(value,wslCandidate.distribution)}:{command,cwd:cwd||os.homedir()}));
  if(runtimeStartupError){rpc.connected=false;rpc.start=async()=>{throw runtimeStartupError;};}
  const metadataRoot=statisticsRoot??(!demo&&!client?defaultStatisticsRoot():null);
+ const ignoredQuestions=new IgnoredQuestions(metadataRoot,runtimeProfile||['native',process.env.CODEX_HOME||os.homedir()]);
+ await ignoredQuestions.load();
  const contextWindows=new ModelContextWindows(metadataRoot,runtimeProfile||['native',process.env.CODEX_HOME||os.homedir()]);
  await contextWindows.load();
  const modelWindowCatalog=()=>readModelWindowCatalog(wslActive
   ? (wslCandidate?wslPathToHost(wslCandidate.codexHome,wslCandidate.distribution):null) : rpc.codexHome);
- const sessions=new ThreadSessions(rpc,{contextWindows,onEvent:message=>{desktopSleep?.update();broadcast(message);scheduleMobileTasks();},onThreadLoaded:result=>{statistics.thread(result?.thread,result);mobileNotifications.routes.remember(result?.thread);}});
+ const sessions=new ThreadSessions(rpc,{contextWindows,onEvent:message=>{desktopSleep?.update();broadcast(message);scheduleMobileTasks();},onThreadLoaded:result=>{statistics.thread(result?.thread,result);mobileNotifications.rememberThread(result?.thread);}});
  const threadReads=new ThreadReads();
  const mobileNotifications=new MobileNotificationFeed({
+  isQuestionIgnored:(threadId,itemId)=>ignoredQuestions.has(threadId,itemId),
   readThread:async threadId=>(await rpc.call('thread/read',{threadId,includeTurns:false})).thread,
   changed:scheduleMobileTasks,
  });
  const mobileTaskStreams=new Map();
  let mobileTaskUpdate=null;
- function mobileSnapshot(){
-  return mobileNotifications.snapshot({connected:rpc.connected===true&&!stopping,serverInstance:operations.serverInstance,
+ function mobileSnapshot(details=false){
+  return mobileNotifications.snapshot({connected:rpc.connected===true&&!stopping,serverInstance:operations.serverInstance,details,
    threads:sessions.snapshot().threads,requests:new Map(availableRequests('lan').map(([id,request])=>[id,presentRequest(request)]))});
  }
- function mobileTaskEvent(baseline=false){
-  const {connected,running,finished}=mobileSnapshot();
+ function mobileTaskEvent(baseline=false,details=false){
+  const {connected,running,finished}=mobileSnapshot(details);
   return 'data: '+JSON.stringify({method:'bridge/mobileTasks',params:{connected,running,finished,baseline}})+'\n\n';
  }
  function scheduleMobileTasks(){
@@ -231,11 +236,13 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
   mobileTaskUpdate=setImmediate(()=>{
    mobileTaskUpdate=null;
    if(!mobileTaskStreams.size)return;
-   const event=mobileTaskEvent();
-   for(const [res,previous] of mobileTaskStreams) {
-    if(event===previous)continue;
+   const events=new Map();
+   for(const [res,stream] of mobileTaskStreams) {
+    if(!events.has(stream.details))events.set(stream.details,mobileTaskEvent(false,stream.details));
+    const event=events.get(stream.details);
+    if(event===stream.previous)continue;
     if(res.destroyed||res.writableLength>4*1024*1024)res.destroy();
-    else {res.write(event);mobileTaskStreams.set(res,event);}
+    else {res.write(event);stream.previous=event;}
    }
   });
  }
@@ -257,25 +264,27 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
  }
  const pricing=new PricingService({root:metadataRoot});await pricing.load();
  const statistics=new StatisticsService({pricing,root:metadataRoot});await statistics.load();
- const contextLive=new Map(),contextFiles=new Map(),contextReads=new Map();
+ const contextLive=new Map(),contextFiles=new Map(),contextReads=new Map(),timingCache=new Map();
  const contextRoots=wslActive?(wslCandidate?['sessions','archived_sessions'].map(dir=>wslPathToHost(wslCandidate.codexHome+'/'+dir,wslCandidate.distribution)):[]):defaultRolloutRoots();
  function rememberContext(map,id,value){map.delete(id);map.set(id,value);if(map.size>512)map.delete(map.keys().next().value);}
- async function readThreadContext(threadId){
+ async function readThreadContext(threadId,needTiming=false){
   if(!contextFiles.has(threadId))return null;
   const live=contextLive.get(threadId);
-  if(live)return live;
+  const timing=timingCache.get(threadId);
+  if(needTiming?timing?.file===contextFiles.get(threadId)&&Date.now()-timing.at<5000:live)return live;
   if(contextReads.has(threadId))return contextReads.get(threadId);
   const generation=accountIdentityGeneration,wirePath=contextFiles.get(threadId);
   if(typeof wirePath!=='string'||contextReads.size>=4)return null;
-  const reading=(async()=>{
-   let saved=null;
+  const reading=Promise.resolve().then(async()=>{
+   let saved=null,timings=null;
    try{
     const rollout=wslCandidate?wslPathToHost(hostPathToWsl(wirePath,wslCandidate.distribution),wslCandidate.distribution):wirePath;
-    saved=await contextHistoryReader({rollout,threadId,roots:contextRoots,caseSensitive:wslActive});
+    saved=await contextHistoryReader({rollout,threadId,roots:contextRoots,caseSensitive:wslActive,onTimings:value=>{timings=value;}});
    }catch{/* An unavailable source leaves the thread's context metrics unknown. */}
    if(generation!==accountIdentityGeneration||contextFiles.get(threadId)!==wirePath)return null;
+   if(contextReads.get(threadId)===reading)rememberContext(timingCache,threadId,{file:wirePath,at:Date.now(),timings});
    return contextLive.get(threadId)||saved;
-  })();
+  });
   contextReads.set(threadId,reading);
   try{return await reading;}finally{if(contextReads.get(threadId)===reading)contextReads.delete(threadId);}
  }
@@ -283,7 +292,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
   codexHome:wslCandidate.codexHome,scratchRoot:wslPathToHost('/tmp',wslCandidate.distribution),toHost:value=>wslPathToHost(value,wslCandidate.distribution),
  }:{ }),onEvent:message=>broadcast(message)});await titleSummary.load();
  let accountIdentityGeneration=0,accountIdentityPending=null;
- function clearStatisticsAccount(){accountIdentityGeneration++;statistics.setAccount(null);accountIdentityPending=null;observedPermissionIdentity=undefined;sessionPermissions.resetAnonymous();contextLive.clear();contextFiles.clear();contextReads.clear();}
+ function clearStatisticsAccount(){accountIdentityGeneration++;statistics.setAccount(null);accountIdentityPending=null;observedPermissionIdentity=undefined;sessionPermissions.resetAnonymous();contextLive.clear();contextFiles.clear();contextReads.clear();timingCache.clear();}
  async function readStatisticsAccount(){
   if(demo||!rpc.connected)return;
   if(accountIdentityPending)return accountIdentityPending;
@@ -415,8 +424,9 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      if(requestAccess==='lan')desktopSleep?.update();
      res.write(`data: ${JSON.stringify({method:'bridge/threadReads',params:threadReads.snapshot()})}\n\n`);
      if(url.searchParams.get('mobileTasks')==='1'){
-      mobileTaskStreams.set(res,null);
-      res.write(mobileTaskEvent(true));
+      const details=url.searchParams.get('details')==='1';
+      mobileTaskStreams.set(res,{details,previous:null});
+      res.write(mobileTaskEvent(true,details));
      }
      const heartbeat=setInterval(()=>{if(res.writableLength>4*1024*1024)res.destroy();else res.write(': keepalive\n\n');if(mobileTaskStreams.has(res))scheduleMobileTasks();},15000);
      res.once('close',()=>{streams.delete(res);mobileTaskStreams.delete(res);clearInterval(heartbeat);if(requestAccess==='lan')desktopSleep?.update();});return;
@@ -424,12 +434,19 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
     if(url.pathname==='/api/mobile/notification-state'){
      if(requestAccess!=='lan'){json(res,403,{error:'仅配对设备可读取手机通知状态',code:'LAN_ONLY'});return;}
      if(req.method!=='GET'){res.setHeader('Allow','GET');json(res,405,{error:'不支持的操作'});return;}
-     json(res,200,mobileSnapshot());return;
+     json(res,200,mobileSnapshot(url.searchParams.get('details')==='1'));return;
+    }
+    if(url.pathname==='/api/release-notes' && req.method==='GET'){
+     const version=url.searchParams.get('version')??appVersion;
+     if(!/^\d{1,9}(?:\.\d{1,9}){2}$/.test(version)){json(res,400,{error:'版本号无效'});return;}
+     try{json(res,200,{version,notes:await readFile(new URL('../releases/'+version+'.md',import.meta.url),'utf8')});}
+     catch(error){if(error.code!=='ENOENT')throw error;json(res,404,{error:'工作台未收录此版本的更新日志'});}
+     return;
     }
     if(url.pathname==='/api/status' && req.method==='GET'){
      const identity=await remoteIdentity(requestAccess!=='local');
      if(identity.remoteHostId)res.setHeader('X-CodeCang-Remote-Host-Id',identity.remoteHostId);
-     json(res,200,{...identity,connected:rpc.connected,runtimeTarget:wslActive?'wsl':'native',runtimeUnsupported:wslActive?['gitWrite','dshConfigSources','runtimeUpgrade',...(!wslCandidate?['dshConnection','gitRead']:[])]:[],demo,desktop:requestDesktop,access:requestAccess,canImportSkill:requestDesktop&&!!skillImporter,stopping,engineStopped,shutdownError,threadSessions:sessions.snapshot(),persistenceWarning:desktopState?.persistenceWarning||null,version:rpc.version||null,error:rpc.lastError||null,dshError:dsh.releaseError||dshResetError,dshWakeup:dshWakeup?.status()||{automaticWakeup:false,error:dshWakeupError},pendingRequests:availableRequests(requestAccess).map(([,request])=>presentRequest(request)),serverInstance:operations.serverInstance,operationRetentionMs:operations.retentionMs,reopenAvailable:requestAccess==='local'&&!!reopener,reopenError:requestAccess==='local'?reopenError:null,...(requestDesktop?{appUpdate:{...appUpdates.status(),demo},nodeUpdate:nodeUpdates?.status}:{})});return;
+     json(res,200,{...identity,appVersion,connected:rpc.connected,runtimeTarget:wslActive?'wsl':'native',runtimeUnsupported:wslActive?['gitWrite','dshConfigSources','runtimeUpgrade',...(!wslCandidate?['dshConnection','gitRead']:[])]:[],demo,desktop:requestDesktop,access:requestAccess,canImportSkill:requestDesktop&&!!skillImporter,stopping,engineStopped,shutdownError,threadSessions:sessions.snapshot(),persistenceWarning:desktopState?.persistenceWarning||null,version:rpc.version||null,error:rpc.lastError||null,dshError:dsh.releaseError||dshResetError,dshWakeup:dshWakeup?.status()||{automaticWakeup:false,error:dshWakeupError},pendingRequests:availableRequests(requestAccess).map(([,request])=>presentRequest(request)),serverInstance:operations.serverInstance,operationRetentionMs:operations.retentionMs,reopenAvailable:requestAccess==='local'&&!!reopener,reopenError:requestAccess==='local'?reopenError:null,...(requestDesktop?{appUpdate:{...appUpdates.status(),demo},nodeUpdate:nodeUpdates?.status}:{})});return;
     }
     if(url.pathname==='/api/lan/tunnel/status'&&req.method==='GET'){
      if(requestAccess!=='local')throw Object.assign(new Error('此操作仅限本机窗口'),{status:403});
@@ -449,6 +466,18 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      json(res,200,snapshot);return;
     }
     if(req.method!=='POST'){json(res,405,{error:'不支持的操作'});return;}
+    if(url.pathname==='/api/questions/ignored'||url.pathname==='/api/questions/ignore'){
+     const input=await body(req),{threadId,itemId,itemIds}=input||{};
+     if(url.pathname.endsWith('/ignored')){
+      if(!Array.isArray(itemIds)||itemIds.length<1||itemIds.length>64)throw Object.assign(new Error('提问列表无效'),{status:400});
+      json(res,200,{ignored:itemIds.filter(id=>ignoredQuestions.has(threadId,id))});return;
+     }
+     if(input?.serverInstance!==operations.serverInstance)throw Object.assign(new Error('连接环境已变化，请重新打开提问'),{status:409});
+     await ignoredQuestions.ignore(threadId,itemId);
+     mobileNotifications.ignoreQuestion(threadId,itemId);
+     broadcast({method:'bridge/questionIgnored',params:{threadId,itemId}});
+     json(res,200,{threadId,itemId});return;
+    }
     if(url.pathname==='/api/thread-reads'){
      if(requestAccess!=='lan'){json(res,403,{error:'仅配对设备可上报对话已读',code:'LAN_ONLY'});return;}
      const reads=threadReads.read(await body(req));
@@ -738,6 +767,13 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      res.setHeader('Content-Security-Policy',"sandbox; default-src 'none'; script-src 'none'; object-src 'none'; frame-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'");
      res.writeHead(200,{'Content-Type':image.mime,'Content-Length':image.bytes.length,'Content-Disposition':'attachment; filename="artifact.'+({'image/png':'png','image/jpeg':'jpg','image/webp':'webp','image/gif':'gif','image/vnd.microsoft.icon':'ico','image/svg+xml':'svg'})[image.mime]+'"','X-Artifact-Width':String(image.width),'X-Artifact-Height':String(image.height)});res.end(image.bytes);return;
     }
+    if(url.pathname==='/api/statistics/session-speed'){
+     if(!input || Object.keys(input).some(key=>key!=='threadId'&&key!=='liveOnly') || typeof input.threadId!=='string' || !input.threadId || input.threadId.length>256 || /[\x00-\x20\x7f]/.test(input.threadId) || (input.liveOnly!==undefined&&typeof input.liveOnly!=='boolean'))throw new Error('对话速度查询参数无效');
+     const generation=accountIdentityGeneration;
+     if(!input.liveOnly)await readThreadContext(input.threadId,true);
+     if(generation!==accountIdentityGeneration)throw new Error('账户已改变，请重新打开对话。');
+     json(res,200,statistics.sessionSpeed(input.threadId,timingCache.get(input.threadId)?.timings));return;
+    }
     if(url.pathname==='/api/statistics/turns'){
      const result=statistics.turnUsage(input);
      if(!demo&&!stopping&&requestAccess==='local'&&result.turns.some(turn=>!turn.model||!turn.tokensComplete))void recoverUsage();
@@ -857,6 +893,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      let params,titleInput;
      try {
       if(input.method==='thread/delete'&&input.confirmed!==true)throw new Error('删除对话需要明确确认');
+      if(requestAccess==='lan' && input.method==='account/rateLimitResetCredit/consume' && input.confirmed!==true)throw new Error('使用重置卡需要明确确认');
       if((input.attachmentIds!==undefined||input.fileAttachmentIds!==undefined||input.confirmedFileAttachmentIds!==undefined) && !['turn/start','turn/steer'].includes(input.method))throw new Error('此操作不接受附件');
       const attachmentInputs=input.attachmentIds===undefined?[]:await uploads.resolveInline(input.attachmentIds);
       const files=input.fileAttachmentIds===undefined?[]:await fileUploads.resolve(input.fileAttachmentIds);
@@ -895,8 +932,8 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
       const forward=()=>input.method==='thread/summary'?titleSummary.summarizeSavedThread(currentThread):sessions.call(input.method,effective);
       const output=input.method==='thread/list'?await threadList.http(req,res,params):MUTATING_METHODS.has(input.method)?await threadList.mutate(forward):await forward();statistics.acknowledge(input.method,effective,output);if(output?.thread){artifacts.bindThread(output.thread);files.bindThread(output.thread);}
       if(identityGeneration===accountIdentityGeneration){
-       if(input.method==='thread/list'&&!params.archived)for(const thread of output?.data||[])mobileNotifications.routes.remember(thread,true);
-       else if(output?.thread)mobileNotifications.routes.remember(output.thread,['thread/start','thread/fork'].includes(input.method));
+       if(input.method==='thread/list'&&!params.archived)for(const thread of output?.data||[])mobileNotifications.rememberThread(thread,true);
+       else if(output?.thread)mobileNotifications.rememberThread(output.thread,['thread/start','thread/fork'].includes(input.method));
       }
       if(output?.thread?.id&&identityGeneration===accountIdentityGeneration)rememberContext(contextFiles,output.thread.id,output.thread.path||contextFiles.get(output.thread.id)||null);
       if(input.method==='account/read'&&identityGeneration===accountIdentityGeneration)observedPermissionIdentity=accountIdentityKey(output);
@@ -1007,6 +1044,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
   if(titleSummary.observe(message))return;
   if(message.method==='account/updated'||(message.method==='bridge/status'&&message.params?.connected===false))clearStatisticsAccount();
   const threadId=message.params?.threadId||message.params?.thread?.id;
+  if(threadId&&message.method==='turn/completed'){timingCache.delete(threadId);contextReads.delete(threadId);}
   if(threadId&&dsh.isReaderThread(threadId))return;
   if(message.method==='account/login/completed'&&message.params?.success===true){resetThreadReads();pluginActions.clear();}
   threadReads.observe(message);
@@ -1025,12 +1063,15 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
    if(snapshot)rememberContext(contextLive,snapshot.threadId,{...snapshot,source:'live'});
   }
   if(['thread/archived','thread/deleted'].includes(message.method)){
-   contextFiles.delete(message.params?.threadId);contextLive.delete(message.params?.threadId);
+   contextFiles.delete(message.params?.threadId);contextLive.delete(message.params?.threadId);timingCache.delete(message.params?.threadId);
   }
   if(message.method==='remoteControl/status/changed')observeRemote('remoteControl/status/read',{},message.params);
   if(['item/started','item/completed'].includes(message.method)){
-   dsh.observe(threadId,message.params?.item);artifacts.observe(threadId,message.params?.item);
-   if(!demo&&message.method==='item/completed')desktopSleep?.observeChild(threadId,message.params?.item);
+   const item=message.params?.item;
+   dsh.observe(threadId,item);artifacts.observe(threadId,item);
+   if(!demo&&message.method==='item/completed')desktopSleep?.observeChild(threadId,item);
+   if(item?.type==='agentMessage' && item.delivery==='async' && validTaskId(threadId) && validTaskId(item.id) && ignoredQuestions.has(threadId,item.id))
+    broadcast({method:'bridge/questionIgnored',params:{threadId,itemId:item.id}});
   }
   broadcast(message);
  });

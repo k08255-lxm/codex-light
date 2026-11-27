@@ -236,7 +236,7 @@ public class CodexLightBridge {
 
     @JavascriptInterface
     public String getAppVersion() {
-        return "0.4.19";
+        return "0.4.20";
     }
 
     @JavascriptInterface

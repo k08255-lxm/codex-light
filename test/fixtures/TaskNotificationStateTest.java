@@ -41,6 +41,10 @@ public final class TaskNotificationStateTest {
         check(tasks.update("thread-1", "turn-1", "任务一", "running", "tool", 100_005) == null,
             "replayed phase from a replaced turn cannot take over the current notification");
         checkPhaseUpdates();
+        java.util.Set<String> ignored=TaskNotificationState.ignoring(java.util.Collections.emptySet(),"computer","one","turn-a");
+        check(ignored.equals(TaskNotificationState.ignoring(ignored,"computer","one","turn-a")), "repeat ignore is idempotent");
+        check(ignored.contains(TaskNotificationState.ignoreKey("computer","one","turn-a")), "same turn remains ignored on the paired computer");
+        check(!ignored.contains(TaskNotificationState.ignoreKey("computer","one","turn-b")) && !ignored.contains(TaskNotificationState.ignoreKey("other-computer","one","turn-a")), "next turn and different computer are independent");
         System.out.println("Task notification state checks passed");
     }
 
@@ -74,5 +78,11 @@ public final class TaskNotificationStateTest {
         tasks.update("one", "a", "一", "completed", 8000);
         first.postedAt = 8000;
         check(first.phase == null && !first.needsPost(90000), "completed card drops the ongoing phase and never renews");
+        check(tasks.update("one","a","一","waiting","question",90001,true)==first, "a confirmed outstanding request can follow completion on the original card");
+        first.details("",2,4,7,"question-1","one","选择哪个版本？");
+        check(first.notificationId==id && first.needsPost(90001) && "计划 2/4".equals(first.progressLabel()),"waiting card retains its route and real plan counts");
+        tasks.update("one","a","一","running","tool",90002);
+        first.details("fileChange",0,0,7,"","","");
+        check("修改文件".equals(first.phaseLabel()) && "已完成 7 项工具操作".equals(first.progressLabel()),"answer restores the tool and measured progress");
     }
 }

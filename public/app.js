@@ -13,6 +13,9 @@ import { mountWelcomeGreeting } from './ui/welcome-greeting.js';
 import { redeemPairing } from './ui/pairing.js';
 import { mountUpdateIndicator, mountAndroidUpdateIndicator } from './ui/update-indicator.js';
 import { mountContextDetails } from './ui/context-details.js';
+import {mountSessionSpeed} from './ui/session-speed.js';
+import {mountMobileAbout} from './ui/mobile-about.js';
+import {createQuestionIgnores} from './ui/question-ignores.js';
 import { bootstrapToken } from './ui/access.js';
 import { mountConfigSettingsPanel } from './config-settings-panel.js';
 import { mountSettingsSearch } from './ui/settings-search.js';
@@ -71,6 +74,7 @@ const dshTasks = new DshTaskStore();
 const $ = id => document.getElementById(id);
 hydrateIcons(document);
 const contextDetails=mountContextDetails(document);
+const sessionSpeed=mountSessionSpeed(document,(threadId,history)=>api('/api/statistics/session-speed',history?{threadId}:{threadId,liveOnly:true}));
 mountWelcomeGreeting(document.querySelector('#welcome h1'));
 let localSession; try { localSession = sessionStorage; } catch { localSession = {getItem(){throw new Error('会话存储不可用');},setItem(){throw new Error('会话存储不可用');},removeItem(){throw new Error('会话存储不可用');}}; }
 const readSession = key => { try { return localSession.getItem(key); } catch { return null; } };
@@ -80,7 +84,16 @@ try { await redeemPairing(location, url=>history.replaceState(null,'',url)); } c
 const access = bootstrapToken(location, localSession, url => history.replaceState(null, '', url));
 const token = access.token;
 // LAN pages cannot use local management (shutdown, runtime, desktop, LAN links). Applied before any request.
-function applyAccessMode(lan) { state.lan = !!lan; document.documentElement.dataset.access = lan ? 'lan' : 'local'; }
+function applyAccessMode(lan) {
+  state.lan = !!lan; document.documentElement.dataset.access = lan ? 'lan' : 'local';
+  const paired = state.lan || androidUpdateHost;
+  $('about-root').hidden = paired; $('mobile-about').hidden = !paired;
+  const next = paired ? mobileAbout : desktopAbout;
+  if (aboutView !== next) {
+    aboutView.deactivate(); aboutView = next;
+    if (currentRoute === 'settings' && state.settingsPage === 'about') void aboutView.activate();
+  }
+}
 const pendingMutations = new PendingMutations(localSession);
 let draftModelChoice = readDraftModelChoice();
 let modelCatalogLoading = true;
@@ -275,7 +288,12 @@ async function fetchArtifactPreview(path, threadId = state.thread?.id, workspace
 const lightbox = mountLightbox(document);
 const artifactView = mountArtifacts({ document, fetchPreview: fetchArtifactPreview, getScope:()=>state.thread?.id||null, onOpen: view => lightbox.open(view), resolveImage: (itemId, slot) => state.store.image(itemId, slot) });
 const conversationScroll=mountConversationScroll($('conversation'));
-const conversation = mountConversation($('messages'), { scrollController:conversationScroll,
+const questionIgnores=createQuestionIgnores({scope:()=>state.serverInstance,
+  read:(threadId,itemIds)=>api('/api/questions/ignored',{threadId,itemIds}),
+  write:(threadId,itemId,serverInstance)=>api('/api/questions/ignore',{threadId,itemId,serverInstance}),
+  onIgnored:(threadId,itemId)=>questionNotifications?.answered(threadId,itemId),
+  onError:error=>notice('暂时无法读取已忽略的提问：'+error.message,true)});
+const conversation = mountConversation($('messages'), { scrollController:conversationScroll,questionIgnores,
   onFork:(threadId,lastTurnId)=>forkCurrentThread(lastTurnId,threadId),
   readTurnUsage:(threadId,turnIds)=>api('/api/statistics/turns',{threadId,turnIds}),
   ensurePrices:()=>api('/api/pricing/ensure',{}),getContext:()=>state.contexts.get(state.thread?.id), onLocalLink: previewLocalFile, getCwd: () => state.thread?.cwd || state.cwd, getThreadId:()=>state.thread?.id, onAnswerAsync:payload=>answerAsync(payload), artifacts: artifactView, onOpenAgent:(id,kind)=>{showDetails('dsh',true);dshView.openAgent(id,kind);} });
@@ -526,9 +544,9 @@ const accountView = mountAccount($('account-root'), {
     if(method==='account/read')return accountIdentity.read();
     if(method!=='account/rateLimitResetCredit/consume')return rpc(method,params);
     if(pendingMutations.values().some(row=>row.method===method))throw Object.assign(new Error('上次重置结果仍待核实，请先刷新账户状态'),{outcome:'notExecuted'});
-    return performMutation(method,params);
+    return performMutation(method,params,{confirmed:true});
   },
-  loginPanelHost: $('account-login-controls'), pendingHost: $('account-pending'), demo: () => state.demo, readOnly:access.lan,
+  loginPanelHost: $('account-login-controls'), pendingHost: $('account-pending'), demo: () => state.demo,
   getThreadId: () => state.thread?.id, onQuota: result => accountQuota.update(result),
 });
 const lanView = mountLanAccess($('lan-root'), { api, notice });
@@ -540,24 +558,27 @@ const updateIndicator = !androidUpdateHost&&!access.lan ? mountUpdateIndicator(u
 if(androidUpdateHost)mountAndroidUpdateIndicator(updateHost,window,$('mobile-app-update'));
 let announcedUpdate='',announcedNode='';
 function updateNodeRuntime(status){
-  aboutView.updateNode(status);
+  desktopAbout.updateNode(status);
   if(status?.available&&status.latest!==announcedNode){
     announcedNode=status.latest;
     notice('Node.js v'+status.latest+' 可用，在「设置 → 关于」查看运行环境更新。');
   }
 }
 function applyAutomaticUpdate(status) {
-  aboutView.update(status);
+  desktopAbout.update(status);
   const version=status?.latest?.available&&status.supported&&!status.demo&&status.latest.version;
   if(window.chrome?.webview&&version&&version!==announcedUpdate&&!['launched','launchUnknown'].includes(status.phase)){
     announcedUpdate=version;
     notice('码舱 CodeCang v'+version+' 可用。打开设置 → 关于查看更新说明并下载。');
   }
 }
-const aboutView = mountAbout($('about-root'), { api, onStatus:status=>updateIndicator?.update(status), mutate: (method, params) => {
+const desktopAbout = mountAbout($('about-root'), { api, onStatus:status=>updateIndicator?.update(status), mutate: (method, params) => {
   if(pendingMutations.storageError||scopedPending('app-update').length)throw Object.assign(new Error('上一次更新请求尚未结束，请稍后查看更新状态。'),{outcome:'notExecuted'});
   return performMutation(method, params);
 } });
+const mobileAbout = mountMobileAbout($('mobile-about'), {bridge:androidUpdateHost ? window.CodexLightNative : null,
+  readNotes:version=>api('/api/release-notes?version='+encodeURIComponent(version))});
+let aboutView = desktopAbout;
 // Local-only: the LAN page never mounts requests for DSH config management (server also refuses with 403).
 const dshConfigView = mountDshConfig($('dsh-config-root'), { api, onSourcesChanged: () => dshConnectionView.refreshModels() });
 const dshModelReminder = $('dsh-model-reminder');
@@ -664,7 +685,7 @@ $('navigate-forward').addEventListener('click',()=>travelHistory(1));
 document.addEventListener('keydown',event=>{if(event.altKey&&!event.ctrlKey&&!event.metaKey&&['ArrowLeft','ArrowRight'].includes(event.key)){event.preventDefault();void travelHistory(event.key==='ArrowLeft'?-1:1);}});
 for(const button of document.querySelectorAll('[data-window-command]'))button.addEventListener('click',()=>window.chrome?.webview?.postMessage({type:'windowCommand',command:button.dataset.windowCommand}));
 function route(name, { section, back = false } = {}) {
-  if(name!=='chat')contextDetails.close();
+  if(name!=='chat'){contextDetails.close();sessionSpeed.close();}
   if (!Object.hasOwn(STAGES, name)) name = 'chat';
   const previous = currentRoute;
   currentRoute = name;
@@ -1139,7 +1160,7 @@ function renderTools() {
 const toolActivity=mountToolActivity($('tool-list'),{artifacts:artifactView});
 const liveChanges=mountLiveChanges($('live-changes'),{renderDiff});
 const scrollToBottom=mountScrollToBottom($('conversation'),{onBottom:behavior=>conversationScroll.toBottom({behavior})});
-const dshView = createDshView({ document, state, $, dshLive, dshTasks, api, rpc, el, onAnswerAsync:payload=>answerAsync(payload), onLocalLink:previewLocalFile, artifactFactory:({threadId,resolveImage})=>mountArtifacts({document,fetchPreview:fetchArtifactPreview,getScope:()=>threadId,onOpen:view=>lightbox.open(view),resolveImage}) });
+const dshView = createDshView({ document, state, $, dshLive, dshTasks, api, rpc, el, questionIgnores,onAnswerAsync:payload=>answerAsync(payload), onLocalLink:previewLocalFile, artifactFactory:({threadId,resolveImage})=>mountArtifacts({document,fetchPreview:fetchArtifactPreview,getScope:()=>threadId,onOpen:view=>lightbox.open(view),resolveImage}) });
 const { renderDshConnection, refreshDsh, syncDshLiveContext, scheduleDshRender, renderDshTasks, ingestDshSnapshot } = dshView;
 $('dsh-live-refresh').addEventListener('click', () => { dshLive.refresh(); scheduleDshRender(); });
 function removeAttachment(id) {
@@ -1324,6 +1345,7 @@ let pendingContextRead=null;
 function renderContext() {
   const id=state.thread?.id||null;
   contextDetails.update(id,state.contexts.get(id)||null,pendingContextRead?.id===id);
+  sessionSpeed.select(state.connected?id:null);
 }
 function cacheContext(snapshot,source) {
   if(snapshot.turnId)conversation.refreshTurnUsage(snapshot.threadId,snapshot.turnId);
@@ -1667,6 +1689,7 @@ function onEvent(message) {
     return;
   }
   if(message.method==='bridge/mobileTasks'){taskNotifications?.apply(message.params);return;}
+  if(message.method==='bridge/questionIgnored'){questionIgnores.apply(message.params.threadId,message.params.itemId);return;}
   if(message.method==='bridge/runtimeUpdate'){runtimePanel?.updateAvailable();return;}
   if(message.method==='bridge/sessionPermissionChanged'){
     sessionControls.changed(message.params).catch(error=>notice('未能同步对话批准方式：'+error.message,true));
@@ -1696,7 +1719,7 @@ function onEvent(message) {
     renderThreads();updateControls();return;
   }
   if(message.method==='account/updated')return accountIdentity.verify();
-  if(message.method==='bridge/statisticsRecovered'){statsView.recovered();conversation.recoverTurnUsage();return;}
+  if(message.method==='bridge/statisticsRecovered'){statsView.recovered();conversation.recoverTurnUsage();sessionSpeed.refresh();return;}
   if(message.method==='bridge/accountLogin'){accountLoginPanel.update(message.params);if(['completed','loggedOut'].includes(message.params?.state)){accountIdentity.reset();resetAccountScopedViews('账户已改变');}return;}
   if(message.method==='thread/tokenUsage/updated'){if(!state.connected)return;const snapshot=contextSnapshot(message.params);if(snapshot){cacheContext(snapshot,'live');if(snapshot.threadId===state.thread?.id)renderContext();}return;}
   if(message.method==='bridge/threadReads'){
@@ -1713,8 +1736,8 @@ function onEvent(message) {
   if(message.method==='bridge/threadSessions'){applyThreadSessions(message.params);return;}
   if(message.method==='skills/changed'){slashMenu.invalidateSkills();void skillsView.invalidate();return;}
   if (message.method === 'remoteControl/status/changed') { applyRemoteStatus(message.params); return; }
-  if (message.method === 'bridge/nodeUpdate') { if(!state.lan)updateNodeRuntime(message.params); return; }
-  if (message.method === 'bridge/appUpdate') { if(!state.lan)applyAutomaticUpdate(message.params); return; }
+  if (message.method === 'bridge/nodeUpdate') { if(aboutView===desktopAbout)updateNodeRuntime(message.params); return; }
+  if (message.method === 'bridge/appUpdate') { if(aboutView===desktopAbout)applyAutomaticUpdate(message.params); return; }
   if (message.method === 'bridge/dshSnapshot') { ingestDshSnapshot(message.params); return; }
   if (message.method === 'bridge/threadSubmission') { const {threadId,submittedAt}=message.params||{};recordThreadSubmission(threadId,submittedAt);return; }
   if (message.method === 'bridge/status') { const connected=!!message.params?.connected;if(!connected)dropRequests(()=>true);const reconnected=connected&&!state.connected;setConnected(connected);if(reconnected&&state.thread?.id)void loadSavedContext(state.thread.id,state.openGeneration,true);if(connected&&(!state.serverInstance||!state.cliVersion))syncStatus().catch(error=>notice('连接已建立，但本地服务状态读取失败：'+error.message,true)); if (message.params?.error) notice(message.params.error, true); return; }
@@ -1722,6 +1745,8 @@ function onEvent(message) {
   if (message.method === 'bridge/titleSummary') { titleSettings.reset(); if(message.params?.state==='failed')notice(message.params.error||'标题总结未完成，保留原名称。',true); return; }
   if (message.id !== undefined && message.method) { if (trackRequest(message)) renderRequests({notify:true}); return; }
   const p = message.params || {};
+  if(state.thread?.id===p.threadId&&message.method==='turn/completed')sessionSpeed.refresh();
+  if(currentRoute==='chat'&&state.thread?.id===p.threadId&&message.method==='item/completed')sessionSpeed.activity(p.item);
   threadCompletion.observe(message,viewedThreadId());
   if (message.method === 'serverRequest/resolved') { if (validRequestId(p.requestId)) { state.requests.delete(requestKey(p.requestId)); renderRequests(); } return; }
   if (message.method === 'thread/closed' && typeof p.threadId === 'string' && p.threadId) {
@@ -1771,11 +1796,12 @@ function applyThreadSessions(params) {
   updateControls(); renderThreads();watchExternalTurn();drainAll();
 }
 async function syncStatus() {
-  const updateRevision=aboutView.revision;
+  const updateRevision=desktopAbout.revision;
   const status = await api('/api/status'); applyAccessMode(state.lan || status.access === 'lan'); state.cliVersion = typeof status.version==='string'&&status.version ? boundedText(status.version,300) : null; state.desktop = status.desktop === true; state.canImportSkill = status.canImportSkill === true; state.runtimeTarget=status.runtimeTarget==='wsl'?'wsl':'native';applyRuntimeTarget(); if($('version-info'))$('version-info').textContent=state.cliVersion||'未知'; document.body.classList.toggle('native-desktop',state.desktop); $('runtime-close-info').textContent='停止服务会中断正在运行的本应用任务。'; $('reopen-info').textContent=state.desktop?'重新打开窗口可查看对话历史。':status.reopenAvailable===true?'可通过启动器重新打开本地界面。':status.reopenAvailable===false?'关闭后可能需要重新运行启动器。':''; if(!state.desktop&&status.reopenError)$('reopen-info').textContent+=' '+boundedText(status.reopenError,800); if(state.serverInstance !== (status.serverInstance || null)){resetContext();sessionControls.reset();deactivatePendingReconciler();historyCaps.unsupported.clear();pluginPanel.reset();configPanel.reset();resetUsage();resetRuntimePanel();dshLive.reset();if(state.serverInstance)remoteReset({statusMessage:'本地服务已切换。',pairMessage:'服务已切换，旧配对码已隐藏。',devicesMessage:'刷新后可查看当前服务的设备。'});}state.serverInstance = status.serverInstance || null; state.demo = !!status.demo; setConnected(status.connected, status.demo ? '演示模式 · 不调用模型' : undefined); if(state.desktop){await loadDesktopState();preferencesView.syncHostTheme();} preferencesView.offerFirstTheme(); $('mode-info').textContent = status.demo ? '演示模式，不消耗额度' : '本地 Codex app-server';
   // Replace with the server's current set; unchanged instances keep their card and draft.
-  if(status.nodeUpdate&&!state.lan)updateNodeRuntime(status.nodeUpdate);
-  if(status.appUpdate&&!state.lan&&aboutView.revision===updateRevision)applyAutomaticUpdate(status.appUpdate);
+  if(aboutView===mobileAbout)mobileAbout.setHostVersion(status.appVersion);
+  if(status.nodeUpdate&&aboutView===desktopAbout)updateNodeRuntime(status.nodeUpdate);
+  if(status.appUpdate&&aboutView===desktopAbout&&desktopAbout.revision===updateRevision)applyAutomaticUpdate(status.appUpdate);
   applyThreadSessions(status.threadSessions); const pending = new Map(); for (const request of status.pendingRequests || []) if (validRequestId(request?.id)) { const key = requestKey(request.id), known = state.requests.get(key); pending.set(key, known && known.bridgeRequestToken === request.bridgeRequestToken ? known : request); } state.requests = pending; renderRequests();
   if (status.demo) notice('当前是演示模式：仅测试界面和协议，不会调用真实模型。'); engineOnboarding.start(); return status;
 }
@@ -1784,7 +1810,8 @@ async function events() {
   while (!state.shuttingDown) {
     let reader; const controller = new AbortController(); state.eventController = controller;
     try {
-      const response = await fetch(taskNotifications?'/api/events?mobileTasks=1':'/api/events', { signal: controller.signal, headers: { Authorization: `Bearer ${token}` } }); if (!response.ok) throw new Error(`事件连接失败 (${response.status})`);
+      const eventPath=taskNotifications?'/api/events?mobileTasks=1'+(taskNotifications.details?'&details=1':''):'/api/events';
+      const response = await fetch(eventPath, { signal: controller.signal, headers: { Authorization: `Bearer ${token}` } }); if (!response.ok) throw new Error(`事件连接失败 (${response.status})`);
       lastEventAt=Date.now();
       reader = response.body.getReader(); eventsReconnecting = false; const decoder = new TextDecoder(); let buffer = ''; await syncStatus(); delay = 1000;
       offlineSnapshot?.ready();
@@ -1792,7 +1819,7 @@ async function events() {
         try { await openThread(state.thread); }
         catch (error) { notice('已恢复连接，重新载入对话失败：'+error.message, true); }
       }
-      taskNavigationReady=true;taskNotifications?.reconcile();
+      taskNavigationReady=true;taskNotifications?.reconcile();questionIgnores.refresh();
       reconnected = true;
       while (true) {
         // The server sends a keepalive every 15 seconds. A silent socket must not keep stale task notifications alive.
@@ -1929,6 +1956,8 @@ let searchTimer; $('search').addEventListener('input', () => {
   searchTimer=setTimeout(()=>loadThreads().catch(()=>{}),150);
 });
 const backLayers = [
+    { isOpen: () => contextDetails.open, close: () => contextDetails.close(true) },
+    { isOpen: () => sessionSpeed.open, close: () => sessionSpeed.close(true) },
     { isOpen: () => !$('thread-menu').classList.contains('hidden'), close: () => closeThreadMenu(true) },
     { isOpen: () => !!activeMenu, close: () => { closeWindowMenu(); focusAfterWindowMenu(); } },
     { isOpen: () => !$('reasoning-popover').classList.contains('hidden'), close: () => closeReasoning() },
@@ -2058,7 +2087,7 @@ function selectSettingsSection(section = 'general') {
   if(section==='account'||section==='usage'){route(section);return;}
   if(section==='lan')section='remote';
   const sections = ['general','engines','dsh','archived','remote','plugins','skills','appearance','notifications','shortcuts','configuration','about','storage'];
-  const page = (['about','storage','engines'].includes(section) && state.lan) || !sections.includes(section) ? 'general' : section; state.settingsPage = page;
+  const page = (['storage','engines'].includes(section) && state.lan) || !sections.includes(section) ? 'general' : section; state.settingsPage = page;
   for (const name of sections) $('settings-' + name).classList.toggle('hidden', name !== page);
   for (const item of document.querySelectorAll('[data-settings-section]')) item.classList.toggle('active', item.dataset.settingsSection === section);
   document.querySelector('.settings-content').scrollTop = 0;
@@ -2070,7 +2099,7 @@ function selectSettingsSection(section = 'general') {
   if(page==='plugins')pluginPanel.activate();else pluginPanel.deactivate();renderPluginPending();
   if(page==='configuration')configPanel.activate();
   if(page==='remote'&&!state.lan)lanView.activate();else lanView.deactivate();
-  if(page==='about')aboutView.activate();else aboutView.deactivate();
+  if(page==='about')ready=aboutView.activate();else aboutView.deactivate();
   if(page==='storage'&&!state.lan)storageView.activate();else storageView.deactivate();
   if (page === 'remote'){if(state.connected)refreshRemote();else remoteReset({statusMessage:'尚未连接 Codex，无法读取远控状态。',pairMessage:'连接已断开，配对码已隐藏。',devicesMessage:'未连接时设备列表不可用；不会撤销旧环境设备。'});}
   syncRuntimePanelActivity();

@@ -3,15 +3,22 @@ import argparse,hashlib,json,sys
 from pathlib import Path
 from stage import plain
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'msi'))
-from payload_policy import omitted_runtime_file
+from payload_policy import omitted_runtime_file,release_note_name
 from bridge_bundle import validate as validate_bridge_bundle
 SCOPES=('src','public','package.json','components/dsh-bridge')
 def digest(b):return hashlib.sha256(b).hexdigest()
 def entry_plain(p):
  if p.is_symlink() or getattr(p.lstat(),'st_file_attributes',0)&0x400:raise ValueError('Reparse entry refused: '+str(p))
+def scopes(root):
+ package=root/'package.json';plain(package)
+ version=json.loads(package.read_text(encoding='utf-8'))['version']
+ folder=root/'releases';plain(folder)
+ notes=sorted(f.name for f in folder.iterdir() if release_note_name(f.name) and f.is_file())
+ if version+'.md' not in notes:raise ValueError('Missing release notes for '+version)
+ return (*SCOPES,*('releases/'+name for name in notes))
 def collect(root):
  result={}
- for scope in SCOPES:
+ for scope in scopes(root):
   p=root/scope;plain(p)
   if not p.exists():raise ValueError('Missing source scope: '+scope)
   if scope=='components/dsh-bridge':
@@ -36,7 +43,7 @@ def verify(repo,payload,filtered=False):
   if digest(actual[name].read_bytes())!=h:raise ValueError('Stale/modified payload: '+name)
   entries.append({'Path':name,'Bytes':len(b),'Sha256':h})
  encoded=json.dumps(entries,separators=(',',':'),ensure_ascii=False).encode('utf-8')
- return {'Schema':1,'Scopes':list(SCOPES),'FilteredRuntimeDeclarations':filtered,'FileCount':len(entries),'TreeSha256':digest(encoded),'Files':entries}
+ return {'Schema':1,'Scopes':list(scopes(repo)),'FilteredRuntimeDeclarations':filtered,'FileCount':len(entries),'TreeSha256':digest(encoded),'Files':entries}
 if __name__=='__main__':
  p=argparse.ArgumentParser();p.add_argument('repo');p.add_argument('payload');p.add_argument('--filtered',action='store_true');p.add_argument('--output');a=p.parse_args();r=verify(a.repo,a.payload,a.filtered);s=json.dumps(r,indent=2)
  if a.output:Path(a.output).write_text(s,encoding='utf-8')

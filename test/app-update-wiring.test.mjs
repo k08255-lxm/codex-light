@@ -6,7 +6,7 @@ import {PendingMutations,lookupDecision,outcomeFromError,pendingForScope,makeMut
 const source=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
 const apiSource=source.slice(source.indexOf('async function api('),source.indexOf('const rpc ='));
 const mutationSource=source.slice(source.indexOf('async function performMutation('),source.indexOf('// ---------- Composer:'));
-const adapterSource=source.slice(source.indexOf('const aboutView = mountAbout('),source.indexOf('// Local-only:',source.indexOf('const aboutView = mountAbout(')));
+const adapterSource=source.slice(source.indexOf('const desktopAbout = mountAbout('),source.indexOf('const mobileAbout = mountMobileAbout('));
 const instance='b'.repeat(32);
 const noop=()=>{};
 function dependencies(fn,deps){const names=Object.keys(deps);return new Function(...names,fn)(...names.map(name=>deps[name]));}
@@ -14,7 +14,7 @@ function harness(api){
  const values=new Map();const storage={getItem:key=>values.get(key)||null,setItem:(key,value)=>values.set(key,value),removeItem:key=>values.delete(key)};
  const pendingMutations=new PendingMutations(storage);
  const performMutation=dependencies(mutationSource+'\nreturn performMutation;',{pendingMutations,state:{serverInstance:instance,openGeneration:0},mutationContexts:new Map(),renderPendingMutations:noop,updateControls:noop,api,lookupDecision,outcomeFromError,noteLedgerChanged:noop,notice:noop});
- const adapter=dependencies(adapterSource+'\nreturn aboutView;',{mountAbout:(_host,options)=>options,$:noop,api,pendingMutations,scopedPending:scope=>pendingForScope(pendingMutations.values(),scope),performMutation});
+ const adapter=dependencies(adapterSource+'\nreturn desktopAbout;',{mountAbout:(_host,options)=>options,$:noop,api,pendingMutations,scopedPending:scope=>pendingForScope(pendingMutations.values(),scope),performMutation});
  return {pendingMutations,performMutation,adapter,storage};
 }
 

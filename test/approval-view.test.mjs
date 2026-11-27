@@ -55,6 +55,18 @@ test('choice without Other cannot send free text; clearing a choice returns to s
   assert.throws(() => userInputResponse(ask(1, [{ id: 'c', options: [{ label: 'A', description: '' }] }]).params, { c: 'free text' }));
 });
 
+test('ignoring a blocking question skips its fields and preserves the other question', async () => {
+  const x = setup(), fields = [{id:'note', header:'说明', question:'填写说明', options:null}];
+  x.add(ask(3,fields)); x.add(ask(4,fields));
+  const first=card(x,3), second=card(x,4);
+  first.querySelector('textarea').value='草稿';
+  const ignore=byText(first,'忽略');
+  assert.equal(ignore.parentElement,byText(first,'提交回答').parentElement);
+  await click(ignore);
+  assert.deepEqual(x.posted,[{id:3,bridgeRequestToken:'token-3',result:{answers:{note:{answers:[]}}}}]);
+  assert.equal(card(x,4),second); assert.equal(x.requests.size,1);
+});
+
 test('drafts survive other requests arriving/resolving and status refresh of the same instance', () => {
   const x = setup();
   x.add(ask(1, [{ id: 'a', header: 'A', question: 'Free', options: null }]));

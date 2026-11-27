@@ -3,6 +3,7 @@ import {itemText} from '../store.js';
 // Render marks for all loaded turns, including those currently represented by spacers.
 export function mountTurnTimeline(rail, scroller, host, {pause, reveal}) {
   const doc = rail.ownerDocument, win = doc.defaultView;
+  const narrow=win.matchMedia?.('(max-width:760px), (pointer:coarse) and (max-height:600px)');
   const marks = rail.querySelector('.turn-marks'), preview = rail.querySelector('.turn-preview');
   const buttons = new Map();
   let items = [], active = null, jumpFrame = null;
@@ -85,6 +86,11 @@ export function mountTurnTimeline(rail, scroller, host, {pause, reveal}) {
     marks.replaceChildren(); marks.scrollTop=0; rail.hidden=true;
   }
   function update(list) {
+    if(narrow?.matches||doc.documentElement.dataset.mobileShell==='android'){
+      if(!rail.hidden||buttons.size)clear();
+      items=list;
+      return;
+    }
     if (items === list) { updateActive(); return; }
     items = list;
     rail.hidden = list.length < 2;
@@ -111,5 +117,6 @@ export function mountTurnTimeline(rail, scroller, host, {pause, reveal}) {
     }
     updateActive();
   }
+  narrow?.addEventListener('change',()=>{const list=items;clear();update(list);});
   return {update,clear};
 }

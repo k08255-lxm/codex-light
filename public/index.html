@@ -93,7 +93,7 @@
         <button class="settings-nav-item" data-settings-section="plugins"><span data-icon="plug"></span><span>插件</span></button>
         <button class="settings-nav-item" data-settings-section="remote"><span data-icon="remote"></span><span>远程控制</span></button>
         <button class="settings-nav-item local-only" data-settings-section="storage"><span data-icon="archive"></span><span>存储空间</span></button>
-        <button class="settings-nav-item local-only" data-settings-section="about"><span data-icon="info"></span><span>关于</span></button>
+        <button class="settings-nav-item" data-settings-section="about" data-search-keywords="版本 更新日志 发布说明"><span data-icon="info"></span><span>关于</span></button>
       </nav>
     </div>
   </aside>
@@ -131,10 +131,10 @@
       <section id="queue" class="queue hidden" aria-label="排队消息" aria-live="polite"></section>
       <div class="composer-overlays">
         <div id="live-changes" class="live-changes hidden"></div>
-        <div id="attachment-tray" class="attachment-tray hidden" aria-label="待发送附件（图片和文件合计最多 5 个）"></div>
       </div>
       <form id="compose" class="composer">
         <span class="attachment-drop-hint">松开以添加附件</span>
+        <div id="attachment-tray" class="attachment-tray hidden" aria-label="待发送附件（图片和文件合计最多 5 个）"></div>
         <div id="slash-menu" class="slash-menu hidden" role="listbox" aria-label="命令与技能"></div>
         <textarea id="prompt" rows="1" placeholder="描述要完成的任务" aria-label="消息" maxlength="100000" role="combobox" aria-autocomplete="list" aria-controls="slash-menu" aria-expanded="false"></textarea>
         <div class="composer-row">
@@ -166,6 +166,7 @@
       <div class="composer-foot">
         <button id="cwd-button" type="button" class="foot-btn" title="设置工作目录"><span data-icon="folder"></span><span id="cwd-label">设置工作目录</span><span data-icon="down"></span></button>
         <span class="foot-chip" title="任务在此计算机的工作目录中运行，可能直接修改项目文件"><span data-icon="computer"></span>本地</span>
+        <button id="session-speed" type="button" class="foot-btn speed-meter hidden" aria-haspopup="dialog" aria-controls="speed-details" aria-expanded="false" aria-label="查看会话速度"><span data-icon="usage"></span><span id="speed-label">会话速度</span></button>
         <span id="composer-hint" class="composer-hint">Enter 发送 · Shift Enter 换行 · / 命令</span>
       </div>
     </footer>
@@ -191,7 +192,6 @@
         <div id="mobile-connection-settings" class="panel" hidden>
           <div class="pref-row"><div><strong>手机连接</strong><small class="fine">配对、更换电脑和自动连接</small></div><button id="mobile-connection" type="button" class="btn">管理连接</button></div>
           <div id="mobile-app-permissions-row" class="pref-row" hidden><div><strong>应用权限</strong><small class="fine">在 Android 系统中管理相机和通知权限</small></div><button id="mobile-app-permissions" type="button" class="btn">打开系统设置</button></div>
-          <div id="mobile-app-update-row" class="pref-row" hidden><div><strong>手机应用更新</strong></div><button id="mobile-app-update" type="button" class="btn">检查更新</button></div>
         </div>
         <form id="settings-form">
           <h2 class="section-title">当前连接</h2>
@@ -298,7 +298,24 @@
       <section id="settings-skills" class="settings-section hidden"></section>
       <section id="settings-plugins" class="settings-section hidden"></section>
       <section id="settings-storage" class="settings-section hidden"><div id="storage-root"></div></section>
-      <section id="settings-about" class="settings-section hidden"><div id="about-root"></div></section>
+      <section id="settings-about" class="settings-section hidden">
+        <div id="about-root" class="local-only"></div>
+        <div id="mobile-about" class="about-page" hidden>
+          <h1>关于</h1>
+          <div class="about-brand mobile-about-brand"><img src="/icon.svg" width="38" height="38" alt=""><h2>码舱 CodeCang</h2></div>
+          <div class="mobile-about-versions">
+            <div id="mobile-about-client" class="pref-row" hidden><div><strong>Android 客户端</strong><small id="mobile-client-version" class="fine"></small></div><button id="mobile-app-update" type="button" class="btn" hidden>检查更新</button></div>
+            <div class="pref-row"><div><strong>配对电脑</strong><small id="mobile-host-version" class="fine">正在读取…</small></div></div>
+          </div>
+          <section id="mobile-release-notes" class="about-release-notes" aria-labelledby="mobile-notes-title">
+            <div class="mobile-notes-heading"><h2 id="mobile-notes-title">更新日志</h2><span id="mobile-notes-version" class="about-version"></span></div>
+            <div id="mobile-notes-switch" class="segmented" role="group" aria-label="选择更新日志" hidden>
+              <button type="button" data-notes-for="client" aria-pressed="true">手机端</button><button type="button" data-notes-for="host" aria-pressed="false">电脑端</button>
+            </div>
+            <div class="release-body"></div>
+          </section>
+        </div>
+      </section>
     </div>
   </main>
 
@@ -331,18 +348,25 @@
     <div class="first-theme-footer"><span id="first-theme-status" role="status">以后可以在设置中更改。</span><button type="submit" class="btn primary">使用此主题</button></div>
   </form>
 </dialog>
-<dialog id="context-details" aria-labelledby="context-details-title">
+<section id="speed-details" class="turn-usage-popover dock-stat-popover" popover="auto" role="dialog" aria-labelledby="speed-title">
+  <div class="turn-usage-head"><strong id="speed-title">会话速度</strong></div>
+  <dl class="speed-readings">
+    <div><dt>模型回复用时</dt><dd id="speed-reply">—</dd></div>
+    <div><dt>工具调用用时</dt><dd id="speed-tools">—</dd></div>
+    <div><dt>首 token 平均（TTFT）</dt><dd id="speed-ttft">—</dd></div>
+    <div><dt>输出速度（TPS）</dt><dd id="speed-tps">—</dd></div>
+    <div id="speed-turn-row" hidden><dt>整轮平均输出</dt><dd id="speed-turn">—</dd></div>
+  </dl>
+  <p id="speed-status" class="fine" role="status"></p>
+</section>
+<section id="context-details" class="turn-usage-popover dock-stat-popover" popover="auto" role="dialog" aria-labelledby="context-details-title">
   <div class="context-details-body">
-    <div class="dialog-header"><h2 id="context-details-title">上下文用量</h2><button id="context-details-close" class="btn icon-only ghost" type="button" aria-label="关闭上下文详情" autofocus><span data-icon="close"></span></button></div>
+    <div class="dialog-header"><h2 id="context-details-title">上下文用量</h2><button id="context-details-close" class="btn icon-only ghost" type="button" aria-label="关闭上下文详情"><span data-icon="close"></span></button></div>
     <p id="context-details-status" role="status"></p>
-    <section aria-labelledby="context-window-heading"><h3 id="context-window-heading">模型窗口</h3><dl id="context-window-metrics"></dl></section>
-    <div class="context-detail-usage">
-      <section aria-labelledby="context-last-heading"><h3 id="context-last-heading">最近一次请求</h3><dl id="context-last-metrics"></dl></section>
-      <section aria-labelledby="context-total-heading"><h3 id="context-total-heading">对话累计</h3><dl id="context-total-metrics"></dl></section>
-    </div>
-    <p class="context-detail-note">单位为 tokens。各项数值和合计均采用 Codex 的报告。</p>
+    <dl id="context-window-metrics" aria-label="模型窗口"></dl>
+    <table class="context-detail-usage" aria-label="Token 用量"><thead><tr><th scope="col">Tokens</th><th scope="col">最近一次请求</th><th scope="col">对话累计</th></tr></thead><tbody id="context-breakdown"></tbody></table>
   </div>
-</dialog>
+</section>
 <script type="module" src="/app.js"></script>
 <script type="module" src="/ui/select.js"></script>
 </body>

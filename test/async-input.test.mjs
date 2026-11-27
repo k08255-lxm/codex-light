@@ -13,7 +13,7 @@ function form(options = {}) {
   const document = createDocument(), posted = [];
   const opts = { threadId: 'main-thread', onAnswerAsync: async payload => { posted.push(payload); return { status: 'sent' }; }, ...options };
   const card = createAsyncInputCard(document, question, opts); document.body.append(card.node);
-  return { ...card, document, posted, opts, submit: card.node.querySelector('button') };
+  return { ...card, document, posted, opts, submit: card.node.querySelector('.answer-submit') };
 }
 
 test('only native async message questions become an async form; tool accepted is not an answer', () => {
@@ -63,6 +63,33 @@ test('recommended options start unchecked and only an explicit submit sends sele
   assert.doesNotMatch(view.posted[0].text, /回答：模型总结/);
   assert.equal(view.node.dataset.outcome,'sent'); assert.equal(view.node.firstElementChild.textContent,'已回答');
   assert.doesNotMatch(visibleText(view.node), /回答已发送/); assert.equal(view.submit.disabled, true);
+});
+
+test('ignoring a question retries with the draft intact and dismisses only its card', async () => {
+  const requests = [];
+  let attempts = 0, watching = 0;
+  const questionIgnores = {
+    watch(thread, item, listener) { watching++; listener(false); return () => { watching--; }; },
+    async ignore(thread, item) {
+      requests.push([thread, item]);
+      if (++attempts === 1) throw new Error('连接中断');
+    }
+  };
+  const view = form({questionIgnores});
+  const ignore = view.node.querySelector('.answer-ignore'), draft = view.node.querySelector('.approval-other');
+  assert.equal(ignore.parentElement, view.submit.parentElement);
+  assert.equal(ignore.textContent, '忽略'); assert.equal(ignore.hidden, false);
+  draft.value = '未发送的草稿'; draft.dispatch('input');
+  await click(ignore);
+  assert.equal(view.node.querySelector('.inline-error').textContent, '连接中断');
+  assert.equal(draft.value, '未发送的草稿'); assert.equal(ignore.disabled, false);
+  await click(ignore);
+  assert.deepEqual(requests, Array(2).fill(['main-thread', question.id]));
+  assert.equal(view.node.dataset.outcome, 'ignored'); assert.equal(view.node.firstElementChild.textContent, '已忽略');
+  assert.equal(view.posted.length, 0); assert.equal(view.submit.disabled, true);
+  view.pause(); assert.equal(watching, 0);
+  view.update(question, {...view.opts, confirmedAnswers:['从另一台设备回答','未回答']});
+  assert.equal(watching, 0); assert.equal(view.node.dataset.outcome, 'sent');
 });
 
 test('only the matching structured reply joins the question across refresh and turns', async () => {
@@ -143,6 +170,6 @@ test('native subagent forms send to their own thread and survive inspector refre
   custom.focus(); inspector.render();
   assert.equal(host.querySelector('.approval-other'), custom); assert.equal(document.activeElement, custom);
   const compact = host.querySelector('.compaction-record'); assert.ok(compact); assert.equal(compact.closest('details'), null);
-  await click(host.querySelector('.async-input-card').querySelector('button'));
+  await click(host.querySelector('.async-input-card').querySelector('.answer-submit'));
   assert.equal(posted.length, 1); assert.equal(posted[0].threadId, 'child'); assert.equal(posted[0].itemId, question.id);
 });

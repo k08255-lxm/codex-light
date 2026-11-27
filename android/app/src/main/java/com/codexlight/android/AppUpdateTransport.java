@@ -50,8 +50,12 @@ final class AppUpdateTransport {
         final String version;
         final Asset apk;
         final String sha256;
+        final String notes;
         Release(String version, Asset apk, String sha256) {
-            this.version = version; this.apk = apk; this.sha256 = sha256;
+            this(version, apk, sha256, "");
+        }
+        Release(String version, Asset apk, String sha256, String notes) {
+            this.version = version; this.apk = apk; this.sha256 = sha256; this.notes = notes;
         }
         boolean matches(Release other) {
             return other != null && version.equals(other.version) && apk.size == other.apk.size && sha256.equals(other.sha256);
@@ -87,7 +91,8 @@ final class AppUpdateTransport {
         if (apk.digest != null && !apk.digest.equals("sha256:" + sha256)) {
             throw new Failure("GitHub 摘要与发布校验文件不一致");
         }
-        return new Release(version, apk, sha256);
+        String notes = selected.optString("body","").trim();
+        return new Release(version, apk, sha256, notes.length() > 8000 ? notes.substring(0,8000) + "…" : notes);
     }
 
     static int compareVersions(String candidate, String installed) throws IOException {

@@ -1,4 +1,5 @@
 import {contextFields,contextView} from '../context-usage.js';
+import {mountStatPopover} from './stat-popover.js';
 
 export function mountContextDetails(document) {
   const meter = document.getElementById('context-meter');
@@ -20,8 +21,16 @@ export function mountContextDetails(document) {
     });
   }
   const windowRows = addMetrics('context-window-metrics',[['used','已用'],['remaining','剩余'],['window','窗口']]);
-  const lastRows = addMetrics('context-last-metrics',contextFields);
-  const totalRows = addMetrics('context-total-metrics',contextFields);
+  const lastRows=[],totalRows=[];
+  for(const [field,title] of contextFields){
+    const row=document.createElement('tr'),name=document.createElement('th');
+    name.scope='row';name.textContent=title;row.append(name);
+    for(const [scope,rows] of [['last',lastRows],['total',totalRows]]){
+      const value=document.createElement('td');value.dataset.scope=scope;value.dataset.metric=field;
+      rows.push([field,value]);row.append(value);
+    }
+    document.getElementById('context-breakdown').append(row);
+  }
   function setRows(rows, values) {
     for(const [key,node] of rows){
       const value=values?.[key];
@@ -38,26 +47,17 @@ export function mountContextDetails(document) {
     meter.title=view.detail;
     meter.setAttribute('aria-label',view.detail+'，查看上下文详情');
     meter.classList.toggle('hidden',!threadId);
-    if(!dialog.open)return;
+    if(!popover.open)return;
     status.textContent=loading&&!snapshot?'正在读取此对话的上下文用量…':!snapshot?'此对话暂无可用用量记录。':
       snapshot.source==='history'?'来自该对话的最近一条历史用量记录。':'来自 Codex 最近一次用量更新。';
     setRows(windowRows,{used:snapshot?.used,remaining:view.remaining,window:snapshot?.window});
     setRows(lastRows,snapshot?.last);
     setRows(totalRows,snapshot?.total);
   }
-  function close(){if(dialog.open)dialog.close();}
-  meter.addEventListener('click',()=>{
-    if(!threadId||dialog.open)return;
-    dialog.showModal();meter.setAttribute('aria-expanded','true');draw();closeButton.focus();
-  });
-  closeButton.addEventListener('click',close);
-  dialog.addEventListener('click',event=>{if(event.target===dialog)close();});
-  dialog.addEventListener('close',()=>{
-    meter.setAttribute('aria-expanded','false');
-    if(threadId&&meter.getClientRects().length)meter.focus({preventScroll:true});
-  });
-  return {close,update(id, next, pending=false){
-    if(threadId!==id)close();
+  const popover=mountStatPopover(meter,dialog,{onOpen:draw,focusOnOpen:closeButton});
+  closeButton.addEventListener('click',()=>popover.close(true));
+  return {close:popover.close,get open(){return popover.open;},update(id, next, pending=false){
+    if(threadId!==id)popover.close();
     threadId=id;snapshot=next;loading=pending;draw();
   }};
 }

@@ -41,7 +41,14 @@ public final class MobileNotificationService extends Service {
     private static boolean backgroundQuestions = true;
 
     static String status() { return state; }
-    static boolean ownsNotifications() { return started && "active".equals(state); }
+    static boolean ownsNotifications() { return started; }
+    static boolean questionAlertsEnabled() { return backgroundQuestions; }
+    static String lastTaskSummary() {
+        MobileNotificationService service=currentService;
+        if (service==null || !"active".equals(state) || service.lastTaskCount<0) return "";
+        if (service.lastTaskCount==0) return "电脑当前没有已同步的任务。";
+        return "电脑已同步 " + service.lastTaskCount + " 个任务。";
+    }
     static void setQuestionAlerts(boolean enabled) { backgroundQuestions = enabled; }
     static void saveQuestionAlerts(Context context, ServerConfig config, boolean enabled) {
         android.content.SharedPreferences prefs = context.getSharedPreferences(CHANNEL, MODE_PRIVATE);
@@ -123,6 +130,7 @@ public final class MobileNotificationService extends Service {
     private final Set<String> knownFinished = new LinkedHashSet<>();
     private final Runnable nextPoll = this::poll;
     private boolean polling, refreshPending, expedited;
+    private int lastTaskCount=-1;
     private ServerConfig target;
     private ServerConfig verifiedTarget;
     private android.net.Network verifiedNetwork;
@@ -166,6 +174,7 @@ public final class MobileNotificationService extends Service {
         polling = false; refreshPending = false;
         handler.removeCallbacksAndMessages(null);
         serverInstance = null;
+        lastTaskCount=-1;
         retryMs = 5_000L;
         deadline = SystemClock.elapsedRealtime() + SESSION_MS;
         poll();
@@ -210,7 +219,7 @@ public final class MobileNotificationService extends Service {
                     }
                     if (!PairedNetwork.unchanged(this, network)) throw new IOException("Route changed");
                 }
-                HttpURLConnection connection = (HttpURLConnection) new URL(config.origin() + "/api/mobile/notification-state").openConnection();
+                HttpURLConnection connection = (HttpURLConnection) new URL(config.origin() + "/api/mobile/notification-state?details=1").openConnection();
                 active = connection;
                 if (session != generation) { connection.disconnect(); return; }
                 connection.setInstanceFollowRedirects(false);
@@ -257,13 +266,10 @@ public final class MobileNotificationService extends Service {
         refreshPending = false;
         if (SystemClock.elapsedRealtime() >= deadline) { expireSession(); return; }
         if (!tasks.permissionGranted()) { state = "permission_required"; stopSelf(); return; }
-        // A foreground event received during this request is newer than its snapshot.
-        if (refresh && data != null && data.optBoolean("connected")) {
-            handler.post(nextPoll);
-            return;
-        }
         if (data == null || !data.optBoolean("connected")) {
-            if ("active".equals(state)) tasks.disconnected();
+            // One missed poll must not demote live work. Expiry marks stale tasks
+            // when connectivity stays down. An explicit engine disconnect is authoritative.
+            if (data != null) tasks.disconnected();
             state = data == null ? error : "engine_offline";
             if (data == null && ("unauthorized".equals(error) || "incompatible".equals(error))) {
                 if ("unauthorized".equals(error)) { tasks.clear(); questions.clearAll(); }
@@ -284,16 +290,6 @@ public final class MobileNotificationService extends Service {
             knownFinished.clear();
         }
         JSONArray incoming = data.optJSONArray("pending"), running = data.optJSONArray("running"), finished = data.optJSONArray("finished");
-        Set<String> current = new HashSet<>();
-        for (int i = 0; i < incoming.length(); i++) {
-            JSONObject notice = incoming.optJSONObject(i);
-            if (notice == null) continue;
-            String id = notice.optString("id");
-            if (!QuestionNotificationController.validId(id)) continue;
-            current.add(id);
-            if (backgroundQuestions) questions.show(id,notice.optString("threadId"),notice.optString("kind"));
-        }
-        questions.reconcile(current);
         Set<String> currentThreads = new HashSet<>();
         for (int i = 0; i < running.length(); i++) {
             JSONObject task = running.optJSONObject(i);
@@ -308,7 +304,19 @@ public final class MobileNotificationService extends Service {
             if (remember(knownFinished,key) && !baseline && !currentThreads.contains(task.optString("threadId"))) tasks.updateFromFeed(task);
         }
         tasks.reconcile(currentThreads);
-        handler.postDelayed(nextPoll,5_000L);
+        lastTaskCount=currentThreads.size();
+        Set<String> current = new HashSet<>();
+        for (int i = 0; i < incoming.length(); i++) {
+            JSONObject notice = incoming.optJSONObject(i);
+            if (notice == null) continue;
+            String id = notice.optString("id");
+            if (!QuestionNotificationController.validId(id)) continue;
+            current.add(id);
+            if (backgroundQuestions) questions.show(id,notice.optString("threadId"),notice.optString("kind"));
+        }
+        questions.reconcile(current);
+        // Apply every successful snapshot, even when streaming updates queue another poll.
+        handler.postDelayed(nextPoll,refresh ? 250L : 5_000L);
     }
 
     private static boolean remember(Set<String> seen, String key) {

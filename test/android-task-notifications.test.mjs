@@ -43,6 +43,8 @@ test('Native notification integration guards trust, uses public Android promotio
   assert.match(controller, /setTimeoutAfter/);
   assert.match(controller, /setDeleteIntent\(deleteIntent\)/);
   assert.match(controller, /"取消固定"/);
+  assert.doesNotMatch(controller+read('QuestionNotificationController.java'),/"忽略本轮"/);
+  assert.match(controller, /boolean running = entry.active\(\)/);
   assert.match(manifest, /android.permission.POST_NOTIFICATIONS/);
   assert.match(manifest, /android.permission.POST_PROMOTED_NOTIFICATIONS/);
   assert.match(manifest, /TaskNotificationReceiver" android:exported="false"/);

@@ -9,6 +9,8 @@ export const STATISTICS_LIMIT=5000;
 const MAX_BYTES=8*1024*1024;
 const TOKEN_KEYS=['inputTokens','cachedInputTokens','cacheWriteInputTokens','outputTokens','reasoningOutputTokens','totalTokens'];
 const METRICS=['firstTextLatencyMs','durationMs','textCharsPerSecond'];
+const SPEED_FIELDS=['replyMs','toolMs','decodeMs','decodeTokens'];
+const toolItems=new Set(['commandExecution','fileChange','mcpToolCall','dynamicToolCall','collabAgentToolCall','webSearch','imageView','imageGeneration']);
 const statuses=new Set(['inProgress','completed','failed','interrupted','unknown']);
 const n=value=>Number.isSafeInteger(value)&&value>=0?value:null;
 const metric=value=>typeof value==='number'&&Number.isFinite(value)&&value>=0?value:null;
@@ -37,6 +39,7 @@ function cleanRow(raw){
  const row=blankRow(raw.threadId,raw.turnId,'light-events');
  Object.assign(row,{timestamp:iso(raw.timestamp),startedAt:iso(raw.startedAt),completedAt:iso(raw.completedAt),model:id(raw.model),provider:providerId(raw.provider),status:raw.status,submissionCount:n(raw.submissionCount)??0,tokens:tokens(raw.tokens),tokensComplete:raw.tokensComplete===true,outputTokensComplete:raw.outputTokensComplete===true,unknownTokenFields:TOKEN_KEYS.filter(key=>raw.unknownTokenFields?.includes(key)),performance:Object.fromEntries(METRICS.map(key=>[key,metric(raw.performance?.[key])]))});
  row.account=publicAccountIdentity(raw.account);if(raw.tokenSource==='verified-local-turn')row.tokenSource='verified-local-turn';
+ if(raw.speed)row.speed=Object.fromEntries(SPEED_FIELDS.filter(key=>metric(raw.speed[key])!==null).map(key=>[key,raw.speed[key]]));
  if(n(raw.context?.used)!==null&&n(raw.context?.window)>0)row.context={used:raw.context.used,window:raw.context.window};
  return row;
 }
@@ -169,22 +172,46 @@ export class StatisticsService {
   if(message.method==='turn/started'){
    if(this.rows.get(key)?.startedAt)return;
    const info=this.threads.get(threadId)||{},existing=this.rows.get(key),row=existing||blankRow(threadId,turnId,'light-events');if(!existing)row.account=this.currentAccount?{...this.currentAccount}:null;row.status='inProgress';row.timestamp=row.startedAt=new Date(this.now()).toISOString();row.model=row.model||info.model||null;row.provider=row.provider||info.provider||null;row.tokensComplete=this.baselines.has(threadId);row.outputTokensComplete=n(this.baselines.get(threadId)?.outputTokens)!==null;
-   this.rows.set(key,row);this.active.set(key,{turnId,start:this.monotonic(),streams:new Map(),streamChars:0,streamMs:0});this.changed();return;
+   this.rows.set(key,row);this.active.set(key,{turnId,start:this.monotonic(),streams:new Map(),speedItems:new Map(),streamChars:0,streamMs:0});this.changed();return;
   }
   const row=this.rows.get(key),active=this.active.get(key);if(!row)return;
-  if(message.method==='item/agentMessage/delta'&&active&&typeof p.delta==='string'&&p.delta.length&&id(p.itemId)){
-   const now=this.monotonic();if(row.performance.firstTextLatencyMs===null)row.performance.firstTextLatencyMs=Math.max(0,now-active.start);
-   let stream=active.streams.get(p.itemId);if(!stream){if(active.streams.size>=200)return;stream={first:now,last:now,afterFirstChars:0,done:false};active.streams.set(p.itemId,stream);}else if(!stream.done){stream.last=now;let chars=0;for(const _ of p.delta)chars++;stream.afterFirstChars+=chars;}
-   this.changed();return;
+  if(active&&(message.method==='item/started'||message.method==='item/completed')&&id(p.item?.id)&&
+     (p.item.type==='agentMessage'||toolItems.has(p.item.type))){
+   let sample=active.speedItems.get(p.item.id);
+   if(!sample&&active.speedItems.size<2048){sample={};active.speedItems.set(p.item.id,sample);}
+   if(sample&&!sample.done){
+    if(message.method==='item/started'){
+     sample.start??=this.monotonic();sample.nativeStart??=n(p.startedAtMs)??n(p.item.startedAtMs);
+    }else{
+     sample.done=true;
+     const now=this.monotonic(),start=n(p.item.startedAtMs)??sample.nativeStart,end=n(p.completedAtMs)??n(p.item.completedAtMs);
+     const duration=metric(p.item.durationMs)??(start!=null&&end!==null&&end>=start?end-start:sample.start!=null?metric(now-sample.start):null);
+     const speed=row.speed??={};
+     const field=p.item.type==='agentMessage'?'replyMs':'toolMs';
+     if(duration!==null)speed[field]=(speed[field]??0)+duration;
+     const stream=active.streams.get(p.item.id),count=n(p.contentTokenCount);
+     // Content tokens and the observed decode interval must belong to the same message.
+     if(field==='replyMs'&&stream&&!stream.done&&sample.start!=null&&count!==null&&now>stream.first){
+      speed.decodeTokens=(speed.decodeTokens??0)+count;speed.decodeMs=(speed.decodeMs??0)+now-stream.first;
+     }
+     this.changed();
+    }
+   }
   }
-  if(message.method==='item/completed'&&active&&p.item?.type==='agentMessage')this.finishStream(active,row,p.item.id);
+  if(message.method==='item/agentMessage/delta'&&active&&typeof p.delta==='string'&&p.delta.length&&id(p.itemId)){
+   const now=this.monotonic();
+   if(row.performance.firstTextLatencyMs===null){row.performance.firstTextLatencyMs=Math.max(0,now-active.start);this.changed();}
+   let stream=active.streams.get(p.itemId);if(!stream){if(active.streams.size>=200)return;stream={first:now,last:now,afterFirstChars:0,done:false};active.streams.set(p.itemId,stream);}else if(!stream.done){stream.last=now;let chars=0;for(const _ of p.delta)chars++;stream.afterFirstChars+=chars;}
+   return;
+  }
+  if(message.method==='item/completed'&&active&&p.item?.type==='agentMessage'&&this.finishStream(active,row,p.item.id))this.changed();
   if(message.method==='turn/completed'){
    if(active){for(const itemId of active.streams.keys())this.finishStream(active,row,itemId);row.performance.durationMs=metric(p.turn?.durationMs)??Math.max(0,this.monotonic()-active.start);}
    else if(metric(p.turn?.durationMs)!==null)row.performance.durationMs=metric(p.turn.durationMs);
    row.completedAt=new Date(this.now()).toISOString();row.status=statuses.has(p.turn?.status)?p.turn.status:'unknown';this.active.delete(key);this.changed();
   }
  }
- finishStream(active,row,itemId){const stream=active.streams.get(itemId);if(!stream||stream.done)return;stream.done=true;const elapsed=stream.last-stream.first;if(elapsed>0&&stream.afterFirstChars>0){active.streamChars+=stream.afterFirstChars;active.streamMs+=elapsed;row.performance.textCharsPerSecond=active.streamChars/(active.streamMs/1000);}}
+ finishStream(active,row,itemId){const stream=active.streams.get(itemId);if(!stream||stream.done)return false;stream.done=true;const elapsed=stream.last-stream.first;if(elapsed<=0||!stream.afterFirstChars)return false;active.streamChars+=stream.afterFirstChars;active.streamMs+=elapsed;row.performance.textCharsPerSecond=active.streamChars/(active.streamMs/1000);return true;}
  recoveryThreads(){
   const priorities=new Map();
   for(const row of this.rows.values()){
@@ -237,6 +264,25 @@ export class StatisticsService {
    this.localRows=[...out.values()].sort((a,b)=>(b.timestamp||'').localeCompare(a.timestamp||'')).slice(0,this.limit);this.localCoverage={partial:scan.partial||out.size>this.limit||excluded>0||overlap.size>0,excludedOverlappingThreads:overlap.size,excludedAmbiguousSessions:excluded};this.revision++;
   }
   return {recovered};
+ }
+ sessionSpeed(threadId,history){
+  if(!id(threadId))throw error('对话标识无效');
+  let replyMs=null,toolMs=null,decodeMs=0,decodeTokens=0,turnMs=0,turnTokens=0;
+  const counted=new Set();
+  for(const rows of [this.rows.values(),this.localRows])for(const row of rows){
+   if(row.threadId!==threadId||row.kind!=='turn')continue;
+   const s=row.speed;
+   if(s&&row.source==='light-events'){
+    if(metric(s.replyMs)!==null)replyMs=(replyMs??0)+s.replyMs;
+    if(metric(s.toolMs)!==null)toolMs=(toolMs??0)+s.toolMs;
+    if(s.decodeMs>0&&n(s.decodeTokens)!==null){decodeMs+=s.decodeMs;decodeTokens+=s.decodeTokens;}
+   }
+   if(!counted.has(row.turnId)&&turnThroughput(row)!==null){
+    counted.add(row.turnId);turnMs+=row.performance.durationMs;turnTokens+=row.tokens.outputTokens;
+   }
+  }
+  return {replyMs,toolMs,ttftMs:history?.ttftMs??null,partialHistory:history?.partial===true,
+   tps:decodeMs>0?1000*decodeTokens/decodeMs:null,turnTps:turnMs>0?1000*turnTokens/turnMs:null};
  }
  turnUsage(input){
   if(!input||Object.keys(input).sort().join(',')!=='threadId,turnIds'||!id(input.threadId)||!Array.isArray(input.turnIds)||input.turnIds.length>100||input.turnIds.some(value=>!id(value)))throw error('回合用量查询参数无效');

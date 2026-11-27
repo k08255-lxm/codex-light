@@ -42,6 +42,7 @@ test('public download instructions match the release asset/version contract', ()
   if (version === '0.4.12') assert.equal(apkNames[0], 'codex-light-android-0.4.12.apk');
   if (version === '0.4.13') assert.equal(apkNames[0], 'codex-light-0.4.13.apk');
   if (version === '0.4.15') assert.equal(apkNames[0], 'codex-light-0.4.15.apk');
+  if (version === '0.4.20') assert.equal(apkNames[0], 'codex-light-0.4.20.apk');
   assert.ok(android.includes(`versionCode 为 ${versionCode}`));
   assert.ok(readme.includes('SHA256SUMS.txt'));
   assert.ok(android.includes('SHA256SUMS.txt'));

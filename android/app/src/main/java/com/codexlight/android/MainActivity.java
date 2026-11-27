@@ -338,8 +338,8 @@ public class MainActivity extends Activity {
 
     public void updateTaskNotification(String json) {
         if (trustedTaskNotificationPage() && taskNotifications != null) {
-            taskNotifications.update(json);
             if (MobileNotificationService.ownsNotifications()) MobileNotificationService.refreshFromWeb();
+            else taskNotifications.update(json);
             deliverTaskNotificationIntent();
         }
     }
@@ -441,7 +441,7 @@ public class MainActivity extends Activity {
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
 
         String defaultUa = settings.getUserAgentString();
-        settings.setUserAgentString(defaultUa + " CodexLightMobile/0.4.19");
+        settings.setUserAgentString(defaultUa + " CodexLightMobile/0.4.20");
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             settings.setSafeBrowsingEnabled(false);

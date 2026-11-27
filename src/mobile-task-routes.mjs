@@ -79,6 +79,16 @@ export class MobileTaskRoutes {
     return false;
   }
 
+  rootFor(id) {
+    const visited = new Set();
+    while (validTaskId(id) && !visited.has(id) && !this.#inactive.has(id)) {
+      visited.add(id);
+      if (this.isRoot(id)) return id;
+      id = this.#routes.get(id)?.parent;
+    }
+    return null;
+  }
+
   async target(id) {
     const visited = new Set();
     while (validTaskId(id) && !visited.has(id)) {

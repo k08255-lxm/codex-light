@@ -33,6 +33,7 @@ try{
  await page.addInitScript(()=>{window.nativeCalls=[];window.taskCalls=[];window.androidUpdateStatus={phase:'idle'};let enabled=false;window.CodexLightNative={isNativeApp:()=>true,setToolbarIntegrated:flag=>window.nativeCalls.push(['toolbar',flag]),openServerManager:()=>window.nativeCalls.push(['connection']),openApplicationSettings:()=>window.nativeCalls.push(['permissions']),checkForUpdates:()=>window.nativeCalls.push(['android-update']),getAppUpdateStatus:()=>JSON.stringify(window.androidUpdateStatus),openAppUpdate:()=>window.nativeCalls.push(['android-update-open']),getTaskNotificationStatus:()=>JSON.stringify({supported:true,enabled,permissionGranted:true,promotedCandidate:true,reason:enabled?'ready':'disabled'}),setTaskNotificationsEnabled:value=>{enabled=value;window.nativeCalls.push(['notifications',value]);window.dispatchEvent(new Event('codexlight-task-notification-status'));},updateTaskNotification:data=>window.taskCalls.push(JSON.parse(data)),openTaskNotificationSettings:()=>window.nativeCalls.push(['notification-settings'])};});
  page.on('pageerror',error=>errors.push(error.message));await page.goto(phoneUrl.href);
  await page.locator('#connection-text').filter({hasText:'演示模式'}).waitFor({state:'attached'});await page.locator('#mobile-quota-slot .account-quota-row').nth(1).waitFor();
+ if(await page.locator('#first-theme').evaluate(dialog=>dialog.open))await page.locator('#first-theme button[type=submit]').click();
  assert.equal(await page.locator('html').getAttribute('data-access'),'lan');
  assert.deepEqual(await page.locator('.account-quota-value').allTextContents(),['76%','39%']);assert.equal(await page.locator('#menu-app').isVisible(),false);
  assert.equal(await page.locator('#app-update-indicator').isVisible(),false);
@@ -42,7 +43,7 @@ try{
  await page.evaluate(()=>{window.originalUpdateButton=document.querySelector('#app-update-indicator');});
  assert.equal(await page.locator('.app-titlebar > #app-update-indicator').count(),1);
  assert.equal(await page.locator('.rail .update-indicator').count(),0);
- assert.equal(await page.locator('.rail .rail-btn:visible').count(),5);
+ assert.deepEqual(await page.locator('.rail .rail-btn:visible').evaluateAll(buttons=>buttons.map(b=>b.id)),['rail-home','rail-usage','rail-account','rail-settings']);
  await page.locator('#app-update-indicator').click();
  assert.equal(await page.locator('#settings-about').isVisible(),false);
  assert.deepEqual(await page.evaluate(()=>window.nativeCalls.at(-1)),['android-update-open']);
@@ -52,14 +53,18 @@ try{
  await updateNative({phase:'available',version:'0.5.0'});
  checks.push('the APK update button sits between the phone title and quotas, opens the Android updater, and tracks the native state');
  await page.locator('#rail-settings').click();assert.equal(await page.locator('#sidebar-overlay').isVisible(),false);
- await page.locator('#mobile-connection').click();await page.locator('#mobile-app-permissions').click();await page.locator('#mobile-app-update').click();
+ await page.locator('#mobile-connection').click();await page.locator('#mobile-app-permissions').click();
+ assert.equal(await page.locator('#mobile-app-update').isVisible(),false);
+ await page.locator('#rail-sidebar').click();await page.getByRole('button',{name:'关于',exact:true}).click();
+ await page.locator('#mobile-app-update').click();
  assert.equal(await page.locator('#mobile-app-update').innerText(),'查看 v0.5.0 更新');
  assert.deepEqual(await page.evaluate(()=>window.nativeCalls),[['toolbar',true],['android-update-open'],['connection'],['permissions'],['android-update-open']]);
  await updateNative({phase:'up_to_date'});
  await page.getByRole('button',{name:'检查更新',exact:true}).click();
  assert.deepEqual(await page.evaluate(()=>window.nativeCalls.at(-1)),['android-update']);
  await updateNative({phase:'available',version:'0.5.0'});
- assert.equal(await page.evaluate(()=>window.CodexLightNavigation.back()),true);assert.equal(await page.locator('#app').getAttribute('data-view'),'chat');
+ assert.equal(await page.evaluate(()=>window.CodexLightNavigation.back()),true);await page.locator('#settings-general').waitFor();
+ assert.equal(await page.evaluate(()=>window.CodexLightNavigation.back()),true);await page.waitForFunction(()=>document.getElementById('app').dataset.view==='chat');
  await page.setViewportSize({width:700,height:500});await page.locator('.app-titlebar #rail-settings').waitFor();
  await page.locator('#rail-settings').click();await page.locator('#mobile-connection-settings').waitFor();
  await page.setViewportSize({width:1000,height:850});await page.locator('.rail #rail-settings').waitFor();

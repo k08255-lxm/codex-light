@@ -370,6 +370,7 @@ function userInput(ctx, p) {
     summary.textContent = missing ? `${missing} 题未回答，提交时作为跳过发送。` : '';
   };
   body.addEventListener('input', refresh); body.addEventListener('change', refresh); refresh();
+  button('忽略',()=>respond({result:userInputResponse(p,{})}), 'btn ghost answer-ignore');
   button('提交回答', async () => {
     let result; try { result = userInputResponse(p, Object.fromEntries(readers.map(reader => [reader.id, reader.read() ?? null]))); } catch (error) { showError(error.message); return; }
     await respond({ result });

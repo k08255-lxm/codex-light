@@ -44,7 +44,7 @@ test('unknown allowance has no fabricated bar fill or numeric accessible value',
 test('reentering refreshes in the background without replacing trusted content or resetting credit selection', async () => {
   const view = setup(); await view.account.activate();
   const identity = view.host.querySelector('.acct-head'), selector = view.host.querySelector('select'), tabs = view.host.querySelector('.acct-tabs'), credits = view.host.querySelector('.acct-reset-credits');
-  credits.querySelector('details').open = true;
+  assert.equal(credits.querySelector('details'), null);
   credits.querySelector('[data-focus-key="credit:one"]').click();
   const confirm = credits.querySelector('[data-focus-key="credit-confirm"]'); confirm.focus();
   view.account.deactivate();
@@ -58,15 +58,15 @@ test('reentering refreshes in the background without replacing trusted content o
   wait.resolve({}); await refresh;
 });
 
-test('identical results retain DOM, native disclosure state and focus; reads are coalesced', async () => {
+test('identical results retain visible cards and focus; reads are coalesced', async () => {
   const view = setup(); await view.account.activate();
-  const head = view.host.querySelector('.acct-head'), selector = view.host.querySelector('select'), details = view.host.querySelector('.acct-reset-credits').querySelector('details');
-  details.open = true; selector.focus();
+  const head = view.host.querySelector('.acct-head'), selector = view.host.querySelector('select'), card = view.host.querySelector('.acct-credit-row');
+  selector.focus();
   const first = view.account.refresh(), second = view.account.refresh(); assert.equal(first, second);
   await first;
   assert.equal(view.calls.length, 6); assert.equal(view.callbacks.length, 1);
   assert.equal(view.host.querySelector('.acct-head'), head); assert.equal(view.host.querySelector('select'), selector);
-  assert.equal(view.document.activeElement, selector); assert.equal(details.open, true);
+  assert.equal(view.document.activeElement, selector); assert.equal(view.host.querySelector('.acct-credit-row'),card);
 });
 
 test('changed quota preserves selected bucket and restores the active control', async () => {

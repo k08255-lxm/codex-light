@@ -4,6 +4,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /** Bounded task state, independent of Android so transitions can be tested on the JVM. */
 final class TaskNotificationState {
@@ -22,6 +23,9 @@ final class TaskNotificationState {
         String title;
         String state;
         String phase;
+        String action = "", noticeId = "", noticeThread = "", preview = "", alertedNotice = "";
+        String planStep = "";
+        int done, total, completedTools;
         long updatedAt;
         long postedAt = -1;
 
@@ -47,11 +51,34 @@ final class TaskNotificationState {
         void disconnect(long now) {
             state = "disconnected";
             phase = null;
+            details("", 0, 0, 0, "", "", "");
+            planStep = "";
             updatedAt = now;
             postedAt = -1;
         }
 
+        void details(String action, int done, int total, int completedTools, String noticeId, String noticeThread, String preview) {
+            if (!this.action.equals(action) || this.done != done || this.total != total || this.completedTools != completedTools
+                    || !this.noticeId.equals(noticeId) || !this.noticeThread.equals(noticeThread) || !this.preview.equals(preview)) postedAt = -1;
+            this.action = action; this.done = done; this.total = total; this.completedTools = completedTools;
+            this.noticeId = noticeId; this.noticeThread = noticeThread; this.preview = preview;
+        }
+
+        String progressLabel() {
+            if (total > 0) return "计划 " + done + "/" + total + (planStep.isEmpty() ? "" : " · " + planStep);
+            return completedTools > 0 ? "已完成 " + completedTools + " 项工具操作" : "";
+        }
+
         String phaseLabel() {
+            if ("tool".equals(phase)) switch (action) {
+                case "commandExecution": return "运行命令";
+                case "fileChange": return "修改文件";
+                case "webSearch": return "搜索网页";
+                case "collabAgentToolCall": return "协调子任务";
+                case "imageGeneration": return "生成图片";
+                case "imageView": return "查看图片";
+                case "mcpToolCall": case "dynamicToolCall": return "调用工具";
+            }
             if ("thinking".equals(phase)) return "思考中";
             if ("responding".equals(phase)) return "回复中";
             if ("tool".equals(phase)) return "执行中";
@@ -63,6 +90,16 @@ final class TaskNotificationState {
 
     static boolean validId(String value) {
         return value != null && value.matches("[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}");
+    }
+
+    static String ignoreKey(String origin, String threadId, String turnId) { return origin + "\n" + threadId + "\n" + turnId; }
+
+    static Set<String> ignoring(Set<String> previous, String origin, String threadId, String turnId) {
+        Set<String> next = new LinkedHashSet<>(previous);
+        String key = ignoreKey(origin,threadId,turnId);
+        if (!next.contains(key) && next.size() >= 32) next.remove(next.iterator().next());
+        next.add(key);
+        return next;
     }
 
     static boolean validTitle(String title) {
@@ -91,13 +128,18 @@ final class TaskNotificationState {
     }
 
     Entry update(String threadId, String turnId, String title, String state, String phase, long now) {
+        return update(threadId,turnId,title,state,phase,now,false);
+    }
+
+    Entry update(String threadId, String turnId, String title, String state, String phase, long now, boolean pendingRequest) {
         if (!validId(threadId) || !validId(turnId) || !validTitle(title) || !validState(state)
                 || !validPhase(state, phase) || "idle".equals(state)) return null;
-        if (replacedTurns.contains(threadId + "\n" + turnId)) return null;
+        boolean waitingForRequest = pendingRequest && "waiting".equals(state);
+        if (replacedTurns.contains(threadId + "\n" + turnId) && !waitingForRequest) return null;
         Entry old = entries.get(threadId);
         if (old != null && old.turnId.equals(turnId)) {
             // A delayed heartbeat must never resurrect a finished turn.
-            if (old.terminal() && !old.state.equals(state)) return null;
+            if (old.terminal() && !old.state.equals(state) && !waitingForRequest) return null;
             // Older senders may send a heartbeat without a phase for this same state.
             if (phase == null && old.state.equals(state)) phase = old.phase;
             if (!old.title.equals(title) || !old.state.equals(state) || !Objects.equals(old.phase, phase)) old.postedAt = -1;
@@ -109,7 +151,7 @@ final class TaskNotificationState {
         }
         if (old == null && entries.size() >= MAX_TASKS) return null;
         if (old != null) {
-            replacedTurns.add(old.key());
+            if (!waitingForRequest) replacedTurns.add(old.key());
             if (replacedTurns.size() > 128) replacedTurns.remove(replacedTurns.iterator().next());
         }
         Entry entry = new Entry(threadId, turnId, title, state, phase, now,

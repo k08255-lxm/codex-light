@@ -137,28 +137,34 @@ export function createAsyncInputCard(document, initialItem, initialOptions = {})
   const error = el('p', 'inline-error'); error.setAttribute('role', 'alert'); error.hidden = true;
   const actions = el('div', 'actions');
   const progress=el('span','answer-progress');progress.setAttribute('aria-live','polite');
-  const submit = el('button', 'accept answer-submit', '发送回答'); submit.type = 'button'; actions.append(progress,submit);
+  const ignore = el('button','btn ghost answer-ignore','忽略'); ignore.type='button';
+  const submit = el('button', 'accept answer-submit', '发送回答'); submit.type = 'button'; actions.append(progress,ignore,submit);
   node.append(title, body, status, error, actions);
   let item, options, signature, definition, readers = [], busy = false, outcome = null;
+  let ignored=false,ignoring=false,stopWatching=null,watchKey='',watchStore=null;
   function readAnswers() { return readers.map(reader => ({ question: reader.question, answer: reader.read() || null })); }
   function refresh() {
     const answered = readAnswers().filter(answer => answer.answer !== null).length;
     const available = !!options?.threadId && typeof options?.onAnswerAsync === 'function';
-    for (const control of body.querySelectorAll('input,textarea,button')) control.disabled = busy || !!outcome;
+    const dismissed=ignored && !outcome;
+    for (const control of body.querySelectorAll('input,textarea,button')) control.disabled = busy || ignoring || dismissed || !!outcome;
     for (const [index, reader] of readers.entries()) { reader.summary.hidden = outcome?.status !== 'sent'; reader.summary.textContent = outcome?.answers?.[index] ?? (reader.read() || '未回答'); }
-    submit.disabled = busy || !!outcome || !definition?.supported || !available || !answered;
+    submit.disabled = busy || ignoring || dismissed || !!outcome || !definition?.supported || !available || !answered;
+    ignore.hidden=!options?.questionIgnores || !definition?.supported || !options.threadId;
+    ignore.disabled=ignore.hidden || busy || ignoring || dismissed || !!outcome;
+    ignore.textContent=ignoring?'正在忽略…':'忽略';
     progress.textContent=definition?.supported?`已回答 ${answered} / ${readers.length}`:'';
     submit.textContent=busy?'正在发送…':outcome?.status==='queued'?'已加入队列':outcome?.status==='unknown'?'等待确认':'发送回答';
-    node.dataset.outcome=outcome?.status||'';
-    title.textContent=outcome?.status==='sent'?'已回答':'需要你回答';
-    if (outcome?.status === 'sent') status.textContent = '';
+    node.dataset.outcome=outcome?.status||(dismissed?'ignored':'');
+    title.textContent=outcome?.status==='sent'?'已回答':dismissed?'已忽略':'需要你回答';
+    if (outcome?.status === 'sent' || dismissed || ignoring) status.textContent = '';
     else if (busy) status.textContent = '正在发送回答…';
     else if (outcome) status.textContent = outcome.message || ({ queued: '已加入待发送队列', unknown: '发送结果待确认，请勿重复提交。' })[outcome.status];
     else if (!definition?.supported) status.textContent = definition?.reason || '';
     else if (!available) status.textContent = '当前无法发送回答，请在原对话中回复。';
     else status.textContent = answered && answered < readers.length ? `${readers.length - answered} 题未答` : '';
     status.hidden = !status.textContent;
-    node.setAttribute('aria-busy', String(busy));
+    node.setAttribute('aria-busy', String(busy || ignoring));
   }
   function build() {
     body.replaceChildren(); readers = [];
@@ -186,6 +192,17 @@ export function createAsyncInputCard(document, initialItem, initialOptions = {})
       group.append(input,summary); body.append(group); readers.push({ question: question.title, read, summary });
     }
   }
+  ignore.addEventListener('click',async()=>{
+    if(ignore.disabled)return;
+    const target=watchKey;
+    ignoring=true;error.hidden=true;refresh();
+    try{
+      await options.questionIgnores.ignore(options.threadId,item.id);
+      if(watchKey===target)ignored=true;
+    }catch(cause){
+      if(watchKey===target && !ignored){error.textContent=cause?.message||'未能忽略这张提问卡，请重试。';error.hidden=false;}
+    }finally{ignoring=false;refresh();}
+  });
   submit.addEventListener('click', async () => {
     if (submit.disabled || busy || outcome) return;
     const answers = readAnswers();
@@ -206,8 +223,16 @@ export function createAsyncInputCard(document, initialItem, initialOptions = {})
     const next = JSON.stringify(definition);
     if (signature !== next) { signature = next; outcome = null; error.hidden = true; build(); }
     if (options.confirmedAnswers) { outcome = {status: 'sent', answers: options.confirmedAnswers}; error.hidden = true; }
+    const key=JSON.stringify([options.threadId,item.id]);
+    const store=definition?.supported && options.threadId && item.id && !options.confirmedAnswers ? options.questionIgnores : null;
+    if(watchKey!==key || watchStore!==store){
+      stopWatching?.();stopWatching=null;ignored=false;watchKey=key;watchStore=store;
+      if(store)
+        stopWatching=store.watch(options.threadId,item.id,value=>{ignored=value;refresh();});
+    }
     refresh();
   }
   update(initialItem, initialOptions);
-  return { node, update, dispose() { for (const input of body.querySelectorAll('input,textarea')) { input.value = ''; input.checked = false; } node.remove(); } };
+  function pause() { stopWatching?.(); stopWatching=null; watchStore=null; }
+  return { node, update, pause, dispose() { pause();for (const input of body.querySelectorAll('input,textarea')) { input.value = ''; input.checked = false; } node.remove(); } };
 }

@@ -427,7 +427,7 @@ function longTextView(document, { render, label = '正文', onCopy, scrollContro
 
 // ---------- View ----------
 
-export function mountConversation(host, { onLocalLink, getCwd = () => '', getThreadId = () => '', onAnswerAsync, onCopy, onFork, readTurnUsage, ensurePrices, getContext, artifacts = null, loadAgentThread, onOpenAgent, scrollController = null } = {}) {
+export function mountConversation(host, { onLocalLink, getCwd = () => '', getThreadId = () => '', onAnswerAsync, questionIgnores, onCopy, onFork, readTurnUsage, ensurePrices, getContext, artifacts = null, loadAgentThread, onOpenAgent, scrollController = null } = {}) {
   const document = host.ownerDocument;
   const turns = new Map(); // turn id -> view
   const usageSource=readTurnUsage?createTurnUsageSource(readTurnUsage):null;
@@ -509,11 +509,11 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     if (definition) {
       const threadId = getThreadId(), key = JSON.stringify([threadId, item.id]);
       let input = asyncInputs.get(key);
-      const options = { threadId, onAnswerAsync, confirmedAnswers };
+      const options = { threadId, onAnswerAsync, questionIgnores, confirmedAnswers };
       if (!input) { input = createAsyncInputCard(document, item, options); asyncInputs.set(key, input); }
       else input.update(item, options);
       if (view.asyncInput !== input) { view.asyncInput?.node.remove(); view.asyncInput = input; view.node.append(input.node); }
-    } else { view.asyncInput?.node.remove(); view.asyncInput = null; }
+    } else { view.asyncInput?.pause(); view.asyncInput?.node.remove(); view.asyncInput = null; }
     // Full body: equal-length corrections repaint because the strings differ.
     const text = asyncInputBodyText(item, String(itemText(item) ?? ''));
     view.body.hidden = !text.trim();
@@ -793,7 +793,7 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     return reply.node;
   }
   function releaseSegment(view){for(const row of view.rows.values())row.images?.release?.();}
-  function releaseTurn(view){view.actions?.release();view.art?.release?.();for(const segment of view.segments.values())releaseSegment(segment);for(const message of view.messages.values()){if(message.long)longPositions.set(message.node.dataset.itemId,{start:message.long.window.start,follow:message.long.window.follow});message.media?.release?.();}}
+  function releaseTurn(view){view.actions?.release();view.art?.release?.();for(const segment of view.segments.values())releaseSegment(segment);for(const message of view.messages.values()){if(message.long)longPositions.set(message.node.dataset.itemId,{start:message.long.window.start,follow:message.long.window.follow});message.asyncInput?.pause();message.media?.release?.();}}
 
   function timingLabel(turn, now) {
     const t = turn.timing;
@@ -914,7 +914,7 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
       }
       flushOperations(true);
       for (const key of view.segments.keys()) if (!segmentKeys.has(key)) {releaseSegment(view.segments.get(key));view.segments.delete(key);}
-      for (const id of view.messages.keys()) if (!messageIds.has(id)) {view.messages.get(id).media?.release?.();view.messages.delete(id);}
+      for (const [id,message] of view.messages) if (!messageIds.has(id)) {message.asyncInput?.pause();message.media?.release?.();view.messages.delete(id);}
       const turnItems=chronological.filter(item=>item.type!=='userMessage');
       // Generated / referenced images: only explicit native paths and markdown image refs in answers.
       if (artifacts) {

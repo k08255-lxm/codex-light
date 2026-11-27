@@ -12,6 +12,11 @@ const micros = value => typeof value === 'number' && Number.isFinite(value) ? va
 const finite = value => typeof value === 'number' && Number.isFinite(value);
 const decimal = value => finite(value) ? value.toLocaleString('zh-CN', { maximumFractionDigits: 6 }) : UNKNOWN;
 const RESET_STATUS = { available: '可用', redeeming: '处理中', redeemed: '已使用', unknown: '状态未知' };
+const creditName = credit => /^full reset$/i.test(credit.title?.trim()) ? '完整额度重置' : credit.title || 'Codex 限额重置卡';
+function creditDescription(credit) {
+  const text = credit.description?.trim() || '';
+  return /^Thanks for using Codex! You['’]ve been granted one free rate limit reset\.?$/i.test(text) ? '' : text;
+}
 const REACHED = { rate_limit_reached: '已达使用限额', workspace_owner_credits_depleted: '工作区额度已耗尽', workspace_member_credits_depleted: '成员额度已耗尽', workspace_owner_usage_limit_reached: '已达工作区用量上限', workspace_member_usage_limit_reached: '已达成员用量上限' };
 
 // RPC messages can contain request URLs or authorization details. Keep only diagnostic codes;
@@ -41,7 +46,7 @@ function usageFailureText(scope, failure) {
   return `${scope}：${descriptions[failure.kind]}${codes.length ? `（${codes.join('；')}）` : ''}。`;
 }
 
-export function mountAccount(host, { rpc, loginPanelHost, pendingHost, demo = () => false, readOnly = false, getThreadId = () => null, onQuota = () => {} }) {
+export function mountAccount(host, { rpc, loginPanelHost, pendingHost, demo = () => false, getThreadId = () => null, onQuota = () => {} }) {
   const document = host.ownerDocument;
   let generation = 0, accountEpoch = 0, active = false, quotaResult = null, attempt = null, selectedCredit = null, bucketId = null, usageTab = 'overview';
   let loadTask = null, creditSignature = null;
@@ -68,9 +73,11 @@ export function mountAccount(host, { rpc, loginPanelHost, pendingHost, demo = ()
   const section = (node, title, ...children) => {
     const focusKey = node.contains(document.activeElement) ? document.activeElement?.dataset.focusKey : null;
     const open = new Map([...node.querySelectorAll('details')].map(detail => [detail.dataset.stateKey, detail.open]));
-    node.replaceChildren(el(document, 'h2', 'section-title', title), ...children);
+    const heading = el(document, 'h2', 'section-title', title);
+    node.replaceChildren(heading, ...children);
     for (const detail of node.querySelectorAll('details')) if (open.has(detail.dataset.stateKey)) detail.open = open.get(detail.dataset.stateKey);
     if (focusKey) [...node.querySelectorAll('[data-focus-key]')].find(item => item.dataset.focusKey === focusKey)?.focus({ preventScroll: true });
+    return heading;
   };
   const fact = (label, value, mono = false) => { const row = el(document, 'div', 'fact'); row.append(el(document, 'span', 'fact-label', label), el(document, 'span', 'fact-value' + (mono ? ' mono' : ''), value)); return row; };
   const errorLine = (text, error) => el(document, 'p', 'inline-error', `${text}：${error?.message || error}`);
@@ -154,10 +161,7 @@ export function mountAccount(host, { rpc, loginPanelHost, pendingHost, demo = ()
     resetCredits.hidden = !summary && !attempt;
     if (!summary && !attempt) return;
     const body = el(document, 'div', 'acct-credit-body');
-    if (summary) {
-      const top = el(document, 'div', 'acct-credit-heading'); top.append(el(document, 'strong', '', `${integer(summary.availableCount)} 张可用`), el(document, 'span', '', '用于重置符合条件的 Codex 限额窗口'));
-      body.append(top);
-    }
+    let selectionRow;
     if (attempt?.state === 'pending') body.append(el(document, 'p', 'empty-line', '正在使用重置卡，请勿重复提交。'));
     else if (attempt?.state === 'unknown') body.append(el(document, 'p', 'quota-alert', '使用结果尚未确认，已锁定再次提交。请刷新额度及卡片状态核实；不会自动重试。'));
     else if (attempt?.message) body.append(el(document, 'p', attempt.error ? 'inline-error' : 'acct-credit-result', attempt.message));
@@ -165,39 +169,46 @@ export function mountAccount(host, { rpc, loginPanelHost, pendingHost, demo = ()
     if (credits === null && summary?.availableCount > 0) body.append(el(document, 'p', 'empty-line', '服务只返回可用数量，暂未提供可选择的卡片。'));
     else if (credits && !credits.length && summary?.availableCount > 0) body.append(el(document, 'p', 'empty-line', '服务未返回卡片详情，暂时无法选择使用。'));
     if (credits?.length) {
-      const details = el(document, 'details', 'acct-details'); details.open = !!selectedCredit; details.dataset.stateKey = 'reset-credits';
-      const toggle = el(document, 'summary', '', `查看卡片（${credits.length}）`); toggle.dataset.focusKey = 'reset-credits'; details.append(toggle);
+      const sharedDescription = credits.length > 1 && credits.every(c=>creditDescription(c)===creditDescription(credits[0])) ? creditDescription(credits[0]) : '';
+      if (sharedDescription) body.append(el(document,'p','acct-credit-note',sharedDescription));
       const list = el(document, 'div', 'acct-credit-list');
       for (const credit of credits) {
         const expired = finite(credit.expiresAt) && credit.expiresAt * 1000 <= Date.now();
         const canUse = credit.status === 'available' && credit.resetType === 'codexRateLimits' && !expired && !demo() && !['pending', 'unknown'].includes(attempt?.state);
         const row = el(document, 'div', 'acct-credit-row');
-        const info = el(document, 'div', 'acct-credit-info'); info.append(el(document, 'strong', '', credit.title || 'Codex 限额重置卡'));
-        if (credit.description) info.append(el(document, 'span', '', credit.description));
-        info.append(el(document, 'span', 'acct-credit-meta', `${expired ? '已过期' : RESET_STATUS[credit.status] || '状态未知'} · ${localTime(credit.grantedAt * 1000)} 获得${finite(credit.expiresAt) ? ` · ${localTime(credit.expiresAt * 1000)} 到期` : ''}`));
-        const choose = el(document, 'button', 'btn', selectedCredit?.id === credit.id ? '已选择' : '选择使用'); choose.type = 'button'; choose.disabled = !canUse;
+        const info = el(document, 'div', 'acct-credit-info'); info.append(el(document, 'strong', '', creditName(credit)));
+        const meta = [];
+        if (finite(credit.expiresAt)) meta.push(localTime(credit.expiresAt * 1000) + ' 到期');
+        if (finite(credit.grantedAt)) meta.push(localTime(credit.grantedAt * 1000) + ' 获得');
+        if (meta.length) info.append(el(document, 'span', 'acct-credit-meta', meta.join(' · ')));
+        const description = creditDescription(credit);
+        if (description && !sharedDescription) info.append(el(document, 'span', 'acct-credit-note', description));
+        const label = selectedCredit?.id === credit.id ? '已选择' : expired ? '已过期' : credit.status==='available' ? (credit.resetType==='codexRateLimits'?'使用':'暂不支持') : RESET_STATUS[credit.status] || '状态未知';
+        const choose = el(document, 'button', 'btn', label); choose.type = 'button'; choose.disabled = !canUse;
         choose.dataset.focusKey = `credit:${credit.id}`;
         choose.addEventListener('click', () => { selectedCredit = credit; renderResetCredits(); resetCredits.querySelector('[data-focus-key="credit-confirm"]')?.focus(); });
-        row.append(info); if (!readOnly) row.append(choose); list.append(row);
+        row.append(info,choose); list.append(row);
+        if (selectedCredit?.id === credit.id) selectionRow=row;
       }
-      details.append(list); body.append(details);
+      body.append(list);
       if (credits.length < summary.availableCount) body.append(el(document, 'p', 'empty-line', '服务仅返回部分可用卡片。'));
     }
     if (selectedCredit && !['pending', 'unknown'].includes(attempt?.state)) {
       const confirm = el(document, 'div', 'acct-credit-confirm');
-      confirm.append(el(document, 'strong', '', `使用「${selectedCredit.title || 'Codex 限额重置卡'}」？`), el(document, 'p', '', '将消耗这张卡，并重置服务判定符合条件的限额窗口。此操作无法撤销；没有可重置窗口时以服务返回结果为准。'));
+      confirm.append(el(document, 'strong', '', `使用「${creditName(selectedCredit)}」？`), el(document, 'p', '', '确认后将用这张卡重置符合条件的额度窗口。使用后无法撤销。'));
       const actions = el(document, 'div', 'acct-credit-actions');
-      const cancel = el(document, 'button', 'btn', '取消'); cancel.type = 'button'; cancel.addEventListener('click', () => { selectedCredit = null; renderResetCredits(); });
+      const cancel = el(document, 'button', 'btn', '取消'); cancel.type = 'button'; cancel.addEventListener('click', () => { const key='credit:'+selectedCredit.id; selectedCredit = null; renderResetCredits(); [...resetCredits.querySelectorAll('[data-focus-key]')].find(node=>node.dataset.focusKey===key)?.focus(); });
       const use = el(document, 'button', 'btn primary', '确认使用这张卡'); use.type = 'button'; use.addEventListener('click', consumeCredit);
       cancel.dataset.focusKey = 'credit-cancel'; use.dataset.focusKey = 'credit-confirm';
-      actions.append(cancel, use); confirm.append(actions); body.append(confirm);
+      actions.append(cancel, use); confirm.append(actions); (selectionRow || body).append(confirm);
     }
-    section(resetCredits, '限额重置卡', body);
+    const heading=section(resetCredits, '限额重置卡', body);
+    if (summary) heading.append(el(document,'span','acct-credit-count',`${integer(summary.availableCount)} 张可用`));
   }
 
   async function consumeCredit() {
     const credit = selectedCredit;
-    if (!credit || readOnly || demo() || ['pending', 'unknown'].includes(attempt?.state)) return;
+    if (!credit || demo() || ['pending', 'unknown'].includes(attempt?.state)) return;
     if (credit.status !== 'available' || credit.resetType !== 'codexRateLimits' || (finite(credit.expiresAt) && credit.expiresAt * 1000 <= Date.now())) { selectedCredit = null; await load(); return; }
     const mine = accountEpoch;
     // This UUID belongs to one logical redemption. An uncertain result never creates a new attempt.
