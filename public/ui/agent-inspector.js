@@ -197,6 +197,8 @@ export function createAgentInspector({document,state,host,dshTasks,dshLive,rpc,r
      const files=target=>{for(const row of activityItems([item]))record(target,row);};
      if(!label){files(emit);continue;}
      const group=emit(`${key}:files:${item.id}`,()=>createFileBatch(document));
+     group.dataset.state=itemState(item);
+     group.dataset.running=String(active&&group.dataset.state==='running');
      const title=group.querySelector('.files-title');if(title.textContent!==label)title.textContent=label;
      renderParts(group.children[1],files);
     }

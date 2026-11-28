@@ -161,10 +161,11 @@
       </form>
       <div class="composer-foot">
         <button id="cwd-button" type="button" class="foot-btn" title="设置工作目录"><span data-icon="folder"></span><span id="cwd-label">设置工作目录</span><span data-icon="down"></span></button>
-        <span class="foot-chip" title="任务在此计算机的工作目录中运行，可能直接修改项目文件"><span data-icon="computer"></span>本地</span>
-        <button id="session-usage" type="button" class="foot-btn hidden" aria-haspopup="dialog" aria-controls="session-usage-details" aria-expanded="false" aria-label="查看本次对话用量与费用"><span data-icon="storage"></span><span id="session-token-label">Token 用量</span><span id="session-hit-label"></span></button>
-        <button id="session-speed" type="button" class="foot-btn speed-meter hidden" aria-haspopup="dialog" aria-controls="speed-details" aria-expanded="false" aria-label="查看会话速度"><span data-icon="usage"></span><span id="speed-label">会话速度</span></button>
         <span id="composer-hint" class="composer-hint">Enter 发送 · Shift Enter 换行 · / 命令</span>
+        <div class="composer-stats">
+          <button id="session-usage" type="button" class="foot-btn hidden" aria-haspopup="dialog" aria-controls="session-usage-details" aria-expanded="false" aria-label="查看本次对话用量与费用"><span data-icon="storage"></span><span id="session-token-label">Token 用量</span><span id="session-hit-label"></span><span id="session-cost-label"></span></button>
+          <button id="session-speed" type="button" class="foot-btn speed-meter hidden" aria-haspopup="dialog" aria-controls="speed-details" aria-expanded="false" aria-label="查看会话速度"><span data-icon="usage"></span><span id="speed-label">会话速度</span></button>
+        </div>
       </div>
     </footer>
   </main>

@@ -26,6 +26,7 @@ test('subscription balance uses reference USD within the account and quota windo
  const now=EPOCH+2000,window={resetsAt:EPOCH/1000+3600,windowDurationMins:300,usedPercent:25};
  const limits={rateLimits:{limitId:'codex',planType:'plus',primary:window,secondary:{...window,windowDurationMins:10080,usedPercent:50}}};
  const [short,week]=service.quotaEstimate(account,limits,now).windows;
+ assert.equal(short.startsAt,window.resetsAt-300*60);assert.equal(week.startsAt,window.resetsAt-10080*60);
  assert.equal(short.count,1);assert.ok(Math.abs(short.remainingUsd-short.spentUsd*3)<1e-12);
  assert.equal(week.remainingUsd,week.spentUsd);assert.ok(week.spentUsd>0);
  assert.equal(service.quotaEstimate({...account,email:'other@example.test'},limits,now).windows[0].remainingUsd,null);

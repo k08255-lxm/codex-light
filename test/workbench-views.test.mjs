@@ -133,6 +133,29 @@ function statsHarness(responses, ensure = async () => ({available:false})) {
 }
 const page = (rows, nextCursor, total) => ({ scope: 'light', generatedAt: '2026-11-12T00:00:00Z', totals: { totalTokens: 1000, inputTokens: 800, outputTokens: 200, cachedInputTokens: 400, cacheHitRate: .5, turnCount: 3, submissionCount: 4, successRate: 1, completedCount: 3, failedCount: 0, interruptedCount: 0, estimatedCost: { usd: null, pricedRows: 0, totalRows: 3, complete: false }, performance: { firstTextLatencyMs: { count: 2, p50: 1200, p95: 3000 }, durationMs: { count: 0 }, textCharsPerSecond: { count: 5, p50: 900, p95: 1200 }, turnOutputTokensPerSecond: { count: 2, p50: 12.5, p95: 40 }, ttftMs: null, outputTokensPerSecond: null } }, trend: [{ start: '2026-11-11T00:00:00Z', totalTokens: 1000, turnCount: 3 }], models: [{ model: 'm1', turnCount: 3 }], providers: [{ provider: 'openai' }], details: { data: rows, nextCursor, total }, coverage: { notes: [] }, pricing: { available: false }, dsh: { available: false, reason: '无遥测' } });
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+test('saved reset range waits for quota, follows the latest window and freezes its bounds for paging',async()=>{
+  const document=createDocument(),host=document.createElement('div'),queries=[];
+  document.defaultView.localStorage={getItem:()=> 'reset'};
+  const now=Math.floor(Date.now()/1000);
+  let windows=[{startsAt:now-1200,resetsAt:now+600,windowDurationMins:300},{startsAt:now-600,resetsAt:now+2400,windowDurationMins:10080}];
+  let release;
+  const firstRead=new Promise(resolve=>{release=resolve;});
+  const readQuota=async()=>{await firstRead;return {windows};};
+  const api=async(path,body)=>{if(path==='/api/pricing/ensure')return {};queries.push(body);return page([],'next',60);};
+  const view=mountStatistics(host,{api,readQuota});
+  try{
+    view.activate();assert.equal(queries.length,0);release();await settle();
+    assert.equal(queries[0].from,new Date((now-600)*1000).toISOString());
+    windows=[{...windows[0],startsAt:now-100}];await view.refreshBalance();
+    host.querySelector('.table-pager').querySelectorAll('button')[1].click();await settle();
+    assert.deepEqual(queries[1],{...queries[0],cursor:'next'});
+    const refresh=host.querySelector('.page-controls').querySelectorAll('button').at(-1);
+    refresh.click();await settle();assert.equal(queries[2].from,new Date((now-100)*1000).toISOString());
+    windows=[];refresh.click();await settle();
+    assert.equal(queries.length,3);assert.equal(host.querySelector('[data-range="reset"]').disabled,true);
+    assert.match(host.querySelector('.page-status').textContent,/尚无当前订阅的额度重置时间/);
+  }finally{view.deactivate();}
+});
 test('statistics pager enables Next after load and keeps one frozen time window across pages', async () => {
   const row = id => ({ id, status: 'completed', model: 'm1', tokens: { inputTokens: 1, outputTokens: 1 }, performance: {}, estimatedCost: {} });
   const h = statsHarness([page([row('a')], 'c1', 65), page([row('b')], null, 65), page([row('a')], 'c1', 65)]);
@@ -154,7 +177,7 @@ test('statistics pager enables Next after load and keeps one frozen time window 
   assert.match(h.host.querySelector('.perf-strip').innerTitle ?? h.host.querySelector('.perf-strip').children[2].title, /整轮耗时/);
   assert.doesNotMatch(h.host.querySelector('.table-head').textContent,/路由/);
   assert.doesNotMatch(h.host.querySelector('.kpi-row').textContent,/未计价|估算/);
-  assert.equal(h.host.querySelector('.stats-cost').querySelector('summary').textContent,'—');
+  assert.equal(h.host.querySelector('.cost-trigger').textContent,'—');
 });
 test('late automatic price sync does not reset a newer page or its frozen time range', async () => {
   let finish;const pending=new Promise(resolve=>{finish=resolve;});

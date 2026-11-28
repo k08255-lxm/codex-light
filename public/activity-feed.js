@@ -62,8 +62,9 @@ export function fileBatchLabel(item,cwd=''){
 }
 export function createFileBatch(document,listTag='div'){
   const node=el(document,'details','file-batch');
-  const head=el(document,'summary','file-batch-head');
-  head.append(icon(document,'right',{size:14}),el(document,'span','files-title'));
+  const head=el(document,'summary','step-summary file-batch-head');
+  const symbol=el(document,'span','step-icon');symbol.append(icon(document,'edit',{size:14}));
+  head.append(symbol,el(document,'span','step-verb files-title'));
   node.append(head,el(document,listTag,'files-list'));
   return node;
 }
@@ -680,6 +681,8 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
         batch=createFileBatch(document);view.batches.set(item.id,batch);
         const head=batch.children[0];head.addEventListener('click',()=>scrollController?.pause(head));
       }
+      batch.dataset.state=itemState(item);
+      batch.dataset.running=String(running&&batch.dataset.state==='running');
       setText(batch.querySelector('.files-title'),label);reconcile(batch.children[1],rows);nodes.push(batch);
     }
     for(const id of view.batches.keys())if(!batchIds.has(id))view.batches.delete(id);

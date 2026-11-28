@@ -3,7 +3,7 @@ import {el} from './format.js';
 import {icon} from '../icons.js';
 import {mountStatPopover} from './stat-popover.js';
 
-const presets=new Map([['today','当天'],['24h','近 24 小时'],['7d','近 7 天'],['14d','近 14 天'],['30d','近 30 天'],['all','全部']]);
+const presets=new Map([['today','当天'],['24h','近 24 小时'],['7d','近 7 天'],['14d','近 14 天'],['30d','近 30 天'],['reset','上次重置以来'],['all','全部']]);
 const dayMs=86400000;
 const pad=n=>String(n).padStart(2,'0');
 const dateText=d=>d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
@@ -18,6 +18,9 @@ export function usageBounds(selection,now){
   const day=new Date(now);
   let start;
   switch(selection.range){
+    case 'reset':
+      if(!Number.isFinite(selection.start))throw new Error('尚无当前订阅的额度重置时间。');
+      start=selection.start;break;
     case 'custom': start=selection.start;break;
     case 'all': start=null;break;
     case '24h': start=now-dayMs;break;
@@ -26,16 +29,16 @@ export function usageBounds(selection,now){
       start=new Date(day.getFullYear(),day.getMonth(),day.getDate()-count+1).getTime();
     }
   }
-  const hourly=selection.range==='today'||selection.range==='24h'||selection.range==='custom'&&end-start<=dayMs;
+  const hourly=selection.range==='today'||selection.range==='24h'||['custom','reset'].includes(selection.range)&&end-start<=dayMs;
   return {start,end,bucket:hourly?'hour':'day'};
 }
 
-export function mountUsageRange(document,selection,onApply){
+export function mountUsageRange(document,selection,onApply,{boundary,readResetStart,onOpen}){
   const make=(tag,cls,text)=>el(document,tag,cls,text);
   function button(text,cls='btn small'){
     const node=make('button',cls,text);node.type='button';return node;
   }
-  const trigger=button(),label=make('span'),panel=make('section','usage-range-panel');
+  const trigger=button(),label=make('span'),panel=make('section','stats-popover usage-range-panel');
   panel.id='usage-range-panel';panel.setAttribute('role','dialog');panel.setAttribute('aria-label','统计时间范围');
   trigger.append(icon(document,'calendar',{size:16}),label,icon(document,'down',{size:14}));
   trigger.setAttribute('aria-controls',panel.id);trigger.setAttribute('aria-expanded','false');trigger.setAttribute('aria-haspopup','dialog');
@@ -109,13 +112,24 @@ export function mountUsageRange(document,selection,onApply){
   next.addEventListener('click',()=>showMonth(new Date(month.getFullYear(),month.getMonth()+1,1)));
   monthLabel.addEventListener('click',()=>showMonth(new Date()));
   layout.append(fields,calendar);panel.append(shortcuts,layout);
-  const popup=mountStatPopover(trigger,panel,{onOpen(){
-    const draft=usageBounds(selection,Date.now());
-    write('start',new Date(draft.start??draft.end-30*dayMs));write('end',new Date(draft.end));
-    live.checked=selection.range==='custom'&&selection.liveEnd;error.textContent='';
-    selectField('start');syncClock();showMonth(new Date(read('start')));
-    const current=shortcuts.querySelector('[aria-pressed="true"]')||entries.start.date;
-    current.focus({preventScroll:true});
+  const resetButton=button(presets.get('reset'));
+  function updateReset(){
+    const start=readResetStart(),available=Number.isFinite(start);
+    resetButton.disabled=!available;
+    resetButton.title=available?'从 '+new Date(start).toLocaleString('zh-CN')+' 至今':'尚无当前订阅的额度重置时间';
+    if(selection.range==='reset')trigger.title=resetButton.title;
+  }
+  const popup=mountStatPopover(trigger,panel,{boundary,onOpen(){
+    updateReset();onOpen();
+    const now=Date.now();
+    const draft=selection.range==='reset'?{start:readResetStart(),end:now}:usageBounds(selection,now);
+    if(selection.range==='reset'&&draft.start===null){entries.start.date.value='';entries.start.time.value='';}
+    else write('start',new Date(draft.start??draft.end-30*dayMs));
+    write('end',new Date(draft.end));
+    live.checked=selection.range==='reset'||selection.range==='custom'&&selection.liveEnd;error.textContent='';
+    selectField('start');syncClock();showMonth(new Date(Number.isFinite(read('start'))?read('start'):now));
+    const current=shortcuts.querySelector('[aria-pressed="true"]');
+    (current&&!current.disabled?current:entries.start.date).focus({preventScroll:true});
   },onClose(){clearInterval(clock);clock=null;}});
   function set(value){
     selection=value;
@@ -125,11 +139,19 @@ export function mountUsageRange(document,selection,onApply){
     for(const node of shortcuts.children)node.setAttribute('aria-pressed',String(node.dataset.range===value.range));
   }
   function commit(value){
-    set(value);popup.close(true);
+    set(value);updateReset();popup.close(true);
     if(value.range!=='custom'){try{document.defaultView?.localStorage?.setItem(storageKey,value.range);}catch{/* Storage can be disabled. */}}
     onApply(value);
   }
-  for(const [key,title] of presets){const node=button(title);node.dataset.range=key;node.addEventListener('click',()=>commit({range:key}));shortcuts.append(node);}
+  for(const [key,title] of presets){
+    const node=key==='reset'?resetButton:button(title);node.dataset.range=key;
+    node.addEventListener('click',()=>{
+      if(key==='reset'){
+        updateReset();if(!node.disabled)commit({range:key,start:readResetStart()});
+      }else commit({range:key});
+    });
+    shortcuts.append(node);
+  }
   cancel.addEventListener('click',()=>popup.close(true));
   apply.addEventListener('click',()=>{
     const start=read('start'),end=live.checked?Date.now():read('end');
@@ -137,5 +159,5 @@ export function mountUsageRange(document,selection,onApply){
     if(start>end){error.textContent='开始时间不能晚于结束时间。';return;}
     commit({range:'custom',start,end,liveEnd:live.checked});
   });
-  set(selection);return {trigger,panel,close:popup.close};
+  set(selection);updateReset();return {trigger,panel,updateReset,close:popup.close};
 }

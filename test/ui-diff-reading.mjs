@@ -58,6 +58,12 @@ try {
   const progress = { id: 'progress', type: 'commandExecution', command: 'synthetic progress', status: 'inProgress', aggregatedOutput: 'one' };
   turn.items.push(progress); client.items.get(thread.id).push({ turnId: turn.id, item: progress }); emit('item/started', { item: progress });
   await page.waitForTimeout(220); await check(running, saved, 'unrelated progress');
+  const rowStyle=node=>{
+    const verb=node.querySelector('.step-verb'),symbol=node.querySelector('.step-icon');
+    return [verb.getBoundingClientRect().left,symbol.getBoundingClientRect().left,node.getBoundingClientRect().height,getComputedStyle(verb).fontSize,getComputedStyle(verb).color];
+  };
+  const command=page.locator('.turn-process-items > .step > summary').filter({hasText:'synthetic progress'});
+  assert.deepEqual(await batch.locator(':scope > summary').evaluate(rowStyle),await command.evaluate(rowStyle));
   emit('item/started', { item: file }); await page.waitForTimeout(220); await check(running, saved, 'same file status refresh');
   file.changes = [{ ...file.changes[0], diff: source + '\n+appended real diff' },secondFile]; emit('item/fileChange/patchUpdated', { itemId: file.id, changes: file.changes });
   await page.waitForTimeout(220); await check(running, saved, 'actual changed diff'); assert.ok((await running.textContent()).includes('appended real diff'), 'real patch update is rendered');

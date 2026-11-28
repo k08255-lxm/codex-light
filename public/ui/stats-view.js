@@ -4,6 +4,7 @@ import { el, compact, integer, percent, usd, seconds, rate, localTime, windowLab
 import { barChart } from './chart.js';
 import { icon } from '../icons.js';
 import {initialRange,mountUsageRange,usageBounds} from './usage-range.js';
+import {mountStatPopover} from './stat-popover.js';
 
 const METRICS = {
   tokens: { label: 'Tokens', value: row => row.totalTokens, format: compact },
@@ -48,6 +49,12 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
   let rangeClock=null;
   let liveRefresh=null;
   let quotaGeneration=0;
+  let quotaRead=null,quotaWindows=[];
+  function latestResetStart(){
+    const now=Date.now();
+    const starts=quotaWindows.filter(w=>Number.isFinite(w.startsAt)&&w.startsAt*1000<=now&&now<w.resetsAt*1000).map(w=>w.startsAt*1000);
+    return starts.length?Math.max(...starts):null;
+  }
   function usageUpdated(){
     if(!active||ui.scope!=='light'||ui.cursor||liveRefresh!==null)return;
     liveRefresh=setTimeout(()=>{
@@ -59,7 +66,7 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
   }
   function syncRangeClock(){
     clearInterval(rangeClock);rangeClock=null;
-    if(active&&ui.range==='custom'&&ui.liveEnd)rangeClock=setInterval(()=>{
+    if(active&&(ui.range==='reset'||ui.range==='custom'&&ui.liveEnd))rangeClock=setInterval(()=>{
       if(!ui.cursor&&!loading&&!importing&&document.visibilityState!=='hidden'){ui.anchor=null;void load();}
     },60000);
   }
@@ -73,7 +80,8 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
     ui.scope = value; ui.model = ''; ui.account=''; resetPaging();
     if (value === 'local' && !localImported) discoverAndImport(); else load();
   });
-  const range = mountUsageRange(document,ui,value=>{Object.assign(ui,value);resetPaging();syncRangeClock();load();});
+  const range = mountUsageRange(document,ui,value=>{Object.assign(ui,value);resetPaging();syncRangeClock();load();},
+    {boundary:header,readResetStart:latestResetStart,onOpen:refreshBalance});
   const refresh = el(document, 'button', 'btn icon-only'); refresh.type = 'button'; refresh.title = '刷新'; refresh.setAttribute('aria-label', '刷新统计'); refresh.append(icon(document, 'refresh', { size: 16 }));
   refresh.addEventListener('click', () => { resetPaging(); void refreshBalance(); if (ui.scope === 'local' && importInput.value.trim()) importDirectory(); else load(); });
   const priceImport=el(document,'button','btn small','导入 models.dev 价格');priceImport.type='button';priceImport.title='显式获取公共参考单价，不发送对话或账户信息';
@@ -143,29 +151,43 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
   chartHead.append(chartTitle, chartNote);
   const chartHost = el(document, 'div', 'chart-host');
   chartBox.append(chartHead, chartHost);
-  overview.append(kpis, chartBox);
+  const trend=el(document,'div','stats-trend');
+  overview.append(kpis,trend);
 
   const perf = el(document, 'section', 'perf-strip'); perf.setAttribute('aria-label', '性能');
-  const balance=el(document,'section','subscription-balance');balance.hidden=!readQuota;
-  const balanceTitle=el(document,'h2','','预估订阅余额'),balanceRows=el(document,'div','balance-windows'),balanceNote=el(document,'p','page-sub');
+  const balance=el(document,'section','subscription-balance');balance.hidden=true;
+  const balanceTitle=el(document,'h2','','预估订阅余额'),balanceRows=el(document,'div','balance-windows'),balanceNote=el(document,'p','balance-note');
   balance.append(balanceTitle,balanceRows,balanceNote);
-  async function refreshBalance(){
+  trend.append(chartBox,balance);
+  function refreshBalance(){
     if(!active||!readQuota)return;
+    if(quotaRead)return quotaRead;
     const generation=++quotaGeneration;
+    quotaRead=loadBalance(generation).finally(()=>{if(generation===quotaGeneration)quotaRead=null;});
+    return quotaRead;
+  }
+  async function loadBalance(generation){
     try{
       const result=await readQuota();
       if(generation!==quotaGeneration||!active)return;
       const windows=result.windows||[];
+      quotaWindows=windows;
       balanceRows.replaceChildren(...windows.map(w=>{
         const row=el(document,'div','balance-window');
         const reason=!w.usedPercent?'额度消耗尚为 0%':!w.count?'本周期没有已计量请求':w.unpriced?'有请求缺少单价':'';
-        row.append(el(document,'span','',windowLabel(w.windowDurationMins)),el(document,'strong','',w.remainingUsd==null?'待估算':usd(w.remainingUsd)),
-          el(document,'small','',w.remainingUsd==null?reason:`已用 ${w.usedPercent}% · 已记录 ${usd(w.spentUsd)}`));
+        const meter=el(document,'div','balance-meter'),fill=el(document,'span');
+        fill.style.width=w.usedPercent+'%';meter.append(fill);meter.setAttribute('aria-hidden','true');
+        row.append(el(document,'span','balance-period',windowLabel(w.windowDurationMins)),el(document,'strong',w.remainingUsd==null?'pending':'',w.remainingUsd==null?'待估算':usd(w.remainingUsd)),
+          meter,el(document,'small','',w.remainingUsd==null?reason:`已用 ${w.usedPercent}% · 已记录 ${usd(w.spentUsd)}`));
         row.title='下次额度重置 '+localTime(w.resetsAt*1000);
         return row;
       }));
-      balanceNote.textContent=windows.length?'按当前账户在各自周期内已记录的参考花费和官方额度消耗比例推算。'+(windows.some(w=>w.customProvider)?'含自定义提供方，只有计入该订阅的请求才与额度对应。':''):(result.reason||'尚无当前订阅的额度数据。');
-    }catch{if(active&&generation===quotaGeneration){balanceRows.replaceChildren();balanceNote.textContent='订阅额度暂时无法读取。';}}
+      balanceNote.textContent=windows.length?'按周期内已记录花费和额度消耗比例估算。'+(windows.some(w=>w.customProvider)?'含自定义提供方，仅计入订阅的请求可用于估算。':''):(result.reason||'尚无当前订阅的额度数据。');
+    }catch{
+      if(!active||generation!==quotaGeneration)return;
+      quotaWindows=[];balanceRows.replaceChildren();balanceNote.textContent='订阅额度暂时无法读取。';
+    }
+    balance.hidden=false;range.updateReset();
   }
 
   const table = el(document, 'section', 'stats-table');
@@ -179,7 +201,11 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
   const tableHead = el(document, 'div', 'table-head'); tableHead.append(tabs, filters);
   const scroller = el(document, 'div', 'table-scroll');
   const pager = el(document, 'div', 'table-pager');
-  table.append(tableHead, scroller, pager);
+  const costPanel=el(document,'section','stats-popover stats-cost');
+  costPanel.id='stats-cost-panel';costPanel.tabIndex=-1;
+  costPanel.setAttribute('role','dialog');costPanel.setAttribute('aria-label','费用明细');
+  const costPopup=mountStatPopover(null,costPanel,{boundary:header,focusOnOpen:costPanel});
+  table.append(tableHead, scroller, pager,costPanel);
 
   const scopeNote = el(document, 'details', 'scope-note');
   const scopeSummary = el(document, 'summary', '', '数据口径');
@@ -224,7 +250,7 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
     }catch(error){priceState.textContent=error.message;}finally{savePrice.disabled=false;}
   });
   function openPrice(row){pricePanel.open=true;legacyProvider=row.estimatedCost?.reference?.scope==='provider'?row.provider:null;priceModel.value=row.model||'';mode.value='automatic';updateMode();priceModel.focus();lookupPrices();}
-  host.replaceChildren(header, importBar, status, pricePanel, wait, overview, balance, perf, table, scopeNote);
+  host.replaceChildren(header, importBar, status, pricePanel, wait, overview, perf, table, scopeNote);
 
   function segmented(options, value, onChange) {
     const node = el(document, 'div', 'segmented'); node.setAttribute('role', 'radiogroup');
@@ -244,11 +270,18 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
   async function load(successStatus='',quiet=false) {
     if (!active || importing) return;
     const mine = ++generation; loading = true; refresh.disabled = true; host.setAttribute('aria-busy', 'true');
-    if (ui.anchor === null) ui.anchor = Date.now();
+    const fresh=ui.anchor===null;
     renderPager();
     importBar.classList.toggle('hidden', ui.scope !== 'local');
     refresh.setAttribute('aria-label','正在更新统计');if(!quiet)setWaiting(true,data?'正在刷新，先显示已有数据…':'正在读取统计…');
     try {
+      if(fresh&&ui.range==='reset'){
+        await refreshBalance();
+        if(mine!==generation)return;
+        ui.start=latestResetStart();
+        if(ui.start===null){data=null;resetPaging();throw new Error('尚无当前订阅的额度重置时间，请选择其他范围。');}
+      }
+      if(fresh)ui.anchor=Date.now();
       const query={...statisticsQuery(ui),detailLevel:'request'};const result = await api('/api/statistics/query', query);
       if (mine !== generation) return;
       loading = false; data = result;dataBucket=query.bucket; setStatus(successStatus); render();
@@ -363,8 +396,43 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
 
     accountFilter.replaceChildren(option('全部账户',''),...(data?.accounts||[]).map(row=>option(row.label,row.account)));accountFilter.value=ui.account;
   }
+  function showCost(button,row,detail){
+    const cost=row.estimatedCost;
+    const heading=el(document,'div','cost-heading');
+    heading.append(el(document,'strong','','费用明细'),el(document,'span','',usd(cost?.usd)));
+    const nodes=[heading];
+    if(!detail){
+      nodes.push(el(document,'p','',costCoverage(cost)));
+    }else{
+      const parts=el(document,'dl','cost-parts');
+      for(const part of cost?.components||[]){
+        if(part.tokens==null&&part.usd==null)continue;
+        const label=el(document,'dt','',COST_PARTS[part.kind]||part.kind);
+        label.append(el(document,'small','',`${compact(part.tokens)} tok × ${usd(part.pricePerMillion)} / M`));
+        if(part.tokens!=null)label.title=integer(part.tokens)+' tokens';
+        parts.append(label,el(document,'dd','',usd(part.usd)));
+      }
+      if(parts.children.length)nodes.push(parts);
+      if(cost?.tokenSource==='verified-local-turn')nodes.push(el(document,'p','','已按同一回合原始日志校准用量；未与本应用观察值重复相加。'));
+      if(!cost?.complete){
+        const reason=!row.model?'此轮尚未记录模型，无法匹配单价。':costCompletenessReason(cost);
+        nodes.push(el(document,'p','',reason));
+        if(!row.model||cost?.components?.some(part=>part.tokens==null))nodes.push(el(document,'p','','可在「Codex 日志」导入这段对话的 sessions 目录，补充原始用量记录。'));
+      }
+      if(cost?.reference?.catalogProvider)nodes.push(el(document,'p','','价格来源：'+cost.reference.catalogProvider));
+      else if(cost?.reference?.source==='manual')nodes.push(el(document,'p','','使用手填单价'));
+      if(row.model){
+        const configure=el(document,'button','btn small','调整单价');configure.type='button';
+        configure.addEventListener('click',()=>{costPopup.close();openPrice(row);});nodes.push(configure);
+      }
+    }
+    const restoreAction=costPanel.contains(document.activeElement)&&document.activeElement?.tagName==='BUTTON';
+    costPanel.replaceChildren(...nodes);costPopup.show(button);
+    if(restoreAction)costPanel.querySelector('button')?.focus({preventScroll:true});
+  }
   function renderTable() {
-    const openCosts=new Set(Array.from(scroller.querySelectorAll('details.stats-cost[open]'),node=>node.dataset.record));
+    const openKey=costPopup.anchor?.dataset.record;
+    let restoreCost=null;
     renderTabs();
     const detail = ui.tab === 'details';
     const groupKey=ui.tab==='models'?'model':'label';
@@ -390,31 +458,15 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
         const td = el(document, 'td', [kind, key === 'model' ? 'mono' : ''].filter(Boolean).join(' '), text(row));
         const tokenKey={tokens:'totalTokens',input:'inputTokens',cached:'cachedInputTokens',output:'outputTokens'}[key];
         if(tokenKey&&Number.isFinite((row.tokens||row)[tokenKey]))td.title=integer((row.tokens||row)[tokenKey])+' tokens';
-        if(detail&&key==='cost'){
-          const cost=row.estimatedCost,details=el(document,'details','stats-cost'),summary=el(document,'summary','',usd(cost?.usd));
-          details.dataset.record=row.id;details.open=openCosts.has(row.id);
-          summary.title='展开费用明细';summary.setAttribute('aria-label','展开费用明细 · '+(cost?.usd==null?'暂无金额':usd(cost.usd)));details.append(summary);
-          const parts=el(document,'dl','cost-parts');
-          for(const part of cost?.components||[]){
-            if(part.tokens==null&&part.usd==null)continue;
-            const label=el(document,'dt','',COST_PARTS[part.kind]||part.kind);
-            label.append(el(document,'small','',`${compact(part.tokens)} tok × ${usd(part.pricePerMillion)} / M`));
-            if(part.tokens!=null)label.title=integer(part.tokens)+' tokens';
-            parts.append(label,el(document,'dd','',usd(part.usd)));
-          }
-          if(parts.children.length)details.append(parts);
-          if(cost?.tokenSource==='verified-local-turn')details.append(el(document,'p','','已按同一回合原始日志校准用量；未与本应用观察值重复相加。'));
-          if(!cost?.complete){
-            const reason=!row.model?'此轮尚未记录模型，无法匹配单价。':costCompletenessReason(cost);
-            details.append(el(document,'p','',reason));
-            if(!row.model||cost?.components?.some(part=>part.tokens==null))details.append(el(document,'p','','可在「Codex 日志」导入这段对话的 sessions 目录，补充原始用量记录。'));
-          }
-          td.replaceChildren(details);
-          if(cost?.reference?.catalogProvider)details.append(el(document,'p','','价格来源：'+cost.reference.catalogProvider));
-          else if(cost?.reference?.source==='manual')details.append(el(document,'p','','使用手填单价'));
-          if(row.model){const configure=el(document,'button','btn small','调整单价');configure.type='button';configure.addEventListener('click',()=>openPrice(row));details.append(configure);}
-        }else if(!detail&&key==='cost'&&row.estimatedCost&&!row.estimatedCost.complete){
-          const info=el(document,'details','stats-cost');info.append(el(document,'summary','',usd(row.estimatedCost.usd)),el(document,'p','',costCoverage(row.estimatedCost)));td.replaceChildren(info);
+        if(key==='cost'&&(detail||row.estimatedCost&&!row.estimatedCost.complete)){
+          const button=el(document,'button','cost-trigger',usd(row.estimatedCost?.usd));button.type='button';
+          button.title='查看费用明细';button.setAttribute('aria-label','查看费用明细 · '+(row.estimatedCost?.usd==null?'暂无金额':button.textContent));
+          button.setAttribute('aria-controls',costPanel.id);button.setAttribute('aria-haspopup','dialog');button.setAttribute('aria-expanded','false');
+          button.dataset.record=JSON.stringify([ui.scope,ui.tab,detail?row.id:row[ui.tab==='models'?'model':'account']]);
+          const show=()=>showCost(button,row,detail);
+          button.addEventListener('click',()=>costPopup.anchor===button?costPopup.close(true):show());
+          if(button.dataset.record===openKey)restoreCost=show;
+          td.replaceChildren(button);
         }
         line.append(td);
       }
@@ -422,6 +474,7 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
     }
     tableNode.append(head, body);
     scroller.replaceChildren(rows.length ? tableNode : el(document, 'p', 'table-empty', data ? '没有符合条件的记录' : '尚未读取'));
+    if(restoreCost)restoreCost();else costPopup.close();
     renderPager();
   }
   function renderPager() {
@@ -475,7 +528,7 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
         else if(info?.available&&info.fetchedAt!==data?.pricing?.fetchedAt)load();
       }).catch(()=>{});
     },
-    deactivate() { range.close();active = false;clearTimeout(liveRefresh);liveRefresh=null;syncRangeClock();generation++; loading = false;setWaiting(false);host.removeAttribute('aria-busy'); },
-    reset() { data = null;quotaGeneration++;balanceRows.replaceChildren();balanceNote.textContent=''; resetPaging(); render(); },
+    deactivate() { range.close();costPopup.close();active = false;quotaGeneration++;quotaRead=null;clearTimeout(liveRefresh);liveRefresh=null;syncRangeClock();generation++; loading = false;setWaiting(false);host.removeAttribute('aria-busy'); },
+    reset() { data = null;quotaGeneration++;quotaRead=null;quotaWindows=[];balance.hidden=true;balanceRows.replaceChildren();balanceNote.textContent='';range.close();range.updateReset();resetPaging();render(); },
   };
 }

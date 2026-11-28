@@ -6,12 +6,15 @@ export function mountMobileLayout(document,window) {
     const node=document.getElementById(id),home=document.createComment(id+' desktop position');node.before(home);return {node,home};
   });
   const quotaSlot=document.getElementById('mobile-quota-slot');
+  const stats=foot.querySelector('.composer-stats');
   const update=document.getElementById('app-update-indicator');
   const updateHome=update?document.createComment('update indicator desktop position'):null;
   if(update)update.before(updateHome);
   function sync(){
     for(const {node,home}of controls){
-      if(narrow.matches)(node.id==='account-quota'?quotaSlot:foot).append(node);
+      if(narrow.matches){
+        if(node.id==='account-quota')quotaSlot.append(node);else foot.insertBefore(node,stats);
+      }
       else home.after(node);
     }
     if(update){if(narrow.matches)quotaSlot.before(update);else updateHome.after(update);}

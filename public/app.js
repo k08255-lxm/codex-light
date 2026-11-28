@@ -75,7 +75,7 @@ const $ = id => document.getElementById(id);
 hydrateIcons(document);
 const contextDetails=mountContextDetails(document);
 const sessionSpeed=mountSessionSpeed(document,(threadId,history)=>api('/api/statistics/session-speed',history?{threadId}:{threadId,liveOnly:true}));
-const sessionUsage=mountSessionUsage(document,threadId=>api('/api/statistics/session-cost',{threadId}));
+const sessionUsage=mountSessionUsage(document,(threadId,history)=>api('/api/statistics/session-cost',history?{threadId}:{threadId,preferCachedHistory:true}));
 mountWelcomeGreeting(document.querySelector('#welcome h1'));
 let localSession; try { localSession = sessionStorage; } catch { localSession = {getItem(){throw new Error('会话存储不可用');},setItem(){throw new Error('会话存储不可用');},removeItem(){throw new Error('会话存储不可用');}}; }
 const readSession = key => { try { return localSession.getItem(key); } catch { return null; } };
@@ -691,6 +691,7 @@ function route(name, { section, back = false } = {}) {
   const previous = currentRoute;
   if(previous==='chat'&&name!=='chat')awayPosition={id:state.thread?.id,snapshot:conversationScroll.capture()};
   currentRoute = name;
+  if(previous!==name&&(previous==='chat'||name==='chat'))renderContext();
   if (name==='chat' && state.thread && state.connected) historyAutoLoad.fill();
   closeThreadMenu();
   for (const [key, id] of Object.entries(STAGES)) $(id).classList.toggle('hidden', key !== name);
@@ -1364,7 +1365,7 @@ function renderContext() {
   const id=state.thread?.id||null;
   contextDetails.update(id,state.contexts.get(id)||null,pendingContextRead?.id===id);
   sessionSpeed.select(state.connected?id:null);
-  sessionUsage.update(state.connected?id:null,state.contexts.get(id)?.total);
+  sessionUsage.update(state.connected&&currentRoute==='chat'?id:null,state.contexts.get(id)?.total);
 }
 function cacheContext(snapshot,source) {
   if(snapshot.turnId)conversation.refreshTurnUsage(snapshot.threadId,snapshot.turnId);

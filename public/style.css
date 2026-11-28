@@ -303,14 +303,15 @@ dialog::backdrop { background: var(--overlay); }
 .stop .ui-icon { width: 16px; height: 16px; }
 .queue-send { display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 10px; font-size: .8125rem; color: var(--secondary); border: 1px solid var(--border-strong); border-radius: 999px; }
 .queue-send .ui-icon { width: 15px; height: 15px; }
-.composer-foot { display: flex; align-items: center; gap: 4px; min-height: 28px; margin: 6px 2px 0; color: var(--tertiary); font-size: .75rem; }
+.composer-foot { display: flex; align-items: center; flex-wrap:wrap; gap: 0 4px; min-height: 28px; margin: 6px 2px 0; color: var(--tertiary); font-size: .75rem; }
+.composer-stats { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:0 4px; max-width:100%; margin-inline-start:auto; }
+.composer-stats:not(:has(>button:not(.hidden))) { display:none; }
 .foot-btn { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 6px; font-size: .75rem; color: var(--tertiary); min-width: 0; }
 .foot-btn #cwd-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
 .foot-btn .ui-icon { width: 14px; height: 14px; }
 .foot-btn .ui-icon:last-child { width: 12px; height: 12px; }
-.foot-chip { display: inline-flex; align-items: center; gap: 5px; padding: 0 6px; }
-.foot-chip .ui-icon { width: 13px; height: 13px; }
-.composer-hint { margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+.composer-hint { flex:1 1 0; min-width:0; text-align:end; margin-inline-end:6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+.composer-foot:has(.composer-stats > button:not(.hidden)) .composer-hint { text-align:start; margin-inline-start:8px; }
 @media (hover:hover) and (pointer:fine) { .tool:not(:disabled):hover, .foot-btn:not(:disabled):hover { color: var(--text); } .send:not(:disabled):hover { background: var(--accent-hover); } .send[data-mode="steer"]:not(:disabled):hover { background: var(--brand); filter: brightness(1.08); } }
 
 /* Model trigger + reasoning popover */
@@ -650,7 +651,7 @@ input[type=checkbox]:disabled, .skills-switch[aria-disabled=true] { cursor: not-
   .stage-bar { padding: 0 8px 0 14px; } .stage-actions .label { display: none; }
   #chat-page .crumbs { gap: 5px; }
   .conversation { padding: 14px 14px 20px; } .composer-dock, .tray { padding-inline: 10px; }
-  .tool .label, .composer-hint, .foot-chip { display: none; }
+  .tool .label, .composer-hint { display: none; }
   #model-trigger { max-width: 180px; }
   .kv { grid-template-columns: minmax(90px, 120px) minmax(0,1fr); }
   .pref-row { flex-wrap: wrap; }
@@ -668,7 +669,7 @@ input[type=checkbox]:disabled, .skills-switch[aria-disabled=true] { cursor: not-
   .stage-actions .btn { min-width: 44px; }
   .new-chat, .side-search, .settings-nav-item, .project-navigation .project-group-thread, .project-navigation .project-group-select, .menu button, .slash-option, .changes-file, .file-row-head, .data-table th .sort, .model-option, #model-options button { min-height: 44px; }
   .project-navigation .project-group-toggle, .project-navigation .project-group-remove { width: 44px; min-height: 44px; }
-  .step > summary, .turn-process > summary, .agent-more summary, .scope-note summary { min-height: 40px; }
+  .step-summary, .turn-process > summary, .agent-more summary, .scope-note summary { min-height: 40px; }
   .md-file-link { padding: 2px 0; }
   :is(input[type=checkbox], .switch) { --switch-width: 44px; --switch-height: 26px; }
   .permission-choice, .plugins-remote { min-height: 44px; }
@@ -932,7 +933,7 @@ input[type=checkbox]:disabled, .skills-switch[aria-disabled=true] { cursor: not-
       .project-group-thread.running .thread-name,
       .turn-working[data-running="true"],
       .turn-process[data-running="true"] > summary .turn-process-label,
-      .step[data-running="true"] > summary .step-verb,
+      :is(.step,.file-batch)[data-running="true"] > summary .step-verb,
       .agent-operation-group[data-running="true"] > summary > span:first-child
     ) {
       background-image:var(--running-highlight,linear-gradient(100deg,var(--secondary) 38%,var(--text) 50%,var(--secondary) 62%));

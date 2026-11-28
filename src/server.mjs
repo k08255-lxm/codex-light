@@ -272,7 +272,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
   const live=contextLive.get(threadId);
   const timing=timingCache.get(threadId);
   const fresh=timing?.file===contextFiles.get(threadId)&&Date.now()-timing.at<5000;
-  if(needTiming?fresh&&(!includeCost||timing.timings?.costGroups):live)return live;
+  if(needTiming?fresh&&(!includeCost||timing.cost&&Date.now()-timing.cost.at<5000):live)return live;
   const pending=contextReads.get(threadId);
   if(pending){
    const generation=accountIdentityGeneration;
@@ -289,7 +289,13 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
     saved=await contextHistoryReader({rollout,threadId,roots:contextRoots,caseSensitive:wslActive,includeCost,onTimings:value=>{timings=value;}});
    }catch{/* An unavailable source leaves the thread's context metrics unknown. */}
    if(generation!==accountIdentityGeneration||contextFiles.get(threadId)!==wirePath)return null;
-   if(contextReads.get(threadId)===reading)rememberContext(timingCache,threadId,{file:wirePath,at:Date.now(),timings});
+   if(contextReads.get(threadId)===reading){
+    const at=Date.now();
+    // Live receipts extend this verified prefix even after a timing-only refresh.
+    let cost=timing?.file===wirePath?timing.cost:null;
+    if(includeCost)cost=timings?.costGroups?{groups:timings.costGroups,through:timings.costThroughTokens,at}:null;
+    rememberContext(timingCache,threadId,{file:wirePath,at,timings,cost});
+   }
    return contextLive.get(threadId)||saved;
   });
   reading.includeCost=includeCost;
@@ -815,12 +821,15 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      json(res,200,statistics.sessionSpeed(input.threadId,timingCache.get(input.threadId)?.timings));return;
     }
     if(url.pathname==='/api/statistics/session-cost'){
-     if(!input||Object.keys(input).join(',')!=='threadId'||typeof input.threadId!=='string'||!input.threadId||input.threadId.length>256)throw new Error('会话费用参数无效');
+     if(!input||Object.keys(input).some(key=>key!=='threadId'&&key!=='preferCachedHistory')||typeof input.threadId!=='string'||!input.threadId||input.threadId.length>256||(input.preferCachedHistory!==undefined&&typeof input.preferCachedHistory!=='boolean'))throw new Error('会话费用参数无效');
      const generation=accountIdentityGeneration;
-     await Promise.all([readThreadContext(input.threadId,true,true),demo?null:pricing.ensureFresh()]);
+     const cached=timingCache.get(input.threadId);
+     if(!input.preferCachedHistory||!cached?.cost||cached.file!==contextFiles.get(input.threadId)){
+      await Promise.all([readThreadContext(input.threadId,true,true),demo?null:pricing.ensureFresh()]);
+     }
      if(generation!==accountIdentityGeneration)throw new Error('账户已改变，请重新打开对话。');
-     const timing=timingCache.get(input.threadId)?.timings;
-     json(res,200,statistics.sessionCost(input.threadId,timing?.costGroups,timing?.costThroughTokens));return;
+     const entry=timingCache.get(input.threadId),cost=entry?.file===contextFiles.get(input.threadId)?entry?.cost:null;
+     json(res,200,statistics.sessionCost(input.threadId,cost?.groups,cost?.through));return;
     }
     if(url.pathname==='/api/statistics/turns'){
      const result=statistics.turnUsage(input);
@@ -1093,7 +1102,11 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
   if(message.method==='account/updated'||(message.method==='bridge/status'&&message.params?.connected===false))clearStatisticsAccount();
   const threadId=message.params?.threadId||message.params?.thread?.id;
   if(message.method==='account/rateLimits/updated')quotaEstimateRead=null;
-  if(threadId&&message.method==='turn/completed'){timingCache.delete(threadId);contextReads.delete(threadId);}
+  if(threadId&&message.method==='turn/completed'){
+   const entry=timingCache.get(threadId);
+   if(entry){entry.at=0;entry.timings=null;}
+   contextReads.delete(threadId);
+  }
   if(threadId&&dsh.isReaderThread(threadId))return;
   if(message.method==='account/login/completed'&&message.params?.success===true){resetThreadReads();pluginActions.clear();}
   threadReads.observe(message);
