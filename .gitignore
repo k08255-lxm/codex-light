@@ -19,6 +19,7 @@ docs/legacy-repair-v7-evidence.json
 /.tmp/
 /.tmp-runtime-schema/
 /.tools/
+/android/signing/
 /.interface-design/
 /HANDOFF.md
 /HANDOFF-TEST-RESULT.txt
