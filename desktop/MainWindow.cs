@@ -19,13 +19,14 @@ internal sealed class MainWindow : CaptionWindow {
  readonly WindowSessionEnd sessionEnd=new();
  readonly SystemSleepRequest systemSleep=new();
  readonly TaskbarBadge taskbarBadge;
+ readonly DesktopCompanion companion;
  readonly CloseBehaviorStore closeBehavior=CloseBehaviorStore.ForCurrentUser();
  readonly string closeBehaviorNonce=Guid.NewGuid().ToString("N");
  QuestionNotificationBridge? questionNotifications;
  Task? stopTask;
  string startupStage="检测运行环境";
  readonly WindowPlacementController placement;
- public MainWindow(bool demo){this.demo=demo;taskbarBadge=new(this);Text="码舱 CodeCang";Icon=Icon.ExtractAssociatedIcon(Application.ExecutablePath);Size=new Size(1257,945);MinimumSize=new Size(800,600);Controls.Add(view);Controls.Add(loading);placement=new WindowPlacementController(this,WindowPlacementStore.ForCurrentUser());Shown+=async(_,_)=>await StartAsync();FormClosing+=OnClosing;}
+ public MainWindow(bool demo){this.demo=demo;taskbarBadge=new(this);companion=new(this,OpenFromCompanion);Text="码舱 CodeCang";Icon=Icon.ExtractAssociatedIcon(Application.ExecutablePath);Size=new Size(1257,945);MinimumSize=new Size(800,600);Controls.Add(view);Controls.Add(loading);placement=new WindowPlacementController(this,WindowPlacementStore.ForCurrentUser());Shown+=async(_,_)=>await StartAsync();FormClosing+=OnClosing;}
  protected override void OnLoad(EventArgs e){base.OnLoad(e);placement.Restore();try{ShowTray();}catch{DisposeTray();ShowTrayFailure();}}
  protected override void OnMove(EventArgs e){base.OnMove(e);placement?.Capture();}
  FormWindowState previousWindowState;bool restorePaintQueued;
@@ -125,6 +126,7 @@ internal sealed class MainWindow : CaptionWindow {
       switch(commandType){
        case "windowCommand":HandleWindowCommand(json);break;
        case "desktopTaskbarBadge":taskbarBadge.HandleMessage(json,!failed);break;
+       case "desktopCompanion":if(!failed)companion.Receive(json);break;
        case "desktopQuestionNotification":questionNotifications.Handle(json);break;
        case "desktopCloseBehavior":HandleCloseBehavior(json);break;
        case "previewImageAction":case "revealLocalPath":RevealLocalPath(json);break;
@@ -138,7 +140,7 @@ internal sealed class MainWindow : CaptionWindow {
    core.PermissionRequested+=(_,e)=>{e.State=CoreWebView2PermissionState.Deny;e.Handled=true;};
    core.DownloadStarting+=(_,e)=>{e.Cancel=true;e.Handled=true;};
    core.NewWindowRequested+=(_,e)=>{e.Handled=true;if(e.IsUserInitiated)QueueExternal(e.Uri);};
-   core.NavigationStarting+=(_,e)=>{if(!IsOwn(e.Uri)){e.Cancel=true;if(e.IsUserInitiated && !e.IsRedirected)QueueExternal(e.Uri);}else{documentId++;questionNotifications?.ClearAll();}};
+   core.NavigationStarting+=(_,e)=>{if(!IsOwn(e.Uri)){e.Cancel=true;if(e.IsUserInitiated && !e.IsRedirected)QueueExternal(e.Uri);}else{documentId++;questionNotifications?.ClearAll();companion.Dispose();}};
    core.FrameNavigationStarting+=(_,e)=>{e.Cancel=true;};
    core.LaunchingExternalUriScheme+=(_,e)=>{e.Cancel=true;};
    core.ServerCertificateErrorDetected+=(_,e)=>{e.Action=CoreWebView2ServerCertificateErrorAction.Cancel;};
@@ -337,9 +339,14 @@ internal sealed class MainWindow : CaptionWindow {
   Show();if(WindowState==FormWindowState.Minimized)WindowState=placement.WasMaximized?FormWindowState.Maximized:FormWindowState.Normal;
   Activate();
  }
+ void OpenFromCompanion(string target){
+  RestoreFromTray();
+  if(target!="main"&&!failed&&LocalPathLinks.TrustedSource(view.CoreWebView2.Source,origin))
+   view.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(new{type="companionOpen",target}));
+ }
  void ShowFailure(string message){
   if(closing||IsDisposed||failed)return;
-  failed=true;taskbarBadge.Clear();loading.ShowFailure(message);loading.Show();loading.BringToFront();
+  failed=true;taskbarBadge.Clear();companion.Disconnected();loading.ShowFailure(message);loading.Show();loading.BringToFront();
   if(!Visible)RestoreFromTray();
  }
  void MoveToTray(){
@@ -401,7 +408,7 @@ internal sealed class MainWindow : CaptionWindow {
    if(choice==CloseChoice.Cancel)return;
    if(choice==CloseChoice.Tray){MoveToTray();return;}
   }
-  closing=true;Enabled=false;await StopBackendAsync();DisposeTray();view.Dispose();
+  closing=true;Enabled=false;companion.Dispose();await StopBackendAsync();DisposeTray();view.Dispose();
   await CleanupProfileAsync();
   allowClose=true;if(!IsDisposed)Close();
  }
@@ -428,7 +435,7 @@ internal sealed class MainWindow : CaptionWindow {
   if(backend!=null){try{if(!backend.HasExited)backend.Kill(true);}catch{}backend.Dispose();backend=null;}
  }
  protected override void Dispose(bool disposing){
-  if(disposing)taskbarBadge?.Dispose();
+  if(disposing){companion?.Dispose();taskbarBadge?.Dispose();}
   if(disposing&&!resourcesDisposed){resourcesDisposed=true;placement?.Save();placement?.Dispose();closing=true;hostMessages.Cancel();ReleaseBackend();questionNotifications?.Dispose();questionNotifications=null;DisposeTray();hostMessages.Dispose();hostWrites.Dispose();}
   base.Dispose(disposing);
  }

@@ -5,6 +5,7 @@ import { createThreadCompletion, createTaskbarBadge, createThreadReadReporter } 
 import { mountMobileLayout } from './ui/mobile-layout.js';
 import { mountTaskNotifications } from './ui/task-notifications.js';
 import { createQuestionNotifications } from './ui/question-notifications.js';
+import { createDesktopCompanion } from './ui/desktop-companion.js';
 import { mountConversationScroll } from './ui/conversation-scroll.js';
 import { mountOfflineSnapshot } from './ui/offline-snapshot.js';
 import { mountDesktopClosePreference } from './ui/desktop-close-preference.js';
@@ -127,6 +128,8 @@ async function saveProjectOrder(order) {
   finally { savingOrder=false; }
 }
 const recentThreads = new Map();
+const desktopWebView = window.chrome?.webview;
+const desktopCompanion = createDesktopCompanion(desktopWebView && (message => desktopWebView.postMessage(message)));
 const taskbarBadge = createTaskbarBadge(message => window.chrome?.webview?.postMessage(message));
 const threadCompletion = createThreadCompletion(taskbarBadge.setCompleted);
 const threadReadReporter = createThreadReadReporter(input => api('/api/thread-reads', input, {timeoutMs: 5000}));
@@ -532,7 +535,7 @@ pendingReconciler.setActive(false);
 // invalidate account-scoped views; a read-only snapshot merely refreshes this page.
 const accountLoginPanel=mountAccountLoginPanel($('account-login-controls'),{api:accountApi,readOnly:access.lan,onAccountChanged:async()=>{if(currentRoute==='account')await refreshAccount();}});
 const statsView = mountStatistics($('stats-root'), { api, notice, readQuota:()=>api('/api/statistics/quota-estimate',{}), onPickFolder: async () => { if (!projectsState.canPickFolder) return null; const result = await api('/api/desktop/pick-folder', {}, { timeoutMs: 310000 }); return result.path || null; } });
-const accountQuota = mountAccountQuota($('account-quota'), { rpc, onOpen: () => route('account') });
+const accountQuota = mountAccountQuota($('account-quota'), { rpc, onOpen: () => route('account'), onChange: desktopCompanion.quota });
 const accountIdentity = createAccountIdentityController({
   rpc,
   onChange: () => resetAccountScopedViews('账户已改变'),
@@ -750,6 +753,7 @@ function renderThreads() {
     for (const [threadId, turnId] of state.activeTurns) track(threadId, turnId);
     if (state.busy && !state.activeTurns.has(state.thread?.id)) track(state.thread?.id, state.turnId);
   }
+  desktopCompanion.tasks(state.connected, runningThreadIds.size);
   const searching=!!$('search').value.trim();
   const order=projectNavigation.render({projects:projectsState.projects,threads:state.threads,selectedPath:state.cwd,activeThreadId:state.thread?.id||'',runningThreadIds,unreadThreadIds:threadCompletion.unread,searchStatus,searching,busy:projectsState.busy||state.sending,error:projectsState.error,
     restoredOrder:!normalThreadsLoaded&&!searching?restoredOrder:null,animateOrder:animateProjectOrder&&!searching});
@@ -2198,7 +2202,10 @@ document.addEventListener('click',event=>{if(!$('thread-menu').contains(event.ta
 $('thread-menu').addEventListener('keydown',event=>{if(event.key==='ArrowDown'||event.key==='ArrowUp'){event.preventDefault();const buttons=[...$('thread-menu').querySelectorAll('button')],n=buttons.indexOf(document.activeElement);buttons[(n+(event.key==='ArrowDown'?1:-1)+buttons.length)%buttons.length]?.focus();}});
 
 $('refresh-archived').addEventListener('click',()=>loadArchived()); $('more-archived').addEventListener('click',()=>loadArchived(true));
-const preferencesView = createPreferences({ document, window, state, $, el, api, notice, confirm: text => confirm(text), onChange:()=>questionNotifications?.sync(state.requests,{notify:false}) });
+const preferencesView = createPreferences({ document, window, state, $, el, api, notice, confirm: text => confirm(text), onChange:(preferences,appearance)=>{
+  if(state.desktop)desktopCompanion.appearance(preferences.desktopCompanion,appearance);
+  questionNotifications?.sync(state.requests,{notify:false});
+} });
 const { loadDesktopState } = preferencesView;
 applyAccessMode(access.lan);
 watchKeyboard(window, document.documentElement);
@@ -2206,6 +2213,7 @@ mountMobileLayout(document,window);
 offlineSnapshot=mountOfflineSnapshot({document,window,readState:()=>({ready:state.connected&&!state.loadingThread&&lastEventAt>0&&Date.now()-lastEventAt<60000,page:currentRoute,title:state.thread?.name||$('thread-title').textContent,project:$('project-name').textContent})});
 questionNotifications=createQuestionNotifications({document,window,host:$('question-alert'),enabled:()=>preferencesView.current().approvalNotice,notice,
   onPendingQuestions:taskbarBadge.setQuestions,
+  onPendingCounts:desktopCompanion.pending,
   permissionStatus:$('question-notification-status'),permissionButton:$('question-notification-permission'),
   canOpen:()=>state.connected&&!state.sending&&!state.loadingThread&&!state.shuttingDown,
   openThread:async(threadId,request)=>{
@@ -2219,6 +2227,11 @@ questionNotifications=createQuestionNotifications({document,window,host:$('quest
     if(target){conversationScroll.pause();for(let parent=target.parentElement;parent;parent=parent.parentElement)if(parent.tagName==='DETAILS')parent.open=true;target.scrollIntoView({block:'center',behavior:'instant'});target.querySelector('input:not(:disabled),textarea:not(:disabled),button:not(:disabled)')?.focus({preventScroll:true});conversationScroll.pause();}
     else notice('已打开对应对话。如问题位于更早的记录，请加载更早消息。');
   },
+});
+desktopWebView?.addEventListener('message', ({data})=>{
+  if(!state.desktop || data?.type!=='companionOpen')return;
+  if(data.target==='appearance')openSettings('appearance');
+  else if(data.target==='question'||data.target==='approval')void questionNotifications.openPending(data.target);
 });
 taskNotifications=mountTaskNotifications({document,window,notice,
   snapshot:()=>({connected:state.connected&&lastEventAt>0&&Date.now()-lastEventAt<60000,canOpen:taskNavigationReady&&state.connected&&!state.loadingThread&&!state.sending}),

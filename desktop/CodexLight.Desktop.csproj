@@ -3,6 +3,7 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType><TargetFramework>net10.0-windows10.0.19041.0</TargetFramework><SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
     <UseWindowsForms>true</UseWindowsForms><EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <UseWPF>true</UseWPF><EnableDefaultPageItems>false</EnableDefaultPageItems>
     <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
     <AssemblyName>CodexLight</AssemblyName><ApplicationManifest>app.manifest</ApplicationManifest>
     <Version>0.4.21</Version>
@@ -21,7 +22,12 @@
   <ItemGroup Condition="'$(EnableVelopackPrototype)' == 'true'">
     <PackageReference Include="Velopack" Version="1.3.39-g8d2844f" />
   </ItemGroup>
-  <!-- WebView2 adds both UI frameworks; this host uses WinForms only. -->
+  <ItemGroup>
+    <Page Include="Companion/CompanionWindow.xaml" />
+    <EmbeddedResource Include="Companion/Art/*.png" LogicalName="CodeCang.Companion.%(Filename).png" />
+    <Using Include="System.IO" /><Using Include="System.Net.Http" />
+  </ItemGroup>
+  <!-- Only the main WinForms window hosts a WebView. -->
   <Target Name="RemoveUnusedWebView2Wpf" BeforeTargets="ResolveAssemblyReferences">
     <ItemGroup><Reference Remove="@(Reference)" Condition="'%(Reference.Filename)' == 'Microsoft.Web.WebView2.Wpf'" /></ItemGroup>
   </Target>

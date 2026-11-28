@@ -130,16 +130,33 @@ test('environment reset clears async and RPC identities without reusing native c
   assert.equal(state.observe(asyncEvent()).fresh.length, 1);
 });
 
-function fixture({ focus = false, visible = true } = {}) {
+function fixture({ focus = false, visible = true, onPendingCounts } = {}) {
   const document = createDocument(), host = document.createElement('aside'), window = new EventTarget();
   document.visibilityState = visible ? 'visible' : 'hidden'; document.hasFocus = () => focus;
   const calls = [], opened = [], notices = [], counts = []; let enabled = true, canOpen = true;
   window.codexLightQuestionNotifications = Object.fromEntries(['show', 'clear', 'clearAll'].map(name => [name, async value => calls.push({ name, value })]));
   const controller = createQuestionNotifications({ document, window, host, enabled: () => enabled, canOpen: () => canOpen,
-    onPendingQuestions: (...args) => counts.push(args),
+    onPendingQuestions: (...args) => counts.push(args), onPendingCounts,
     openThread: async (...args) => opened.push(args), notice: (...args) => notices.push(args) });
   return { document, window, host, controller, calls, opened, notices, counts, disable() { enabled = false; }, allowOpen(value) { canOpen = value; } };
 }
+
+test('companion can open an individual question or approval while system reminders are muted', async () => {
+  const pending=[], f=fixture({onPendingCounts:(...counts)=>pending.push(counts)});
+  f.disable();
+  const approval=request(2,'permission','item/permissions/requestApproval');
+  f.controller.sync(rows(approval)); f.controller.observe(asyncEvent());
+  assert.deepEqual(pending.at(-1),[1,1]);
+  await f.controller.openPending('question');
+  assert.equal(f.opened.at(-1)[1].params.itemId,'item-a');
+  f.controller.answered('thread-a','item-a');
+  assert.deepEqual(pending.at(-1),[0,1]);
+  await f.controller.openPending('approval');
+  assert.equal(f.opened.at(-1)[1],approval);
+  await f.controller.openPending('question');
+  assert.equal(f.opened.length,2);
+  f.controller.dispose();
+});
 
 test('background system reminder excludes private request content and clears resolved requests', async () => {
   const f = fixture(); f.controller.sync(rows(request())); await tick();

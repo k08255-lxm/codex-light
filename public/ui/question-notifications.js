@@ -186,7 +186,7 @@ function notificationTarget(window, open, failed) {
 const setText = (node, text) => { if (node.textContent !== text) node.textContent = text; };
 
 export function createQuestionNotifications({ document, window, host, permissionStatus, permissionButton,
-  enabled = () => true, canOpen = () => true, openThread, notice = () => {}, onPendingQuestions = () => {} }) {
+  enabled = () => true, canOpen = () => true, openThread, notice = () => {}, onPendingQuestions = () => {}, onPendingCounts = () => {} }) {
   const state = createQuestionNoticeState();
   let items = [], dismissed = '', disposed = false, bridgeWarning = false, notificationEnabled = enabled();
   let queuedOpen = null, opening = false, lastCount = -1, lastEnabled, synced = false;
@@ -271,6 +271,7 @@ export function createQuestionNotifications({ document, window, host, permission
   function render() {
     renderPermission();
     const questions = items.filter(item => item.kind === 'question').length;
+    onPendingCounts(questions, items.length - questions);
     publishPendingQuestions(questions, enabled());
     host.hidden = !enabled() || !items.length || dismissed === signature();
     if (host.hidden) return;
@@ -340,6 +341,12 @@ export function createQuestionNotifications({ document, window, host, permission
     void flushOpen();
   }
   return {
+    async openPending(kind) {
+      const item = items.find(entry => entry.kind === kind);
+      if (!item || !canOpen()) { notice(item ? '当前操作结束后可查看请求。' : '这项请求已处理。'); return; }
+      try { await openThread(item.threadId, item.request); }
+      catch (error) { notice('无法打开待处理请求：' + error.message, true); }
+    },
     waitingPhase: (threadId,turnId) => waitingPhase(items,threadId,turnId),
     sync(requests, options) { if (!disposed) { synced=true; apply(state.sync(requests, options)); } },
     observe(message) { if (!disposed && ['item/started', 'item/completed'].includes(message?.method)) apply(state.observe(message)); },
@@ -356,6 +363,7 @@ export function createQuestionNotifications({ document, window, host, permission
     dispose() {
       disposed = true; queuedOpen = null; clearSystem(); host.hidden = true;
       publishPendingQuestions(0, enabled());
+      onPendingCounts(0, 0);
       permissionButton?.removeEventListener('click', requestPermission);
       window.removeEventListener('focus', refreshPermission);
       window.removeEventListener('codexlight-question-notification-status', permissionChanged);

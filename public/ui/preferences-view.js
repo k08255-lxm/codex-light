@@ -16,6 +16,12 @@ export function createPreferences({ document, window, state, $, el, api, notice,
     $('desktop-power-preferences').hidden=!state.desktop;
     for(const [control,key] of powerControls)control.checked=preferences[key];
   }
+  const companion=$('preference-companion');
+  function applyCompanionPreference(){
+    const supported=state.desktop&&typeof window.chrome?.webview?.postMessage==='function';
+    $('desktop-companion-preference').hidden=!supported;
+    companion.value=preferences.desktopCompanion;
+  }
   async function syncNativeTheme(theme,visualStyle,force=false){
    if(!state.desktop)return;
    const signature=theme+':'+visualStyle;
@@ -23,7 +29,7 @@ export function createPreferences({ document, window, state, $, el, api, notice,
    nativeThemePending={theme,visualStyle};if(nativeThemeBusy)return;nativeThemeBusy=true;
    try{while(nativeThemePending){const desired=nativeThemePending;nativeThemePending=null;try{await api('/api/desktop/theme',desired);nativeThemeApplied=desired.theme+':'+desired.visualStyle;}catch{nativeThemeApplied=null;$('preference-status').textContent='外观已应用，标题栏同步失败。刷新连接可重试。';}}}finally{nativeThemeBusy=false;}
   }
-  function applyPreferences(){const effective=effectiveAppearance(preferences,{dark:colorMedia.matches,reduced:motionMedia.matches});const root=document.documentElement;root.dataset.theme=effective.theme;root.dataset.visualStyle=effective.visualStyle;root.dataset.fontScale=effective.fontScale;root.dataset.reducedMotion=String(effective.reducedMotion);for(const button of document.querySelectorAll('[data-theme-choice]'))button.setAttribute('aria-pressed',String(button.dataset.themeChoice===preferences.theme));for(const button of document.querySelectorAll('[data-style-choice]'))button.setAttribute('aria-pressed',String(button.dataset.styleChoice===effective.visualStyle));$('preference-font').value=String(preferences.fontScale);$('preference-motion').value=preferences.motion;$('preference-completion').checked=preferences.completionNotice;$('preference-approval').checked=preferences.approvalNotice;applyPowerPreferences();onChange();if(state.desktop)syncNativeTheme(effective.theme,effective.visualStyle);}
+  function applyPreferences(){const effective=effectiveAppearance(preferences,{dark:colorMedia.matches,reduced:motionMedia.matches});const root=document.documentElement;root.dataset.theme=effective.theme;root.dataset.visualStyle=effective.visualStyle;root.dataset.fontScale=effective.fontScale;root.dataset.reducedMotion=String(effective.reducedMotion);for(const button of document.querySelectorAll('[data-theme-choice]'))button.setAttribute('aria-pressed',String(button.dataset.themeChoice===preferences.theme));for(const button of document.querySelectorAll('[data-style-choice]'))button.setAttribute('aria-pressed',String(button.dataset.styleChoice===effective.visualStyle));$('preference-font').value=String(preferences.fontScale);$('preference-motion').value=preferences.motion;$('preference-completion').checked=preferences.completionNotice;$('preference-approval').checked=preferences.approvalNotice;applyPowerPreferences();applyCompanionPreference();onChange(preferences,effective);if(state.desktop)syncNativeTheme(effective.theme,effective.visualStyle);}
   let desktopStateInstance=null,preferenceSaving=false,desktopPreferencesLoading=false;
   let firstRun=loadedPreferences.firstRun===true,firstThemeOffered=false;
   const dialog=$('first-theme'),form=$('first-theme-form');
@@ -59,6 +65,7 @@ export function createPreferences({ document, window, state, $, el, api, notice,
   for(const button of document.querySelectorAll('[data-theme-choice]'))button.addEventListener('click',()=>changePreferences({theme:button.dataset.themeChoice}));for(const button of document.querySelectorAll('[data-style-choice]'))button.addEventListener('click',()=>changePreferences({visualStyle:button.dataset.styleChoice}));
   $('preference-font').addEventListener('change',()=>changePreferences({fontScale:Number($('preference-font').value)}));$('preference-motion').addEventListener('change',()=>changePreferences({motion:$('preference-motion').value}));$('preference-completion').addEventListener('change',()=>changePreferences({completionNotice:$('preference-completion').checked}));$('preference-approval').addEventListener('change',()=>changePreferences({approvalNotice:$('preference-approval').checked}));
   for(const [control,key] of powerControls)control.addEventListener('change',()=>{if(state.desktop)void changePreferences({[key]:control.checked});});
+  companion.addEventListener('change',()=>{if(state.desktop)void changePreferences({desktopCompanion:companion.value});});
   colorMedia.addEventListener('change',applyPreferences);motionMedia.addEventListener('change',applyPreferences);applyPreferences();if(loadedPreferences.error)$('preference-status').textContent=loadedPreferences.error;
 
   /** Current preferences (read-only snapshot for other controllers). */

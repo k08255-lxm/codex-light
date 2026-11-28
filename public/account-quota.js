@@ -22,7 +22,7 @@ export function sidebarQuotaWindows(result) {
   return ['primary', 'secondary'].map(key => ({ window: bucket[key], key })).filter(({ window }) => {
     const mins = window?.windowDurationMins;
     return Number.isFinite(window?.usedPercent) && (mins === 10080 || (Number.isInteger(mins) && mins >= 60 && mins < 1440 && mins % 60 === 0));
-  }).map(({ window, key }) => ({ ...windowView(window), key: `${bucket.id}:${key}:${window.windowDurationMins}`, shortLabel: window.windowDurationMins === 10080 ? '周' : `${window.windowDurationMins / 60}h`, bucket: bucket.limitName || bucket.id }));
+  }).map(({ window, key }) => ({ ...windowView(window), minutes: window.windowDurationMins, key: `${bucket.id}:${key}:${window.windowDurationMins}`, shortLabel: window.windowDurationMins === 10080 ? '周' : `${window.windowDurationMins / 60}h`, bucket: bucket.limitName || bucket.id }));
 }
 
 function quotaRing(document, view) {
@@ -49,7 +49,7 @@ function quotaRing(document, view) {
 const startupRetryDelays = [1500, 5000, 15000];
 
 /** Start/stop are driven by connection state. Background reads never fetch credit details. */
-export function mountAccountQuota(host, { rpc, onOpen = () => {}, pollMs = 300000 }) {
+export function mountAccountQuota(host, { rpc, onOpen = () => {}, onChange = () => {}, pollMs = 300000 }) {
   const document = host.ownerDocument;
   let epoch = 0, active = false, timer = null, inFlight = null, snapshot = null, startupAttempts = 0;
   let button = null, serverInstance = null;
@@ -58,6 +58,7 @@ export function mountAccountQuota(host, { rpc, onOpen = () => {}, pollMs = 30000
   function update(result) {
     snapshot = result;
     const windows = sidebarQuotaWindows(result);
+    onChange(windows, false);
     host.hidden = !windows.length;
     host.removeAttribute('data-stale');
     if (!windows.length) { host.replaceChildren(); button = null; rows.clear(); return; }
@@ -109,6 +110,7 @@ export function mountAccountQuota(host, { rpc, onOpen = () => {}, pollMs = 30000
         if (active && mine === epoch && previous === snapshot && button) {
           if (!host.getAttribute('data-stale')) button.setAttribute('aria-label', `${button.getAttribute('aria-label')}；刷新失败，显示上次读取结果`);
           host.setAttribute('data-stale', 'true'); button.title = '额度刷新失败，显示上次读取结果';
+          onChange(sidebarQuotaWindows(snapshot), true);
         }
       }
     }
@@ -119,7 +121,7 @@ export function mountAccountQuota(host, { rpc, onOpen = () => {}, pollMs = 30000
     });
     return inFlight;
   }
-  function reset() { epoch++; clearTimeout(timer); startupAttempts = 0; inFlight = null; snapshot = null; button = null; rows.clear(); host.hidden = true; host.replaceChildren(); host.removeAttribute('data-stale'); }
+  function reset() { epoch++; clearTimeout(timer); startupAttempts = 0; inFlight = null; snapshot = null; button = null; rows.clear(); host.hidden = true; host.replaceChildren(); host.removeAttribute('data-stale'); onChange([], false); }
   function stop() { active = false; reset(); }
   function start(instance = null) {
     if (active && serverInstance === instance) return;
