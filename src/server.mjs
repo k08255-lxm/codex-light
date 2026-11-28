@@ -44,6 +44,7 @@ import {HistoryImages} from './history-images.mjs';
 import {createRelaySourceCheck} from './ssh-relay-script.mjs';
 import {FilePreviewService} from './file-preview.mjs';
 import {LanAccess} from './lan-access.mjs';
+import {TunnelSettings} from './tunnel-settings.mjs';
 import {LanPreferenceStore,windowsNetworkIdentity,windowsNetworkSnapshot} from './lan-preferences.mjs';
 import {loadRemoteHostId} from './remote-host-identity.mjs';
 import {SshRelay} from './ssh-relay.mjs';
@@ -127,7 +128,7 @@ publicFiles['/ui/panel-resize.js']='ui/panel-resize.js';publicFiles['/ui/panel-r
 for(const file of ['history-auto-load.js','format.js','chart.js','stats-view.js','account-view.js','live-changes.js','views.css','paste.js','artifacts.js','agents.js','access.js','lan-view.js','tunnel-view.js','access-pairing-view.js','viewport.js','approvals-view.js','composer.js','dsh-view.js','preferences-view.js','remote-view.js','slash-menu.js','dsh-config-view.js','dsh-connection-view.js'])publicFiles['/ui/'+file]='ui/'+file;
 for(const file of ['app-confirm-dialog.js','lan-confirm-dialog.js','history-viewport.js','engine-onboarding.js','engine-onboarding.css','activity-feed.js','activity-feed.css','projects.js','project-navigation.js','project-navigation.css'])publicFiles['/'+file]=file;
 async function body(req){let data='';for await(const chunk of req){data+=chunk;if(data.length>512*1024)throw new Error('请求太大');}try{return JSON.parse(data||'{}');}catch{throw new Error('无效 JSON');}}
-export async function createServer({client,cwd='',command='codex',demo=false,port=0,reopen=false,desktop=false,desktopUpdateTransport='msi',onDesktopTheme,onDesktopKeepAwake,onDesktopPickFolder,onDesktopLaunchInstaller,desktopStateRoot,nativeStorage,storageMaintenance,storageRoot,projectStore,projectsRoot,openProjectFolder=openProjectDirectory,fileAttachmentRoot,token=randomBytes(32).toString('hex'),prReviewService,runtimeManager,appUpdateService,contextHistoryReader=readInlineHistoryContext,statisticsRoot,lanOptions,dshConfigSourcesService,dshConnectionService,wslRuntimeService,wslSelectionStore:providedWslSelectionStore,engineNativeCandidate}={}){
+export async function createServer({client,cwd='',command='codex',demo=false,port=0,reopen=false,desktop=false,desktopUpdateTransport='msi',onDesktopTheme,onDesktopKeepAwake,onDesktopPickFolder,onDesktopLaunchInstaller,desktopStateRoot,nativeStorage,storageMaintenance,storageRoot,projectStore,projectsRoot,openProjectFolder=openProjectDirectory,fileAttachmentRoot,token=randomBytes(32).toString('hex'),prReviewService,runtimeManager,appUpdateService,contextHistoryReader=readInlineHistoryContext,statisticsRoot,lanOptions,tunnelPreferenceStore,sshRelayService,dshConfigSourcesService,dshConnectionService,wslRuntimeService,wslSelectionStore:providedWslSelectionStore,engineNativeCandidate}={}){
  let runtimeSource='configured',wslCandidate=null,wslLaunch=null,runtimeStartupError=null;
  const wslRuntime=wslRuntimeService||new WslRuntime();
  const wslSelectionStore=providedWslSelectionStore||new WslSelectionStore(desktopStateRoot?{root:desktopStateRoot}:{});
@@ -175,6 +176,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
  const projectHistory=typeof projects.submitted==='function'?projects:new ProjectStore({root:projectsRoot||temporaryProjects||undefined});
  // The app's user data outlives an update and is shared by the Windows and WSL engines.
  const remoteDirectory=path.join(desktopState?.root||configuredStateRoot||(runtimeProfile?wslSelectionStore.root:projectHistory.root),'remote-access');
+ const tunnelSettings=new TunnelSettings(remoteDirectory);
  let hostIdPromise;
  function hostId(){
   hostIdPromise??=loadRemoteHostId(remoteDirectory).catch(()=>{
@@ -626,6 +628,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      const action=url.pathname.slice((isTunnel?'/api/lan/tunnel/':'/api/lan/').length);
      if(!input||typeof input!=='object'||Array.isArray(input))throw new Error('远程访问参数无效');
      if(isTunnel){
+      if(action==='settings'){json(res,200,await queueTunnel(()=>tunnelSettings.save(input)));return;}
       if(action==='enable'){json(res,200,await queueTunnel(()=>tunnel.enable(input)));return;}
       if(action==='status'&&!Object.keys(input).length){json(res,200,await tunnelStatus());return;}
       if(['ssh/connect','ssh/prepare','ssh/installer'].includes(action)){
@@ -641,10 +644,10 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
         if(stopping)throw Object.assign(new Error('公网入口已关闭。'),{status:409});
         const endpoint=connecting?await tunnel.configureTunnel(settings,input.previousOrigin):tunnel.status();
         if(!draft&&!endpoint.enabled)throw Object.assign(new Error('请先开启这台电脑的公网入口。'),{status:409});
-        sshRelay??=new SshRelay({keyDir:path.join(remoteDirectory,'ssh')});
         const target={...(draft?settings:{publicOrigin:endpoint.origin,port:endpoint.port}),hostId:id};
-        if(action==='ssh/installer')return sshRelay.installer({...target,randomPorts:input.randomPorts});
-        const prepared=await sshRelay.prepare({...target,verifyRelayProof:(nonce,proof)=>tunnel.verifyRelayProof(nonce,proof)});
+        if(action==='ssh/installer')return relay().installer({...target,randomPorts:input.randomPorts});
+        await tunnel.setTunnelSsh(true);
+        const prepared=await connectRelay(target);
         return connecting?tunnelStatus():prepared;
        });
        if(action==='ssh/installer'){
@@ -654,8 +657,12 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
        return;
       }
       if(Object.keys(input).length)throw new Error('公网入口操作参数无效');
-      if(action==='ssh/stop'){await queueTunnel(()=>sshRelay?.stop());json(res,200,relayStatus());return;}
+      if(action==='ssh/stop'){
+       await queueTunnel(async()=>{try{await tunnel.setTunnelSsh(false);}finally{await sshRelay?.stop();}});
+       json(res,200,relayStatus());return;
+      }
       if(action==='disable'){json(res,200,await queueTunnel(()=>tunnel.disable()));return;}
+      if(action==='rotate'){json(res,200,await queueTunnel(()=>tunnel.rotate()));return;}
      }
      if(action==='enable'){json(res,200,await manager.enable(input));return;}
      if(action==='pairing'&&!isTunnel){json(res,200,await lan.pairing(input));return;}
@@ -1107,10 +1114,19 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
   try{let bytes=await readFile(path.join(publicDir,filename));if(filename==='index.html')bytes=Buffer.from(bytes.toString('utf8').replace(/<head>/i,`<head><meta name="codex-light-style-nonce" content="${styleNonce}">`));res.writeHead(200,{'Content-Type':types[path.extname(filename)]});res.end(bytes);}catch{json(res,404,{error:'资源未找到'});}
  };
  const server=http.createServer((req,res)=>handle(req,res));
- let sshRelay,tunnelQueue=Promise.resolve();
+ let sshRelay=sshRelayService,tunnelQueue=Promise.resolve();
+ const relay=()=>sshRelay??=new SshRelay({keyDir:path.join(remoteDirectory,'ssh'),keepConnected:true});
+ function connectRelay(target){
+  if(stopping)throw Object.assign(new Error('应用正在关闭。'),{status:409});
+  return relay().prepare({...target,verifyRelayProof:(nonce,proof)=>tunnel.verifyRelayProof(nonce,proof)});
+ }
  const relaySourceAvailable=createRelaySourceCheck();
  const relayStatus=()=>sshRelay?.status||{state:'off',message:''};
- const tunnelStatus=async()=>({...tunnel.status(),sshRelay:relayStatus(),...await remoteIdentity(false)});
+ const tunnelStatus=async()=>{
+  const status={...tunnel.status(),sshRelay:relayStatus(),...await remoteIdentity(false)};
+  try{return {...status,settings:await tunnelSettings.read()};}
+  catch(error){return {...status,settingsError:error.message};}
+ };
  function queueTunnel(operation){
   const result=tunnelQueue.then(()=>{
    if(stopping)throw Object.assign(new Error('应用正在关闭。'),{status:409});
@@ -1121,7 +1137,10 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
  }
  const lanPersistence=desktop&&!demo&&process.platform==='win32'?{preferenceStore:new LanPreferenceStore({root:path.join(desktopState.root,'lan')}),networkIdentity:windowsNetworkIdentity,networkSnapshot:windowsNetworkSnapshot}:{};
  const lan=new LanAccess({...lanPersistence,...lanOptions,handler:handle,publicPaths:Object.keys(publicFiles)});
- const tunnel=new LanAccess({tunnel:true,handler:handle,publicPaths:Object.keys(publicFiles),beforeListenerClose:()=>sshRelay?.stop()});
+ const secureTunnelStore=tunnelPreferenceStore??(desktop&&!demo&&process.platform==='win32'?new LanPreferenceStore({root:remoteDirectory,tunnel:true}):null);
+ const tunnel=new LanAccess({tunnel:true,handler:handle,publicPaths:Object.keys(publicFiles),preferenceStore:secureTunnelStore,
+  beforeListenerClose:()=>sshRelay?.stop(),
+  restoreTunnelRelay:async endpoint=>connectRelay({publicOrigin:endpoint.origin,port:endpoint.port,hostId:await hostId()})});
  function observeRemote(method,params,result){
   if(['remoteControl/status/read','remoteControl/enable','remoteControl/disable'].includes(method)){const env=result?.environmentId||null;if(env!==remoteEnvironment){remoteEnvironment=env;remoteClients.clear();clearPairing();}}
   if(method==='remoteControl/client/list'){if(!params.cursor)remoteClients.clear();for(const client of result?.data||[])if(typeof client.clientId==='string')remoteClients.add(client.clientId);}
@@ -1197,6 +1216,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
  void dshWakeup?.refreshAccount();
  dshWakeup?.start();
  void lan.restore().catch(()=>{});
+ void tunnel.restore();
  if(reopen){try{reopener=await createReopener({url:`${origin}/#token=${token}`,serverInstance:operations.serverInstance});}catch{reopenError='安全重开通道不可用；关闭窗口后请恢复原窗口，不会通过不安全方式返回访问令牌';}}
  function reportShutdownFailure(error){shutdownError={code:error.code||'SHUTDOWN_FAILED',message:'本地服务关闭失败，不能确认所有资源已释放'};broadcast({method:'bridge/shutdown',params:{state:'failed',...shutdownError,engineStopped}});}
  function shutdownServices(){

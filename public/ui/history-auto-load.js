@@ -1,12 +1,11 @@
 /** Serialize upward paging and optional background fill for the active conversation. */
-export function mountHistoryAutoLoad({container, button, status, canLoad, load, getKey,scrollController=null,autoFill=false, incompleteTurn=()=>false,label='加载更早的内容',endLabel='已到对话开头'}) {
+export function mountHistoryAutoLoad({container, button, status, canLoad, load, getKey,scrollController=null,shouldFill=()=>false,label='加载更早的内容',endLabel='已到对话开头'}) {
   let pending = null, failed = false, lastTop = container.scrollTop, touchY = null, epoch = 0;
   let upwardUntil = 0, fillTimer = null;
-  const needsContent = () => incompleteTurn() || container.scrollHeight <= container.clientHeight + 1;
   function fill() {
-    if (!autoFill || fillTimer!==null || pending || failed || !canLoad() || !needsContent()) return;
+    if (fillTimer!==null || pending || failed || !canLoad() || !shouldFill()) return;
     // Let the newest page paint and give input a turn between history batches.
-    fillTimer=setTimeout(()=>{fillTimer=null;if(needsContent())void request(false,true);},80);
+    fillTimer=setTimeout(()=>{fillTimer=null;if(shouldFill())void request(false,true);},80);
   }
   // Loading/error text is inside the scroller. Preserve the reading position when
   // it enters/leaves flow, including at scrollTop=0 where native anchoring is off.

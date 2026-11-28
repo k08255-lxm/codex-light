@@ -129,7 +129,7 @@ try {
       const rpc=route.request().postDataJSON();
       if(rpc?.method==='thread/items/list'&&rpc.params?.threadId===archive.id){
         cursors.push(rpc.params.cursor??'first');
-        if(rpc.params.cursor==='400'){started.resolve();await release.promise;}
+        if(rpc.params.cursor && cursors.length===2){started.resolve();await release.promise;}
       }
       await route.continue();
     });

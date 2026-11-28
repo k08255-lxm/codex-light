@@ -81,7 +81,7 @@ function readRelayJson(url, { signal, request, body }) {
     const req = request(url, options, response => {
       if (response.statusCode !== 200) {
         response.destroy();
-        reject(new RelayResponseError(`HTTPS 入口返回 HTTP ${response.statusCode}。请检查该站点的中继转发配置。`));
+        reject(Object.assign(new RelayResponseError(`HTTPS 入口返回 HTTP ${response.statusCode}。请检查该站点的中继转发配置。`),{status:response.statusCode}));
         return;
       }
       if (/^text\/html\b/i.test(response.headers?.['content-type'] || '')) {
@@ -280,7 +280,7 @@ export class SshRelay {
   #status = { state: 'off', message: 'SSH 中继未连接。' };
 
   constructor({ keyDir, request = httpsRequest, spawnProcess, keygen = runKeygen, retryDelayMs = 4000,
-    maxAttempts = 50, waitTimeoutMs = 180000, connectTimeoutMs = 12000 } = {}) {
+    maxAttempts = 50, waitTimeoutMs = 180000, connectTimeoutMs = 12000, keepConnected = false } = {}) {
     if (typeof keyDir !== 'string' || !path.isAbsolute(keyDir) || /[\x00-\x1f]|\$\{/u.test(keyDir)) {
       throw new TypeError('SSH 密钥目录必须是用户专属的本机绝对路径。');
     }
@@ -288,7 +288,7 @@ export class SshRelay {
     this.#readJson = (url, signal, body) => readRelayJson(url, { signal, request, body });
     this.#spawn = spawnProcess;
     this.#keygen = keygen;
-    this.#retry = { retryDelayMs, maxAttempts, waitTimeoutMs, connectTimeoutMs };
+    this.#retry = { retryDelayMs, maxAttempts, waitTimeoutMs, connectTimeoutMs, keepConnected };
   }
 
   get status() { return { ...this.#status }; }
@@ -350,9 +350,12 @@ export class SshRelay {
     const keyUrl = new URL(HOST_KEY_PATH, target.origin);
     let reconnectDeadline;
     let remaining = maxAttempts;
-    let failure;
+    let failure, transient = false;
+    const withinWindow = () => remaining > 0 && Date.now() < (reconnectDeadline ?? deadline);
     try {
-      while (!signal.aborted && remaining-- > 0 && Date.now() < (reconnectDeadline ?? deadline)) {
+      while (!signal.aborted && (withinWindow() || (this.#retry.keepConnected && transient))) {
+        remaining--;
+        transient = false;
         if (!failure) this.#update(session, 'waiting', '正在通过公网 HTTPS 读取服务器的中继配置。');
         let hostKey, relayPort, sshPort;
         try {
@@ -368,6 +371,8 @@ export class SshRelay {
           hostKey = ed25519Key(metadata.hostKey);
         }
         catch (error) {
+          transient = ['ENOTFOUND','EAI_AGAIN','ABORT_ERR','ETIMEDOUT','ECONNREFUSED','ECONNRESET','ENETUNREACH','EHOSTUNREACH'].includes(error.code) ||
+            [502,503,504].includes(error.status);
           if (error instanceof RelayResponseError) failure = error.message;
           else if (error.code === 'ENOTFOUND' || error.code === 'EAI_AGAIN') failure = '无法解析中继域名。请检查 DNS。';
           else if (error.code === 'ABORT_ERR' || error.code === 'ETIMEDOUT') failure = '读取公网 HTTPS 配置超时。请检查端口和防火墙。';
@@ -394,14 +399,15 @@ export class SshRelay {
           }
           failure = result.ready ? 'SSH 连接已断开。' : result.confirmed ? 'SSH 转发已建立，但公网 HTTPS 未能验证到这台电脑。请检查代理转发的 Host 和端口。'
             : `SSH 端口 ${sshPort} 未能建立转发。请检查端口放行和服务器注册。`;
+          transient = result.ready || !result.confirmed;
           if (result.ready) {
             reconnectDeadline = Date.now() + 30000;
             remaining = Math.min(maxAttempts, 3);
           }
         }
-        if (!signal.aborted && remaining > 0) {
+        if (!signal.aborted && (withinWindow() || (this.#retry.keepConnected && transient))) {
           this.#update(session, 'retrying', failure);
-          await pause(retryDelayMs, undefined, { signal });
+          await pause(withinWindow() ? retryDelayMs : Math.min(60000,16*retryDelayMs), undefined, { signal });
         }
       }
       this.#update(session, 'error', failure || '等待 SSH 中继连接超时。');

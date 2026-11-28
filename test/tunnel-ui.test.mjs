@@ -32,6 +32,7 @@ function fixture(t, overrides = {}) {
     '/api/lan/status': () => ({ enabled: false, addresses: [wifi, vpn] }),
     '/api/lan/cancelPairing': () => ({ cancelled: true }),
     '/api/lan/tunnel/status': () => ({ enabled: false }),
+    '/api/lan/tunnel/settings': settings => settings,
     '/api/lan/tunnel/enable': () => tunnelEnabled,
     '/api/lan/tunnel/disable': () => ({ enabled: false }),
     '/api/lan/tunnel/rotate': () => ({ ...tunnelEnabled, url: `${sameOrigin}/#token=${'c'.repeat(64)}` }),
@@ -73,6 +74,9 @@ test('the separate public access form enables with explicit settings and reports
     { path: '/api/lan/tunnel/enable', body: { publicOrigin: sameOrigin, port: 49322 } },
   ]);
   assert.match(panel.querySelector('.tunnel-state').textContent, /本机入口已就绪，公网连通性未验证/);
+  assert.deepEqual(calls.find(call=>call.path.endsWith('/settings')).body,{
+    provider:'frp', publicOrigin:sameOrigin, port:49322, randomPorts:false,
+  });
   assert.equal(origin.disabled, true);
   assert.equal(port.disabled, true);
   assert.ok(!panel.textContent.includes(tunnelEnabled.url));
@@ -81,6 +85,18 @@ test('the separate public access form enables with explicit settings and reports
   assert.deepEqual(calls.at(-1), { path: '/api/lan/tunnel/disable', body: {} });
   assert.match(panel.querySelector('.tunnel-state').textContent, /已关闭/);
   assert.equal(origin.disabled, false);
+});
+
+test('a new window fills the disabled public access form from the computer settings', async t => {
+  const settings={provider:'ssh',publicOrigin:sameOrigin,port:50400,randomPorts:true};
+  const {view,panel,calls}=fixture(t,{'/api/lan/tunnel/status':()=>({enabled:false,settings})});
+  await view.activate();
+  button(panel,'配置公网访问').click();
+  assert.equal(panel.querySelector('#tunnel-provider').value,'ssh');
+  assert.equal(panel.querySelector('#tunnel-public-origin').value,sameOrigin);
+  assert.equal(panel.querySelector('#tunnel-local-port').value,'50400');
+  assert.equal(panel.querySelector('.relay-port-option').querySelector('input').checked,true);
+  assert.deepEqual(calls.map(call=>call.path).sort(),['/api/lan/status','/api/lan/tunnel/status']);
 });
 
 test('the provider selector updates configuration guidance without calling a provider', async t => {

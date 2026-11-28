@@ -1,4 +1,10 @@
 // Adapted from DeepSeek Harness TurnNavigator and turn-navigation (MIT).
+export function compactTimelineMedia(doc) {
+  const query = doc.documentElement.dataset.mobileShell === 'android'
+    ? 'all' : '(max-width:760px), (pointer:coarse) and (max-height:600px)';
+  return doc.defaultView.matchMedia?.(query);
+}
+
 function excerpt(parts,limit){
   let text='',clipped=false;
   for(const part of parts){
@@ -27,8 +33,7 @@ function responsePreview(turn){
 
 // Render marks for all loaded turns, including those currently represented by spacers.
 export function mountTurnTimeline(rail, scroller, host, {jumpTo}) {
-  const doc = rail.ownerDocument, win = doc.defaultView;
-  const narrow=win.matchMedia?.('(max-width:760px), (pointer:coarse) and (max-height:600px)');
+  const doc = rail.ownerDocument, narrow = compactTimelineMedia(doc);
   const marks = rail.querySelector('.turn-marks'), preview = rail.querySelector('.turn-preview');
   const buttons = new Map();
   const prompt=preview.querySelector('.turn-preview-prompt'),reply=preview.querySelector('.turn-preview-response');
@@ -112,7 +117,7 @@ export function mountTurnTimeline(rail, scroller, host, {jumpTo}) {
     marks.replaceChildren(); marks.scrollTop=0; rail.hidden=true;
   }
   function update(list) {
-    if(narrow?.matches||doc.documentElement.dataset.mobileShell==='android'){
+    if(narrow?.matches){
       if(!rail.hidden||buttons.size)clear();
       items=list;
       return;

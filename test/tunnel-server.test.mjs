@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import http from 'node:http';
-import {mkdtemp, rm} from 'node:fs/promises';
+import {mkdtemp, readFile, rm} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { createServer } from '../src/server.mjs';
 import { LanAccess } from '../src/lan-access.mjs';
+import { LanPreferenceStore } from '../src/lan-preferences.mjs';
+import { setTimeout as pause } from 'node:timers/promises';
 
 const loopback = '127.0.0.1';
 const publicOrigin = 'https://phone.example.com';
@@ -130,6 +132,98 @@ test('desktop restart and a changed project profile retain the authenticated com
     assert.notEqual(second.serverInstance,first.serverInstance);
     await after.close();
   }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('saved form and paired phone survive desktop restart; rotation and disabling survive another restart', {skip:process.platform!=='win32'}, async t => {
+  const root=await mkdtemp(path.join(os.tmpdir(),'codecang-tunnel-settings-'));
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  const store=new LanPreferenceStore({root:path.join(root,'state','remote-access'),tunnel:true});
+  const options={desktopStateRoot:path.join(root,'state'),tunnelPreferenceStore:store};
+  const before=await fixture(t,{...options,projectsRoot:path.join(root,'old-profile')});
+  const settings={provider:'frp',publicOrigin:publicOrigin+':9443',port:await availablePort(),randomPorts:false};
+  assert.equal((await manage(before,'tunnel/settings',settings,null)).status,401);
+  assert.equal((await manage(before,'tunnel/settings',settings)).status,200);
+  const enabled=await manage(before,'tunnel/enable',{publicOrigin:settings.publicOrigin,port:settings.port});
+  assert.equal(enabled.status,200);
+  const issued=await manage(before,'tunnel/pairing');
+  const phone=await request(settings.port,settings.publicOrigin,'/api/pairing/redeem',{body:{ticket:fragment(issued.json().url,'pair')}});
+  assert.equal(phone.status,200);
+  const token=phone.json().token;
+  assert.ok(!(await readFile(store.file)).includes(Buffer.from(token)));
+  assert.equal((await manage(before,'tunnel/settings',{...settings,token:'unexpected'})).status,400);
+  assert.deepEqual(JSON.parse(await readFile(path.join(options.desktopStateRoot,'remote-access','tunnel-settings.json'),'utf8')),settings);
+  await before.close();
+  const after=await fixture(t,{...options,projectsRoot:path.join(root,'new-profile')});
+  const status=await restoredStatus(after);
+  assert.deepEqual(status.settings,settings);
+  assert.equal(status.enabled,true);
+  const check=token=>request(settings.port,settings.publicOrigin,'/api/status',{token});
+  assert.equal((await check(token)).status,200);
+  const rotated=fragment((await manage(after,'tunnel/rotate')).json().url,'token');
+  await after.close();
+  const third=await fixture(t,options);
+  await restoredStatus(third);
+  assert.equal((await check(token)).status,401);
+  assert.equal((await check(rotated)).status,200);
+  assert.equal((await manage(third,'tunnel/disable')).status,200);
+  await third.close();
+  const stopped=await fixture(t,options);
+  const disabled=await restoredStatus(stopped);
+  assert.equal(disabled.enabled,false);
+  assert.deepEqual(disabled.settings,settings);
+});
+
+async function restoredStatus(app){
+  const deadline=Date.now()+10000;
+  do{
+    const status=(await manage(app,'tunnel/status')).json();
+    if(!status.restoring)return status;
+    await pause(25);
+  }while(Date.now()<deadline);
+  assert.fail('desktop did not finish restoring public access');
+}
+
+test('startup restores the selected SSH relay and manual disconnect keeps only the public listener',async t=>{
+  let saved=null;
+  const store={read:async()=>saved,write:async v=>{saved=v;}};
+  let starts=0;
+  const relay={prepare:async()=>{starts++;return {};},stop:async()=>{},close:async()=>{}};
+  const root=await mkdtemp(path.join(os.tmpdir(),'codecang-ssh-restore-'));
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  const options={tunnelPreferenceStore:store,sshRelayService:relay,desktopStateRoot:root};
+  const first=await fixture(t,options);
+  const port=await availablePort();
+  assert.equal((await manage(first,'tunnel/ssh/connect',{publicOrigin,port,previousOrigin:null})).status,200);
+  assert.equal(starts,1);
+  const draft={provider:'ssh',publicOrigin:'https://another.example.com',port,randomPorts:true};
+  assert.equal((await manage(first,'tunnel/settings',draft)).status,200);
+  await first.close();
+  const second=await fixture(t,options);
+  assert.equal((await restoredStatus(second)).origin,publicOrigin);
+  assert.equal(starts,2);
+  assert.equal((await manage(second,'tunnel/ssh/stop')).status,200);
+  await second.close();
+  const third=await fixture(t,options);
+  assert.equal((await restoredStatus(third)).enabled,true);
+  assert.equal(starts,2);
+});
+
+test('busy public port recovers with the original pairing when the previous listener exits',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const port=await availablePort();
+  let saved={version:1,port,publicOrigin,ssh:false,token:'d'.repeat(64)};
+  const manager=new LanAccess({tunnel:true,handler:(_req,res)=>res.end(),preferenceStore:{
+    read:async()=>saved,write:async value=>{saved=value;},
+  }});
+  t.after(()=>manager.close());
+  const blocker=http.createServer();
+  blocker.listen(port,loopback);await once(blocker,'listening');
+  try{const waiting=await manager.restore();assert.equal(waiting.retryScheduled,true);assert.equal(waiting.enabled,false);}
+  finally{await new Promise(resolve=>blocker.close(resolve));}
+  t.mock.timers.tick(5000);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(manager.status().port,port);
+  assert.equal(fragment(manager.status().url,'token'),saved.token);
 });
 
 async function ticket(app, action = 'tunnel/pairing') {

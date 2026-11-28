@@ -54,6 +54,7 @@ import { DshTaskStore } from './dsh.js';
 import { DshLiveMonitor } from './dsh-live.js';
 import { PendingMutations, pendingForScope, PendingReconciler, outcomeFromError, lookupDecision, canReleaseUnknownSkill, sendAvailability, ConnectionBootstrap, SessionDefaultsBridge } from './submissions.js';
 import { mountHistoryAutoLoad, mountThreadAutoLoad, captureHistoryAnchor, restoreHistoryAnchor } from './ui/history-auto-load.js';
+import { compactTimelineMedia } from './ui/turn-timeline.js';
 import { mountRuntimePanel } from './runtime-panel.js';
 import { mountWslRuntimePanel } from './wsl-runtime-panel.js';
 import { mountEngineOnboarding } from './engine-onboarding.js';
@@ -1137,7 +1138,7 @@ async function loadItems(earlier = false, generation = state.openGeneration, cur
   if (!earlier) state.pager = pager; else if (state.pager !== pager) return;
   const items = page.items;
   // Finish the newest turn in the background so its gallery and process survive reopening
-  // even if a single image-heavy turn spans multiple pages. Older turns stay scroll-driven.
+  // even if a single image-heavy turn spans multiple pages.
   if (!earlier) pager.openingTurn = items.at(-1)?._turnId;
   if (!page.hasMore || items[0]?._turnId !== pager.openingTurn || (page.mode==='turns' && !pager.buffer.length)) pager.openingTurn=null;
   for (const turn of page.turns) state.ledger.merge(turn);
@@ -1963,15 +1964,19 @@ const threadAutoLoad = mountThreadAutoLoad({
 function hasEarlierHistory(){
   return Boolean(state.pager&&(state.pager.hasMore||state.pager.mode==='items'&&state.nextTurns));
 }
+const compactTimeline = compactTimelineMedia(document);
+const historyContainer = $('conversation');
 const historyAutoLoad = mountHistoryAutoLoad({
-  autoFill:true,
-  incompleteTurn:()=>Boolean(state.pager?.openingTurn),
+  // The desktop rail needs every turn, even when the newest page fills the viewport.
+  shouldFill: () => !compactTimeline.matches || Boolean(state.pager?.openingTurn) ||
+    historyContainer.scrollHeight <= historyContainer.clientHeight + 1,
   scrollController:conversationScroll,
-  container: $('conversation'), button: $('earlier'), status: $('history-load-status'),
+  container: historyContainer, button: $('earlier'), status: $('history-load-status'),
   getKey: () => state.thread?.id + ':' + state.openGeneration,
   canLoad: () => state.connected && currentRoute==='chat' && !state.loadingThread && hasEarlierHistory(),
   load: () => loadItems(true),
 });
+compactTimeline.addEventListener('change', historyAutoLoad.fill);
 $('shutdown').addEventListener('click', async () => { if (!await confirm(state.desktop ? '停止本窗口的 Codex app-server？Codex 任务可能中断，独立 DSH 任务可能继续。再次启动会重新连接官方历史，不会无缝恢复当前连接。' : '停止 GUI 本地服务？通过此 GUI 运行的任务可能会中断，独立 DSH 任务可能继续。')) return; state.shuttingDown = true; try { const result = await api('/api/shutdown', {}); if (result?.engineStopped !== true || result?.shutdownAccepted !== true) throw new Error('服务未确认引擎已停止，状态未知；请稍后检查连接状态。'); state.eventController?.abort(); setConnected(false, 'GUI 服务已停止'); activity(state.desktop ? '已停止服务。请关闭本窗口后重新启动应用；新连接会读取官方历史。' : '已停止服务。重新运行启动器即可打开。'); closeSettings(); } catch (e) { state.shuttingDown = false; notice(e.message, true); } });
 $('model').addEventListener('change', () => chooseModel($('model').value)); $('dismiss-notice').addEventListener('click', () => notifications.dismiss());
 $('rail-sidebar').addEventListener('click', () => sidebarController.toggle()); $('sidebar-overlay').addEventListener('click', () => sidebarController.close()); for(const id of ['close-sidebar','settings-sidebar-close']) $(id).addEventListener('click', () => sidebarController.close());

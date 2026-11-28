@@ -29,7 +29,7 @@ function respond(res,status,message){
  res.end(JSON.stringify({error:message}));
 }
 
-function tunnelEndpoint(input) {
+export function tunnelEndpoint(input) {
  const invalid=()=>failure('请输入固定的 HTTPS 域名，仅填写源地址，例如 https://code.example.com','TUNNEL_INVALID_ORIGIN');
  if(!plain(input)||Object.keys(input).sort().join(',')!=='port,publicOrigin')throw failure('公网入口参数无效','TUNNEL_INVALID_INPUT');
  const {publicOrigin,port}=input;
@@ -49,11 +49,13 @@ function tunnelEndpoint(input) {
 /** An opt-in listener for paired devices, on a LAN adapter or behind a local HTTPS tunnel connector. */
 export class LanAccess {
  #retryTimer=null;#retryDelay=5000;
+ #restoreTunnelRelay;
  #revision=0;#stopRevision=0;#handler;#publicPaths;#networkInterfaces;#serverFactory;#session=null;#queue=Promise.resolve();#closed=false;#pairing=null;#preference=null;#restoreError=null;#restoring=false;#monitor=null;#store;#networkIdentity;#networkSnapshot;#beforeListenerClose;#tunnel;
- constructor({handler,publicPaths=['/','/index.html'],networkInterfaces=os.networkInterfaces,serverFactory=listener=>http.createServer(listener),preferenceStore=null,networkIdentity=null,networkSnapshot=null,beforeListenerClose=null,tunnel=false}={}){
+ constructor({handler,publicPaths=['/','/index.html'],networkInterfaces=os.networkInterfaces,serverFactory=listener=>http.createServer(listener),preferenceStore=null,networkIdentity=null,networkSnapshot=null,beforeListenerClose=null,restoreTunnelRelay=null,tunnel=false}={}){
   if(typeof handler!=='function'||typeof networkInterfaces!=='function'||typeof serverFactory!=='function')throw new TypeError('LAN handler and providers must be functions');
   if(!Array.isArray(publicPaths)||publicPaths.some(value=>typeof value!=='string'||!value.startsWith('/')||/[?#]/.test(value)||value.startsWith('/api/')))throw new TypeError('LAN public paths must contain static paths only');
   this.#store=preferenceStore;this.#networkIdentity=networkIdentity;this.#networkSnapshot=networkSnapshot;this.#beforeListenerClose=beforeListenerClose;this.#tunnel=tunnel;
+  this.#restoreTunnelRelay=restoreTunnelRelay;
   this.#handler=handler;this.#publicPaths=new Set(publicPaths);this.#networkInterfaces=networkInterfaces;this.#serverFactory=serverFactory;
  }
  #addresses(){
@@ -69,7 +71,7 @@ export class LanAccess {
   const session=this.#session,enabled=!!session?.token;
   const preferred=enabled?session.listeners[0]:null;
   const endpoint={enabled,address:preferred?.address??null,port:preferred?.port??null,origin:preferred?.origin??null,url:preferred?`${preferred.origin}/#token=${session.token}`:null};
-  if(this.#tunnel)return endpoint;
+  if(this.#tunnel)return {...endpoint,persistent:!!this.#preference,restoring:this.#restoring,retryScheduled:!!this.#retryTimer,restoreError:this.#restoreError};
   const endpoints=enabled?session.listeners.map(({address,family,origin})=>({address,family,origin,url:`${origin}/#token=${session.token}`})):[];
   const addresses=this.#addresses().map(({name,address,family})=>({name,address,family}));
   return {...endpoint,mode:enabled?session.mode:null,endpoints,restoring:this.#restoring,retryScheduled:!!this.#retryTimer,persistent:!!this.#preference,persistenceAvailable:!!this.#store&&!!this.#networkIdentity,restoreError:this.#restoreError,addresses,transport:'http',encrypted:false};
@@ -121,9 +123,15 @@ export class LanAccess {
    if(this.#closed||stopRevision!==this.#stopRevision)throw failure('公网入口已关闭','TUNNEL_CLOSED',409);
    // Credentials and existing streams belong to the old public origin.
    this.#invalidate();
-   this.#session.listeners[0].origin=publicOrigin;
-   this.#session.token=randomBytes(32).toString('hex');
-   return this.status();
+   return this.#replaceToken(this.#session,publicOrigin);
+  });
+ }
+ setTunnelSsh(ssh){
+  return this.#serial(async()=>{
+   if(!this.#tunnel||!this.#preference||this.#preference.ssh===ssh)return;
+   const next={...this.#preference,ssh};
+   await this.#store.write(next);
+   this.#preference=next;
   });
  }
  async #autoNetworks(candidates){
@@ -201,7 +209,9 @@ export class LanAccess {
     ensureCurrent();
     if(session.failed)throw new Error('LAN listener failed');
     const token=saved?.token||randomBytes(32).toString('hex');
-    const preference=persistent?{version:1,address:candidates[0].address,port:listenPort,token,network}:null;
+    let preference=null;
+    if(this.#tunnel&&this.#store)preference=saved??{version:1,publicOrigin,port:listenPort,token,ssh:false};
+    else if(persistent)preference={version:1,address:candidates[0].address,port:listenPort,token,network};
     if(this.#store&&!saved){await this.#store.write(preference);wrotePreference=true;}
     ensureCurrent();
     if(session.failed)throw new Error('LAN listener failed');
@@ -244,12 +254,19 @@ export class LanAccess {
    const saved=await this.#store.read();
    if(revision===this.#revision){
     this.#preference=saved;
-    if(saved)await this.#enable({address:saved.address,port:saved.port,persistent:true},saved,revision);
+    if(saved){
+     const input=this.#tunnel?{publicOrigin:saved.publicOrigin,port:saved.port}:{address:saved.address,port:saved.port,persistent:true};
+     const endpoint=await this.#enable(input,saved,revision);
+     if(this.#tunnel&&saved.ssh&&revision===this.#revision){
+      try { await this.#restoreTunnelRelay(endpoint); }
+      catch(error){await this.#stop();throw error;}
+     }
+    }
     else {this.#clearRetry();this.#restoreError=null;}
    }
   }catch(error){
    if(revision===this.#revision){
-    this.#restoreError=error.code==='LAN_NETWORK_CHANGED'?'等待原可信网络恢复。':error.code==='LAN_ADDRESS_UNAVAILABLE'?'等待原网络地址恢复。':error.code==='LAN_LISTEN_FAILED'?'等待原监听端口可用。':'等待重新核验已保存的局域网设置。';
+    this.#restoreError=error.code==='LAN_NETWORK_CHANGED'?'等待原可信网络恢复。':error.code==='LAN_ADDRESS_UNAVAILABLE'?'等待原网络地址恢复。':error.code==='LAN_LISTEN_FAILED'?'等待原监听端口可用。':this.#tunnel?'正在重试恢复已保存的公网连接。':'等待重新核验已保存的局域网设置。';
     this.#scheduleRestore(revision);
    }
   }finally{this.#restoring=false;}
@@ -296,10 +313,24 @@ export class LanAccess {
   return this.#serial(async()=>{
    const session=this.#session;
    if(this.#closed||!session||session.stopping)throw failure('访问尚未开启','LAN_NOT_ENABLED',409);
-   const token=randomBytes(32).toString('hex');
-   try{if(this.#preference){const next={...this.#preference,token};await this.#store.write(next);this.#preference=next;}if(session.stopping)throw failure('访问已关闭','LAN_NOT_ENABLED',409);session.token=token;return this.status();}
-   catch(error){await this.#stop();try{await this.#store?.write(null);this.#preference=null;}catch{}this.#restoreError='令牌轮换未能安全保存，当前访问已关闭。请成功关闭恢复设置后重新配对；未清除前旧配对可能在重启时恢复。';throw error;}
+   return this.#replaceToken(session,session.listeners[0].origin);
   });
+ }
+ async #replaceToken(session,origin){
+  const token=randomBytes(32).toString('hex');
+  try{
+   if(this.#preference){
+    const next={...this.#preference,token,...(this.#tunnel?{publicOrigin:origin}:{})};
+    await this.#store.write(next);this.#preference=next;
+   }
+  }catch(error){
+   await this.#stop();
+   try{await this.#store?.write(null);this.#preference=null;}catch{}
+   this.#restoreError='令牌轮换未能安全保存，当前访问已关闭。请成功关闭恢复设置后重新配对；未清除前旧配对可能在重启时恢复。';
+   throw error;
+  }
+  if(this.#closed||session.stopping)throw failure('访问已关闭','LAN_NOT_ENABLED',409);
+  session.listeners[0].origin=origin;session.token=token;return this.status();
  }
  disable(){this.#revision++;this.#stopRevision++;this.#clearRetry();this.#invalidate();return this.#serial(async()=>{await this.#stop();this.#clearRetry();try{await this.#store?.write(null);this.#preference=null;this.#restoreError=null;}catch(error){this.#restoreError='当前访问已关闭，但恢复设置清除失败；重启前请重试关闭。';throw error;}return this.status();});}
  close(){this.#revision++;this.#closed=true;this.#clearRetry();this.#invalidate();return this.#serial(async()=>{await this.#stop();return this.status();});}

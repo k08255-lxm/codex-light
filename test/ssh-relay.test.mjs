@@ -159,6 +159,16 @@ test('a web page at the metadata address reports the error while retrying, then 
   assert.match(await readFile(path.join(keyDir,dir,'known_hosts'),'utf8'),/^\[relay\.example\.org\]:23456 /);
 });
 
+test('a persistent relay reconnects after the initial attempt budget during an outage',async t=>{
+  let attempts=0;
+  const {relay}=await fixture(t,(route,body)=>route===metadataPath
+    ? ++attempts<3 ? {status:503,json:{}} : {json:meta}
+    : {json:{proof:sign(JSON.parse(body).nonce)}},{keepConnected:true,maxAttempts:1,retryDelayMs:5});
+  await relay.prepare(inputs);
+  await waitFor(()=>relay.status.state==='connected');
+  assert.equal(attempts,3);
+});
+
 test('native OpenSSH connection closes after abrupt desktop process exit', async t => {
   const listener = createServer();
   const sockets = new Set();
