@@ -109,7 +109,12 @@ test('Velopack install gate blocks unresolved work without launching',async t=>{
  f.app.operations.entries.set('unresolved',{state:'unknown'});
  const response=await post(f.app,'install',{version:'0.4.0',confirmed:true,requestId:id(f.app,'blocked')});
  assert.notEqual(response.status,200);assert.equal(f.launches,0);
- assert.equal((await response.json()).code,'APP_UPDATE_WORK_ACTIVE');
+ const blocked=await response.json();assert.equal(blocked.code,'APP_UPDATE_WORK_ACTIVE');
+ assert.match(blocked.error,/操作的执行结果尚未确认/);
+ assert.equal((await (await post(f.app,'status')).json()).installBlocker,blocked.error);
+ f.app.operations.entries.delete('unresolved');
+ assert.equal((await (await post(f.app,'status')).json()).installBlocker,null);
+ assert.equal(f.launches,0);
 });
 test('Velopack launch reservation blocks subsequent mutations but permits status',async t=>{
  const f=await fixture(t,{veloGuard:true});await prepare(f.app);
@@ -118,4 +123,79 @@ test('Velopack launch reservation blocks subsequent mutations but permits status
  assert.equal((await post(f.app,'status')).status,200);
  const blocked=await post(f.app,'download',{version:'0.4.0',requestId:id(f.app,'after')});
  assert.equal((await blocked.json()).code,'APP_UPDATE_RESERVED');
+});
+
+test('install reconciles a missed completion from the engine before handing off exactly once',async t=>{
+ const f=await fixture(t,{veloGuard:true});const {app}=f;await prepare(app);
+ const {thread}=await app.sessions.call('thread/start',{cwd:process.cwd()});
+ app.rpc.emit('event',{method:'turn/started',params:{threadId:thread.id,turn:{id:'old'}}});
+ app.rpc.threads.get(thread.id).status={type:'idle'};
+ app.rpc.turns.set(thread.id,[{id:'old',status:'interrupted'}]);
+ const stop=id(app,'lost_stop');
+ await assert.rejects(app.operations.execute(stop,'turn/interrupt',{threadId:thread.id,turnId:'old'},async()=>{throw new Error('Lost reply');}));
+ const before=await(await post(app,'status')).json();assert.match(before.installBlocker,/对话正在运行/);
+ const calls=[],original=app.rpc.call.bind(app.rpc);
+ app.rpc.call=(method,params)=>{calls.push(method);return original(method,params);};
+ const response=await post(app,'install',{version:'0.4.0',confirmed:true,requestId:id(app,'install_reconciled')});
+ assert.equal(response.status,200);assert.equal(f.launches,1);
+ assert.equal(app.operations.get(stop).state,'unknown');
+ assert.deepEqual(app.sessions.snapshot().threads,[]);assert.equal(app.runtime.activeTurns.size,0);
+ assert.ok(calls.includes('thread/read')&&calls.includes('thread/turns/list'));
+ assert.ok(!calls.some(method=>['turn/interrupt','turn/start','turn/steer','thread/resume'].includes(method)));
+});
+
+test('a new turn during the idle check survives an older reply and blocks handoff',async t=>{
+ const f=await fixture(t,{veloGuard:true});const {app}=f;await prepare(app);
+ const {thread}=await app.sessions.call('thread/start',{cwd:process.cwd()});
+ const start=turnId=>app.rpc.emit('event',{method:'turn/started',params:{threadId:thread.id,turn:{id:turnId}}});
+ start('old');
+ const reading=Promise.withResolvers(),release=Promise.withResolvers();
+ const installId=id(app,'overlapping');
+ const original=app.rpc.call.bind(app.rpc);
+ app.rpc.call=async(method,params)=>{
+  if(method!=='thread/read'||app.operations.entries.get(installId)?.state!=='pending')return original(method,params);
+  reading.resolve();await release.promise;return {thread:{id:thread.id,status:{type:'idle'}}};
+ };
+ const installing=post(app,'install',{version:'0.4.0',confirmed:true,requestId:installId});
+ await reading.promise;start('new');release.resolve();
+ assert.equal((await installing).status,409);assert.equal(f.launches,0);
+ assert.equal(app.sessions.snapshot().threads[0].activeTurnId,'new');assert.ok(app.runtime.activeTurns.has('new'));
+});
+
+test('an active or unverifiable engine and an unconfirmed native launch still block installation',async t=>{
+ const f=await fixture(t,{veloGuard:true});const {app}=f;await prepare(app);
+ const {thread}=await app.sessions.call('thread/start',{cwd:process.cwd()});
+ app.rpc.emit('event',{method:'turn/started',params:{threadId:thread.id,turn:{id:'busy'}}});
+ const install=suffix=>post(app,'install',{version:'0.4.0',confirmed:true,requestId:id(app,suffix)});
+ for(const type of ['active','systemError',undefined]){
+  app.rpc.threads.get(thread.id).status={type};
+  assert.equal((await install('attempt_'+String(type))).status,409);assert.equal(f.launches,0);
+ }
+ app.rpc.threads.get(thread.id).status={type:'idle'};
+ app.operations.entries.set('native-launch',{method:'app-update/install',state:'unknown'});
+ assert.equal((await install('unknown_launch')).status,409);assert.equal(f.launches,0);
+});
+
+test('a failed asset transfer does not permanently block install after a verified retry',async t=>{
+ const f=await fixture(t,{veloGuard:true});const {app,service}=f;
+ await post(app,'check');const fetchAsset=service.fetchFn;
+ service.fetchFn=async()=>{throw new TypeError('Network connection closed');};
+ const interrupted=id(app,'transfer_failed');
+ const failed=await post(app,'download',{version:'0.4.0',requestId:interrupted});
+ assert.equal((await failed.json()).outcome,'failed');assert.equal(app.operations.get(interrupted).state,'failed');
+ service.fetchFn=fetchAsset;
+ assert.equal((await post(app,'download',{version:'0.4.0',requestId:id(app,'retry_transfer')})).status,200);
+ assert.equal((await post(app,'install',{version:'0.4.0',confirmed:true,requestId:id(app,'after_retry')})).status,200);
+ assert.equal(f.launches,1);
+});
+
+test('status recheck after a block releases an unloaded thread without starting the installer',async t=>{
+ const f=await fixture(t,{veloGuard:true});const {app}=f;await prepare(app);
+ const {thread}=await app.sessions.call('thread/start',{cwd:process.cwd()});
+ app.rpc.emit('event',{method:'turn/started',params:{threadId:thread.id,turn:{id:'stopped'}}});
+ app.rpc.threads.get(thread.id).status={type:'active'};
+ assert.equal((await post(app,'install',{version:'0.4.0',confirmed:true,requestId:id(app,'active_then_idle')})).status,409);
+ app.rpc.threads.get(thread.id).status={type:'notLoaded'};
+ const reason=(await(await post(app,'status',{recheckWork:true})).json()).installBlocker;
+ assert.equal(reason,null);assert.equal(f.launches,0);assert.deepEqual(app.sessions.snapshot().threads,[]);
 });

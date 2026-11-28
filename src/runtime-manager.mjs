@@ -65,7 +65,7 @@ export class RuntimeManager {
   this.maxStageBytes=maxStageBytes??maxUpgradeBytes??STAGE_MAX;
   this.fs={...FILE_SYSTEM,...(fsOptions||{})};
   this.paths=platform==='win32'?path.win32:path.posix;
-  this.latest=null;this.upgrading=false;this.closed=false;this._cache=null;this._checking=null;this.activeTurns=new Set();
+  this.latest=null;this.upgrading=false;this.closed=false;this._cache=null;this._checking=null;this.activeTurns=new Map();
   this.activeChild=null;this.activeTimer=null;this.forceTimer=null;this.cancelTimer=null;this.activeCancel=null;this.lastDiagnostics=[];this._currentProbe=null;
   this.upgradePromise=null;this.phase=null;this.cancelStage=false;this.swapStarted=false;this.stageRoot=null;this.origParent=null;this.ownPaths=new Set();this.upgradeDiagnostics=[];
   this._onEvent=message=>this._observe(message);
@@ -74,10 +74,12 @@ export class RuntimeManager {
  _observe(message){
   if(message?.method==='turn/started'){
    const id=message.params?.turn?.id||message.params?.turnId;
-   if(typeof id==='string'&&id)this.activeTurns.add(id);
+   if(typeof id==='string'&&id)this.activeTurns.set(id,{threadId:message.params?.threadId});
   }else if(['turn/completed','turn/interrupted'].includes(message?.method)){
    const id=message.params?.turn?.id||message.params?.turnId;
    if(typeof id==='string')this.activeTurns.delete(id);
+  }else if(message?.method==='thread/closed' && message.params?.threadId){
+   for(const [id,turn] of this.activeTurns)if(turn.threadId===message.params.threadId)this.activeTurns.delete(id);
   }
   if(message?.method==='bridge/status'&&message.params?.connected===false)this.activeTurns.clear();
   if(['account/updated','account/login/completed'].includes(message?.method))this.activeTurns.clear();

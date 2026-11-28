@@ -254,7 +254,7 @@ export class AppUpdateService{
   if(this.downloading)return this.downloading;
   if(this.checking||this.installing||this.phase==='launchUnknown'||this.phase==='launched')throw fail('当前更新操作尚未结束','APP_UPDATE_BUSY');
   if(this.prepared?.version===latest.version&&this.prepared.sha256===latest.sha256){
-   try{await this._verifyPrepared();this.phase='ready';this.error=null;return this.status();}catch(error){this.phase='failed';this.error=error.message;throw error;}
+   try{await this._verifyPrepared();this.phase='ready';this.error=null;return this.status();}catch(error){this.phase='failed';this.error=error.message;error.outcome??='failed';throw error;}
   }
   this.phase='downloading';this.error=null;this.receivedBytes=0;this.totalBytes=latest.setup.size;
   this.downloading=(async()=>{
@@ -271,7 +271,12 @@ export class AppUpdateService{
     signal.throwIfAborted();
     const file=path.join(directory,cacheName(latest.version,this.updateTransport));await rename(partial,file);partial=null;
     this.prepared={version:latest.version,sha256:latest.sha256,size:latest.setup.size,file};this.phase='ready';return this.status();
-   }catch(error){this.phase='failed';this.error=error?.message||'安装包下载失败';throw error;}
+   }catch(error){
+    // Staging ended before a verified package was handed off. A failed fetch or
+    // file write must not leave an indeterminate installer operation in the ledger.
+    const failure=error instanceof Error?error:new Error(String(error));
+    this.phase='failed';this.error=failure.message||'安装包下载失败';failure.outcome??='failed';throw failure;
+   }
    finally{clearTimeout(timeout);this.abortController=null;await handle?.close().catch(()=>{});if(partial)await rm(partial,{force:true}).catch(()=>{});this.downloading=null;}
   })();return this.downloading;
  }

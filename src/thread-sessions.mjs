@@ -39,7 +39,7 @@ export class ThreadSessions {
   e.loaded=true;e.contextWindow=params.config?.model_context_window;e.model=result.model||params.model;this.onThreadLoaded(result);
  }catch(error){
   if(typeof error.code==='number'||error.outcome==='notExecuted'||['NOT_CONNECTED','INPUT_BACKPRESSURE','TOO_MANY_REQUESTS'].includes(error.code))this.entries.delete(id);
-  else{e.loaded=true;e.unknown=true;this.changed();}
+  else{e.loaded=true;e.unknown=true;e.resumeUnconfirmed=true;this.changed();}
   // The work RPC has not been sent even if the resume outcome is uncertain.
   error.outcome='notExecuted';throw error;
  }}return e;}
@@ -72,6 +72,14 @@ export class ThreadSessions {
   if(!e.loaded){this.entries.delete(id);this.changed();return {status:'notLoaded'};}
   try{const result=await this.rpc.call('thread/unsubscribe',{threadId:id});this.entries.delete(id);this.changed();return result;}
   catch(error){e.releaseError='会话订阅未释放，请检查连接状态；关闭 Light 会结束本应用的引擎进程。';this.changed();throw error;}
+ }
+ async releaseVerifiedIdle(id,entry,status){
+  const finished=entry.activeTurnId;
+  if(finished){entry.completed.add(finished);if(entry.completed.size>64)entry.completed.delete(entry.completed.values().next().value);}
+  entry.activeTurnId=null;entry.unknown=false;entry.resumeUnconfirmed=false;
+  if(status==='notLoaded'){this.entries.delete(id);this.changed();return;}
+  this.changed();
+  try{await this.serial(id,()=>this.entries.get(id)===entry?this.release(id):undefined);}catch{/* release() records the failure for the update gate. */}
  }
  async call(method,params,{beforeSend}={}){
   if(this.closed)throw fail('Light 正在关闭，此请求未发送','CLIENT_CLOSING');
@@ -110,6 +118,8 @@ export class ThreadSessions {
    if(params.model && this.contextWindows?.sizes.get(params.model)!==e.contextWindow)
     throw fail('模型的上下文配置已变化，请重新打开对话后发送。','CONTEXT_WINDOW_CHANGED');
    if(method==='thread/compact/start')e.unknown=true;
+   // Notifications may establish the turn identity even if its RPC reply is lost.
+   const dispatch={turnId:null};e.dispatch=dispatch;
    try{
     beforeSend?.();
     const result=await this.rpc.call(method,params,beforeSend?{beforeSend}:{});
@@ -127,9 +137,13 @@ export class ThreadSessions {
      // Keep it loaded for an explicit retry; switching away/closing may discard it.
      if(!e.unpersisted)await this.release(id).catch(()=>{});else this.changed();
     }
-    else{e.unknown=true;this.changed();}
+    else{
+     if(dispatch.turnId)error.observedWorkTurnId=dispatch.turnId;
+     e.unknown=!dispatch.turnId||!e.completed.has(dispatch.turnId);
+     this.changed();
+    }
     throw error;
-   }
+   }finally{if(e.dispatch===dispatch)delete e.dispatch;}
   });
   if(method==='thread/start'&&this.contextWindows)params=await this.contextWindows.sessionParams(this.rpc,params);
   const result=await this.rpc.call(method,params);
@@ -149,9 +163,10 @@ export class ThreadSessions {
   if(message.method==='turn/started'){
    const turnId=message.params?.turn?.id||message.params?.turnId;
    if(!turnId||e.completed.has(turnId))return;
-   e.activeTurnId=turnId;e.unpersisted=false;e.unknown=false;this.changed();
+   if(e.dispatch)e.dispatch.turnId=turnId;
+   e.activeTurnId=turnId;e.unpersisted=false;e.unknown=false;e.resumeUnconfirmed=false;this.changed();
   }
-  if(message.method==='turn/completed'){
+  if(['turn/completed','turn/interrupted'].includes(message.method)){
    const turnId=message.params?.turn?.id||message.params?.turnId;if(!turnId)return;
    e.unpersisted=false;
    e.completed.add(turnId);if(e.completed.size>64)e.completed.delete(e.completed.values().next().value);

@@ -29,7 +29,7 @@ import {RuntimeAutomation,RuntimeAutomationStore} from './runtime-automation.mjs
 import {NodeUpdateCheck} from './node-update.mjs';
 import {AppUpdateService} from './app-update.mjs';
 import {startUpdateChecks} from '../public/ui/auto-update.js';
-import {assertUpdateIdle,UpdateReservation} from './app-update-safety.mjs';
+import {assertUpdateIdle,updateBlockReason,reconcileUpdateWork,UpdateReservation} from './app-update-safety.mjs';
 import {PluginActionService} from './plugin-actions.mjs';
 import {FileAttachmentStore,FILE_ATTACHMENT_REFERENCE_PREFIX} from './file-attachments.mjs';
 import {AccountLoginService} from './account-login.mjs';
@@ -402,6 +402,12 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
  }}:{})});
  const dsh=new DshReadService(rpc);const uploads=new UploadStore();const streams=new Map();const operations=new OperationStore();const runtime=runtimeManager||new RuntimeManager({currentPath:runtimeStartupError?'':command,currentSource:runtimeSource,operations,rpc,...(process.platform==='win32'&&!client?{occupancy:windowsRuntimeOccupied}:{})});let origin;let stopping=false;let closing;let serviceShutdown;let shutdownError=null;let engineStopped=false;let reopener;let reopenError=null;let remoteEnvironment=null;const remoteClients=new Set();let remotePairing=null;let pairingTimer;let stopAutomaticUpdates;
  const desktopSleep=desktop&&onDesktopKeepAwake?new DesktopSleep({apply:onDesktopKeepAwake,sessions,streams,readDsh:(threadId,agentId)=>dsh.read({threadId,agentId,kind:'status'})}):null;
+ const updateWork={rpc,sessions,terminal,dsh,operations,runtime};
+ let checkingUpdateWork=null;
+ function recheckUpdateWork(requestId){
+  if(!checkingUpdateWork)checkingUpdateWork=reconcileUpdateWork({...updateWork,requestId}).finally(()=>{checkingUpdateWork=null;});
+  return checkingUpdateWork;
+ }
  const sleepPreferenceWarning='无法读取本机偏好，任务与远控防休眠尚未启用。';
  function applySleepPreferences(preferences){
   desktopSleep?.configure(preferences);
@@ -562,8 +568,13 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
       stopAutomaticUpdates.reconnect();stopNodeUpdates?.reconnect();json(res,200,{});return;
      }
      if(action==='status'||action==='check'){
-      if(Object.keys(input).length)throw new Error('应用更新参数无效');
-      const result=action==='status'?appUpdates.status():await appUpdates.check();json(res,200,{...result,demo});return;
+      const recheck=action==='status'&&input.recheckWork===true&&Object.keys(input).length===1;
+      if(Object.keys(input).length&&!recheck)throw new Error('应用更新参数无效');
+      if(recheck&&appUpdates.status().phase==='ready'&&desktopUpdateTransport==='velopack'&&!updateReservation.reserved)await recheckUpdateWork();
+      const result=action==='status'?appUpdates.status():await appUpdates.check();
+      const guard=result.phase==='ready'&&desktopUpdateTransport==='velopack'
+       ? {installBlocker:updateBlockReason(updateWork)} : {};
+      json(res,200,{...result,...guard,demo});return;
      }
      if(!['download','install'].includes(action)){json(res,404,{error:'未知应用更新操作',outcome:'notExecuted'});return;}
      if(demo)throw Object.assign(new Error('演示模式不能下载或安装真实应用更新'),{code:'APP_UPDATE_DEMO',outcome:'notExecuted'});
@@ -571,7 +582,10 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      if(Object.keys(input).sort().join(',')!==keys)throw Object.assign(new Error('应用更新参数无效'),{code:'APP_UPDATE_INPUT_INVALID',outcome:'notExecuted'});
      const {requestId,...params}=input;
      const runUpdate=()=>storageReservation.run('update',()=>appUpdates[action](params));
-     const result=await operations.execute(requestId,'app-update/'+action,params,()=>action==='install'&&desktopUpdateTransport==='velopack'?updateReservation.run(()=>assertUpdateIdle({rpc,sessions,terminal,dsh,operations,runtime,requestId}),runUpdate):runUpdate());json(res,200,{...result,demo});return;
+     const result=await operations.execute(requestId,'app-update/'+action,params,async()=>{
+      if(action!=='install'||desktopUpdateTransport!=='velopack')return runUpdate();
+      return updateReservation.run(()=>assertUpdateIdle({...updateWork,requestId}),runUpdate,()=>recheckUpdateWork(requestId));
+     });json(res,200,{...result,demo});return;
     }
     if(url.pathname.startsWith('/api/lan/')){
      if(requestAccess!=='local')throw Object.assign(new Error('此操作仅限本机窗口'),{status:403});

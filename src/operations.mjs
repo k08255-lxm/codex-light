@@ -38,10 +38,19 @@ export class OperationStore {
     if(old){if(old.signature!==signature)throw fail('同一 requestId 不能提交不同内容；未执行第二次操作','REQUEST_ID_CONFLICT','unknown');return old.promise;}
     if(this.entries.size>=this.limit)throw fail('操作记录已满，此请求未发送。请稍后再试','OPERATION_LIMIT');
     const entry={timestamp,signature,method,state:'pending'};
+    // A lost response can stay unknown even after its target turn has demonstrably ended.
+    // Keep only the scope needed to verify occupancy, never the submitted text.
+    if(['turn/interrupt','turn/steer','turn/settings/update'].includes(method)&&typeof params.threadId==='string'){
+      entry.workThreadId=params.threadId;
+      entry.workTurnId=params.turnId||params.expectedTurnId||null;
+    }
     entry.promise=Promise.resolve().then(async()=>{
       let result;
       try{result=await run();}catch(error){
         const e=error instanceof Error?error:new Error(String(error));e.outcome=classify(e);entry.state=e.outcome==='unknown'?'unknown':'failed';entry.error=e.message;entry.code=e.code;entry.outcome=e.outcome;
+        if(e.outcome==='unknown'&&['turn/start','thread/compact/start','review/start'].includes(method)&&typeof e.observedWorkTurnId==='string'){
+          entry.workThreadId=params.threadId;entry.workTurnId=e.observedWorkTurnId;
+        }
         throw e;
       }
       entry.state='succeeded';entry.result=structuredClone(result);

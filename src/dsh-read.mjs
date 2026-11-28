@@ -148,7 +148,7 @@ export class DshReadService {
   }).finally(()=>{if(this.pending.get(key)===operation)this.pending.delete(key);});
   this.pending.set(key,operation);return operation;
  }
- async read(input){
+ async read(input,{verifyCurrentTask=false}={}){
   strictKeys(input,['threadId','agentId','kind','after','before','taskHistory']);
   const threadId=requireId(input.threadId,'对话标识');
   const agentId=requireId(input.agentId,'任务标识');
@@ -174,6 +174,7 @@ export class DshReadService {
   if(this.pending.has(key))return this.pending.get(key);
   if(this.pending.size>=MAX_PENDING)throw new Error('同时查询过多，请等待已有查询结束');
   const cachedProof=this.provenance.get(agentId),proof=cachedProof?.cwd===bindingCwd?cachedProof:null;
+  const taskAtRead=verifyCurrentTask?this.threads.get(threadId)?.tasks.get(agentId):null;
   const request=kind==='changes'
    ?this.changes.read(`${threadId}:${agentId}`,agentId,(name,args)=>{
      if(generation!==this.generation||this.bindings.get(threadId)!==bindingCwd)throw new Error(STALE);
@@ -186,6 +187,8 @@ export class DshReadService {
    if(this.bindings.get(threadId)!==bindingCwd)throw new Error(STALE);
    if(!this.observed.get(threadId)?.has(agentId))throw new Error(STALE);
    if(kind==='status'){
+    // A live dispatch/termination can land during the read. Its successor owns the current state.
+    if(verifyCurrentTask&&taskAtRead!==this.threads.get(threadId)?.tasks.get(agentId))throw new Error(STALE);
     const toolError=dshResultError(result);if(toolError)throw new Error(toolError);
     const parentThreadId=dshToolResultParentThreadId(result);
     if(parentThreadId&&parentThreadId!==threadId)throw new Error('DSH 返回了其他父对话，已丢弃');

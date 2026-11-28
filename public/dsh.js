@@ -7,7 +7,7 @@ const MAX_EVENT_SUMMARY = 4000;
 const MAX_EVENT_DETAILS = 16000;
 const MAX_EVENTS = 100;
 const ACTIVE_STATUSES = new Set(['starting', 'running', 'interrupting']);
-const TERMINAL_STATUSES = new Set(['completed', 'idle', 'error', 'failed', 'cancelled', 'interrupted', 'context_exhausted', 'closed']);
+const TERMINAL_STATUSES = new Set(['completed', 'idle', 'error', 'failed', 'cancelled', 'canceled', 'interrupted', 'context_exhausted', 'closed']);
 const text = (value, max = MAX_TEXT) => {
   if (value === undefined || value === null) return '';
   let s; try { s = typeof value === 'string' ? value : JSON.stringify(value); } catch { return '[无法显示]'; }

@@ -73,5 +73,10 @@ export class DshReaderSession {
   if(this.rpc?.connected===false){this.connectionEpoch++;this.lease=null;this.releaseError=null;this.unknownStart=false;return Promise.resolve();}
   return this._serial(()=>this._release());
  }
+ async retryRelease(){
+  if(this.releaseError&&!this.unknownStart&&this.lease&&!this.queued){
+   await this._serial(()=>this._release());
+  }
+ }
  close(){this.closed=true;return this.clear();}
 }

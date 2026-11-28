@@ -9,6 +9,7 @@ export function mountAbout(host,{api,mutate,onStatus=()=>{}}){
  const document=host.ownerDocument;
  let active=false,generation=0,revision=0,status=null,busy=null,error=null,readError=null,timer=null,currentRead=null,confirmInstall=false,uncertainInstall=false;
  let nodeRuntime=null,nodeChecking=false;
+ let waitingForIdle=false;
  host.classList.add('about-page');
  function button(text,action,{primary=false,disabled=false}={}){
   const node=el(document,'button','btn'+(primary?' primary':''),text);node.type='button';node.disabled=disabled;node.addEventListener('click',action);return node;
@@ -96,10 +97,13 @@ export function mountAbout(host,{api,mutate,onStatus=()=>{}}){
  }
  function schedule(){
   clearTimeout(timer);timer=null;
-  if(active&&(busy||['checking','downloading','launching'].includes(status?.phase)))timer=setTimeout(refresh,900);
+  if(active&&(busy||waitingForIdle||['checking','downloading','launching'].includes(status?.phase)))timer=setTimeout(refresh,waitingForIdle?1500:900);
  }
  function update(next){
   if(!next?.currentVersion)return;
+  if(waitingForIdle&&(Object.hasOwn(next,'installBlocker')||next.phase!=='ready')){
+   error=next.installBlocker||null;waitingForIdle=!!error;
+  }
   if(status?.preparedVersion!==next.preparedVersion)confirmInstall=false;
   status=next;revision++;currentRead=null;readError=null;
   if(next.phase==='launched')uncertainInstall=false;
@@ -110,17 +114,17 @@ export function mountAbout(host,{api,mutate,onStatus=()=>{}}){
  async function refresh(){
   if(!active||currentRead)return;
   const read=Symbol();currentRead=read;
-  try{const next=await api('/api/app-update/status',{});if(currentRead===read)update(next);}
+  try{const next=await api('/api/app-update/status',waitingForIdle?{recheckWork:true}:{});if(currentRead===read)update(next);}
   catch(failure){if(currentRead===read){readError=failure?.message||'无法读取应用更新状态';render();}}
   finally{if(currentRead===read){currentRead=null;schedule();}}
  }
  async function run(action){
   if(busy||uncertainInstall||['launchUnknown','launched'].includes(status?.phase))return;
-  const mine=generation;busy=action;error=null;confirmInstall=false;render();schedule();
+  const mine=generation;busy=action;error=null;waitingForIdle=false;confirmInstall=false;render();schedule();
   try{
    const result=action==='check'?await api('/api/app-update/check',{}):await mutate(`app-update/${action}`,{version:status.latest.version,...(action==='install'?{confirmed:true}:{})});
    if(mine===generation&&result?.currentVersion)update(result);
-  }catch(failure){if(mine===generation){error=failure?.message||'应用更新失败';if(action==='install'&&failure?.outcome!=='notExecuted')uncertainInstall=true;}}
+  }catch(failure){if(mine===generation){error=failure?.message||'应用更新失败';waitingForIdle=action==='install'&&failure?.code==='APP_UPDATE_WORK_ACTIVE';if(action==='install'&&failure?.outcome!=='notExecuted')uncertainInstall=true;}}
   finally{if(mine===generation){currentRead=null;busy=null;render();if(active)await refresh();}}
  }
  render();
@@ -133,6 +137,6 @@ export function mountAbout(host,{api,mutate,onStatus=()=>{}}){
   refresh,update,
   updateNode(status){if(JSON.stringify(nodeRuntime)===JSON.stringify(status))return;nodeRuntime=status;if(active)render();},
   get revision(){return revision;},
-  reset(){nodeRuntime=null;generation++;revision++;currentRead=null;clearTimeout(timer);timer=null;status=null;error=null;readError=null;confirmInstall=false;uncertainInstall=false;busy=null;onStatus(null);render();if(active)refresh();},
+  reset(){nodeRuntime=null;generation++;revision++;currentRead=null;clearTimeout(timer);timer=null;status=null;error=null;readError=null;confirmInstall=false;uncertainInstall=false;waitingForIdle=false;busy=null;onStatus(null);render();if(active)refresh();},
  };
 }

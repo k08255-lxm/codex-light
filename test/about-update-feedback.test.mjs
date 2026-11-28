@@ -69,3 +69,21 @@ for (const transport of ['velopack','msi']) {
     view.deactivate();
   });
 }
+
+test('an idle recheck clears the previous install rejection without launching again',async()=>{
+ const document=createDocument(),host=document.createElement('div');
+ const status={currentVersion:'0.4.20',latest:{version:'0.4.21',available:true},preparedVersion:'0.4.21',phase:'ready',supported:true,updateTransport:'velopack',installBlocker:'还有 1 个对话正在运行'};
+ let attempts=0;
+ const view=mountAbout(host,{api:async()=>({...status}),mutate:async()=>{
+  attempts++;throw Object.assign(new Error(status.installBlocker),{code:'APP_UPDATE_WORK_ACTIVE',outcome:'notExecuted'});
+ }});
+ try{
+  await view.activate();
+  for(const label of ['安装更新','退出并更新'])host.querySelectorAll('button').find(button=>button.textContent===label).click();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.match(host.querySelector('.inline-error').textContent,/1 个对话/);
+  status.installBlocker=null;await view.refresh();
+  assert.equal(host.querySelector('.inline-error'),null);
+  assert.equal(attempts,1);
+ }finally{view.deactivate();}
+});

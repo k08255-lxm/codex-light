@@ -113,16 +113,17 @@ export class RpcClient extends EventEmitter {
           this.requests.set(serverRequestKey(msg.id),msg);
         }
         if(msg.method==='serverRequest/resolved')removeServerRequest(this.requests,msg.params?.requestId);
-        if(msg.method==='turn/completed') {
-          const threadId=msg.params?.threadId, turnId=msg.params?.turn?.id;
-          for(const [id,req] of this.requests) if(threadId && serverRequestThread(req)===threadId && (req.params.turnId ? turnId && req.params.turnId===turnId : req.method!=='mcpServer/elicitation/request')) {
-            this.requests.delete(id);
-            this.emit('event',{method:'serverRequest/resolved',params:{requestId:req.id,threadId}});
-          }
-        }
+        if(msg.method==='turn/completed'||msg.method==='turn/interrupted')this.settleTurnRequests(msg.params?.threadId,msg.params?.turn?.id||msg.params?.turnId,{unscoped:msg.method==='turn/completed'});
         if(msg.method==='thread/closed'&&typeof msg.params?.threadId==='string'&&msg.params.threadId)for(const [key,request]of this.requests)if(serverRequestThread(request)===msg.params.threadId){this.requests.delete(key);this.emit('event',{method:'serverRequest/resolved',params:{requestId:request.id,threadId:msg.params.threadId}});}
         this.emit('event',msg);
       }
+    }
+  }
+  settleTurnRequests(threadId,turnId,{unscoped=false}={}){
+    if(!threadId)return;
+    for(const [key,req] of this.requests)if(serverRequestThread(req)===threadId &&
+      (req.params?.turnId ? turnId&&req.params.turnId===turnId : unscoped&&req.method!=='mcpServer/elicitation/request')){
+      this.requests.delete(key);this.emit('event',{method:'serverRequest/resolved',params:{requestId:req.id,threadId}});
     }
   }
   respond(id,result,error) {
