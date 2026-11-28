@@ -205,7 +205,7 @@ export function mountTunnelAccess(host, { api, onIdentity = () => {} }) {
     sshStop.hidden = !status?.enabled || !relayActive || relay.state==='error';
     sshStop.textContent=relay.state==='connected'?'断开中继':'取消连接';
     sshStop.disabled = busy;
-    const detail = !status?.enabled || readFailed || (!ssh && !relayActive) ? '' :
+    const detail = !status?.enabled || readFailed || !ssh ? '' :
       relay.state === 'off' ? '填入服务器输出的公网地址即可连接。' :
       relay.state === 'connected' ? `手机配对地址为 ${status.origin}。` : relay.message || '';
     if (sshMessage.textContent !== detail) sshMessage.textContent = detail;
@@ -234,7 +234,7 @@ export function mountTunnelAccess(host, { api, onIdentity = () => {} }) {
     configure.setAttribute('aria-expanded',String(configuring));
     configure.textContent=configuring?'收起配置':enabled?'管理公网访问':'配置公网访问';
     const relayState = status?.sshRelay?.state || 'off';
-    const showRelay = provider.value==='ssh' || relayState!=='off';
+    const showRelay = provider.value==='ssh';
     const label = readFailed ? '暂时无法读取公网入口状态。' : enabled && showRelay ? SSH_LABELS[relayState] || '服务器中继状态未知' :
       enabled ? '本机入口已就绪，公网连通性未验证。' : status ? '公网入口已关闭' : '正在读取公网入口状态…';
     if (state.textContent !== label) state.textContent = label;
@@ -291,7 +291,8 @@ export function mountTunnelAccess(host, { api, onIdentity = () => {} }) {
 
   function applyStatus(result) {
     if (status?.enabled && (!result.enabled || status.url !== result.url)) {pairing.clear();clearScript();}
-    if (!status && !providerSelected && result.sshRelay?.state && result.sshRelay.state !== 'off') {
+    const initialRelay=result.sshRelay?.state;
+    if (!status && initialRelay && initialRelay!=='off' && (!providerSelected || initialRelay!=='error')) {
       provider.value = 'ssh';
       configuring=result.sshRelay.state!=='connected';
     }
@@ -395,7 +396,7 @@ export function mountTunnelAccess(host, { api, onIdentity = () => {} }) {
   });
   rotate.addEventListener('click', () => {
     void mutate('rotate', {}, result => {
-      applyStatus(result);
+      applyStatus({...status,...result});
       say('公网令牌已轮换，旧链接和已配对的公网设备已失效。');
     });
   });

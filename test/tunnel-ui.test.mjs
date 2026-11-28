@@ -333,3 +333,13 @@ test('relay polling preserves an edited address and reveals pairing only for a v
   assert.equal(button(panel,'二维码配对').hidden,false);
   assert.match(panel.querySelector('.tunnel-state').textContent,/公网已连接/);
 });
+
+test('a failed SSH attempt does not mask the selected external tunnel',async t=>{
+  const {view,panel}=fixture(t,{'/api/lan/tunnel/status':()=>({...tunnelEnabled,sshRelay:{state:'error',message:'SSH 连接失败'}})});
+  await view.activate();
+  const provider=panel.querySelector('#tunnel-provider');
+  provider.value='frp';provider.dispatch('change');
+  assert.match(panel.querySelector('.tunnel-state').textContent,/公网连通性未验证/);
+  assert.equal(panel.querySelector('.tunnel-ssh-message').textContent,'');
+  assert.equal(button(panel,'二维码配对').hidden,false);
+});
