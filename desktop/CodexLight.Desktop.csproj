@@ -6,7 +6,7 @@
     <UseWPF>true</UseWPF><EnableDefaultPageItems>false</EnableDefaultPageItems>
     <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
     <AssemblyName>CodexLight</AssemblyName><ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>0.4.21</Version>
+    <Version>0.4.22</Version>
     <ApplicationIcon>app.ico</ApplicationIcon>
     <Product>码舱 CodeCang</Product><Title>码舱 CodeCang</Title>
   </PropertyGroup>

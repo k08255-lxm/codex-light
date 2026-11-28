@@ -181,6 +181,7 @@ const sidebarController = (() => {
     if(!narrow()&&Object.hasOwn(desktopOpen,mode))desktopOpen[mode]=open;
     if(open&&!wasOpen&&narrow())returnFocus=document.activeElement;
     sync();
+    if(initialized&&wasOpen!==open)scheduleThreadRead();
     if(open&&narrow()&&focus)requestAnimationFrame(()=>{if(open&&narrow())closeButton()?.focus();});
     const activeInside=sidebar.contains(document.activeElement);
     if(!open&&(focus||activeInside))requestAnimationFrame(()=>{
@@ -739,7 +740,6 @@ function newThread(cwd = projectsState.draftCwd) {
   recordNavigation();
 }
 function renderThreads() {
-  threadCompletion.read(viewedThreadId());
   scheduleThreadRead();
   const runningThreadIds = new Set();
   if (state.connected) {
@@ -1155,8 +1155,8 @@ function renderMessages(follow = true, scrollSnapshot = null) {
   state.store.dirty.clear(); $('welcome').classList.toggle('hidden', !!state.thread || items.length > 0 || Boolean($('optimistic-messages') && !$('optimistic-messages').hidden));
   if (!$('details').classList.contains('hidden')) renderDshTasks();
   conversationScroll.restore(scrollSnapshot,{follow});
-  if (state.lan && state.thread?.id) {
-    renderedThreadReads = {threadId: state.thread.id, turnIds: turns.filter(turn => !turn.local && turn.status === 'completed').map(turn => turn.id)};
+  if (state.thread?.id) {
+    renderedThreadReads = {threadId: state.thread.id, turnIds: state.lan?turns.filter(turn => !turn.local && turn.status === 'completed').map(turn => turn.id):[]};
     scheduleThreadRead();
   }
 }
@@ -1772,7 +1772,7 @@ function onEvent(message) {
   const p = message.params || {};
   if(state.thread?.id===p.threadId&&message.method==='turn/completed')sessionSpeed.refresh();
   if(currentRoute==='chat'&&state.thread?.id===p.threadId&&message.method==='item/completed')sessionSpeed.activity(p.item);
-  threadCompletion.observe(message,viewedThreadId());
+  if(message.method!=='turn/completed')threadCompletion.observe(message);
   if (message.method === 'serverRequest/resolved') { if (validRequestId(p.requestId)) { state.requests.delete(requestKey(p.requestId)); renderRequests(); } return; }
   if (message.method === 'thread/closed' && typeof p.threadId === 'string' && p.threadId) {
     clearRunningTurn(p.threadId,state.activeTurns.get(p.threadId));
@@ -1788,7 +1788,16 @@ function onEvent(message) {
   if (message.method === 'turn/completed') { const completedId=p.turn?.id||p.turnId;if(!completedId)return;dropRequests(request => p.threadId && requestThread(request) === p.threadId && (request.params?.turnId ? request.params.turnId === completedId : request.method !== 'mcpServer/elicitation/request'));clearRunningTurn(p.threadId,completedId);state.interruptingTurns.delete(completedId);state.terminalTurns.add(completedId);if(state.terminalTurns.size>1000)state.terminalTurns.delete(state.terminalTurns.values().next().value);
     // The queue only advances after a normal completion; anything else waits for the user.
     pauseQueueForOutcome(p.threadId,p.turn?.status);
-    renderThreads(); loadThreads().catch(error => notice('无法刷新对话列表：' + error.message, true)); setTimeout(() => drainQueue(p.threadId), 0); }
+    if(state.thread?.id===p.threadId){
+      state.ledger.merge(p.turn,{observedEndMs:Date.now()});
+      if(state.turnId===completedId||!state.turnId){state.busy=false;state.turnId=null;}
+      activity(p.turn?.status==='failed'?'任务未完成':'');
+      if(p.turn?.error)notice(p.turn.error.message||JSON.stringify(p.turn.error),true);
+      renderMessages();renderQueue();updateControls();
+    }
+    const viewed=p.threadId===readableThreadId()&&(conversationScroll.atBottom||visibleLatestReply()===completedId);
+    threadCompletion.observe(message,viewed?p.threadId:null);
+    renderThreads(); loadThreads().catch(error => notice('无法刷新对话列表：' + error.message, true)); setTimeout(() => drainQueue(p.threadId), 0);return; }
   if (!state.thread || p.threadId !== state.thread.id) return;
   const turnId = typeof p.turnId === 'string' ? p.turnId : p.turn?.id;
   if (message.method === 'item/started' || message.method === 'item/completed') {
@@ -1806,7 +1815,6 @@ function onEvent(message) {
   else if (message.method === 'item/reasoning/summaryTextDelta') { const item = state.store.items.get(p.itemId) || { id: p.itemId, type: 'reasoning', summary: [] }; const summary = Array.isArray(item.summary) ? [...item.summary] : []; const index = Number.isSafeInteger(p.summaryIndex) && p.summaryIndex >= 0 && p.summaryIndex < 64 ? p.summaryIndex : summary.length; summary[index] = boundedText((summary[index] || '') + p.delta, 16000); state.store.upsert({ ...item, summary, _turnId: item._turnId || turnId, _complete: false }); scheduleRender(); }
   else if (message.method === 'item/commandExecution/outputDelta') { state.store.delta(p.itemId, p.delta, 'commandExecution', 'aggregatedOutput'); tagTurn(p.itemId, turnId); scheduleRender(); }
   else if (message.method === 'turn/started') { state.ledger.merge(p.turn, { observedStartMs: Date.now() }); state.turnId = p.turn?.id; state.busy = true; activity(''); renderMessages(); updateControls(); }
-  else if (message.method === 'turn/completed') { state.ledger.merge(p.turn, { observedEndMs: Date.now() }); if (state.turnId === p.turn?.id || !state.turnId) { state.busy = false; state.turnId = null; } activity(p.turn?.status === 'failed' ? '任务未完成' : ''); if (p.turn?.error) notice(p.turn.error.message || JSON.stringify(p.turn.error), true); renderMessages(); renderQueue(); updateControls(); }
   else if (message.method === 'turn/plan/updated') { state.store.upsert({ id: `plan-${p.turnId}`, type: 'plan', text: p.explanation || '', content: p.plan, _turnId: p.turnId, _complete: true }); scheduleRender(); }
 }
 function tagTurn(itemId, turnId) { const item = state.store.items.get(itemId); if (item && turnId && !item._turnId) item._turnId = turnId; }
@@ -2049,18 +2057,41 @@ function selectSettingsSection(section = 'general') {
 function rowsNode(rows) {
   const list = el('dl', 'status-rows'); for (const [label, value] of rows) list.append(el('dt', '', label), el('dd', '', value)); return list;
 }
-function viewedThreadId(){return currentRoute==='chat'&&!state.loadingThread&&conversationScroll.following&&document.visibilityState!=='hidden'&&document.hasFocus()?state.thread?.id:null;}
+function readableThreadId(){
+  if(currentRoute!=='chat'||state.loadingThread||document.visibilityState!=='visible'||!document.hasFocus()
+      ||sidebarController.isOverlayOpen()||document.querySelector('dialog[open]'))return null;
+  return state.thread?.id??null;
+}
+function visibleLatestReply(){
+  const turn=$('messages').lastElementChild;
+  // A finished turn keeps its final answer outside the intermediate-work disclosure.
+  if(turn?.dataset.state!=='completed')return null;
+  const reply=turn.querySelector(':scope > .agentMessage');
+  if(!reply)return null;
+  const bounds=reply.getBoundingClientRect(),viewport=$('conversation').getBoundingClientRect();
+  return bounds.height>0&&bounds.bottom>viewport.top&&bounds.top<viewport.bottom?turn.dataset.turnId:null;
+}
 function scheduleThreadRead() {
-  if (!state.lan || threadReadFrame !== null) return;
+  if (threadReadFrame !== null || !state.thread?.id || (!state.lan&&!threadCompletion.unread.has(state.thread.id))) return;
   threadReadFrame = requestAnimationFrame(() => {
     threadReadFrame = null;
-    const threadId = viewedThreadId();
-    if (!threadId || renderedThreadReads?.threadId !== threadId || document.visibilityState !== 'visible' || !conversationScroll.atBottom
-        || sidebarController.isOverlayOpen() || document.querySelector('dialog[open]')) return;
-    threadReadReporter.record(threadId, renderedThreadReads.turnIds);
+    const threadId = readableThreadId();
+    if (!threadId || renderedThreadReads?.threadId !== threadId) return;
+    const atBottom=conversationScroll.atBottom;
+    const latest=atBottom?null:visibleLatestReply();
+    if(!atBottom&&!latest)return;
+    const turnIds=atBottom?renderedThreadReads.turnIds:[latest];
+    const unread=threadCompletion.unread.get(threadId);
+    if(unread&&(atBottom||unread.has(latest))){
+      if(atBottom)threadCompletion.read(threadId);
+      else threadCompletion.syncRead([{threadId,turnIds}]);
+      renderThreads();
+    }
+    if(state.lan)threadReadReporter.record(threadId,turnIds);
   });
 }
-$('conversation').addEventListener('scroll',()=>{if(threadCompletion.unread.has(viewedThreadId()))renderThreads();else scheduleThreadRead();},{passive:true});
+$('conversation').addEventListener('scroll',scheduleThreadRead,{passive:true});
+window.addEventListener('resize',scheduleThreadRead);
 document.addEventListener('focusin',scheduleThreadRead);
 document.addEventListener('close',scheduleThreadRead,true);
 document.addEventListener('visibilitychange',()=>{renderThreads();remoteView.expireIfNeeded();syncDshLiveContext();syncDelegationMonitor();syncPendingReconciler();syncRuntimePanelActivity();});

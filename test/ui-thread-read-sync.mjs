@@ -13,7 +13,9 @@ const temporary = await mkdtemp(path.join(os.tmpdir(),'codecang-read-sync-'));
 const client = new DemoClient();
 const {thread:first} = await client.call('thread/start',{cwd:temporary});
 const {thread:second} = await client.call('thread/start',{cwd:temporary});
+const {thread:reading} = await client.call('thread/start',{cwd:temporary});
 first.name = '手机阅读测试'; second.name = '另一个会话';
+reading.name = '前台阅读中的回答';
 const address = '192.168.79.19';
 let browser, app, releaseFirstRead;
 const errors = [];
@@ -34,7 +36,7 @@ async function openThread(page,thread) {
  await page.locator('.project-group-thread').filter({hasText:thread.name}).click();
 }
 try {
- app = await createServer({demo:true,client,desktop:true,cwd:temporary,lanOptions:{
+ app = await createServer({demo:true,client,desktop:true,cwd:temporary,desktopStateRoot:path.join(temporary,'desktop'),lanOptions:{
   networkInterfaces:()=>({Synthetic:[{address,family:'IPv4',internal:false}]}),
   serverFactory:handler=>{
    const server = http.createServer((req,res)=>{
@@ -53,18 +55,19 @@ try {
  const phoneUrl = new URL(lan.url); phoneUrl.hostname='127.0.0.1';
  browser = await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||'C:/Program Files/Google/Chrome/Application/chrome.exe'});
  const desktop = await browser.newPage({viewport:{width:1360,height:900}});
- const phone = await browser.newPage({viewport:{width:393,height:852},isMobile:true,hasTouch:true,reducedMotion:'reduce'});
+ const phone = await browser.newPage({viewport:{width:407,height:886},deviceScaleFactor:2656/886,isMobile:true,hasTouch:true,reducedMotion:'reduce'});
  await desktop.addInitScript(()=>{
   window.badges=[];
   window.chrome ||= {};
   window.chrome.webview={addEventListener(){},postMessage(message){if(message.type==='desktopTaskbarBadge')window.badges.push(message);}};
  });
- await phone.addInitScript(()=>{window.CodexLightNative={isNativeApp:()=>true};});
+ await phone.addInitScript(()=>{window.CodexLightNative={isNativeApp:()=>true,getPreferredTheme:()=>'system'};});
  for (const page of [desktop,phone]) {
   page.setDefaultTimeout(8000);
   page.on('pageerror',error=>errors.push(error.message));
  }
  await Promise.all([desktop.goto(app.url),phone.goto(phoneUrl.href)]);
+ await desktop.getByRole('button',{name:'使用此主题'}).click();
  await phone.locator('html[data-access="lan"]').waitFor();
  await desktop.locator('.project-group-thread').filter({hasText:first.name}).waitFor();
 
@@ -98,7 +101,7 @@ try {
  let rejectDesktop = true;
  await desktop.route('**/api/events',route=>rejectDesktop?route.fulfill({status:503}):route.continue());
  app.server.closeAllConnections();
- await desktop.locator('#connection-text').filter({hasText:'连接已断开'}).waitFor();
+ await desktop.locator('#connection-dot.bad').waitFor({state:'attached'});
  const newerRead = phone.waitForResponse(response=>response.url().endsWith('/api/thread-reads') && response.request().postDataJSON()?.turnIds.includes('newer'));
  await openThread(phone,first);
  await phone.locator('#messages').getByText('回复 newer').waitFor();
@@ -138,6 +141,40 @@ try {
  await badge(desktop,1);
  await phone.locator('#messages').getByText('回复 after-scroll').waitFor();
  console.log('PASS the mobile sidebar and older-scroll position defer the read until the reader returns to the latest response');
+ await desktop.bringToFront();
+ await openThread(desktop,reading);
+ await desktop.locator('#conversation[aria-busy="false"]').waitFor();
+ const reply=Array.from({length:40},(_,i)=>`正在读的第 ${i+1} 段。`).join('\n\n');
+ const turnId='onscreen',item={id:'answer-'+turnId,type:'agentMessage',phase:'final_answer',text:reply};
+ client.emit('event',{method:'turn/started',params:{threadId:reading.id,turn:{id:turnId,status:'inProgress'}}});
+ client.emit('event',{method:'item/started',params:{threadId:reading.id,turnId,item}});
+ const answer=desktop.locator('[data-item-id="answer-onscreen"]');
+ await answer.waitFor();
+ await desktop.waitForFunction(()=>{const c=document.getElementById('conversation');return c.scrollTop>200&&c.scrollHeight-c.scrollTop-c.clientHeight<3;});
+ await desktop.locator('#conversation').hover();
+ await desktop.mouse.wheel(0,-160);
+ await desktop.waitForFunction(()=>{const c=document.getElementById('conversation');return c.scrollHeight-c.scrollTop-c.clientHeight>100;});
+ const badgeCount=await desktop.evaluate(()=>window.badges.length);
+ finish(reading,turnId,reply);
+ await desktop.locator('[data-turn-id="onscreen"][data-state="completed"]').waitFor();
+ await paint(desktop);
+ assert.equal(await marker(desktop,reading).isVisible(),false,'a reader looking at the latest reply must not have to reopen it');
+ assert.equal(await desktop.evaluate(n=>window.badges.slice(n).some(b=>b.count>1),badgeCount),false,'no transient unread badge for an onscreen reply');
+ await marker(desktop,second).waitFor();
+ console.log('PASS the visible streaming reply stays read with follow paused; another conversation keeps its dot');
+ await desktop.locator('#conversation').focus();
+ await desktop.keyboard.press('End');
+ await desktop.waitForFunction(()=>{const c=document.getElementById('conversation');return c.scrollHeight-c.scrollTop-c.clientHeight<3;});
+ await desktop.locator('#project-dialog').evaluate(dialog=>dialog.showModal());
+ finish(reading,'behind-dialog');
+ await badge(desktop,2);
+ await marker(desktop,reading).waitFor();
+ await desktop.locator('#project-close').click();
+ await desktop.locator('#messages').getByText('回复 behind-dialog',{exact:true}).waitFor();
+ await badge(desktop,1);
+ await marker(desktop,reading).waitFor({state:'hidden'});
+ await marker(desktop,second).waitFor();
+ console.log('PASS closing a dialog clears the newly visible reply and its badge without a thread switch');
  assert.deepEqual(errors,[]);
 } finally {
  releaseFirstRead?.();

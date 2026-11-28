@@ -62,7 +62,7 @@
                         android:paddingTop="2dp"
                         android:paddingEnd="8dp"
                         android:paddingBottom="2dp"
-                        android:text="0.4.21"
+                        android:text="0.4.22"
                         android:textColor="@color/text_tertiary"
                         android:textSize="11sp" />
                 </LinearLayout>

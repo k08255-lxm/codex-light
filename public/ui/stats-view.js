@@ -314,7 +314,7 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
       kpi('tokens', 'Tokens', compact(t.totalTokens), io, `总计 ${integer(t.totalTokens)} tokens · 输入 ${integer(t.inputTokens)}（含缓存）· 输出 ${integer(t.outputTokens)}`),
       kpi('turns', '回合', integer(t.turnCount), `${integer(t.requestCount)} 次已计量请求 · ${integer(t.submissionCount)} 次提交`, '每次模型请求返回用量后计入；同一回合可以有多次请求。'),
       kpi('cost', '费用', usd(t.estimatedCost?.usd), t.estimatedCost?.usd!=null&&!t.estimatedCost.complete?'部分记录小计':'USD', '按模型单价计算，展开明细可查看用量与小计'),
-      kpi('cache', '缓存命中', percent(t.cacheHitRate), `缓存 ${compact(t.cachedInputTokens)} / 输入 ${compact(t.inputTokens)}`, '缓存输入 ÷ 输入'),
+      kpi('cache', '缓存命中', percent(t.cacheHitRate,1), `缓存 ${compact(t.cachedInputTokens)} / 输入 ${compact(t.inputTokens)}`, '缓存输入 ÷ 输入'),
     );
   }
   function bucketLabel(iso) { const hour = dataBucket === 'hour'; return localTime(iso, { date: !hour, time: hour }); }
@@ -371,7 +371,7 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
     ['tokens', 'Tokens', row => compact(row.totalTokens), row => row.totalTokens ?? -1, 'num'],
     ['input', '输入', row => compact(row.inputTokens), row => row.inputTokens ?? -1, 'num'],
     ['output', '输出', row => compact(row.outputTokens), row => row.outputTokens ?? -1, 'num'],
-    ['cache', '缓存命中', row => percent(row.cacheHitRate), row => row.cacheHitRate ?? -1, 'num'],
+    ['cache', '缓存命中', row => percent(row.cacheHitRate,1), row => row.cacheHitRate ?? -1, 'num'],
     ['cost', '费用', row => usd(row.estimatedCost?.usd), row => row.estimatedCost?.usd ?? -1, 'num'],
     ['success', '成功率', row => percent(row.successRate), row => row.successRate ?? -1, 'num'],
     ['p50', '耗时 p50', row => seconds(row.performance?.durationMs?.p50), row => row.performance?.durationMs?.p50 ?? -1, 'num'],

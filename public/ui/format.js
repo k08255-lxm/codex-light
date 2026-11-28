@@ -14,7 +14,11 @@ export function showTokens(node,value,{suffix='',unknown=UNKNOWN}={}) {
   node.title=finite(value)?integer(value)+' tokens':'';
 }
 export function integer(value) { return finite(value) ? Math.round(value).toLocaleString('zh-CN') : UNKNOWN; }
-export function percent(fraction, digits = 1) { return finite(fraction) ? (fraction * 100).toFixed(digits).replace(/\.0$/, '') + '%' : UNKNOWN; }
+export function percent(fraction, digits) {
+  if (!finite(fraction)) return UNKNOWN;
+  const value = (fraction * 100).toFixed(digits ?? 1);
+  return (digits === undefined ? value.replace(/\.0$/, '') : value) + '%';
+}
 export function usd(value) {
   if (!finite(value)) return UNKNOWN;
   if (value === 0) return '$0';

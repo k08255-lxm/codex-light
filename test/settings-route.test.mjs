@@ -22,7 +22,7 @@ function setup(){
   const noop=()=>{};
   const state={cwd:'/project',lan:false,connected:false};
   const dependencies={document,$,state,createNavigationHistory,conversationScroll:{capture:()=>null,restore:noop},renderThreads:noop,configPanel:view('config'),closeWindowMenu:noop,closeThreadMenu:noop,
-    contextDetails:{close:noop},sessionUsage:{close:noop},sessionSpeed:{close:noop},sidebarController:{setRoute:value=>calls.push(['sidebar',value]),open:()=>calls.push(['sidebar','open']),closeForNavigation:noop},
+    renderContext:()=>calls.push(['context','render']),contextDetails:{close:noop},sessionUsage:{close:noop},sessionSpeed:{close:noop},sidebarController:{setRoute:value=>calls.push(['sidebar',value]),open:()=>calls.push(['sidebar','open']),closeForNavigation:noop},
     statsView:view('stats'),accountView:view('account'),accountLoginPanel:view('login'),pluginPanel:view('plugins'),skillsView:view('skills'),aboutView:view('about'),storageView:view('storage'),
     slashMenu:{close:()=>calls.push(['slash','close'])},
     runtimePanel:null,wslRuntimePanel:view('wsl'),prReviewPanel:null,dshConnectionView:view('dsh'),dshConfigView:view('dsh-config'),lanView:view('lan'),
@@ -48,6 +48,7 @@ test('settings about is a real exclusive section and opens its dedicated sidebar
   assert.equal(h.$('settings-sidebar').classList.contains('hidden'),true);
   assert.ok(h.calls.some(([view,action])=>view==='about'&&action==='deactivate'));
   h.route('chat');assert.equal(h.$('chat-sidebar').classList.contains('hidden'),false);
+  assert.equal(h.calls.filter(([view,action])=>view==='context'&&action==='render').length,2);
 });
 
 test('paired settings can navigate to About without falling back to General',()=>{

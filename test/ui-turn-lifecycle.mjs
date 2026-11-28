@@ -30,6 +30,7 @@ try {
     window.chrome.webview={addEventListener(){},postMessage(message){if(message.type==='desktopTaskbarBadge')window.badges.push(message);}};
   });
   await page.goto(app.url); await page.locator('#connection-text').filter({hasText: '演示模式'}).waitFor({state: 'attached'});
+  await page.getByRole('button',{name:'使用此主题'}).click();
   if (await page.locator('#rail-sidebar').getAttribute('aria-expanded') !== 'true') await page.locator('#rail-sidebar').click();
   await check('thread status identifies running work in the sidebar before opening its history', async () => {
     const row = page.locator('.project-group-thread').filter({hasText:thread.name});
@@ -49,6 +50,7 @@ try {
     await spinner.waitFor();
     assert.equal(await spinner.evaluate(node => getComputedStyle(node).animationName), 'thread-running-spin');
     await page.emulateMedia({reducedMotion:'reduce'});
+    await page.waitForFunction(()=>document.documentElement.dataset.reducedMotion==='true');
     assert.equal(await spinner.evaluate(node => getComputedStyle(node).animationName), 'none');
     await page.emulateMedia({reducedMotion:'no-preference'});
     await page.locator('#new-thread').click();

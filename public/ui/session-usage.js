@@ -10,7 +10,7 @@ export function mountSessionUsage(document,readCost){
   function draw(){
     const input=total?.inputTokens,cached=total?.cachedInputTokens,count=total?.totalTokens;
     const split=input!=null&&cached!=null&&cached<=input;
-    const hit=split&&input>0?percent(cached/input,0):null;
+    const hit=split&&input>0?percent(cached/input,1):null;
     showTokens(get('session-token-label'),count,{suffix:' tok',unknown:'Token 用量'});
     get('session-hit-label').textContent=hit?'· 缓存命中 '+hit:'';
     showTokens(get('session-token-total'),count,{suffix:' tok'});

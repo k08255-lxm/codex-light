@@ -84,6 +84,7 @@ publicFiles['/ui/select.css']='ui/select.css';publicFiles['/ui/select.js']='ui/s
 publicFiles['/vendor/qrcode.js']='vendor/qrcode.js';publicFiles['/ui/pairing.js']='ui/pairing.js';publicFiles['/ui/back-navigation.js']='ui/back-navigation.js';publicFiles['/ui/auto-update.js']='ui/auto-update.js';publicFiles['/ui/welcome-greeting.js']='ui/welcome-greeting.js';
 publicFiles['/ui/update-indicator.js']='ui/update-indicator.js';
 publicFiles['/ui/desktop-close-preference.js']='ui/desktop-close-preference.js';
+publicFiles['/ui/desktop-companion.js']='ui/desktop-companion.js';
 publicFiles['/ui/navigation-history.js']='ui/navigation-history.js';publicFiles['/ui/shell-polish.css']='ui/shell-polish.css';
 publicFiles['/ui/thread-completion.js']='ui/thread-completion.js';publicFiles['/ui/mobile-layout.js']='ui/mobile-layout.js';
 publicFiles['/ui/task-notifications.js']='ui/task-notifications.js';

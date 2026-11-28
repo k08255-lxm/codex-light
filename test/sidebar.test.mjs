@@ -12,14 +12,16 @@ const window={matchMedia(){return media;},addEventListener(){},setTimeout(){retu
 const $=id=>elements[id];
 const start=app.indexOf('// sidebar-controller:start');const end=app.indexOf('// sidebar-controller:end',start);assert.ok(start>=0&&end>start,'sidebar controller markers missing');
 const source=app.slice(app.indexOf('\n',start)+1,end);
-const create=new Function('$','window','document','requestAnimationFrame',`${source}\nreturn sidebarController;`);
-const sidebar=create($,window,document,callback=>callback());
+const create=new Function('$','window','document','requestAnimationFrame','scheduleThreadRead',`${source}\nreturn sidebarController;`);
+let readChecks=0;
+const sidebar=create($,window,document,callback=>callback(),()=>readChecks++);
 const expanded=id=>elements[id].getAttribute('aria-expanded');
 const hidden=()=>elements['sidebar-overlay'].classList.contains('hidden');
 test('wide sidebar defaults open, collapses into real layout space, and reopens from the persistent rail entry',()=>{
  assert.equal(elements.sidebar.inert,false);assert.equal(expanded('rail-sidebar'),'true');assert.equal(expanded('rail-sidebar'),'true');assert.equal(elements.app.classList.contains('sidebar-collapsed'),false);assert.equal(hidden(),true);
  sidebar.toggle();assert.equal(elements.app.classList.contains('sidebar-collapsed'),true);assert.equal(elements.sidebar.inert,true);assert.equal(elements.sidebar.getAttribute('aria-hidden'),'true');assert.equal(expanded('rail-sidebar'),'false');assert.equal(expanded('rail-sidebar'),'false');
  sidebar.toggle();assert.equal(elements.app.classList.contains('sidebar-collapsed'),false);assert.equal(elements.sidebar.inert,false);assert.equal(elements.sidebar.getAttribute('aria-hidden'),undefined);assert.equal(expanded('rail-sidebar'),'true');
+ assert.equal(readChecks,2);
 });
 test('narrow sidebar uses an overlay, traps state through inert/aria, and returns focus to a visible toggle',()=>{
  media.matches=true;media.handler();assert.equal(elements.sidebar.inert,true);assert.equal(hidden(),true);assert.equal(expanded('rail-sidebar'),'false');

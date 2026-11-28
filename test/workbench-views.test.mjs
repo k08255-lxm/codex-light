@@ -172,6 +172,7 @@ test('statistics pager enables Next after load and keeps one frozen time window 
   assert.equal(h.calls[2].body.cursor, undefined, 'refresh starts a fresh first page');
   assert.match(h.host.textContent, /首次可见输出等待/);
   const metrics = h.host.querySelector('.perf-strip').textContent + h.host.querySelector('.kpi-row').textContent;
+  assert.match(metrics,/缓存命中50\.0%/);
   assert.doesNotMatch(metrics, /TTFT|API 请求|字\/秒|字\/s/, 'no character-rate or API-request metrics in the primary strip');
   assert.match(metrics, /回合平均输出12.5 tok\/s/); assert.doesNotMatch(metrics, /900/, 'the character-rate number is never relabelled as tok/s');
   assert.match(h.host.querySelector('.perf-strip').innerTitle ?? h.host.querySelector('.perf-strip').children[2].title, /整轮耗时/);

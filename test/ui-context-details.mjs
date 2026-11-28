@@ -88,7 +88,8 @@ try{
   await page.locator('#session-usage').click();await usage.waitFor();
   assert.equal(await usage.locator('#session-token-total').textContent(),'8k tok');
   assert.equal(await usage.locator('#session-token-total').getAttribute('title'),'8,000 tokens');
-  assert.equal(await usage.locator('#session-cache-hit').textContent(),'25%');
+  assert.equal(await usage.locator('#session-cache-hit').textContent(),'25.3%');
+  assert.equal(await page.locator('#session-hit-label').textContent(),'· 缓存命中 25.3%');
   assert.equal(await usage.locator('#session-input').textContent(),'5.9k tok');
   assert.equal(await usage.locator('#session-output').textContent(),'100 tok');
   await usage.locator('#session-cost').filter({hasText:'$0.0142'}).waitFor();
