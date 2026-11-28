@@ -135,7 +135,8 @@ try{
  for(const {page} of pages){
   await page.locator('#rail-usage').click();
   const balance=page.locator('.balance-window').first();
-  await balance.locator('strong').filter({hasText:'$'}).waitFor();
+  await page.getByRole('heading',{name:'预估订阅总额'}).waitFor();
+  await balance.locator('strong').filter({hasText:'$13.81'}).waitFor();
   assert.match(await balance.textContent(),/5 小时窗口.*已用 25%/);
   const kpi=page.locator('.kpi').filter({has:page.locator('.kpi-label',{hasText:'Tokens'})});
   await kpi.locator('.kpi-value').filter({hasText:'3.2M'}).waitFor();

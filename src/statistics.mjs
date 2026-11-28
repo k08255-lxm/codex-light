@@ -411,8 +411,11 @@ export class StatisticsService {
     const priced=cost({...receipt,model:receipt.model??parent.model,provider,tokensComplete:true},this.pricing,references);
     count++;if(priced.complete)spentUsd+=priced.usd;else unpriced++;
    }
-   const remaining=usedPercent===100?0:count&&!unpriced&&usedPercent>0?spentUsd*(100-usedPercent)/usedPercent:null;
-   windows.push({slot,windowDurationMins,startsAt:start/1000,resetsAt,usedPercent,spentUsd:count>unpriced?spentUsd:null,count,unpriced,customProvider,remainingUsd:Number.isFinite(remaining)?remaining:null});
+   const estimate=count&&!unpriced&&usedPercent>0?spentUsd/(usedPercent/100):null;
+   const estimatedTotalUsd=Number.isFinite(estimate)?estimate:null;
+   // Older open clients still read the remaining amount from this response.
+   const remainingUsd=usedPercent===100?0:estimatedTotalUsd===null?null:estimatedTotalUsd-spentUsd;
+   windows.push({slot,windowDurationMins,startsAt:start/1000,resetsAt,usedPercent,spentUsd:count>unpriced?spentUsd:null,count,unpriced,customProvider,estimatedTotalUsd,remainingUsd});
   }
   return {windows,asOf:at,reason:windows.length?null:'尚无当前重置周期的额度数据。'};
  }

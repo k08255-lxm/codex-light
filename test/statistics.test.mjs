@@ -18,19 +18,25 @@ function fixture(options={}){
 }
 async function directory(t){const root=await fs.mkdtemp(path.join(os.tmpdir(),'statistics-fixture-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));return root;}
 
-test('subscription balance uses reference USD within the account and quota window',()=>{
+test('subscription total scales recorded USD to the full account quota window',()=>{
  const {service,start,event,time}=fixture();
  const account={type:'chatgpt',email:'fixture@example.test',planType:'plus'};
  service.setAccount(account);start();
- const packet=total();time(1000);event('thread/tokenUsage/updated',{tokenUsage:{total:packet,last:packet}});
+ const packet={...total(51_590_000,0),cachedInputTokens:0,reasoningOutputTokens:0};time(1000);event('thread/tokenUsage/updated',{tokenUsage:{total:packet,last:packet}});
  const now=EPOCH+2000,window={resetsAt:EPOCH/1000+3600,windowDurationMins:300,usedPercent:25};
  const limits={rateLimits:{limitId:'codex',planType:'plus',primary:window,secondary:{...window,windowDurationMins:10080,usedPercent:50}}};
  const [short,week]=service.quotaEstimate(account,limits,now).windows;
  assert.equal(short.startsAt,window.resetsAt-300*60);assert.equal(week.startsAt,window.resetsAt-10080*60);
  assert.equal(short.count,1);assert.ok(Math.abs(short.remainingUsd-short.spentUsd*3)<1e-12);
+ assert.equal(short.estimatedTotalUsd,short.spentUsd*4);
+ assert.equal(short.spentUsd.toFixed(2),'103.18');assert.equal(short.estimatedTotalUsd.toFixed(2),'412.72');
+ assert.equal(week.estimatedTotalUsd,week.spentUsd*2);
  assert.equal(week.remainingUsd,week.spentUsd);assert.ok(week.spentUsd>0);
  assert.equal(service.quotaEstimate({...account,email:'other@example.test'},limits,now).windows[0].remainingUsd,null);
- limits.rateLimits.primary={...window,usedPercent:0};assert.equal(service.quotaEstimate(account,limits,now).windows[0].remainingUsd,null);
+ limits.rateLimits.primary={...window,usedPercent:0};assert.equal(service.quotaEstimate(account,limits,now).windows[0].estimatedTotalUsd,null);
+ limits.rateLimits.primary={...window,usedPercent:100};
+ assert.equal(service.quotaEstimate(account,limits,now).windows[0].estimatedTotalUsd,short.spentUsd);
+ assert.equal(service.quotaEstimate({...account,email:'other@example.test'},limits,now).windows[0].estimatedTotalUsd,null);
  limits.rateLimits.primary={...window,resetsAt:now/1000};assert.equal(service.quotaEstimate(account,limits,now).windows.length,1);
 });
 

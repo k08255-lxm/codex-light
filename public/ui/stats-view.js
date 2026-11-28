@@ -156,7 +156,7 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
 
   const perf = el(document, 'section', 'perf-strip'); perf.setAttribute('aria-label', '性能');
   const balance=el(document,'section','subscription-balance');balance.hidden=true;
-  const balanceTitle=el(document,'h2','','预估订阅余额'),balanceRows=el(document,'div','balance-windows'),balanceNote=el(document,'p','balance-note');
+  const balanceTitle=el(document,'h2','','预估订阅总额'),balanceRows=el(document,'div','balance-windows'),balanceNote=el(document,'p','balance-note');
   balance.append(balanceTitle,balanceRows,balanceNote);
   trend.append(chartBox,balance);
   function refreshBalance(){
@@ -177,12 +177,12 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
         const reason=!w.usedPercent?'额度消耗尚为 0%':!w.count?'本周期没有已计量请求':w.unpriced?'有请求缺少单价':'';
         const meter=el(document,'div','balance-meter'),fill=el(document,'span');
         fill.style.width=w.usedPercent+'%';meter.append(fill);meter.setAttribute('aria-hidden','true');
-        row.append(el(document,'span','balance-period',windowLabel(w.windowDurationMins)),el(document,'strong',w.remainingUsd==null?'pending':'',w.remainingUsd==null?'待估算':usd(w.remainingUsd)),
-          meter,el(document,'small','',w.remainingUsd==null?reason:`已用 ${w.usedPercent}% · 已记录 ${usd(w.spentUsd)}`));
+        row.append(el(document,'span','balance-period',windowLabel(w.windowDurationMins)),el(document,'strong',w.estimatedTotalUsd==null?'pending':'',w.estimatedTotalUsd==null?'待估算':usd(w.estimatedTotalUsd)),
+          meter,el(document,'small','',w.estimatedTotalUsd==null?reason:`已用 ${w.usedPercent}% · 已记录 ${usd(w.spentUsd)}`));
         row.title='下次额度重置 '+localTime(w.resetsAt*1000);
         return row;
       }));
-      balanceNote.textContent=windows.length?'按周期内已记录花费和额度消耗比例估算。'+(windows.some(w=>w.customProvider)?'含自定义提供方，仅计入订阅的请求可用于估算。':''):(result.reason||'尚无当前订阅的额度数据。');
+      balanceNote.textContent=windows.length?'总额按本周期已记录的参考费用除以已用比例估算。'+(windows.some(w=>w.customProvider)?'含自定义提供方，仅计入订阅的请求可用于估算。':''):(result.reason||'尚无当前订阅的额度数据。');
     }catch{
       if(!active||generation!==quotaGeneration)return;
       quotaWindows=[];balanceRows.replaceChildren();balanceNote.textContent='订阅额度暂时无法读取。';
