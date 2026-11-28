@@ -141,13 +141,13 @@ export function mountTunnelAccess(host, { api, onIdentity = () => {} }) {
 
   const sshGuide = el(document, 'details', 'tunnel-ssh-guide access-options');
   const sshRequirements = el(document, 'p', 'fine', '将域名解析到 Debian 或 Ubuntu 服务器，并放行安装脚本列出的 HTTPS 和 SSH 端口。');
-  const sshInstall = el(document, 'p', 'fine', '已有 Caddy 或 Nginx 时，安装程序会生成接入配置。空闲服务器可由码舱提供 HTTPS。');
+  const sshInstall = el(document, 'p', 'fine', '已有网站占用 443 时，脚本会另选端口，并尝试自动接入 Nginx 或 Caddy。安装完成后使用脚本验证过的公网地址。');
   const sshMessage = el(document, 'p', 'fine tunnel-ssh-message');
   sshMessage.setAttribute('role', 'status');
   const randomPorts = el(document, 'input');
   randomPorts.type = 'checkbox';
   const randomOption = el(document, 'label', 'fine relay-port-option');
-  randomOption.append(randomPorts, ' 安装时由服务器分配空闲公网端口');
+  randomOption.append(randomPorts, ' 首次安装时始终选择空闲公网端口');
   randomPorts.addEventListener('change', () => { clearScript(); render(); });
   const sshFeedback = el(document, 'p', 'fine tunnel-ssh-message');
   sshFeedback.setAttribute('role', 'status');

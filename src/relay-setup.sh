@@ -3,12 +3,24 @@ set -euo pipefail
 export LC_ALL=C
 umask 022
 fail() { echo "CodeCang: $*" >&2; exit 1; }
+base=/etc/codecang-relay
+if [[ ${1:-} == --repair ]]; then
+  if [[ $# == 1 ]]; then
+    records=("$base"/devices/*)
+    [[ ${#records[@]} == 1 && -f "${records[0]}" ]] || fail '请使用 --repair 电脑ID 指定一台已注册的电脑'
+    id=${records[0]##*/}
+  elif [[ $# == 2 ]]; then id=$2
+  else fail '用法：--repair [电脑ID]'; fi
+  [[ "$id" =~ ^[0-9a-f]{32}$ && -f "$base/devices/$id" ]] || fail '找不到该电脑的有效注册'
+  { read -r host; read -r device_key; } < "$base/devices/$id"
+  set -- "$host" "$device_key" "$id" prefer-443
+fi
 host=$1
 device_key=$2
 id=$3
 port_request=${4:-443}
 valid_port() { [[ "$1" =~ ^[1-9][0-9]{0,4}$ && "$1" -le 65535 ]]; }
-[[ "$port_request" == auto ]] || valid_port "$port_request" || fail '公网端口必须为 auto 或 1 至 65535'
+[[ "$port_request" == auto || "$port_request" == prefer-443 ]] || valid_port "$port_request" || fail '无效的公网端口选项'
 domain_re='^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
 key_re='^ssh-ed25519 [A-Za-z0-9+/]{68}$'
 [[ "$host" =~ $domain_re && $(expr length "$host") -le 253 ]] || fail '域名格式无效'
@@ -17,7 +29,6 @@ case "$host" in *.localhost|*.local|*.internal|home.arpa|*.home.arpa|trycloudfla
 [[ $EUID == 0 && -d /run/systemd/system ]] || fail '请在运行 systemd 的 Debian/Ubuntu VPS 上以 root 执行'
 . /etc/os-release
 [[ "$ID" == debian || "$ID" == ubuntu ]] || fail '支持 Debian/Ubuntu'
-base=/etc/codecang-relay
 sshd=codecang-relay-sshd
 web=codecang-relay-https
 units=/etc/systemd/system
@@ -47,6 +58,10 @@ export DEBIAN_FRONTEND=noninteractive
 if ! command -v ss >/dev/null; then
   apt-get update
   apt-get install -y --no-install-recommends iproute2
+fi
+if ! command -v curl >/dev/null; then
+  apt-get update
+  apt-get install -y --no-install-recommends curl ca-certificates
 fi
 check_port() {
   local number=$1 option=$2 output
@@ -93,6 +108,32 @@ unused_port() {
   fail '没有可用的随机公网端口'
 }
 # Existing v1 servers already have clients using their SSH port.
+if [[ "$port_request" == prefer-443 ]]; then
+  port_request=443
+  if [[ "$entry" != direct && ! -f "$base/public-ports/$id" ]]; then
+    listeners=$(ss -Hlnt 'sport = :443') || fail '无法检查现有 HTTPS 服务'
+    if [[ -n "$listeners" ]]; then
+      generation=''
+      if [[ -f "$base/http/Caddyfile" ]]; then
+        generation=$(sed -n 's|^import /relay/\(gen\.[[:alnum:]]\+\)/sites/\*\.caddy$|\1|p' "$base/http/Caddyfile")
+      fi
+      expected="$base/http/$generation/metadata/$id.json"
+      matches=false
+      if [[ -n "$generation" && -s "$expected" ]]; then
+        for mode in loopback dns; do
+          resolve=()
+          if [[ "$mode" == loopback ]]; then resolve=(--resolve "$host:443:127.0.0.1"); fi
+          if actual=$(curl --noproxy '*' --max-time 4 --max-filesize 1024 -fs "${resolve[@]}" "https://$host/.well-known/codecang-relay") &&
+             [[ "$actual" == "$(<"$expected")" ]]; then matches=true; break; fi
+        done
+      fi
+      if [[ "$matches" == false ]]; then
+        echo '443 已有 HTTPS 服务，正在为码舱选择独立空闲端口。'
+        port_request=auto
+      fi
+    fi
+  fi
+fi
 ssh_port=49323
 if [[ -f "$base/ssh-port" ]]; then
   ssh_port=$(<"$base/ssh-port")
@@ -332,6 +373,273 @@ publish_routes() {
   done
 }
 ROUTES
+if [[ "$entry" != direct ]]; then
+  if ! command -v python3 >/dev/null || ! command -v openssl >/dev/null; then
+    apt-get update
+    apt-get install -y --no-install-recommends python3 openssl
+  fi
+  cat > "$base/frontend.py.new" <<'FRONTEND'
+"""Connect one dedicated TLS port to the relay through the host's existing web server."""
+import json
+import os
+from pathlib import Path
+import pwd
+import re
+import shlex
+import shutil
+import signal
+import ssl
+import subprocess
+import sys
+import tempfile
+import time
+
+base = Path(__file__).resolve().parent
+frontends = base / "frontends"
+
+
+def run(*args, capture=False):
+    return subprocess.run(args, stdin=subprocess.DEVNULL, check=True, text=True,
+                          stdout=subprocess.PIPE if capture else subprocess.DEVNULL)
+
+
+def write_file(path, data, original=None):
+    with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as tmp:
+        staged = Path(tmp.name)
+    try:
+        if original:
+            run("cp", "--preserve=all", "--", original, staged)
+        staged.write_bytes(data)
+        if not original:
+            staged.chmod(0o644)
+        os.replace(staged, path)
+    finally:
+        staged.unlink(missing_ok=True)
+
+
+def probe(host, port, expected, attempts, loopback=True):
+    resolve = ["--resolve", f"{host}:{port}:127.0.0.1"] if loopback else []
+    for attempt in range(attempts):
+        reply = subprocess.run(["curl", "--noproxy", "*", "--max-time", "3", "--max-filesize", "1024",
+                                *resolve, "-fs", f"https://{host}:{port}/.well-known/codecang-relay"], stdout=subprocess.PIPE)
+        if reply.returncode == 0 and reply.stdout.strip() == expected.strip():
+            return True
+        if attempt + 1 < attempts:
+            time.sleep(0.5)
+    return False
+
+
+def certificate_pair(host, dump):
+    lineage = Path("/etc/letsencrypt/live") / host
+    pairs = [(str(lineage / "fullchain.pem"), str(lineage / "privkey.pem"))]
+    # nginx -T lists files separately. Confirm the hostname, chain and matching
+    # private key before referring to any configured pair in the new server.
+    for section in re.split(r"(?m)^# configuration file .+:$", dump):
+        def paths(directive):
+            return re.findall(r'(?:^|[;{}])\s*' + directive + r'\s+"?(/[\w./@+ ~-]+?)"?\s*;', section, re.M)
+        pairs.extend(zip(paths("ssl_certificate"), paths("ssl_certificate_key")))
+    for cert, key in dict.fromkeys(pairs):
+        if not Path(cert).is_file() or not Path(key).is_file():
+            continue
+        verified = subprocess.run(["openssl", "verify", "-purpose", "sslserver", "-verify_hostname", host,
+                                   "-untrusted", cert, cert], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if verified.returncode:
+            continue
+        try:
+            ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).load_cert_chain(cert, key, password=lambda: b"")
+            return cert, key
+        except (ssl.SSLError, OSError):
+            continue
+    raise ValueError("Nginx 未找到覆盖该域名的有效证书和匹配的密钥")
+
+
+def nginx_instance(owner):
+    for value in set(re.findall(r'"nginx",pid=(\d+)', owner)):
+        process = Path("/proc") / value
+        try:
+            title = (process / "cmdline").read_bytes().rstrip(b"\0").replace(b"\0", b" ").decode()
+        except FileNotFoundError:
+            continue
+        if not title.startswith("nginx: master process ") or not (process / "root").samefile("/"):
+            continue
+        uid = re.search(r"(?m)^Uid:\s+\d+\s+(\d+)", (process / "status").read_text())
+        if not uid or uid[1] != "0":
+            continue
+        command = [os.readlink(process / "exe")]
+        args = shlex.split(title[len("nginx: master process "):])
+        for flag in ("-p", "-c"):
+            if flag in args:
+                option = args[args.index(flag)+1]
+                if not Path(option).is_absolute():
+                    raise ValueError("Nginx 使用相对启动路径，无法安全确定当前配置")
+                command.extend([flag, option])
+        if "-g" in args and not re.fullmatch(r"(?:(?:daemon|master_process) (?:on|off);\s*)+",
+                                              " ".join(args[args.index("-g")+1:])):
+            raise ValueError("Nginx 使用自定义全局启动指令，请使用生成的接入文件")
+        return command, int(value)
+    raise ValueError("未找到宿主机上负责此入口的 Nginx 主进程")
+
+
+def install_nginx(host, port, device, expected, owner):
+    command, pid = nginx_instance(owner)
+    dump = run(*command, "-T", capture=True).stdout
+    cert, key = certificate_pair(host, dump)
+    includes = re.findall(r'(?:^|[;{}])\s*include\s+"?(/[^"$;*]+/\*(?:\.conf)?)"?\s*;', dump, re.M)
+    dirs = [Path(p).parent for p in includes if Path(p).parent.name in ("conf.d", "sites-enabled")]
+    if not dirs:
+        raise ValueError("Nginx 配置中未找到已加载的 conf.d 或 sites-enabled 站点目录")
+    directory = next((d for d in dirs if d.name == "conf.d"), dirs[0])
+    link = directory / f"codecang-relay-{device}.conf"
+    source = frontends / f"{device}.nginx-site"
+    record = frontends / f"{device}.nginx-link"
+    if os.path.lexists(link) and not (link.is_symlink() and os.readlink(link) == str(source)):
+        raise ValueError(f"已有其他配置占用 {link}")
+    original = source.read_bytes() if source.exists() else None
+    had_link = link.is_symlink()
+    lines = [f"    listen {port} ssl;"]
+    if Path("/proc/net/if_inet6").exists():
+        lines.append(f"    listen [::]:{port} ssl;")
+    name = host if port == "443" else f"{host}-{port}"
+    lines.extend([f"    server_name {host};", f'    ssl_certificate "{cert}";',
+                  f'    ssl_certificate_key "{key}";', f'    include "{frontends}/{name}.nginx.conf";'])
+    reloading = False
+    try:
+        write_file(source, ("server {\n" + "\n".join(lines) + "\n}\n").encode())
+        if not had_link:
+            link.symlink_to(source)
+        checked = run(*command, "-T", capture=True).stdout
+        if f"# configuration file {link}:" not in checked.splitlines():
+            raise ValueError("运行中的 Nginx 配置没有加载新增站点")
+        write_file(record, str(link).encode())
+        reloading = True
+        os.kill(pid, signal.SIGHUP)
+        if not probe(host, port, expected, 12):
+            raise ValueError("重载后 HTTPS 没有返回这台电脑的中继配置")
+    except BaseException:
+        if not had_link and link.is_symlink() and os.readlink(link) == str(source):
+            link.unlink()
+        if original is not None:
+            write_file(source, original)
+        if not had_link:
+            record.unlink(missing_ok=True)
+        if reloading:
+            run(*command, "-t")
+            os.kill(pid, signal.SIGHUP)
+        raise
+
+
+def install_caddy(host, port, device, expected):
+    pid = run("systemctl", "show", "--value", "-p", "MainPID", "caddy", capture=True).stdout.strip()
+    proc = Path(f"/proc/{int(pid)}")
+    args = (proc / "cmdline").read_bytes().decode().split("\0")
+    if "--config" not in args or "--resume" in args:
+        raise ValueError("Caddy 服务没有使用可识别的 Caddyfile")
+    main = Path(args[args.index("--config")+1])
+    if not main.is_absolute() or main.is_symlink() or not main.is_file() or not (proc / "root").samefile("/"):
+        raise ValueError("请使用独立的常规 Caddyfile 接入该端口")
+    for path in (main, *main.parents):
+        info = path.stat()
+        if info.st_uid != 0 or (info.st_mode & 0o022 and not info.st_mode & 0o1000):
+            raise ValueError("Caddyfile 或其目录可由其他用户修改，请使用生成的接入配置")
+    uid = int(re.search(r"(?m)^Uid:\s+\d+\s+(\d+)", (proc / "status").read_text())[1])
+    caddy_cli = ["caddy"] if uid == 0 else ["runuser", "-u", pwd.getpwuid(uid).pw_name, "--", "caddy"]
+    original = main.read_bytes()
+    adapted = json.loads(run(*caddy_cli, "adapt", "--config", main, "--adapter", "caddyfile", capture=True).stdout)
+    admin = adapted.get("admin", {}).get("listen", "localhost:2019")
+    if not re.fullmatch(r"(?:localhost|127\.0\.0\.1|\[::1\]):[0-9]+", admin):
+        raise ValueError("Caddy 管理地址不支持自动核对当前配置")
+    live = json.loads(run("curl", "--noproxy", "*", "-fsS", "--max-time", "3",
+                          f"http://{admin}/config/", capture=True).stdout)
+    if live != adapted:
+        raise ValueError("Caddy 正在使用的配置与磁盘文件不同")
+    enabled = frontends / "caddy-enabled"
+    enabled.mkdir(exist_ok=True)
+    link = enabled / f"{device}.caddy"
+    name = host if port == "443" else f"{host}-{port}"
+    source = frontends / f"{name}.caddy"
+    if os.path.lexists(link) and not (link.is_symlink() and os.readlink(link) == str(source)):
+        raise ValueError(f"已有其他配置占用 {link}")
+    directive = f"import {enabled}/*.caddy".encode()
+    updated = original if directive in original.splitlines() else original.rstrip(b"\n") + b"\n" + directive + b"\n"
+    had_link = link.is_symlink()
+    changed_main = False
+    try:
+        if not had_link:
+            link.symlink_to(source)
+        if main.read_bytes() != original:
+            raise ValueError("Caddyfile 已被其他进程更改")
+        if updated != original:
+            write_file(main, updated, main)
+            changed_main = True
+        run(*caddy_cli, "validate", "--config", main, "--adapter", "caddyfile")
+        run("systemctl", "reload", "caddy")
+    except BaseException:
+        if not had_link and link.is_symlink() and os.readlink(link) == str(source):
+            link.unlink()
+        if changed_main and main.read_bytes() == updated:
+            write_file(main, original, main)
+        raise
+    if not probe(host, port, expected, 12):
+        print("Caddy 已加载站点，HTTPS 尚未验证。请核对 DNS、证书签发和 journalctl -u caddy 的日志后重试。", file=sys.stderr)
+        sys.exit(3)
+
+
+def remove_frontend(host, port, device):
+    record = frontends / f"{device}.nginx-link"
+    if record.exists():
+        link = Path(record.read_text())
+        if link.is_symlink() and os.readlink(link) == str(frontends / f"{device}.nginx-site"):
+            link.unlink()
+        owner = run("ss", "-Hlnpt", f"sport = :{port}", capture=True).stdout
+        if '"nginx"' in owner:
+            command, pid = nginx_instance(owner)
+            run(*command, "-t")
+            os.kill(pid, signal.SIGHUP)
+        record.unlink()
+    link = frontends / "caddy-enabled" / f"{device}.caddy"
+    name = host if port == "443" else f"{host}-{port}"
+    if link.is_symlink() and os.readlink(link) == str(frontends / f"{name}.caddy"):
+        link.unlink()
+        try:
+            run("systemctl", "reload", "caddy")
+        except BaseException:
+            link.symlink_to(frontends / f"{name}.caddy")
+            raise
+
+
+def main():
+    action, host, port, device = sys.argv[1:]
+    if action == "remove":
+        remove_frontend(host, port, device)
+        return
+    root = (base / "http/Caddyfile").read_text()
+    generation = re.search(r"(?m)^import /relay/(gen\.[A-Za-z0-9]+)/sites/\*\.caddy$", root)
+    if not generation:
+        raise ValueError("找不到已发布的中继配置")
+    expected = (base / "http" / generation[1] / "metadata" / f"{device}.json").read_bytes()
+    if probe(host, port, expected, 1) or probe(host, port, expected, 1, loopback=False):
+        return
+    owner = run("ss", "-Hlnpt", "sport = :443", capture=True).stdout
+    if port == "443" and owner.strip():
+        raise ValueError("此服务器由已有站点提供 HTTPS；选择分配空闲公网端口可单独配置入口")
+    if not owner.strip():
+        owner = run("ss", "-Hlnpt", "sport = :80", capture=True).stdout
+    if '"nginx"' in owner:
+        install_nginx(host, port, device, expected, owner)
+    elif '"caddy"' in owner and shutil.which("caddy"):
+        install_caddy(host, port, device, expected)
+    else:
+        raise ValueError("无法识别宿主机上负责 HTTPS 的 Nginx 或 Caddy")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (ValueError, OSError, subprocess.SubprocessError) as error:
+        sys.exit(f"CodeCang HTTPS：{error}")
+FRONTEND
+  mv "$base/frontend.py.new" "$base/frontend.py"
+fi
 cat > "$base/revoke" <<'REVOKE'
 #!/bin/bash
 set -euo pipefail
@@ -352,6 +660,12 @@ if systemctl is-active --quiet codecang-relay-sshd; then
       [ "$pid" -gt 1 ] || continue
       case $(cat "/proc/$pid/comm" 2>/dev/null) in sshd|sshd-session) kill -TERM "$pid" || true;; esac
     done' sh "$port"
+fi
+if [[ -f "$base/frontend.py" ]]; then
+  read -r domain < "$record"
+  public=443
+  if [[ -f "$base/public-ports/$1" ]]; then read -r public _ < "$base/public-ports/$1"; fi
+  python3 -I "$base/frontend.py" remove "$domain" "$public" "$1"
 fi
 echo '该主机的站点和授权已移除。该端口保留停用，其他设备继续使用各自的站点。'
 REVOKE
@@ -404,21 +718,36 @@ for ((attempt=0; attempt<40; attempt++)); do
   sleep .5
 done
 [[ "$ready" == true ]] || fail '服务尚未监听，请用 journalctl -u codecang-relay-sshd -u codecang-relay-https 检查'
-if [[ "$entry" == direct ]]; then
-  echo "已启动独立入口。将 $host 的 A/AAAA 指向此 VPS，放行 TCP 80（证书验证）、$public_port（HTTPS）、$ssh_port（SSH）。"
-else
-  write_frontend_examples "$entry" "$public_port"
-  name=$host
-  if [[ "$public_port" != 443 ]]; then name="$host-$public_port"; fi
-  echo "VPS 本机中继已监听 127.0.0.1:$entry。请放行 TCP $public_port（HTTPS）、$ssh_port（SSH），再接入对外 HTTPS 服务。"
-  echo "Caddy：在已有 Caddyfile 顶层添加 import $base/frontends/$name.caddy"
-  echo "Nginx：在监听 $public_port 且配置了 $host 有效证书的 HTTPS server 块添加 include $base/frontends/$name.nginx.conf;"
-  if [[ "$public_port" != 443 ]]; then echo "为端口 $public_port 单独配置 HTTPS 站点，原有 443 站点继续使用原配置。"; fi
-  echo '核对配置后，只重载对外提供 HTTPS 的服务。'
-fi
-echo "本机 $id 的回源端口为 $assigned。撤销此设备：sudo /etc/codecang-relay/revoke $id"
 origin="https://$host"
 if [[ "$public_port" != 443 ]]; then origin="$origin:$public_port"; fi
+echo "请放行 TCP $public_port（HTTPS）、$ssh_port（SSH）。"
 echo "桌面公网地址：$origin"
-echo "HTTPS 配置完成后，在码舱填写上述地址并连接。可核对 $origin/.well-known/codecang-relay 是否返回本机的 JSON 配置。"
+echo "本机 $id 的回源端口为 $assigned。撤销此设备：sudo /etc/codecang-relay/revoke $id"
+if [[ "$entry" == direct ]]; then
+  echo "已启动独立入口。将 $host 的 A/AAAA 指向此 VPS，并放行证书验证端口 TCP 80。"
+  generation=$(sed -n 's|^import /relay/\(gen\.[[:alnum:]]\+\)/sites/\*\.caddy$|\1|p' "$base/http/Caddyfile")
+  [[ -n "$generation" && -s "$base/http/$generation/metadata/$id.json" ]] || fail '找不到本机中继配置'
+  expected=$(<"$base/http/$generation/metadata/$id.json")
+  verified=false
+  for ((attempt=0; attempt<10; attempt++)); do
+    if actual=$(curl --noproxy '*' --max-time 3 --max-filesize 1024 -fs --resolve "$host:$public_port:127.0.0.1" "$origin/.well-known/codecang-relay") &&
+       [[ "$actual" == "$expected" ]]; then verified=true; break; fi
+    sleep 1
+  done
+  [[ "$verified" == true ]] || fail "HTTPS 尚未通过本机验证。请检查 DNS、TCP 80 和证书签发日志：journalctl -u $web --no-pager -n 50。修正后可重跑命令。"
+else
+  write_frontend_examples "$entry" "$public_port"
+  frontend_status=0
+  python3 -I "$base/frontend.py" install "$host" "$public_port" "$id" || frontend_status=$?
+  if [[ "$frontend_status" == 3 ]]; then exit 3; fi
+  if [[ "$frontend_status" != 0 ]]; then
+    name=$host
+    if [[ "$public_port" != 443 ]]; then name="$host-$public_port"; fi
+    echo "内部中继已监听 127.0.0.1:$entry，HTTPS 入口尚未验证。手动接入文件如下："
+    echo "Caddy：import $base/frontends/$name.caddy"
+    echo "Nginx：在监听 $public_port 且配置了 $host 有效证书的 HTTPS server 块添加 include $base/frontends/$name.nginx.conf;"
+    fail '请根据上面的接入结果处理后重新执行安装命令。'
+  fi
+fi
+echo "已在 VPS 本机验证 $origin 的证书和本机中继配置。现在可以在码舱填写该地址并连接。"
 echo "日志：journalctl --no-pager -l -n 50 -u codecang-relay-sshd -u codecang-relay-https"

@@ -27,7 +27,8 @@ export function buildRelayInstaller({ hostname, publicKey, hostId, httpsPort = 4
   if (blob.length !== 51 || blob.toString('base64') !== encoded || !blob.subarray(0, 19).equals(ed25519Header)) {
     throw new TypeError('需要无注释的 OpenSSH Ed25519 公钥');
   }
-  const args = [hostname,publicKey,hostId,randomPorts ? 'auto' : httpsPort].map(value=>"'"+value+"'").join(' ');
+  const portRequest = randomPorts ? 'auto' : httpsPort === 443 ? 'prefer-443' : httpsPort;
+  const args = [hostname,publicKey,hostId,portRequest].map(value=>"'"+value+"'").join(' ');
   const script = "bash -s -- "+args+" <<'CODECANG_RELAY_SETUP'\n"+setupBody+'CODECANG_RELAY_SETUP\n';
   const command = "( f=$(mktemp) && trap 'rm -f -- \"$f\"' EXIT && curl -fsSL --proto '=https' '"+releaseSource+"' -o \"$f\" && printf '%s  %s\\n' '"+
     digest+"' \"$f\" | sha256sum -c - && bash \"$f\" "+args+" )";

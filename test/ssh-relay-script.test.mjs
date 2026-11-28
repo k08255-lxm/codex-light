@@ -78,6 +78,7 @@ test('script accepts only a canonical DNS host, a fixed-size device ID and a com
   }
   assert.throws(() => buildRelaySetupScript({ ...first, httpsPort: 65536 }));
   assert.match(buildRelayInstaller({...first,randomPorts:true}).command, /'auto' \)$/);
+  assert.match(buildRelayInstaller(first).command, /'prefer-443' \)$/);
   assert.match(buildRelayInstaller({...first,httpsPort:28443}).command, /'28443' \)$/);
   assert.match(script, /AddressFamily any/);
   for (const directive of ['AuthenticationMethods publickey', 'AllowUsers codecang-tunnel', 'AllowTcpForwarding remote',
@@ -291,6 +292,9 @@ test('server selects unused ports, keeps installed SSH and rechecks saved HTTPS 
   assert.equal(fresh.status,0,fresh.stderr);
   const [ssh,https]=fresh.stdout.trim().split(' ');
   assert.match(ssh,/^2\d{4}$/);assert.match(https,/^2\d{4}$/);assert.notEqual(ssh,https);
+  assert.equal(run('prefer-443').stdout.trim(),'49323 443 no');
+  const busy443='ss(){ if [[ "$2" == "sport = :443" ]]; then echo LISTEN; fi; }';
+  assert.match(run('prefer-443',busy443).stdout,/2\d{4} 2\d{4} no/);
   const skipped=run('auto','ss(){ if [[ ! -e occupied ]]; then echo "${2##*:}" > occupied; fi; if [[ "${2##*:}" == "$(<occupied)" ]]; then echo LISTEN; fi; }');
   assert.equal(skipped.status,0,skipped.stderr);
   assert.ok(!skipped.stdout.trim().split(' ').includes((await readFile(path.join(root,'occupied'),'utf8')).trim()));
@@ -303,7 +307,24 @@ test('server selects unused ports, keeps installed SSH and rechecks saved HTTPS 
   await mkdir(path.join(root,'http','gen.saved','metadata'),{recursive:true});
   await writeFile(path.join(root,'http','Caddyfile'),'import /relay/gen.saved/sites/*.caddy\n');
   await writeFile(path.join(root,'http','gen.saved','metadata','test.json'),'{"hostId":"test"}\n');
+  assert.match(run('prefer-443',busy443).stdout,/49323 28000 yes/);
   const occupied='ss(){ [[ "$2" != "sport = :28000" ]] || echo LISTEN; };';
   assert.notEqual(run('auto',occupied+' curl(){ echo wrong; }').status,0);
   assert.equal(run('auto',occupied+' curl(){ echo \'{"hostId":"test"}\'; }').status,0);
+  await rm(path.join(root,'public-ports','test'));
+  assert.match(run('prefer-443',busy443+'; curl(){ echo \'{"hostId":"test"}\'; }').stdout,/49323 443 yes/);
+});
+
+test('repair reads the registered computer and requires a selection when there are multiple registrations',{skip:!bashAvailable},async t=>{
+  const root=await mkdtemp(path.join(tmpdir(),'codecang-repair-'));
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  await mkdir(path.join(root,'devices'));
+  const resolver=script.slice(script.indexOf('if [[ ${1:-} == --repair'),script.indexOf('\nhost=$1'));
+  const repair=(...args)=>spawnSync(bash,['-c','set -eu; base=.; fail(){ exit 5; };\n'+resolver+'\nprintf "%s\\n" "$@"','test','--repair',...args],{cwd:root,encoding:'utf8'});
+  const register=entry=>writeFile(path.join(root,'devices',entry.hostId),[entry.hostname,entry.publicKey,'49322',''].join('\n'));
+  await register(first);
+  assert.deepEqual(repair().stdout.trim().split('\n'),[first.hostname,first.publicKey,first.hostId,'prefer-443']);
+  await register(second);
+  assert.equal(repair().status,5);
+  assert.equal(repair(second.hostId).stdout.split('\n')[0],second.hostname);
 });
