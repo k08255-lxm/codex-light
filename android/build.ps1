@@ -65,7 +65,8 @@ $JdkBin = Resolve-JdkBin -Explicit $JdkHome
 $Aapt2 = Join-Path $BuildToolsDir "aapt2.exe"
 $D8 = Join-Path $BuildToolsDir "d8.bat"
 $ZipAlign = Join-Path $BuildToolsDir "zipalign.exe"
-$ApkSigner = Join-Path $BuildToolsDir "apksigner.bat"
+$ApkSigner = Join-Path $BuildToolsDir "lib\apksigner.jar"
+$Java = Join-Path $JdkBin "java.exe"
 $Javac = Join-Path $JdkBin "javac.exe"
 $KeyTool = Join-Path $JdkBin "keytool.exe"
 $Jar = Join-Path $JdkBin "jar.exe"
@@ -142,10 +143,19 @@ if (-not $KeystorePath) {
 }
 
 $FinalApk = Join-Path $DistDir "codex-light.apk"
-cmd.exe /c "`"$ApkSigner`" sign --ks `"$KeystorePath`" --ks-key-alias `"$KeyAlias`" --ks-pass `"pass:$KeystorePass`" --key-pass `"pass:$KeyPass`" --out `"$FinalApk`" `"$AlignedApk`""
-if ($LASTEXITCODE -ne 0) { throw "apksigner failed" }
+$previousStorePass = $env:CODEX_LIGHT_ANDROID_KS_PASS
+$previousKeyPass = $env:CODEX_LIGHT_ANDROID_KEY_PASS
+try {
+    $env:CODEX_LIGHT_ANDROID_KS_PASS = $KeystorePass
+    $env:CODEX_LIGHT_ANDROID_KEY_PASS = $KeyPass
+    & $Java -jar $ApkSigner sign --ks $KeystorePath --ks-key-alias $KeyAlias --ks-pass env:CODEX_LIGHT_ANDROID_KS_PASS --key-pass env:CODEX_LIGHT_ANDROID_KEY_PASS --out $FinalApk $AlignedApk
+    if ($LASTEXITCODE -ne 0) { throw "apksigner failed" }
+} finally {
+    $env:CODEX_LIGHT_ANDROID_KS_PASS = $previousStorePass
+    $env:CODEX_LIGHT_ANDROID_KEY_PASS = $previousKeyPass
+}
 
-cmd.exe /c "`"$ApkSigner`" verify -v `"$FinalApk`"" | Out-Null
+& $Java -jar $ApkSigner verify -v $FinalApk | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "apk signature verification failed" }
 & (Join-Path $PSScriptRoot "verify-licenses.ps1") -ApkPath $FinalApk
 

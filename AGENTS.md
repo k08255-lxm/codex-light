@@ -4,6 +4,7 @@
 
 - 本项目生成的文件放在 `codex-light/` 内。临时工作使用 `.tmp/`，构建产物使用项目已有的 `dist/` 或 `artifacts/`。不要在上一级 `ChatGPT/` 总目录创建本项目的辅助目录。
 - Android 正式签名库保存在项目内的 `android/signing/release.keystore`。签名目录由 Git 忽略，正式构建通过 `-KeystorePath` 指定本地文件，并与上一版公开 APK 核对证书指纹。
+- v0.4.22 经确认更换 Android 发布签名，是新证书的起点。后续版本以 v0.4.22 起的正式 APK 核对签名兼容性。
 
 ## 开工与发布前同步
 

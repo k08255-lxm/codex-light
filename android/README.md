@@ -27,7 +27,7 @@ Android 原生外壳通过 WebView 连接桌面码舱。可以在可信局域网
 - 已配对的手机更新电脑后即可使用新版对话和用量界面。首次安装可从 [Releases](https://github.com/k08255-lxm/codex-light/releases) 下载 `codex-light-android-0.4.22.apk`，versionCode 为 422。
 - 将 APK 传到手机，用系统安装器打开；如系统提示，仅为当前使用的文件管理器或浏览器允许安装该来源的应用。安装后即可关闭这项许可。
 - 若要核对下载文件，在 Windows 执行 `Get-FileHash .\codex-light-android-0.4.22.apk -Algorithm SHA256`，与同一发布的 `SHA256SUMS.txt` 中对应文件名的条目对比。哈希只校验文件一致性，不能代替对发布者和签名的信任。
-- 覆盖升级需要相同应用 ID 和签名证书。作者发布包、自行构建包及其他机器生成的调试密钥不保证互相兼容；签名不匹配时不要直接卸载来强行升级，因为卸载会清除手机保存的连接地址和令牌。请优先使用同一来源、同一签名的更新包。
+- v0.4.22 起的官方 APK 使用新签名。已配对的旧版 App 可继续连接新版电脑。主动从 v0.4.21 或更早的官方 App 迁移到新签名时，需要卸载旧 App、安装新 APK 并重新配对，手机本地保存的连接和设置会被清除。
 
 ### 连接电脑
 
@@ -53,7 +53,22 @@ pwsh -File android/build.ps1
 
 以上命令使用 PowerShell 7；仅安装 Windows PowerShell 5.1 时，在仓库根目录执行 `powershell -File android/build.ps1`。脚本调用 Windows 的 `.exe`、`.bat` 和 `cmd.exe`，不是 Linux/macOS 构建脚本。SDK/JDK 检测失败时可用 `-SdkDir`、`-JdkHome` 显式传入安装目录。
 
-默认产物输出至 `android/dist/codex-light.apk` 及对应的 `codex-light.apk.sha256`（已被 `.gitignore` 忽略，不纳入源码提交）。未通过环境变量 `CODEX_LIGHT_ANDROID_KEYSTORE` 指定正式签名密钥时，脚本会在本地生成不入库的 `local-debug.keystore` 完成签名校验；请勿将任何 `.keystore` 或私钥文件提交至版本库。
+默认产物输出至 `android/dist/codex-light.apk` 及对应的 `codex-light.apk.sha256`。未通过 `-KeystorePath` 或环境变量 `CODEX_LIGHT_ANDROID_KEYSTORE` 指定签名库时，开发构建使用本地的 `local-debug.keystore`。产物和签名库均由 Git 忽略。
+
+正式构建使用项目内的签名库和别名 `codecang-release`。v0.4.22 发布证书的 SHA-256 指纹为 `f9c11ce4603aa13b502c35261c5c19804f0f89eec3afa7f7b1c303ab17dd4e34`。在创建签名的 Windows 账户下，从仓库根目录执行：
+
+```powershell
+$secret = Get-Content -Raw -Encoding utf8 android/signing/release.password.dpapi | ConvertTo-SecureString
+$credential = [PSCredential]::new('codecang-release', $secret)
+try {
+    $password = $credential.GetNetworkCredential().Password
+    ./android/build.ps1 -KeystorePath (Resolve-Path android/signing/release.keystore) -KeyAlias codecang-release -KeystorePass $password -KeyPass $password
+} finally {
+    Remove-Variable password,credential,secret -ErrorAction SilentlyContinue
+}
+```
+
+口令文件由 Windows DPAPI 保护，依赖创建它的账户和系统。若要迁移到另一台电脑，需同时保管签名库和可在新机器上使用的恢复口令。
 
 ## 验证范围与限制
 
@@ -93,7 +108,7 @@ android/
 
 桌面启动后及每六小时自动检查稳定 Release，发现新版仅提示；设置 → 关于仍可手动检查、下载与确认安装。Android 进入前台自动检查稳定 Release，成功检查间隔六小时。连接页、连接失败或离线页、手机设置均可点击「检查更新」立即检查，无需连接电脑。发现新版时可查看下载进度，待 APK 的 SHA256、包名、版本和签名全部通过核验后，点击「打开系统安装器」并在 Android 中确认安装。首次使用时 Android 可能要求允许码舱安装未知应用。手动检查失败会提示原因，自动检查遇到网络错误会稍后重试。
 
-APK 升级须保留同一 applicationId 与签名证书，增加 versionCode；Android 安装器会拒绝不匹配签名。不要为更新而卸载应用。v0.4.6 已随 Release 提供 APK，versionCode 为 406；后续构建仍须同步版本并使用原签名。本地构建脚本不会自动发布 Release，其独立 `.sha256` 输出与 Release 汇总的 `SHA256SUMS.txt` 用途不同。
+APK 覆盖升级须保留相同的 applicationId 与签名证书，并增加 versionCode。v0.4.6 已随 Release 提供 APK，versionCode 为 406。v0.4.22 是新签名的首版，迁移方式见「安装与升级」。发布时用 `SHA256SUMS.txt` 核对各项下载资产。
 
 依赖：ZXing core 3.5.3（Apache-2.0）位于 android/libs，构建时离线编译到 DEX；相机仅扫描页使用，离开页面释放。不自动接受系统相机权限。
 
