@@ -39,6 +39,8 @@ export function mountLiveChanges(host, { renderDiff }) {
     host.classList.toggle('hidden', !summary.count);
     if (!summary.count) { open = false; panel.classList.add('hidden'); pill.setAttribute('aria-expanded','false'); return; }
     pill.replaceChildren(icon(document, 'diff', { size: 14 }), el(document, 'span', 'pill-text', `${summary.count} 个文件${summary.running ? '正在更改' : '已更改'}`), stats(summary));
+    pill.dataset.count=summary.count>99?'99+':String(summary.count);
+    pill.setAttribute('aria-label',pill.textContent);
     pill.dataset.running = String(!!summary.running);
     pill.setAttribute('aria-expanded', String(open));
     panel.classList.toggle('hidden', !open);

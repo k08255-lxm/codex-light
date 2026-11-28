@@ -23,7 +23,7 @@ export class DesktopState{
   if(value===undefined)return (await this.read()).preferences;
   return (await this.update(s=>{
    const next=validatePreferences(value);
-   for(const key of ['keepAwakeDuringTask','keepAwakeDuringRemote','desktopCompanion']){
+   for(const key of ['keepAwakeDuringTask','keepAwakeDuringRemote','desktopCompanion','desktopCompanionSize']){
     if(!Object.hasOwn(value,key))next[key]=s.preferences[key];
    }
    s.preferences=next;

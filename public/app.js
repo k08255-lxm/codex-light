@@ -274,12 +274,14 @@ async function previewLocalFile(ref,node,threadId=state.thread?.id){
   filePreview.open(ref,{threadId},node);
 }
 // Image previews go only through the authenticated, thread-scoped preview API; the token never enters a URL.
-async function fetchArtifactPreview(path, threadId = state.thread?.id, workspaceOnly = false) {
+async function fetchArtifactPreview(path, threadId = state.thread?.id, workspaceOnly = false, historyImage = null) {
   if (!threadId) throw new Error('需要已保存的对话才能预览');
   if (!token) throw new Error('缺少本地访问令牌');
   const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 30000);
   try {
-    const response = await fetch('/api/artifacts/preview', { method: 'POST', signal: controller.signal, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ threadId, path, ...(workspaceOnly ? {workspaceOnly:true} : {}) }) });
+    const request = input => fetch('/api/artifacts/preview', { method: 'POST', signal: controller.signal, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(input) });
+    let response = await request(path ? {threadId, path, ...(workspaceOnly ? {workspaceOnly:true} : {})} : {threadId, historyImage});
+    if (path && historyImage && [400,403,404,410,415].includes(response.status)) response=await request({threadId,historyImage});
     if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(typeof data.error === 'string' ? data.error : data.error?.message || (response.status === 404 ? '图片不存在或已移动' : `无法预览（${response.status}）`)); }
     const type = response.headers.get('Content-Type') || '';
     if (!/^image\//.test(type)) throw new Error('服务返回的不是图片');
@@ -753,7 +755,11 @@ function renderThreads() {
     for (const [threadId, turnId] of state.activeTurns) track(threadId, turnId);
     if (state.busy && !state.activeTurns.has(state.thread?.id)) track(state.thread?.id, state.turnId);
   }
-  desktopCompanion.tasks(state.connected, runningThreadIds.size);
+  if(desktopWebView){
+    const titles=new Map(state.threads.map(thread=>[thread.id,thread.name]));
+    if(state.thread?.name)titles.set(state.thread.id,state.thread.name);
+    desktopCompanion.tasks(state.connected,titles,state.activeTurns,state.terminalTurns);
+  }
   const searching=!!$('search').value.trim();
   const order=projectNavigation.render({projects:projectsState.projects,threads:state.threads,selectedPath:state.cwd,activeThreadId:state.thread?.id||'',runningThreadIds,unreadThreadIds:threadCompletion.unread,searchStatus,searching,busy:projectsState.busy||state.sending,error:projectsState.error,
     restoredOrder:!normalThreadsLoaded&&!searching?restoredOrder:null,animateOrder:animateProjectOrder&&!searching});
@@ -1005,7 +1011,7 @@ async function openThread(thread) {
   openingReasoning=changing;
   try {
     // History is read-only: never resume or subscribe just to look at a conversation.
-    const [result,reasoning] = await Promise.all([rpc('thread/read', { threadId: thread.id }),api('/api/session/reasoning',{threadId:thread.id}).catch(error=>{if(generation===state.openGeneration)notice('未能读取对话模型设置：'+error.message,true);return null;}),sessionControls.load(thread.id).catch(error=>{if(generation===state.openGeneration)notice('未能读取对话批准方式：'+error.message,true);})]);
+    const [result,reasoning] = await Promise.all([rpc('thread/read', { threadId: thread.id, includeTurns:false }),api('/api/session/reasoning',{threadId:thread.id}).catch(error=>{if(generation===state.openGeneration)notice('未能读取对话模型设置：'+error.message,true);return null;}),sessionControls.load(thread.id).catch(error=>{if(generation===state.openGeneration)notice('未能读取对话批准方式：'+error.message,true);})]);
     if (generation !== state.openGeneration) return;
     state.thread = withSubmittedActivity(result.thread || thread); dshTasks.reset(state.thread.id); state.dshReadErrors.clear(); state.dshOpenDetails.clear(); state.dshConnection = null; renderDshConnection(); syncDshLiveContext(); renderDshTasks(); restoreThreadReasoning({ model: state.thread.model, reasoningEffort: state.thread.reasoningEffort, sessionReasoning:reasoning, serviceTier: Object.hasOwn(result,'serviceTier') ? result.serviceTier : state.thread.serviceTier });
     openingReasoning=null;
@@ -1123,12 +1129,17 @@ async function loadItems(earlier = false, generation = state.openGeneration, cur
   const before = refresh ? new Map(state.store.items) : null;
   const pager = earlier ? state.pager : new HistoryPager((method,params)=>{
     if (generation!==state.openGeneration || id!==state.thread?.id) throw new Error('对话已切换');
-    return rpc(method,params);
+    return api('/api/rpc', {method, params, historyImages: 'deferred'});
   },id,historyCaps);
-  const page = await pager.next({ max: CONVERSATION_ITEMS });
+  const smallPage = (!earlier && !refresh) || Boolean(pager.openingTurn);
+  const page = await pager.next({ max: smallPage ? 60 : CONVERSATION_ITEMS, firstPaint: smallPage });
   if (!current() || generation !== state.openGeneration || id !== state.thread?.id) return;
   if (!earlier) state.pager = pager; else if (state.pager !== pager) return;
   const items = page.items;
+  // Finish the newest turn in the background so its gallery and process survive reopening
+  // even if a single image-heavy turn spans multiple pages. Older turns stay scroll-driven.
+  if (!earlier) pager.openingTurn = items.at(-1)?._turnId;
+  if (!page.hasMore || items[0]?._turnId !== pager.openingTurn || (page.mode==='turns' && !pager.buffer.length)) pager.openingTurn=null;
   for (const turn of page.turns) state.ledger.merge(turn);
   if (!earlier && page.activeTurnId && !state.activeTurns.has(id) && !state.terminalTurns.has(page.activeTurnId)) state.activeTurns.set(id, page.activeTurnId);
   state.historyFallback = page.mode !== 'items';
@@ -1713,6 +1724,7 @@ function onEvent(message) {
     return;
   }
   if(message.method==='bridge/mobileTasks'){taskNotifications?.apply(message.params);return;}
+  if(message.method==='bridge/companionTasks'){if(desktopWebView)desktopCompanion.activity(message.params);return;}
   if(message.method==='bridge/questionIgnored'){questionIgnores.apply(message.params.threadId,message.params.itemId);return;}
   if(message.method==='bridge/runtimeUpdate'){runtimePanel?.updateAvailable();return;}
   if(message.method==='bridge/sessionPermissionChanged'){
@@ -1843,7 +1855,8 @@ async function events() {
   while (!state.shuttingDown) {
     let reader; const controller = new AbortController(); state.eventController = controller;
     try {
-      const eventPath=taskNotifications?'/api/events?mobileTasks=1'+(taskNotifications.details?'&details=1':''):'/api/events';
+      const eventPath=taskNotifications?'/api/events?mobileTasks=1'+(taskNotifications.details?'&details=1':'')
+        :state.desktop&&desktopWebView?'/api/events?companion=1':'/api/events';
       const response = await fetch(eventPath, { signal: controller.signal, headers: { Authorization: `Bearer ${token}` } }); if (!response.ok) throw new Error(`事件连接失败 (${response.status})`);
       lastEventAt=Date.now();
       reader = response.body.getReader(); eventsReconnecting = false; const decoder = new TextDecoder(); let buffer = ''; await syncStatus(); delay = 1000;
@@ -1952,6 +1965,7 @@ function hasEarlierHistory(){
 }
 const historyAutoLoad = mountHistoryAutoLoad({
   autoFill:true,
+  incompleteTurn:()=>Boolean(state.pager?.openingTurn),
   scrollController:conversationScroll,
   container: $('conversation'), button: $('earlier'), status: $('history-load-status'),
   getKey: () => state.thread?.id + ':' + state.openGeneration,
@@ -2234,7 +2248,7 @@ $('thread-menu').addEventListener('keydown',event=>{if(event.key==='ArrowDown'||
 
 $('refresh-archived').addEventListener('click',()=>loadArchived()); $('more-archived').addEventListener('click',()=>loadArchived(true));
 const preferencesView = createPreferences({ document, window, state, $, el, api, notice, confirm: text => confirm(text), onChange:(preferences,appearance)=>{
-  if(state.desktop)desktopCompanion.appearance(preferences.desktopCompanion,appearance);
+  if(state.desktop)desktopCompanion.appearance(preferences.desktopCompanion,appearance,preferences.desktopCompanionSize);
   questionNotifications?.sync(state.requests,{notify:false});
 } });
 const { loadDesktopState } = preferencesView;
@@ -2259,8 +2273,14 @@ questionNotifications=createQuestionNotifications({document,window,host:$('quest
     else notice('已打开对应对话。如问题位于更早的记录，请加载更早消息。');
   },
 });
-desktopWebView?.addEventListener('message', ({data})=>{
-  if(!state.desktop || data?.type!=='companionOpen')return;
+desktopWebView?.addEventListener('message', async ({data})=>{
+  if(!state.desktop)return;
+  if(data?.type==='companionResize'){
+    const saved=await preferencesView.setCompanionSize(data.size);
+    desktopWebView.postMessage({type:'companionResizeResult',size:data.size,saved:saved===true});
+    return;
+  }
+  if(data?.type!=='companionOpen')return;
   if(data.target==='appearance')openSettings('appearance');
   else if(data.target==='question'||data.target==='approval')void questionNotifications.openPending(data.target);
 });

@@ -2,7 +2,7 @@
 export function mountMobileLayout(document,window) {
   const narrow=window.matchMedia('(max-width:760px)'),foot=document.querySelector('.composer-foot');
   const bridge=window.CodexLightNative,android=document.documentElement.dataset.mobileShell==='android';
-  const controls=['permissions-info','context-meter','account-quota'].map(id=>{
+  const controls=['permissions-info','context-meter','live-changes','account-quota'].map(id=>{
     const node=document.getElementById(id),home=document.createComment(id+' desktop position');node.before(home);return {node,home};
   });
   const quotaSlot=document.getElementById('mobile-quota-slot');

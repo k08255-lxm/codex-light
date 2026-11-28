@@ -1,3 +1,5 @@
+import {dshLifecycleEvent} from '../dsh.js';
+
 const tools = new Set(['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'collabAgentToolCall', 'webSearch', 'imageGeneration', 'imageView']);
 const deltaActions = new Map([['item/commandExecution/outputDelta','commandExecution'],['item/mcpToolCall/progress','mcpToolCall'],['item/fileChange/patchUpdated','fileChange']]);
 const deltaPhases = new Map([
@@ -14,9 +16,17 @@ export function taskPreview(value) {
 // Only the active plan step and typed tool category are needed for the private card.
 export function createTurnActivity(turnId) {
   const active = new Map(), finished = new Set();
+  const collaborators = new Set();
   let done = 0, total = 0, completedTools = 0, revision = 0, step = '';
+  function setAgent(id, running) {
+    if (collaborators.has(id)===running) return;
+    if (running) collaborators.add(id); else collaborators.delete(id);
+    revision++;
+  }
   return {
     turnId,
+    collaborators,
+    finishChild(id) { setAgent('native:'+id,false); },
     get phase() {return [...active.values()].at(-1)?.phase || 'working';},
     get revision() {return revision;},
     details() {
@@ -34,6 +44,17 @@ export function createTurnActivity(turnId) {
       }
       const item = params?.item, id = item?.id || params?.itemId;
       if (typeof id !== 'string' || !id || id.length > 256 || finished.has(id)) return;
+      if (item && (method==='item/started'||method==='item/completed')) {
+        if (item.type==='subAgentActivity' && typeof item.agentThreadId==='string' && ['started','completed','interrupted'].includes(item.kind))
+          setAgent('native:'+item.agentThreadId,item.kind==='started');
+        if (item.type==='collabAgentToolCall') for (const child of item.receiverThreadIds || []) {
+          const status=item.agentsStates?.[child]?.status;
+          if (['running','pendingInit'].includes(status)) setAgent('native:'+child,true);
+          else if (['completed','interrupted','errored','shutdown','notFound'].includes(status)) setAgent('native:'+child,false);
+        }
+        const event=item.type==='mcpToolCall' && dshLifecycleEvent(item);
+        if (event) setAgent('dsh:'+event.id,event.kind==='started');
+      }
       if (method === 'item/completed') {
         if (active.delete(id)) revision++;
         if (tools.has(item?.type)) {completedTools++; revision++;}

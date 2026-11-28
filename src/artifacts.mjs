@@ -119,7 +119,7 @@ async function checkPath(target,file=false){
 }
 
 export class ArtifactPreviewService {
- constructor({projects,rolloutRoots,wslDistribution}={}){this.wsl=wslDistribution?new WslFileScope(wslDistribution):null;this.projects=projects;this.rolloutRoots=rolloutRoots;this.rollouts=new Map();this.threads=new Map();this.references=new Map();this.referenceCount=0;this.pending=new Set();this.closed=false;}
+ constructor({projects,rolloutRoots,wslDistribution,readHistoryImage}={}){this.wsl=wslDistribution?new WslFileScope(wslDistribution):null;this.projects=projects;this.readHistoryImage=readHistoryImage;this.rolloutRoots=rolloutRoots;this.rollouts=new Map();this.threads=new Map();this.references=new Map();this.referenceCount=0;this.pending=new Set();this.closed=false;}
  bindThread(thread){if(typeof thread?.path==='string'&&safeId(thread?.id)){this.rollouts.set(thread.id,thread.path);while(this.rollouts.size>1000)this.rollouts.delete(this.rollouts.keys().next().value);}if(safeId(thread?.id)&&typeof thread.cwd==='string'&&thread.cwd.length<=4096&&isAbsoluteWorkingDirectory(thread.cwd)){this.threads.delete(thread.id);this.threads.set(thread.id,thread.cwd);while(this.threads.size>1000){const oldest=this.threads.keys().next().value;this.threads.delete(oldest);this.dropReferences(oldest);}}}
  dropReferences(threadId){this.referenceCount-=this.references.get(threadId)?.size||0;this.references.delete(threadId);}
  /** Only trusted RPC items or accepted uploads may add exact external image references. */
@@ -149,9 +149,11 @@ export class ArtifactPreviewService {
  }
  async preview(input){
   if(this.closed)throw fail('产物预览服务正在关闭','ARTIFACT_CLOSED',409);
-  if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['threadId','projectId','path','workspaceOnly'].includes(key))||(input.workspaceOnly!==undefined&&input.workspaceOnly!==true))throw fail('产物预览参数无效','ARTIFACT_INPUT_INVALID');
+  if(!input||typeof input!=='object'||Array.isArray(input))throw fail('产物预览参数无效','ARTIFACT_INPUT_INVALID');
+  const history = this.readHistoryImage && Object.hasOwn(input,'historyImage');
+  if(!history && (Object.keys(input).some(key=>!['threadId','projectId','path','workspaceOnly'].includes(key))||(input.workspaceOnly!==undefined&&input.workspaceOnly!==true)))throw fail('产物预览参数无效','ARTIFACT_INPUT_INVALID');
   if(this.pending.size>=ARTIFACT_LIMITS.concurrent)throw fail('同时预览过多图片，请稍后重试','ARTIFACT_BUSY',429);
-  const operation=this.read(input);this.pending.add(operation);try{return await operation;}finally{this.pending.delete(operation);}
+  const operation=history?this.readHistoryImage(input):this.read(input);this.pending.add(operation);try{return await operation;}finally{this.pending.delete(operation);}
  }
  async read(input){
   let handle;

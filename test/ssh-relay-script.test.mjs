@@ -2,13 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
+import { createHash } from 'node:crypto';
 import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
 import { mkdtemp, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { buildRelaySetupScript } from '../src/ssh-relay-script.mjs';
+import { buildRelayInstaller, buildRelaySetupScript, createRelaySourceCheck } from '../src/ssh-relay-script.mjs';
 
 function publicKey(byte) {
   const wire = Buffer.concat([Buffer.from('0000000b7373682d6564323535313900000020', 'hex'), Buffer.alloc(32, byte)]);
@@ -20,6 +21,41 @@ const second = { ...first, hostname: 'two.example.com', publicKey: publicKey(2),
 const script = buildRelaySetupScript(first);
 const bash = process.platform === 'win32' ? path.join(process.env.ProgramFiles || 'C:/Program Files', 'Git/bin/bash.exe') : 'bash';
 const bashAvailable = spawnSync(bash, ['--version']).status === 0;
+
+test('online installation pins the packaged release script and unverified versions use the bundled copy',async()=>{
+  const original=await readFile(new URL('../src/relay-setup.sh',import.meta.url));
+  const {command,script:local}=buildRelayInstaller(first);
+  assert.ok(command.includes(createHash('sha256').update(original).digest('hex')));
+  assert.ok(command.includes('sha256sum -c - && bash'));assert.equal(command.includes('\n'),false);
+  assert.ok(local.includes(original.toString('utf8').trimEnd()));
+  let reads=0;
+  const available=createRelaySourceCheck(async url=>{
+    reads++;assert.match(url,/^https:\/\/raw\.githubusercontent\.com\/k08255-lxm\/codex-light\/v\d+\.\d+\.\d+\/src\/relay-setup\.sh$/);
+    return new Response(original);
+  });
+  assert.deepEqual(await Promise.all([available(),available()]),[true,true]);
+  assert.equal(await available(),true);assert.equal(reads,1);
+  for(const response of [new Response('missing',{status:404}),new Response('different script')]){
+    assert.equal(await createRelaySourceCheck(async()=>response)(),false);
+  }
+  if(bashAvailable)assert.equal(spawnSync(bash,['-n'],{input:command}).status,0);
+});
+
+test('entry detection respects active relays, installed proxies and listening or reserved ports', {skip:!bashAvailable}, async t=>{
+  const root=await mkdtemp(path.join(tmpdir(),'codecang-entry-mode-'));
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  const choose=script.slice(script.indexOf('choose_entry() {'),script.indexOf('\nchoose_entry\n'));
+  const run=preflight=>spawnSync(bash,['-c',[
+    'set -eu; base=.; web=ours; fail(){ exit 8; }; systemctl(){ return 1; }; ss(){ :; }',
+    choose,preflight,'choose_entry; printf "%s" "$entry"'
+  ].join('\n')],{cwd:root,encoding:'utf8'});
+  assert.equal(run('command(){ if [[ "$1" == -v ]]; then return 1; fi; builtin command "$@"; }').stdout,'direct');
+  assert.equal(run('nginx(){ :; }; caddy(){ :; }').stdout,'49152');
+  assert.equal(run('ss(){ if [[ "$2" == *":80 "* || "$2" == "sport = :49152" ]]; then echo LISTEN; fi; }').stdout,'49153');
+  assert.equal(run('caddy(){ :; }; systemctl(){ [[ "$3" == ours ]]; }').stdout,'direct');
+  await writeFile(path.join(root,'web-entry'),'49201\n');assert.equal(run('nginx(){ :; }').stdout,'49201');
+  await writeFile(path.join(root,'web-entry'),'invalid\n');assert.notEqual(run(':').status,0);
+});
 
 function section(start, end) {
   const from = script.indexOf(start + '\n');
@@ -215,4 +251,14 @@ test('actual registry and renderer allocate exclusive durable ports, publish per
   assert.equal((await readdir(path.join(root, 'after/sites'))).length, 2);
   assert.equal((await read('ssh/authorized_keys.new')).includes(first.publicKey), false);
   assert.ok((await read('ssh/authorized_keys.new')).includes(second.publicKey));
+  await writeFile(path.join(root,'web-entry'),'49168\n');
+  const shared=run('render_routes shared; host=$1; write_frontend_examples 49168',[second.hostname]);
+  assert.equal(shared.status,0,shared.stderr);
+  const inner=await read('shared/Caddyfile'), site=await read('shared/sites/'+second.hostId+'.caddy');
+  assert.ok(inner.includes('auto_https off'));assert.ok(inner.includes('http://:49168 {\n    bind 127.0.0.1\n    respond 404'));
+  assert.ok(site.startsWith('http://'+second.hostname+':49168 {\n    bind 127.0.0.1'));
+  assert.ok(site.includes('reverse_proxy 127.0.0.1:49324'));
+  assert.ok((await read('frontends/'+second.hostname+'.caddy')).includes('reverse_proxy 127.0.0.1:49168'));
+  const nginx=await read('frontends/'+second.hostname+'.nginx.conf');
+  assert.ok(nginx.includes('proxy_set_header Host $host;'));assert.ok(nginx.includes('proxy_buffering off;'));
 });

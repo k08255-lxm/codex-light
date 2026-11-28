@@ -34,6 +34,8 @@ docs/legacy-repair-v7-evidence.json
 /docs/assets/*
 !/docs/assets/conversation-demo.png
 !/docs/assets/narrow-layout-demo.png
+!/docs/assets/desktop-companion-settings.png
+!/docs/assets/remote-access.png
 !/docs/assets/first-theme.png
 !/docs/assets/engine-updates.png
 !/docs/assets/turn-usage.png

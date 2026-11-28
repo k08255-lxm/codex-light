@@ -218,7 +218,7 @@ main.stage { display: flex; flex: 1; flex-direction: column; min-width: 0; min-h
 /* Give the project its natural width before allocating space to the conversation. */
 #thread-title { min-width: 0; flex: 1 1 0; }
 .crumb-sep { flex: none; }
-.remote-lan-section { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border); }
+.remote-lan-section { margin-top: 8px; }
 .crumb-sep { color: var(--muted); }
 .stage-actions { display: flex; align-items: center; gap: 4px; flex: none; }
 .stage-actions .btn[aria-pressed="true"] { color: var(--text); background: var(--selected); }
@@ -458,6 +458,15 @@ dialog::backdrop { background: var(--overlay); }
 .pref-row > div:first-child { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .pref-row strong { font-size: .875rem; font-weight: 500; }
 .pref-row select { min-width: 140px; }
+.companion-picker { display: grid; gap: 10px; padding: 14px 0; border-bottom: 1px solid var(--border); }
+.companion-picker-head, .companion-picker-head label { display: flex; align-items: center; }
+.companion-picker-head { justify-content: space-between; gap: 12px; font-size: .875rem; }
+.companion-picker-head label { gap: 6px; cursor: pointer; color: var(--muted); }
+.companion-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.companion-choice { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 5px; min-width: 0; padding: 8px 12px; border: 1px solid var(--border-strong); border-radius: var(--r-md); background: var(--raised); cursor: pointer; font-size: .875rem; }
+.companion-choice img { grid-column: 1 / -1; width: 100%; height: 96px; object-fit: contain; }
+.companion-choice:has(:checked) { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.companion-choice:has(:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
 :is(input[type=checkbox], .switch) {
   --switch-width: 34px; --switch-height: 20px;
   --switch-track: var(--selected); --switch-edge: var(--border-strong); --switch-thumb: var(--tertiary);

@@ -1,13 +1,15 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {DEFAULT_PREFERENCES,PREFERENCE_KEY,validatePreferences,readPreferences,savePreferences,effectiveAppearance} from '../public/preferences.js';
 import {createDocument} from './mini-dom.mjs';import {createPreferences} from '../public/ui/preferences-view.js';
 const memory=(raw=null)=>({raw,getItem(){return this.raw;},setItem(key,value){assert.equal(key,PREFERENCE_KEY);this.raw=value;}});
-const {visualStyle:_omit,keepAwakeDuringTask:_task,keepAwakeDuringRemote:_remote,desktopCompanion:_companion,...LEGACY}=DEFAULT_PREFERENCES;
+const {visualStyle:_omit,keepAwakeDuringTask:_task,keepAwakeDuringRemote:_remote,desktopCompanion:_companion,desktopCompanionSize:_size,...LEGACY}=DEFAULT_PREFERENCES;
 
 test('strict non-sensitive preference schema rejects unknown, invalid and mixed legacy data',()=>{
  for(const change of [{token:'secret'},{theme:'invert'},{fontScale:99},{motion:'yes'},{approvalNotice:'true'},{version:2},{visualStyle:'neon'},{visualStyle:null}])assert.throws(()=>validatePreferences({...DEFAULT_PREFERENCES,...change}),JSON.stringify(change));
  for(const change of [{token:'secret'},{fontScale:undefined},{theme:undefined},{motion:'yes'},{version:2},{extra:true}])assert.throws(()=>validatePreferences({...LEGACY,...change}),JSON.stringify(change));
  assert.deepEqual([DEFAULT_PREFERENCES.theme,DEFAULT_PREFERENCES.motion,DEFAULT_PREFERENCES.visualStyle],['dark','system','codex']);
  assert.equal(validatePreferences(LEGACY).desktopCompanion,'off');
+ assert.equal(validatePreferences(LEGACY).desktopCompanionSize,100);
+ for(const size of ['125',0,110,225])assert.throws(()=>validatePreferences({...LEGACY,desktopCompanionSize:size}));
  assert.throws(()=>validatePreferences({...LEGACY,desktopCompanion:'unknown'}));
  for(const key of ['keepAwakeDuringTask','keepAwakeDuringRemote']){
   assert.equal(validatePreferences(LEGACY)[key],false);

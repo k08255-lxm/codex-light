@@ -186,12 +186,21 @@ body .app{height:calc(100dvh - 38px)}
   .composer-row #model-trigger .model-trigger-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .composer-row .queue-send{width:40px;min-width:40px;min-height:44px;flex:none;padding:0;justify-content:center}
   .composer-row .queue-send>span:not(.ui-icon){display:none}
-  .composer-foot{display:flex;align-items:center;gap:4px;margin-top:4px;min-width:0}
-  .composer-foot #cwd-button{margin-right:auto;flex:0 1 auto;}
-  .composer-foot .speed-meter{min-width:0;min-height:40px;padding-inline:5px}
+  .composer-foot{position:relative;display:flex;align-items:center;flex-wrap:nowrap;gap:0;margin:2px 0 0;min-width:0}
+  .composer-foot #cwd-button{margin-right:auto;flex:1 1 0;}
   .composer-foot #composer-hint{display:none}
   .composer-foot #cwd-button{min-width:44px;min-height:44px;max-width:100%;padding-inline:4px;justify-self:start;justify-content:flex-start}
   .composer-foot #permissions-info{max-width:128px;min-height:40px;padding-inline:5px;justify-content:center}
   .composer-foot #permissions-info .label{display:inline}
   .composer-foot #context-meter{min-height:40px;min-width:0;padding-inline:5px;gap:4px}
+  .composer-foot .composer-stats{flex:none;flex-wrap:nowrap;gap:0;margin:0}
+  .composer-foot .composer-stats .foot-btn{width:40px;min-width:40px;height:44px;padding:0;justify-content:center}
+  .composer-foot .composer-stats .foot-btn > span:not([data-icon]){display:none}
+  .composer-foot .composer-stats .ui-icon{width:16px;height:16px}
+  .composer-foot #live-changes{position:static;transform:none;width:auto;max-width:none;flex:none}
+  .composer-foot .changes-pill{height:44px;min-width:40px;gap:3px;padding:0 5px;border:0;border-radius:var(--r-md);background:transparent;color:var(--tertiary);font-size:.75rem}
+  .composer-foot .changes-pill > span:not(.ui-icon){display:none}
+  .composer-foot .changes-pill::after{content:attr(data-count)}
+  .composer-foot .changes-panel{inset:auto 0 calc(100% + 6px);width:auto;max-width:100%;translate:none;max-height:52dvh}
 }
+@media(max-width:359px){.composer-foot #permissions-info .label{display:none}}

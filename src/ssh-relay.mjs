@@ -9,7 +9,7 @@ import { rootCertificates } from 'node:tls';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as pause } from 'node:timers/promises';
 import { promisify } from 'node:util';
-import { buildRelaySetupScript } from './ssh-relay-script.mjs';
+import { buildRelayInstaller } from './ssh-relay-script.mjs';
 
 const SSH_PORT = 49323;
 const HOST_KEY_PATH = '/.well-known/codecang-relay';
@@ -289,6 +289,20 @@ export class SshRelay {
     if (this.#session === session && !session.signal.aborted) this.#status = { state, message };
   }
 
+  async #credentials(target, signal) {
+    signal.throwIfAborted();
+    const key = await prepareClientKey(this.#keyDir, this.#keygen, signal);
+    signal.throwIfAborted();
+    const installer = buildRelayInstaller({hostname:target.hostname, publicKey:key.publicKey, sshPort:SSH_PORT, hostId:target.hostId});
+    return {installer, privateKey:key.privateKey};
+  }
+
+  async installer({publicOrigin, port, hostId}) {
+    if(this.#closed)throw new Error('SSH 中继控制器已关闭。');
+    const {installer}=await this.#credentials(relayTarget(publicOrigin,port,hostId),AbortSignal.timeout(15000));
+    return {...installer,...this.status};
+  }
+
   async prepare({ publicOrigin, port, hostId, verifyRelayProof }) {
     if (this.#closed) throw new Error('SSH 中继控制器已关闭。');
     const target = relayTarget(publicOrigin, port, hostId);
@@ -301,13 +315,7 @@ export class SshRelay {
       session = { target, controller, signal, verifyRelayProof };
       this.#session = session;
       this.#update(session, 'waiting', '正在准备 SSH 中继密钥。');
-      session.prepared = this.#task.then(async () => {
-        signal.throwIfAborted();
-        const key = await prepareClientKey(this.#keyDir, this.#keygen, signal);
-        signal.throwIfAborted();
-        const script = buildRelaySetupScript({ hostname: target.hostname, publicKey: key.publicKey, sshPort: SSH_PORT, hostId });
-        return { script, privateKey: key.privateKey };
-      });
+      session.prepared = this.#task.then(() => this.#credentials(target,signal));
       const active = session;
       this.#task = session.prepared.then(({ privateKey }) => this.#connect(active, privateKey), error => {
         active.prepareError = error.code === 'ENOENT' ? '未找到 Windows OpenSSH 客户端或其密钥工具。' : '无法创建或读取 SSH 中继专用密钥。';
@@ -315,9 +323,9 @@ export class SshRelay {
       }).catch(() => this.#update(active, 'error', 'SSH 中继连接或清理失败。'));
     }
     try {
-      const { script } = await session.prepared;
+      const { installer } = await session.prepared;
       session.signal.throwIfAborted();
-      return { script, ...this.status };
+      return { ...installer, ...this.status };
     } catch (cause) {
       if (session.signal.aborted) throw new Error('SSH 中继准备已取消。');
       throw new Error(session.prepareError || '无法创建 SSH 中继安装脚本。', { cause });

@@ -26,7 +26,7 @@ internal sealed class MainWindow : CaptionWindow {
  Task? stopTask;
  string startupStage="检测运行环境";
  readonly WindowPlacementController placement;
- public MainWindow(bool demo){this.demo=demo;taskbarBadge=new(this);companion=new(this,OpenFromCompanion);Text="码舱 CodeCang";Icon=Icon.ExtractAssociatedIcon(Application.ExecutablePath);Size=new Size(1257,945);MinimumSize=new Size(800,600);Controls.Add(view);Controls.Add(loading);placement=new WindowPlacementController(this,WindowPlacementStore.ForCurrentUser());Shown+=async(_,_)=>await StartAsync();FormClosing+=OnClosing;}
+ public MainWindow(bool demo){this.demo=demo;taskbarBadge=new(this);companion=new(this,OpenFromCompanion,RequestCompanionSize);Text="码舱 CodeCang";Icon=Icon.ExtractAssociatedIcon(Application.ExecutablePath);Size=new Size(1257,945);MinimumSize=new Size(800,600);Controls.Add(view);Controls.Add(loading);placement=new WindowPlacementController(this,WindowPlacementStore.ForCurrentUser());Shown+=async(_,_)=>await StartAsync();FormClosing+=OnClosing;}
  protected override void OnLoad(EventArgs e){base.OnLoad(e);placement.Restore();try{ShowTray();}catch{DisposeTray();ShowTrayFailure();}}
  protected override void OnMove(EventArgs e){base.OnMove(e);placement?.Capture();}
  FormWindowState previousWindowState;bool restorePaintQueued;
@@ -127,6 +127,7 @@ internal sealed class MainWindow : CaptionWindow {
        case "windowCommand":HandleWindowCommand(json);break;
        case "desktopTaskbarBadge":taskbarBadge.HandleMessage(json,!failed);break;
        case "desktopCompanion":if(!failed)companion.Receive(json);break;
+       case "companionResizeResult":companion.SizeResult(json);break;
        case "desktopQuestionNotification":questionNotifications.Handle(json);break;
        case "desktopCloseBehavior":HandleCloseBehavior(json);break;
        case "previewImageAction":case "revealLocalPath":RevealLocalPath(json);break;
@@ -343,6 +344,11 @@ internal sealed class MainWindow : CaptionWindow {
   RestoreFromTray();
   if(target!="main"&&!failed&&LocalPathLinks.TrustedSource(view.CoreWebView2.Source,origin))
    view.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(new{type="companionOpen",target}));
+ }
+ bool RequestCompanionSize(int size){
+  if(closing||failed||!LocalPathLinks.TrustedSource(view.CoreWebView2.Source,origin))return false;
+  view.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(new{type="companionResize",size}));
+  return true;
  }
  void ShowFailure(string message){
   if(closing||IsDisposed||failed)return;

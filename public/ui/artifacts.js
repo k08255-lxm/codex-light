@@ -4,7 +4,7 @@
 import { el } from './format.js';
 import { icon } from '../icons.js';
 import { rasterBase64Mime } from '../store.js';
-import { localImageRef } from '../markdown.js';
+export { markdownImageRefs } from '../markdown.js';
 
 const PREVIEW_EXT = /\.(png|jpe?g|webp|gif|ico|svg)$/i;
 // MCP image content is shown only for raster types; SVG markup from a tool result is never rendered.
@@ -28,6 +28,16 @@ function toolImageCandidate(item, part, index, source) {
 
 /** Explicit artifact candidates from a native item. Prose is never parsed as proof of an artifact. */
 export function artifactCandidates(item) {
+  const candidates = nativeArtifactCandidates(item);
+  if (!Array.isArray(item?._historyImages)) return candidates;
+  return candidates.map(candidate => {
+    const slot = candidate.inline?.slot ?? (candidate.kind==='generated' && candidate.path ? 0 : null);
+    const handle = Number.isInteger(slot) && item._historyImages[slot];
+    if (typeof handle !== 'string' || !/^[a-f0-9]{64}$/.test(handle)) return candidate;
+    return { ...candidate, key: candidate.key + ':' + handle, inline: null, historyImage: {key:handle, itemId:item.id, slot} };
+  });
+}
+function nativeArtifactCandidates(item) {
   if (!item || typeof item !== 'object') return [];
   if(item.type==='userMessage')return (item.content||[]).flatMap((part,index)=>{
     if(part?.type==='localImage'&&typeof part.path==='string'&&part.path&&!isRemote(part.path))return [{key:`${item.id}:upload:${index}`,kind:'uploaded',path:part.path,status:'done',caption:'',reason:''}];
@@ -78,16 +88,6 @@ export function artifactCandidates(item) {
   return [];
 }
 
-/** Local markdown image references `![alt](path)` with an explicit image extension. */
-export function markdownImageRefs(text) {
-  const rows = []; const pattern = /!\[([^\]\n]{0,200})\]\((<[^<>\n]+>|[^()\s\n]+)\)/g; let match;
-  while ((match = pattern.exec(String(text || ''))) && rows.length < 6) {
-    const ref = localImageRef(match[2]);
-    if (ref) rows.push({ path: ref.path, alt: match[1] });
-  }
-  return rows;
-}
-
 const basename = path => String(path).split(/[\\/]/).filter(Boolean).at(-1) || String(path);
 
 /**
@@ -98,13 +98,22 @@ export function mountArtifacts({ document, fetchPreview, onOpen, ttlMs = 60000, 
   // Cache key = candidate key (item id + slot), so a new item writing the same path is read again.
   // Entries are reference-counted by live cards; unreferenced entries are revoked after ttlMs.
   const cache = new Map();
+  let generation = 0;
   const timers = new Map();
+  const visibility = new WeakMap();
+  const Observer = document.defaultView?.IntersectionObserver;
+  const observer = Observer && new Observer(entries => {
+    for (const entry of entries) if (entry.isIntersecting) {
+      observer.unobserve(entry.target);
+      visibility.get(entry.target)?.();
+      visibility.delete(entry.target);
+    }
+  }, { rootMargin: '160px 0px' });
   const pending=[];let active=0;
   function pump(){while(active<3&&pending.length){const job=pending.shift();if(cache.get(job.key)!==job.entry){job.reject(new Error('预览已取消'));continue;}active++;Promise.resolve().then(job.run).then(job.resolve,job.reject).finally(()=>{active--;pump();});}}
   function enqueue(key,entry,run){return new Promise((resolve,reject)=>{pending.push({key,entry,run,resolve,reject});pump();});}
-  function acquire(candidate) {
+  function acquire(candidate, scope) {
     const key = candidate.key;
-    const scope=getScope();
     let entry = cache.get(key);
     clearTimeout(timers.get(key)); timers.delete(key);
     if (!entry) {
@@ -115,7 +124,7 @@ export function mountArtifacts({ document, fetchPreview, onOpen, ttlMs = 60000, 
         if (!stored?.data) throw new Error('图片数据已不在内存中（超过显示预算），请重新打开对话');
         if (!candidate.inline.data && candidate.inline.revision && stored.revision !== candidate.inline.revision) throw new Error('图片已被更新，正在刷新');
         return { blob: decodeBase64(stored.data, candidate.inline.mime), width: null, height: null };
-      }) : enqueue(key,entry,() => fetchPreview(candidate.path,scope,candidate.kind === 'referenced'));
+      }) : enqueue(key,entry,() => fetchPreview(candidate.path,scope,candidate.kind === 'referenced',candidate.historyImage));
       source.then(result => {
         if (cache.get(key) !== entry) return;
         entry.url = URL.createObjectURL(result.blob); entry.width = result.width; entry.height = result.height; entry.localPath = result.localPath; entry.state = 'ready';
@@ -130,22 +139,23 @@ export function mountArtifacts({ document, fetchPreview, onOpen, ttlMs = 60000, 
     entry.listeners.delete(listener); entry.refs = Math.max(0, entry.refs - 1);
     if (!entry.refs && cache.get(key) === entry) timers.set(key, setTimeout(() => drop(key), ttlMs));
   }
-  function card(candidate) {
-    const node = el(document, 'figure', 'artifact');
+  function card(candidate, inline) {
+    const node = el(document, inline ? 'span' : 'figure', 'artifact');
     node.dataset.kind = candidate.kind;
     const frame = el(document, 'button', 'artifact-frame'); frame.type = 'button';
-    const caption = el(document, 'figcaption', 'artifact-caption');
+    const caption = el(document, inline ? 'span' : 'figcaption', 'artifact-caption');
     const title = candidate.name || (candidate.path ? basename(candidate.path) : '生成的图片');
     const name = el(document, 'span', 'artifact-name', title);
     const meta = el(document, 'span', 'artifact-meta');
     caption.append(name, meta);
     node.append(frame, caption);
     if (candidate.path) node.title = candidate.path;
-    const previewable = (candidate.path || candidate.inline) && candidate.status === 'done';
-    const entry = previewable ? acquire(candidate) : null;
+    const previewable = (candidate.path || candidate.inline || candidate.historyImage) && candidate.status === 'done';
+    let entry = null;
     const paint = () => {
       frame.replaceChildren(); frame.disabled = true; node.dataset.state = candidate.status;
       if (candidate.status === 'running') { frame.append(icon(document, 'image', { size: 20 })); meta.textContent = '正在生成…'; return; }
+      if (previewable && !entry) { frame.append(icon(document, 'image', { size: 20 })); return; }
       if (!entry) { frame.append(icon(document, 'image', { size: 20 })); meta.textContent = candidate.reason || '无法预览'; node.dataset.state = 'unavailable'; return; }
       if (entry.state === 'loading') { frame.append(el(document, 'span', 'artifact-spinner')); meta.textContent = '读取预览…'; return; }
       if (entry.state === 'error') { frame.append(icon(document, 'image', { size: 20 })); meta.textContent = entry.error; node.dataset.state = 'unavailable'; return; }
@@ -157,19 +167,24 @@ export function mountArtifacts({ document, fetchPreview, onOpen, ttlMs = 60000, 
       meta.textContent = entry.width && entry.height ? `${entry.width}×${entry.height}` : '';
     };
     frame.addEventListener('click', () => { if (entry?.state === 'ready') onOpen({ url: entry.url, name: title, path: candidate.path || '', localPath: entry.localPath, width: entry.width, height: entry.height, caption: candidate.caption }); });
-    if (entry) entry.listeners.add(paint);
-    node._release = () => { if (entry) release(candidate.key, entry, paint); node._release = null; };
-    paint();
+    const scope = getScope(), mounted = generation;
+    const load = () => { if (mounted !== generation) return; entry = acquire(candidate, scope); entry.listeners.add(paint); paint(); };
+    node._release = () => { observer?.unobserve(node); visibility.delete(node); if (entry) release(candidate.key, entry, paint); node._release = null; };
+    if (previewable && !observer) load();
+    else {
+      paint();
+      if (previewable) { visibility.set(node, load); observer.observe(node); }
+    }
     return node;
   }
-  function strip(candidates) {
-    const node = el(document, 'div', 'artifact-strip');
-    for (const candidate of candidates) node.append(card(candidate));
+  function strip(candidates, { inline = false } = {}) {
+    const node = el(document, inline ? 'span' : 'div', 'artifact-strip');
+    for (const candidate of candidates) node.append(card(candidate, inline));
     node.release = () => { for (const child of node.children) child._release?.(); };
     return node;
   }
   /** Revokes every blob URL (thread switch / reset). */
-  function clear() { for (const key of [...cache.keys()]) drop(key); }
+  function clear() { generation++; observer?.disconnect(); for (const key of [...cache.keys()]) drop(key); }
   return { strip, clear, size: () => cache.size };
 }
 

@@ -32,7 +32,8 @@ export class MobileNotificationFeed {
 
   rememberThread(thread, listed=false) {
     this.routes.remember(thread,listed);
-    if (!validId(thread?.id) || this.#running.has(thread.id) || !Array.isArray(thread.turns)) return;
+    if (!validId(thread?.id) || this.#running.has(thread.id) || !Array.isArray(thread.turns)
+        || ['idle','notLoaded','systemError'].includes(thread.status?.type)) return;
     const latest=thread.turns.at(-1);
     if (latest?.status==='inProgress' && validId(latest.id) && this.#track(thread.id,latest.id)) this.changed();
   }
@@ -75,7 +76,13 @@ export class MobileNotificationFeed {
     }
     const activity = this.#running.get(threadId);
     if (activity && activity.turnId === turnId) activity.observe(message);
-    if (method === 'thread/closed' || (method === 'turn/completed' && activity?.turnId === turnId)) this.#running.delete(threadId);
+    const inactive = method === 'thread/closed' || (method === 'thread/status/changed' && ['idle','notLoaded','systemError'].includes(params.status?.type));
+    if (inactive || (method === 'turn/completed' && (!activity || activity.turnId === turnId))) {
+      this.#running.delete(threadId);
+      for (const parent of this.#running.values()) if (parent.collaborators.has('native:'+threadId)) {
+        parent.finishChild(threadId); this.changed();
+      }
+    }
     if (method === 'thread/archived' || method === 'thread/deleted') {
       this.#running.delete(threadId);
       for (const [key, task] of this.#finished) if (task.threadId === threadId) this.#finished.delete(key);
@@ -97,7 +104,7 @@ export class MobileNotificationFeed {
     if (previous !== this.#running.get(threadId) || revision !== previous?.revision || ['thread/archived','thread/deleted','thread/unarchived'].includes(method)) this.changed();
   }
 
-  snapshot({connected, serverInstance, threads, requests, details = false, now = Date.now()}) {
+  snapshot({connected, serverInstance, threads, requests, details = false, companion = false, now = Date.now()}) {
     this.#notices.sync(requests,{notify:false});
     for (const [key, task] of this.#finished) if (now-task.at >= retentionMs) this.#finished.delete(key);
     const pending = connected ? this.#notices.snapshot() : [];
@@ -109,6 +116,25 @@ export class MobileNotificationFeed {
       }
     }
     const tasks = new Map();
+    if (companion) {
+      const teams = new Map();
+      for (const [id, activity] of active) {
+        const root=this.routes.rootFor(id);
+        if (!root) continue;
+        const team=teams.get(root) || new Set();
+        if (root!==id) team.add('native:'+id);
+        for(const child of activity.collaborators) team.add(child);
+        teams.set(root,team);
+      }
+      const running=[];
+      for(const [threadId,activity] of active) if(this.routes.isRoot(threadId)) {
+        const phase=activity.phase==='tool' && activity.details().action==='commandExecution'?'command':activity.phase==='thinking'?'thinking':'work';
+        running.push({threadId,turnId:activity.turnId,name:this.routes.nameOf(threadId),phase,agents:teams.get(threadId)?.size || 0});
+      }
+      let backgroundAgents=0;
+      for (const [root,team] of teams) if(!active.has(root)) backgroundAgents+=team.size;
+      return {connected,running,backgroundAgents};
+    }
     for (const [threadId,activity] of active) {
       if (!this.routes.isRoot(threadId)) continue;
       tasks.set(threadId,{threadId,turnId:activity.turnId,state:'running',phase:activity.phase,...(details && {details:activity.details()})});

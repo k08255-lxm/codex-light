@@ -52,13 +52,15 @@ test('the separate public access form enables with explicit settings and reports
   await view.activate();
   const origin = panel.querySelector('#tunnel-public-origin'), port = panel.querySelector('#tunnel-local-port');
   const form = panel.querySelector('form');
+  button(panel,'配置公网访问').click();
+  const provider=panel.querySelector('#tunnel-provider');provider.value='frp';provider.dispatch('change');
   assert.match(panel.querySelector('.tunnel-state').textContent, /已关闭/);
   assert.equal(port.value, '49321');
   assert.equal(button(panel, '开启公网入口').disabled, true);
   origin.value = `${sameOrigin}/path`;
   origin.dispatch('input');
   form.dispatch('submit');
-  assert.match(panel.querySelector('.tunnel-message').textContent, /固定的公网 HTTPS 域名/);
+  assert.match(panel.querySelector('.tunnel-message').textContent, /固定公网域名/);
   origin.value = sameOrigin;
   port.value = 65536;
   form.dispatch('submit');
@@ -85,7 +87,8 @@ test('the provider selector updates configuration guidance without calling a pro
   const { view, panel, calls } = fixture(t);
   await view.activate();
   const guide = panel.querySelector('.tunnel-guide');
-  const provider = guide.querySelector('select'), config = guide.querySelector('pre'), link = guide.querySelector('a');
+  const provider = panel.querySelector('#tunnel-provider'), config = guide.querySelector('pre'), link = guide.querySelector('a');
+  provider.value='frp';provider.dispatch('change');
   const origin = panel.querySelector('#tunnel-public-origin'), port = panel.querySelector('#tunnel-local-port');
   origin.value = sameOrigin;
   origin.dispatch('input');
@@ -237,13 +240,15 @@ test('a selected single address can be remembered after confirmation', async t =
   assert.match(panel.textContent, /已记住/);
 });
 
-test('SSH setup registers this computer, copies its script and can stop the relay independently', async t => {
+test('SSH setup downloads the device script, copies its verified command and connects independently', async t => {
   let status = { enabled: false, remoteHostId: 'e'.repeat(32), remoteHostName: '书房电脑', sshRelay: { state: 'off' } };
   const origin = 'https://office.example.test';
   const script = 'test installation script';
+  const installCommand='verified installer command';
   const { document, host, view, panel, calls } = fixture(t, {
     '/api/lan/tunnel/status': () => status,
     '/api/lan/tunnel/enable': () => (status = { ...status, enabled: true, port: 49321, origin }),
+    '/api/lan/tunnel/ssh/installer':()=>({script,command:installCommand,online:true,...status.sshRelay}),
     '/api/lan/tunnel/ssh/prepare': () => {
       status.sshRelay = { state: 'waiting', message: '等待 VPS 注册' };
       return { script, ...status.sshRelay };
@@ -254,7 +259,7 @@ test('SSH setup registers this computer, copies its script and can stop the rela
   document.defaultView.navigator.clipboard = { writeText: async value => copied.push(value) };
   await view.activate();
   const provider = panel.querySelector('select'), form = panel.querySelector('form'), field = panel.querySelector('#tunnel-public-origin');
-  const install = button(panel, '复制服务器安装脚本'), identity = host.querySelector('.lan-identity');
+  const install = button(panel, '获取安装命令'), identity = host.querySelector('.lan-identity');
   assert.deepEqual(calls.find(call => call.path === '/api/lan/tunnel/status'), { path: '/api/lan/tunnel/status', body: undefined });
   assert.match(identity.textContent, /书房电脑/);
   button(identity, '复制电脑 ID').click();
@@ -274,8 +279,13 @@ test('SSH setup registers this computer, copies its script and can stop the rela
   assert.equal(install.disabled, false);
   install.click();
   await settled();
+  assert.ok(!calls.some(call=>call.path.endsWith('/ssh/prepare')));
+  button(panel,'复制安装命令').click();await settled();
+  assert.equal(panel.querySelector('.relay-command').value,installCommand);
+  assert.equal(panel.querySelector('textarea').parentElement.open,false);
+  button(panel,'连接已配置的服务器').click();await settled();
   assert.deepEqual(calls.find(call => call.path.endsWith('/ssh/prepare')), { path: '/api/lan/tunnel/ssh/prepare', body: {} });
-  assert.deepEqual(copied, [status.remoteHostId, script]);
+  assert.deepEqual(copied, [status.remoteHostId, installCommand]);
   assert.match(panel.querySelector('.tunnel-ssh-guide').textContent, /等待 VPS 注册/);
   button(panel, '停止服务器中继').click();
   await settled();
@@ -286,19 +296,20 @@ test('SSH setup registers this computer, copies its script and can stop the rela
 
 test('reopening a waiting relay shows its configuration, with manual copy if the clipboard is unavailable', async t => {
   const sshRelay = { state: 'waiting', message: '等待服务器' };
-  const { view, panel } = fixture(t, {
+  const { document, view, panel } = fixture(t, {
     '/api/lan/tunnel/status': () => ({ ...tunnelEnabled, origin: 'https://office.example.test', sshRelay }),
-    '/api/lan/tunnel/ssh/prepare': () => ({ ...sshRelay, script: 'installation script' }),
+    '/api/lan/tunnel/ssh/installer': () => ({ ...sshRelay,script:'installation script',command:'bash ./codecang-relay-setup.sh',online:false }),
   });
   await view.activate();
   assert.equal(panel.querySelector('select').value, 'ssh');
   assert.equal(panel.querySelector('.tunnel-guide').open, true);
-  button(panel, '复制服务器安装脚本').click();
+  button(panel, '获取安装命令').click();
   await settled();
-  const fallback = panel.querySelector('textarea');
-  assert.equal(fallback.hidden, false);
-  assert.equal(fallback.value, 'installation script');
+  const fallback = panel.querySelector('.relay-command');
+  button(panel,'复制安装命令').click();await settled();
+  assert.equal(document.activeElement, fallback);
+  assert.equal(fallback.value, 'bash ./codecang-relay-setup.sh');
+  assert.equal(panel.querySelector('textarea').parentElement.open,false);
   view.deactivate();
-  assert.equal(fallback.hidden, true);
   assert.equal(fallback.value, '');
 });

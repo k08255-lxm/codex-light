@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace CodexLight.Desktop;
 
-internal enum CompanionPose { Idle, Work, Read, Cheer, Low, Question, Approval, Offline, Greet }
+internal enum CompanionPose { Idle, Work, Thinking, Command, Team, Cheer, Low, Question, Approval, Offline, Greet }
 
 internal sealed record QuotaWindow(int Minutes, double Remaining) {
  internal string Label => Minutes == 10080 ? "每周" : $"{Minutes / 60} 小时";
@@ -11,39 +11,38 @@ internal sealed record QuotaWindow(int Minutes, double Remaining) {
 }
 
 internal sealed record CompanionState(string Character, bool Dark, bool ReducedMotion, bool Connected,
- int Running, int Questions, int Approvals, QuotaWindow[] Quota, bool Stale) {
+ int Running, int Questions, int Approvals, QuotaWindow[] Quota, bool Stale, int SizePercent=100, CompanionPose WorkPhase=CompanionPose.Work) {
+ internal int Agents {get;init;}
+ internal string[] TaskNames {get;init;}=[];
+ internal const int MinSize=50, MaxSize=200, SizeStep=25;
  internal string Name => Character == "lulu" ? "水豚噜噜" : "奶龙";
  internal QuotaWindow? Limiting => Quota.MinBy(window => window.Remaining);
  internal CompanionPose Activity => !Connected ? CompanionPose.Offline : Questions > 0 ? CompanionPose.Question
-  : Approvals > 0 ? CompanionPose.Approval : Running > 0 ? CompanionPose.Work : CompanionPose.Idle;
+  : Approvals > 0 ? CompanionPose.Approval : Agents > 0 ? CompanionPose.Team : Running > 0 ? WorkPhase : CompanionPose.Idle;
  internal string Status => Activity switch {
   CompanionPose.Offline => "连接已断开", CompanionPose.Question => $"等你回答 · {Questions} 项",
   CompanionPose.Approval => $"等你审批 · {Approvals} 项", CompanionPose.Work => $"{Running} 个任务进行中",
+  CompanionPose.Thinking => "思考中", CompanionPose.Command => "执行命令中", CompanionPose.Team => "子代理协作中",
   _ => "待机中"
  };
  internal string Summary {
   get {
-   if (Activity is not (CompanionPose.Idle or CompanionPose.Work) || Stale || Limiting is not {} limit) return Status;
-   string task = Running switch { 0 => "待机", 1 => "工作中", _ => $"{Running} 项运行" };
+   if (Activity is CompanionPose.Question or CompanionPose.Approval or CompanionPose.Offline || Stale || Limiting is not {} limit) return Status;
+   string task = Activity switch { CompanionPose.Idle => "待机", CompanionPose.Work when Running==1 => "工作中",
+    CompanionPose.Work => $"{Running} 项运行", _ => Status };
    return $"{task} · {limit.ShortLabel} 剩 {limit.Percent}";
   }
  }
- internal CompanionPose Pose(double seconds) {
-  var activity = Activity;
-  if (activity is not (CompanionPose.Work or CompanionPose.Idle)) return activity;
-  var remaining = Stale ? null : Limiting?.Remaining;
-  // Keep the task legible while allowing a short allowance gesture each cycle.
-  double phase = seconds % 12;
-  if (remaining <= 10 && (activity == CompanionPose.Idle || phase >= 9)) return CompanionPose.Low;
-  if (activity == CompanionPose.Work) return phase is >= 6 and < 9 ? CompanionPose.Read : CompanionPose.Work;
-  return remaining > 30 && phase >= 8 ? CompanionPose.Cheer : CompanionPose.Idle;
- }
+ internal CompanionPose Pose => Activity==CompanionPose.Idle && !Stale && Limiting?.Remaining<=10 ? CompanionPose.Low : Activity;
+ internal bool RecoveredFrom(CompanionState previous) =>
+  Character==previous.Character && Activity==CompanionPose.Idle && previous.Pose==CompanionPose.Low && !Stale &&
+  Limiting?.Remaining>30 && previous.Limiting is {} low && Quota.Any(q=>q.Minutes==low.Minutes);
 
- internal CompanionState Offline() => this with { Connected = false, Running = 0, Questions = 0, Approvals = 0, Quota = [], Stale = false };
+ internal CompanionState Offline() => this with { Connected = false, Running = 0, Agents = 0, TaskNames = [], Questions = 0, Approvals = 0, Quota = [], Stale = false };
 
  internal static bool TryRead(string json, out CompanionState? state) {
   state = null;
-  if (json.Length > 2048) return false;
+  if (json.Length > 32768) return false;
   try {
    using var document = JsonDocument.Parse(json);
    var root = document.RootElement;
@@ -62,7 +61,31 @@ internal sealed record CompanionState(string Character, bool Dark, bool ReducedM
      || !amount.TryGetDouble(out double remaining) || !double.IsFinite(remaining) || remaining is < 0 or > 100) return false;
     quota.Add(new(duration,remaining));
    }
-   state = new(character,dark,reduced,connected,running,questions,approvals,[..quota],stale);
+   // A previous web bundle has neither field and uses the original size and generic work pose.
+   int size=100;
+   if (root.TryGetProperty("size",out _) && (!Count("size",out size) || size is < MinSize or > MaxSize || size % SizeStep!=0)) return false;
+   var phase=CompanionPose.Work;
+   if(root.TryGetProperty("phase",out var stage)){
+    if(stage.ValueKind!=JsonValueKind.String)return false;
+    switch(stage.GetString()){
+     case "work": break;
+     case "thinking": phase=CompanionPose.Thinking;break;
+     case "command": phase=CompanionPose.Command;break;
+     case "team": phase=CompanionPose.Team;break;
+     default:return false;
+    }
+   }
+   int agents=0;
+   if(root.TryGetProperty("agents",out _) && !Count("agents",out agents))return false;
+   var names=new List<string>();
+   if(root.TryGetProperty("taskNames",out var titles)){
+    if(titles.ValueKind!=JsonValueKind.Array || titles.GetArrayLength()>32)return false;
+    foreach(var title in titles.EnumerateArray()){
+     if(title.ValueKind!=JsonValueKind.String || title.GetString() is not {Length:>0 and <=64} name || name.Any(char.IsControl))return false;
+     names.Add(name);
+    }
+   }
+   state = new(character,dark,reduced,connected,running,questions,approvals,[..quota],stale,size,phase){Agents=agents,TaskNames=[..names]};
    if (!connected) state = state.Offline();
    return true;
 

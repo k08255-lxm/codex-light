@@ -24,9 +24,9 @@ Android 原生外壳通过 WebView 连接桌面码舱。可以在可信局域网
 ### 安装与升级
 
 - 最低系统版本为 Android 7.0（API 24），Manifest 的 target SDK 为 34。需要可用的 Android System WebView；不要把 target SDK 当作最低 Android 版本。
-- 已配对的手机更新电脑后即可使用新版对话和用量界面。首次安装可从 [Releases](https://github.com/k08255-lxm/codex-light/releases) 下载 `codex-light-android-0.4.22.apk`，versionCode 为 422。
+- 已配对的手机更新电脑后即可使用新版对话和用量界面。首次安装可从 [Releases](https://github.com/k08255-lxm/codex-light/releases) 下载 `codex-light-android-0.4.23.apk`，versionCode 为 423。
 - 将 APK 传到手机，用系统安装器打开；如系统提示，仅为当前使用的文件管理器或浏览器允许安装该来源的应用。安装后即可关闭这项许可。
-- 若要核对下载文件，在 Windows 执行 `Get-FileHash .\codex-light-android-0.4.22.apk -Algorithm SHA256`，与同一发布的 `SHA256SUMS.txt` 中对应文件名的条目对比。哈希只校验文件一致性，不能代替对发布者和签名的信任。
+- 若要核对下载文件，在 Windows 执行 `Get-FileHash .\codex-light-android-0.4.23.apk -Algorithm SHA256`，与同一发布的 `SHA256SUMS.txt` 中对应文件名的条目对比。哈希只校验文件一致性，不能代替对发布者和签名的信任。
 - v0.4.22 起的官方 APK 使用新签名。已配对的旧版 App 可继续连接新版电脑。主动从 v0.4.21 或更早的官方 App 迁移到新签名时，需要卸载旧 App、安装新 APK 并重新配对，手机本地保存的连接和设置会被清除。
 
 ### 连接电脑

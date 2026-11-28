@@ -1,5 +1,5 @@
 import { createAccessPairing } from './access-pairing-view.js';
-import { el } from './format.js';
+import { el, switchInput, onAsyncSwitchChange } from './format.js';
 
 const TUNNEL_API = '/api/lan/tunnel/';
 const DEFAULT_PORT = 49321;
@@ -9,7 +9,7 @@ const SSH_LABELS = {
   off: '服务器中继已关闭',
   waiting: '正在等待服务器运行脚本',
   connecting: '正在建立 SSH 中继',
-  connected: 'SSH 中继已连接，公网连通性未验证',
+  connected: 'SSH 中继已连接',
   error: '服务器中继连接失败',
 };
 const GUIDES = {
@@ -24,7 +24,8 @@ const GUIDES = {
 };
 
 function parseOrigin(value) {
-  const input = value.trim();
+  const text = value.trim();
+  const input = text.includes('://') ? text : 'https://'+text;
   if (!/^https:\/\/[\p{L}0-9.-]+(?::[0-9]+)?\/?$/iu.test(input)) return null;
   try {
     return new URL(input);
@@ -49,20 +50,26 @@ export function mountTunnelAccess(host, { api, onIdentity = () => {} }) {
   const document = host.ownerDocument;
   let status = null, active = false, busy = false, readFailed = false;
   let version = 0, reading = null, cancellation = null, poll, pollDelay;
-  let providerSelected = false;
+  let providerSelected = false, configuring = false, installerUrl = null;
   const request = (action, body) => api(TUNNEL_API + action, body);
 
   const panel = el(document, 'section', 'panel tunnel-panel');
-  const heading = el(document, 'h3', '', '公网隧道');
-  const intro = el(document, 'p', 'fine', '用自建服务器、frp 或 Cloudflare 命名隧道从外网连接。手机同时使用内网和外网时，需要与同一台电脑分别配对一次。应用重启后需手动开启公网入口。');
+  const heading = el(document, 'h3', '', '公网访问');
+  const intro = el(document, 'p', 'fine access-description', '离开本地网络后，通过固定的 HTTPS 域名连接此电脑。');
   const state = el(document, 'p', 'tunnel-state');
   state.setAttribute('role', 'status');
+  const header=el(document,'div','access-heading'), title=el(document,'div');
+  const configure=button(document,'配置公网访问');
+  const toggle=switchInput(document);toggle.setAttribute('aria-label','公网访问');
+  configure.setAttribute('aria-controls','tunnel-configuration');
+  title.append(heading,state);header.append(title,toggle);
+  const setup=el(document,'div','tunnel-configuration');setup.id='tunnel-configuration';
 
   const form = el(document, 'form', 'tunnel-form');
   const origin = el(document, 'input');
   origin.id = 'tunnel-public-origin';
-  origin.type = 'url';
-  origin.placeholder = `https://${EXAMPLE_DOMAIN}`;
+  origin.type = 'text';origin.inputMode='url';origin.autocapitalize='none';origin.required=true;
+  origin.placeholder = EXAMPLE_DOMAIN;
   origin.autocomplete = 'off';
   origin.spellcheck = false;
   origin.setAttribute('aria-describedby', 'tunnel-origin-description');
@@ -74,8 +81,7 @@ export function mountTunnelAccess(host, { api, onIdentity = () => {} }) {
   port.step = '1';
   port.value = DEFAULT_PORT;
   const fields = el(document, 'div', 'tunnel-fields');
-  fields.append(control(document, '公网 HTTPS 地址', origin), control(document, '本机端口', port));
-  const originDescription = el(document, 'p', 'fine', '填写固定公网域名，可带 HTTPS 端口。');
+  const originDescription = el(document, 'p', 'fine', '填写指向公网入口的域名。');
   originDescription.id = 'tunnel-origin-description';
   const enable = button(document, '开启公网入口', 'btn primary');
   enable.type = 'submit';
@@ -84,10 +90,17 @@ export function mountTunnelAccess(host, { api, onIdentity = () => {} }) {
   const rotate = button(document, '轮换公网令牌');
   const retry = button(document, '重试读取状态');
   const actions = el(document, 'div', 'work-row');
-  actions.append(enable, pair, rotate, disable, retry);
-  form.append(fields, originDescription, actions);
+  const options=el(document,'details','access-options'), advancedActions=el(document,'div','work-row');
+  advancedActions.append(rotate,disable);
+  options.append(el(document,'summary','','端口与访问管理'),control(document,'本机端口',port),advancedActions);
+  actions.append(enable);
+  form.append(fields,originDescription,actions);
+  const quickActions=el(document,'div','work-row access-quick');quickActions.append(pair,configure,retry);
 
   const message = el(document, 'p', 'fine tunnel-message');
+  message.id='tunnel-feedback';
+  origin.setAttribute('aria-describedby','tunnel-origin-description tunnel-feedback');
+  port.setAttribute('aria-describedby','tunnel-feedback');
   message.setAttribute('role', 'status');
   const say = (text, error = false) => {
     message.textContent = text;
@@ -104,14 +117,16 @@ export function mountTunnelAccess(host, { api, onIdentity = () => {} }) {
   });
 
   const guide = el(document, 'details', 'tunnel-guide');
-  const guideHeading = el(document, 'summary', '', '隧道方案与配置');
+  const guideHeading = el(document, 'summary', '', '服务接入说明');
   const provider = el(document, 'select');
   provider.id = 'tunnel-provider';
-  for (const [value, label] of [['frp', 'frp'], ['cloudflare', 'Cloudflare 命名隧道'], ['ssh', '自建服务器（SSH + Caddy）']]) {
+  for (const [value, label] of [['ssh', '自己的 Linux 服务器'], ['cloudflare', 'Cloudflare Tunnel'], ['frp', '已有 frp 隧道']]) {
     const option = el(document, 'option', '', label);
     option.value = value;
     provider.append(option);
   }
+  fields.append(control(document,'连接方式',provider),control(document,'公网域名',origin));
+  try { const stored=document.defaultView.localStorage?.getItem('codecang.tunnelProvider');if(['ssh','cloudflare','frp'].includes(stored)){provider.value=stored;providerSelected=true;} } catch {}
   const target = el(document, 'code', 'lan-url');
   const guideText = el(document, 'p', 'fine');
   const frpConfig = el(document, 'pre', 'tunnel-frp-config');
@@ -122,15 +137,15 @@ export function mountTunnelAccess(host, { api, onIdentity = () => {} }) {
   manualGuide.append(el(document, 'p', 'fine', '本机转发目标'), target, guideText, frpConfig, guideLink);
 
   const sshGuide = el(document, 'div', 'tunnel-ssh-guide');
-  const sshRequirements = el(document, 'p', 'fine', '为每台电脑配置不同的固定子域名。将 DNS A 或 AAAA 记录指向同一台 VPS，也可以用通配 DNS。在 VPS 防火墙放行共用的 TCP 80、443 和 49323 端口。');
-  const sshInstall = el(document, 'p', 'fine', '在每台电脑上开启公网入口、复制该电脑的脚本，再到同一台运行 systemd 的 Debian 或 Ubuntu VPS 上以 root 执行。脚本登记这台电脑的 SSH 公钥并分配回源端口，私钥保存在电脑上。');
+  const sshRequirements = el(document, 'p', 'fine', '将这台电脑的子域名指向 Debian 或 Ubuntu 服务器，开放 SSH 中继端口 49323。');
+  const sshInstall = el(document, 'p', 'fine', '已有 Caddy 或 Nginx 时，安装程序会生成接入配置。空闲服务器可由码舱提供 HTTPS。');
   const sshOriginHint = el(document, 'p', 'fine');
   const sshState = el(document, 'p', 'tunnel-state');
   sshState.setAttribute('role', 'status');
   const sshMessage = el(document, 'p', 'fine tunnel-ssh-message');
   const sshFeedback = el(document, 'p', 'fine tunnel-ssh-message');
   sshFeedback.setAttribute('role', 'status');
-  const sshPrepare = button(document, '复制服务器安装脚本');
+  const sshPrepare = button(document, '获取安装命令','btn primary');
   const sshConnect = button(document, '连接已配置的服务器');
   const sshStop = button(document, '停止服务器中继');
   const sshActions = el(document, 'div', 'work-row');
@@ -141,10 +156,24 @@ export function mountTunnelAccess(host, { api, onIdentity = () => {} }) {
   sshScript.spellcheck = false;
   sshScript.setAttribute('aria-label', '服务器安装脚本');
   sshScript.hidden = true;
-  sshGuide.append(sshRequirements, sshInstall, sshOriginHint, sshState, sshMessage, sshActions, sshFeedback, sshScript);
-  guide.append(guideHeading, control(document, '隧道服务', provider), manualGuide, sshGuide);
-
-  panel.append(heading, intro, state, form, message, pairing.element, guide);
+  const installer=el(document,'div','relay-installer');installer.hidden=true;
+  const installHint=el(document,'p','fine');
+  const command=el(document,'input','relay-command');command.readOnly=true;command.setAttribute('aria-label','服务器安装命令');
+  const copyCommand=button(document,'复制安装命令','btn primary');
+  const download=el(document,'a','btn','下载脚本');download.download='codecang-relay-setup.sh';
+  const source=el(document,'details','access-options');source.append(el(document,'summary','','查看脚本'),sshScript);
+  const installActions=el(document,'div','work-row');installActions.append(copyCommand,download);
+  installer.append(installHint,command,installActions,source);
+  sshGuide.append(sshState,sshMessage,sshActions,installer,sshFeedback);
+  guide.append(guideHeading,sshRequirements,sshInstall,sshOriginHint,manualGuide);
+  setup.append(form,sshGuide,guide,options);
+  panel.append(header,intro,quickActions,pairing.element,setup,message);
+  configure.addEventListener('click',()=>{configuring=!configuring;render();if(configuring&&!status?.enabled)origin.focus();});
+  copyCommand.addEventListener('click',async()=>{
+    const mine=version;
+    try{await document.defaultView.navigator.clipboard.writeText(command.value);if(version===mine)sshFeedback.textContent='安装命令已复制。';}
+    catch{if(version===mine){command.focus();command.select?.();sshFeedback.textContent='请手动复制选中的安装命令。';}}
+  });
   host.replaceChildren(panel);
 
   function selectedPort() {
@@ -158,16 +187,15 @@ export function mountTunnelAccess(host, { api, onIdentity = () => {} }) {
     const relayActive = relay.state !== 'off';
     const sshPort = parseOrigin(origin.value)?.port;
     manualGuide.hidden = ssh;
-    sshGuide.hidden = !ssh && !relayActive;
+    sshGuide.hidden = !status?.enabled || (!ssh && !relayActive);
     sshRequirements.hidden = !ssh;
     sshInstall.hidden = !ssh;
     sshOriginHint.hidden = !ssh;
-    sshOriginHint.textContent = status?.enabled && sshPort
-      ? '请先关闭公网入口，使用标准 HTTPS 端口 443 重新开启，再复制安装脚本。'
-      : '自建服务器使用标准 HTTPS 端口 443。';
-    sshPrepare.hidden = !ssh;
+    sshOriginHint.textContent = sshPort ? '自建服务器的公网 HTTPS 地址使用 443 端口。' : '';
+    sshPrepare.hidden = !ssh || !installer.hidden;
     sshPrepare.disabled = busy || !status?.enabled || !!sshPort || relay.state === 'connected';
-    sshConnect.hidden = !ssh || relayActive;
+    sshConnect.hidden = !ssh || (relayActive && relay.state!=='error');
+    sshConnect.textContent=relay.state==='error'?'重新连接服务器':'连接已配置的服务器';
     sshConnect.disabled = sshPrepare.disabled;
     sshStop.hidden = !relayActive;
     sshStop.disabled = busy;
@@ -195,7 +223,11 @@ export function mountTunnelAccess(host, { api, onIdentity = () => {} }) {
 
   function render() {
     const enabled = !!status?.enabled;
-    const label = readFailed ? '暂时无法读取公网入口状态。' : enabled ? '本机入口已就绪，公网连通性未验证。' : status ? '公网入口已关闭' : '正在读取公网入口状态…';
+    toggle.checked=enabled;toggle.disabled=!status||busy;
+    setup.hidden=!configuring;
+    configure.setAttribute('aria-expanded',String(configuring));
+    configure.textContent=configuring?'收起配置':enabled?'管理公网访问':'配置公网访问';
+    const label = readFailed ? '暂时无法读取公网入口状态。' : enabled && status.sshRelay?.state==='connected' ? '已连接 · 公网回源已验证' : enabled ? '本机入口已就绪，公网连通性未验证。' : status ? '公网入口已关闭' : '正在读取公网入口状态…';
     if (state.textContent !== label) state.textContent = label;
     for (const node of [origin, port]) node.disabled = enabled || busy;
     provider.disabled = busy;
@@ -221,6 +253,8 @@ export function mountTunnelAccess(host, { api, onIdentity = () => {} }) {
   }
 
   function clearScript() {
+    if(installerUrl)URL.revokeObjectURL(installerUrl);
+    installerUrl=null;download.removeAttribute('href');installer.hidden=true;command.value='';source.open=false;
     sshScript.value = '';
     sshScript.hidden = true;
     sshFeedback.textContent = '';
@@ -232,9 +266,10 @@ export function mountTunnelAccess(host, { api, onIdentity = () => {} }) {
   }
 
   function applyStatus(result) {
-    if (!result.enabled || status?.url !== result.url) pairing.clear();
+    if (!result.enabled || status?.url !== result.url) {pairing.clear();clearScript();}
     if (!status && !providerSelected && result.sshRelay?.state && result.sshRelay.state !== 'off') {
       provider.value = 'ssh';
+      configuring=true;
       guide.open = true;
     }
     status = result;
@@ -242,7 +277,7 @@ export function mountTunnelAccess(host, { api, onIdentity = () => {} }) {
     if (typeof result.remoteHostId === 'string' && /^[a-f0-9]{32}$/i.test(result.remoteHostId)) {
       onIdentity({ id: result.remoteHostId, name: result.remoteHostName });
     }
-    if (!result.enabled || result.sshRelay?.state === 'off' || result.sshRelay?.state === 'connected') clearScript();
+    if (result.sshRelay?.state === 'connected') clearScript();
     if (result.enabled) {
       origin.value = result.origin;
       port.value = result.port;
@@ -293,15 +328,24 @@ export function mountTunnelAccess(host, { api, onIdentity = () => {} }) {
     }
   }
 
-  form.addEventListener('submit', event => {
-    event.preventDefault();
+  function enablePublic() {
     if (enable.hidden || enable.disabled) return;
     const publicOrigin = parseOrigin(origin.value);
     const localPort = selectedPort();
-    if (!publicOrigin) { say('请输入固定的公网 HTTPS 域名地址，例如 https://remote.example.com。', true); origin.focus(); return; }
-    if (provider.value === 'ssh' && publicOrigin.port) { say('自建服务器使用标准 HTTPS 端口 443，请填写域名。', true); origin.focus(); return; }
-    if (!localPort) { say('本机端口须为 1 至 65535 的整数。', true); port.focus(); return; }
-    void mutate('enable', { publicOrigin: origin.value.trim(), port: localPort }, applyStatus);
+    if (!publicOrigin) { origin.setAttribute('aria-invalid','true');say('请输入固定公网域名，例如 remote.example.com。', true); origin.focus(); return; }
+    if (provider.value === 'ssh' && publicOrigin.port) { origin.setAttribute('aria-invalid','true');say('自建服务器使用标准 HTTPS 端口 443，请填写域名。', true); origin.focus(); return; }
+    if (!localPort) { options.open=true;port.setAttribute('aria-invalid','true');say('本机端口须为 1 至 65535 的整数。', true); port.focus(); return; }
+    origin.removeAttribute('aria-invalid');
+    return mutate('enable', { publicOrigin: publicOrigin.origin, port: localPort }, applyStatus);
+  }
+  form.addEventListener('submit',event=>{event.preventDefault();void enablePublic();});
+  onAsyncSwitchChange(toggle,async()=>{
+    const wanted=toggle.checked;toggle.checked=!!status?.enabled;
+    if(!status||busy)return;
+    if(!wanted){await mutate('disable',{},applyStatus);return;}
+    configuring=true;render();
+    if(!origin.value.trim()){origin.focus();return;}
+    await enablePublic();
   });
   disable.addEventListener('click', () => { void mutate('disable', {}, applyStatus); });
   pair.addEventListener('click', () => {
@@ -320,27 +364,21 @@ export function mountTunnelAccess(host, { api, onIdentity = () => {} }) {
   });
   sshPrepare.addEventListener('click', () => {
     clearScript();
-    void mutate('ssh/prepare', {}, async ({ script, state, message }, mine) => {
+    void mutate('ssh/installer', {}, ({script,command:installCommand,online,state,message}) => {
       applyRelay({ state, message });
-      if (typeof script !== 'string' || !script) throw new Error('服务没有返回安装脚本，请重试。');
-      try {
-        await document.defaultView.navigator.clipboard.writeText(script);
-        if (version === mine) sshFeedback.textContent = '脚本已复制。在 VPS 上以 root 执行。';
-      } catch {
-        if (version !== mine) return;
-        sshScript.value = script;
-        sshScript.hidden = false;
-        sshScript.focus();
-        sshScript.select?.();
-        sshFeedback.textContent = '无法写入剪贴板，请手动复制下面的脚本。';
-      }
+      if(!script || !installCommand)throw new Error('没有收到服务器安装文件，请重试。');
+      clearScript();installer.hidden=false;command.value=installCommand;sshScript.value=script;sshScript.hidden=false;
+      installerUrl=URL.createObjectURL(new Blob(['#!/usr/bin/env bash\n',script],{type:'text/x-shellscript;charset=utf-8'}));download.href=installerUrl;
+      copyCommand.classList.toggle('primary',online);download.classList.toggle('primary',!online);
+      installActions.replaceChildren(...(online?[copyCommand,download]:[download,copyCommand]));
+      installHint.textContent=online?'在服务器以 root 身份执行，命令会先校验脚本的 SHA-256。完成后点击「连接已配置的服务器」。':'当前无法验证在线脚本。下载脚本并上传到服务器，在文件所在目录以 root 身份执行下面的命令，完成后点击「连接已配置的服务器」。';
     });
   });
   sshStop.addEventListener('click', () => { void mutate('ssh/stop', {}, applyRelay); });
   retry.addEventListener('click', refresh);
-  origin.addEventListener('input', render);
-  port.addEventListener('input', renderGuide);
-  provider.addEventListener('change', () => { providerSelected = true; clearScript(); renderGuide(); });
+  origin.addEventListener('input', ()=>{origin.removeAttribute('aria-invalid');render();});
+  port.addEventListener('input', ()=>{port.removeAttribute('aria-invalid');renderGuide();});
+  provider.addEventListener('change', () => { providerSelected=true; try{document.defaultView.localStorage?.setItem('codecang.tunnelProvider',provider.value);}catch{} clearScript();renderGuide(); });
   render();
 
   return {

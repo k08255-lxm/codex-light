@@ -232,12 +232,17 @@ export class ItemStore {
     }
     const previous = this.items.get(item.id) || {};
     const combined = { ...previous, ...next };
+    if (extracted.replaces && !next._historyImages) delete combined._historyImages;
     // Message bodies bypass the bounded display snapshot; everything else stays a bounded projection.
     const body = {};
     for (const field of BODY_FIELDS) if (typeof combined[field] === 'string') { body[field] = combined[field]; delete combined[field]; }
     const userContent = combined.type === 'userMessage' && Array.isArray(combined.content) ? (this.preserveBodies ? combined.content : combined.content.slice(0, 64)) : null;
     if (userContent) delete combined.content;
     const metadata = {};
+    if (Array.isArray(combined._historyImages)) {
+      metadata._historyImages = combined._historyImages.slice(0,5).map(key => typeof key==='string' && /^[a-f0-9]{64}$/.test(key) ? key : null);
+      delete combined._historyImages;
+    }
     for (const key of ITEM_METADATA_FIELDS) if (Object.hasOwn(combined, key)) {metadata[key] = combined[key]; delete combined[key];}
     if (combined.error === null) {metadata.error = null; delete combined.error;}
     const merged = {...displaySnapshot(combined), ...metadata};

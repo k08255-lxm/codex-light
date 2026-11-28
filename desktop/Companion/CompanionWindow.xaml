@@ -25,20 +25,20 @@
      <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Face" Property="BorderBrush" Value="{DynamicResource Muted}"/></Trigger>
      <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Face" Property="BorderBrush" Value="{DynamicResource Accent}"/></Trigger>
      <Trigger Property="IsPressed" Value="True"><Setter TargetName="Face" Property="Opacity" Value=".75"/></Trigger>
+     <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Face" Property="Opacity" Value=".45"/></Trigger>
     </ControlTemplate.Triggers>
    </ControlTemplate></Setter.Value></Setter>
   </Style>
  </Window.Resources>
  <Grid x:Name="Stage">
   <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-  <Ellipse Width="97" Height="13" VerticalAlignment="Bottom" Margin="0,0,0,7" IsHitTestVisible="False">
+  <Ellipse x:Name="FootShadow" Width="97" Height="13" VerticalAlignment="Bottom" Margin="0,0,0,7" IsHitTestVisible="False">
    <Ellipse.Fill><RadialGradientBrush><GradientStop Color="#55362619" Offset="0"/><GradientStop Color="#00362619" Offset="1"/></RadialGradientBrush></Ellipse.Fill>
   </Ellipse>
   <Grid x:Name="Art" RenderTransformOrigin=".5,.97" Margin="3,4,3,0" IsHitTestVisible="False" RenderOptions.BitmapScalingMode="HighQuality">
    <Image x:Name="Figure" Stretch="Uniform" VerticalAlignment="Bottom"/>
-   <Image x:Name="PreviousFigure" Stretch="Uniform" VerticalAlignment="Bottom"/>
   </Grid>
-  <Border Grid.Row="1" CornerRadius="12" HorizontalAlignment="Center" MaxWidth="172" Margin="0,0,0,3"
+  <Border x:Name="StatusBadge" Grid.Row="1" CornerRadius="12" HorizontalAlignment="Center" MaxWidth="172" Margin="0,0,0,3"
    Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Line}" BorderThickness="1" Padding="9,3">
    <StackPanel Orientation="Horizontal">
     <Ellipse x:Name="StatusDot" Width="6" Height="6" VerticalAlignment="Center" Margin="0,0,6,0"/>
@@ -48,7 +48,7 @@
   <Button x:Name="CharacterButton" Grid.RowSpan="2" Cursor="Hand" Background="Transparent"
    Click="Greet" PreviewMouseLeftButtonDown="Press" PreviewMouseMove="MoveCharacter"
    ContextMenuOpening="ShowContext" PreviewMouseRightButtonUp="RightClick" PreviewKeyDown="CharacterKey"
-   ToolTip="单击打招呼 · 右击查看概览 · 拖动换位置">
+   ToolTip="单击打招呼 · 双击打开码舱 · 右击查看概览和调整大小">
    <Button.Template><ControlTemplate TargetType="Button"><Border Background="Transparent"/></ControlTemplate></Button.Template>
   </Button>
   <Popup x:Name="Overview" PlacementTarget="{Binding ElementName=Stage}" Placement="Top" StaysOpen="False"
@@ -64,14 +64,27 @@
      <TextBlock x:Name="Activity" Foreground="{DynamicResource Accent}" Margin="0,3,0,12" FontSize="12"/>
      <Border BorderBrush="{DynamicResource Line}" BorderThickness="0,1,0,1" Padding="0,8">
       <Grid>
-       <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+       <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
        <StackPanel><TextBlock Text="进行中" Foreground="{DynamicResource Muted}" FontSize="11"/><TextBlock x:Name="Running" FontWeight="SemiBold" FontSize="19"/></StackPanel>
        <StackPanel Grid.Column="1"><TextBlock Text="待回答" Foreground="{DynamicResource Muted}" FontSize="11"/><TextBlock x:Name="Questions" FontWeight="SemiBold" FontSize="19"/></StackPanel>
        <StackPanel Grid.Column="2"><TextBlock Text="待审批" Foreground="{DynamicResource Muted}" FontSize="11"/><TextBlock x:Name="Approvals" FontWeight="SemiBold" FontSize="19"/></StackPanel>
+       <StackPanel Grid.Column="3"><TextBlock Text="子代理" Foreground="{DynamicResource Muted}" FontSize="11"/><TextBlock x:Name="Agents" FontWeight="SemiBold" FontSize="19"/></StackPanel>
       </Grid>
      </Border>
+     <ScrollViewer x:Name="TaskList" MaxHeight="90" VerticalScrollBarVisibility="Auto" Margin="0,6,0,0">
+      <TextBlock x:Name="TaskNames" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource Muted}"/>
+     </ScrollViewer>
      <DockPanel Margin="0,11,0,2"><TextBlock Text="剩余额度" FontWeight="SemiBold"/><TextBlock x:Name="QuotaNote" Foreground="{DynamicResource Muted}" FontSize="11" HorizontalAlignment="Right"/></DockPanel>
      <StackPanel x:Name="QuotaRows"/>
+     <DockPanel Margin="0,12,0,0">
+      <TextBlock Text="角色大小" FontWeight="SemiBold" VerticalAlignment="Center"/>
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+       <Button x:Name="Smaller" Content="−" AutomationProperties.Name="缩小角色" Style="{StaticResource Action}" Padding="8,2" Click="ChangeSize"/>
+       <TextBlock x:Name="SizeLabel" Width="44" TextAlignment="Center" VerticalAlignment="Center"/>
+       <Button x:Name="Larger" Content="+" AutomationProperties.Name="放大角色" Style="{StaticResource Action}" Padding="8,2" Click="ChangeSize"/>
+      </StackPanel>
+     </DockPanel>
+     <TextBlock x:Name="SizeError" Text="大小未保存，可重新调整。" Visibility="Collapsed" FontSize="11" Foreground="{DynamicResource Notice}"/>
      <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
       <Button x:Name="OpenApp" Click="OpenMain" Style="{StaticResource Action}" FontSize="12"/>
       <Button Content="角色设置" Click="OpenSettings" Style="{StaticResource Action}" FontSize="12" Margin="6,0,0,0"/>

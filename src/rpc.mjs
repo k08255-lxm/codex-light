@@ -11,10 +11,21 @@ import {validServerRequestId,serverRequestKey,findServerRequest,removeServerRequ
 const appVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 export const APP_SERVER_ARGS = Object.freeze(['app-server','--listen','stdio://','-c','features.step_model_switching=true','-c','thread_unload_delay_secs=0']);
 const failure = (message, code) => Object.assign(new Error(message), { code });
+function historyReply(parts, tail, pending) {
+  let prefix='';
+  for (const part of parts) {
+    prefix+=part.slice(0,128-prefix.length);
+    if (prefix.length===128) break;
+  }
+  prefix+=tail.slice(0,128-prefix.length);
+  const id=/^\s*\{\s*(?:"jsonrpc"\s*:\s*"2\.0"\s*,\s*)?"id"\s*:\s*(\d+)\s*,\s*"result"\s*:/.exec(prefix)?.[1];
+  const request=id && pending.get(Number(id));
+  return request && ['thread/items/list','thread/turns/list','thread/read'].includes(request.method) ? request : null;
+}
 export class RpcClient extends EventEmitter {
   constructor({ command = process.env.CODEX_LIGHT_CODEX || 'codex', args = [...APP_SERVER_ARGS], cwd = process.cwd(), timeout = 60000, closeTimeout = 1500, spawnProcess = spawn, env, mapRequest, mapResponse } = {}) {
     super(); Object.assign(this, {command,args,cwd,timeout,closeTimeout,spawnProcess,env,mapRequest,mapResponse});
-    this.pending = new Map(); this.requests = new Map(); this.sequence = 0; this.connected = false; this.closed = false; this.buffer = ''; this.lastError = null;
+    this.pending = new Map(); this.requests = new Map(); this.sequence = 0; this.connected = false; this.closed = false; this.lineParts = []; this.lineLength = 0; this.lastError = null;
   }
   // Older engines may silently ignore unknown fork parameters. Check this executable's
   // protocol once before sending a mutation that could otherwise copy later turns.
@@ -83,7 +94,7 @@ export class RpcClient extends EventEmitter {
       // bridge waiter/timer, ignore late replies, and never interrupt a turn.
       const onAbort=()=>fail(aborted());
       timer=options.timeoutMs===null?null:setTimeout(()=>fail(failure('请求超时，结果未知；请刷新状态，不要重复提交。','RPC_TIMEOUT')),this.timeout);
-      this.pending.set(id,{resolve:succeed,reject:fail,timer});
+      this.pending.set(id,{method,resolve:succeed,reject:fail,timer});
       options.signal?.addEventListener('abort',onAbort,{once:true});
       if(options.signal?.aborted){onAbort();return;}
       try{options.beforeSend?.();this.write({id,method,params});}catch(e){fail(e);}
@@ -91,11 +102,28 @@ export class RpcClient extends EventEmitter {
   }
   consume(data) {
     if(this.closed) return;
-    this.buffer += data;
-    if(this.buffer.length>32*1024*1024) {this.fail(failure('协议消息过大，连接已停止','MESSAGE_TOO_LARGE'));this.child?.kill();return;}
-    let end;
-    while((end=this.buffer.indexOf('\n'))>=0) {
-      const line=this.buffer.slice(0,end);this.buffer=this.buffer.slice(end+1);if(!line.trim())continue;
+    // Image-bearing replies can span thousands of pipe chunks. Scan each chunk once.
+    for(let start=0;start<data.length;){
+      const end=data.indexOf('\n',start);
+      if(this.discardHistoryLine){
+        if(end<0)return;
+        this.discardHistoryLine=false;start=end+1;continue;
+      }
+      const part=data.slice(start,end<0?data.length:end);
+      this.lineLength+=part.length;
+      if(this.lineLength>32*1024*1024){
+        const request=historyReply(this.lineParts,part,this.pending);
+        if(!request){this.fail(failure('协议消息过大，连接已停止','MESSAGE_TOO_LARGE'));this.child?.kill();return;}
+        this.lineParts=[];this.lineLength=0;
+        request.reject(failure('这一页历史数据过大，请缩小读取范围。','HISTORY_PAGE_TOO_LARGE'));
+        if(end<0){this.discardHistoryLine=true;return;}
+        start=end+1;continue;
+      }
+      if(end<0){this.lineParts.push(part);return;}
+      let line=part;
+      if(this.lineParts.length){this.lineParts.push(part);line=this.lineParts.join('');this.lineParts=[];}
+      this.lineLength=0;start=end+1;
+      if(!line.trim())continue;
       let msg;try{msg=JSON.parse(line);}catch{this.emit('event',{method:'bridge/warning',params:{message:'忽略了一条无效协议消息'}});continue;}
       if(!msg || typeof msg!=='object' || Array.isArray(msg))continue;
       // Approval payloads are native engine data. Preserve their exact paths so
@@ -132,7 +160,7 @@ export class RpcClient extends EventEmitter {
     this.emit('event',{method:'serverRequest/resolved',params:{requestId:request.id,threadId:serverRequestThread(request)}});
   }
   fail(error) {
-    if(this.closed)return;this.lastError=error.message;this.closed=true;this.connected=false;this.buffer='';
+    if(this.closed)return;this.lastError=error.message;this.closed=true;this.connected=false;this.lineParts=[];this.lineLength=0;
     for(const p of this.pending.values()){clearTimeout(p.timer);p.reject(error);}this.pending.clear();
     for(const request of this.requests.values())this.emit('event',{method:'serverRequest/resolved',params:{requestId:request.id,threadId:serverRequestThread(request)}});this.requests.clear();
     this.emit('event',{method:'bridge/status',params:{connected:false,error:error.message}});

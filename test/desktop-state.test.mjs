@@ -8,11 +8,11 @@ test('preferences survive restart and a legacy receipt ledger is retired on the 
  assert.deepEqual(await state.preferenceSnapshot(),{preferences:DEFAULT_PREFERENCES,firstRun:true});
  await assert.rejects(stat(state.root),{code:'ENOENT'});
  await mkdir(state.root);
- const preferences={...DEFAULT_PREFERENCES,theme:'light',keepAwakeDuringTask:true,desktopCompanion:'lulu'};
+ const preferences={...DEFAULT_PREFERENCES,theme:'light',keepAwakeDuringTask:true,desktopCompanion:'lulu',desktopCompanionSize:150};
  await writeFile(state.file,JSON.stringify({version:1,preferences,receipts:Array(1000).fill({state:'unknown'})}));
  assert.deepEqual(await state.preferences(),preferences);
  assert.deepEqual(await state.preferenceSnapshot(),{preferences,firstRun:false});
- const {keepAwakeDuringTask,desktopCompanion,...olderClient}=preferences;
+ const {keepAwakeDuringTask,desktopCompanion,desktopCompanionSize,...olderClient}=preferences;
  await state.preferences({...olderClient,theme:'dark'});
  assert.deepEqual(JSON.parse(await readFile(state.file,'utf8')),{version:2,preferences:{...preferences,theme:'dark'}});
  assert.equal((await new DesktopState({root:state.root}).preferences()).keepAwakeDuringTask,true);

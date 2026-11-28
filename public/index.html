@@ -244,7 +244,17 @@
           <div class="pref-row"><div><strong>主题</strong></div><div class="theme-cards segmented" role="group" aria-label="主题"><button type="button" data-theme-choice="system">系统</button><button type="button" data-theme-choice="light">浅色</button><button type="button" data-theme-choice="dark">深色</button></div></div>
           <label class="pref-row" for="preference-font"><div><strong>文字大小</strong><small class="fine">不影响系统缩放</small></div><select id="preference-font"><option value="90">90%</option><option value="100">100%</option><option value="110">110%</option><option value="125">125%</option></select></label>
           <label class="pref-row" for="preference-motion"><div><strong>减少动画</strong></div><select id="preference-motion"><option value="system">跟随系统</option><option value="on">开启</option><option value="off">关闭</option></select></label>
-          <div id="desktop-companion-preference" hidden><label class="pref-row" for="preference-companion"><div><strong>桌面伙伴</strong><small class="fine">单击和它打招呼，右击查看任务与额度。拖动可换位置。</small></div><select id="preference-companion"><option value="off">关闭</option><option value="nailong">奶龙</option><option value="lulu">水豚噜噜</option></select></label></div>
+          <div id="desktop-companion-preference" hidden>
+            <div id="preference-companion" class="companion-picker" role="radiogroup" aria-labelledby="companion-picker-label" aria-describedby="companion-gestures">
+              <div class="companion-picker-head"><strong id="companion-picker-label">桌面伙伴</strong><label><input type="radio" name="desktop-companion" value="off" checked>关闭</label></div>
+              <div class="companion-choices">
+                <label class="companion-choice"><img src="/ui/companions/nailong.webp" alt="" width="176" height="112" loading="lazy" decoding="async"><span>奶龙</span><input type="radio" name="desktop-companion" value="nailong"></label>
+                <label class="companion-choice"><img src="/ui/companions/lulu.webp" alt="" width="176" height="112" loading="lazy" decoding="async"><span>水豚噜噜</span><input type="radio" name="desktop-companion" value="lulu"></label>
+              </div>
+              <small id="companion-gestures" class="fine">单击打招呼，双击打开码舱。右击查看概览，拖动换位置。</small>
+            </div>
+            <label class="pref-row" for="preference-companion-size"><strong>角色大小</strong><select id="preference-companion-size"></select></label>
+          </div>
         </div>
         <p id="preference-status" class="fine" role="status"></p>
         <button id="preference-native-reload" type="button" class="btn hidden">重新读取本机偏好</button>
@@ -282,7 +292,9 @@
       <section id="settings-archived" class="settings-section hidden"><div class="section-head"><h1>已归档</h1><button id="refresh-archived" class="btn small">刷新</button></div><div id="archived-list" class="panel list-panel"><p class="fine">尚未读取。</p></div><button id="more-archived" class="btn hidden">加载更多</button></section>
       <section id="settings-remote" class="settings-section hidden">
         <h1>远程控制</h1>
-        <p class="fine">使用本机 Codex 的官方远控协议。连接或配对成功不等于手机端已验证可用。</p>
+        <section id="settings-lan" class="local-only remote-lan-section"><p class="fine access-intro">局域网和公网可以同时开启。手机分别扫码配对后，会优先通过局域网连接这台电脑。</p><div id="lan-root"></div></section>
+        <details id="official-remote" class="official-remote"><summary>Codex 官方远控</summary>
+        <p class="fine">管理通过 Codex 官方协议连接的设备和配对码。连接或配对成功不等于手机端已验证可用。</p>
         <div class="panel remote-panel"><div class="work-row"><button id="remote-refresh" type="button" class="btn">刷新</button><button id="remote-enable" type="button" class="btn">本次会话启用</button><button id="remote-disable" type="button" class="btn">持久停用</button></div><div id="remote-status" role="status">尚未读取。</div></div>
         <h2 class="section-title">设备</h2><div id="remote-devices" class="panel list-panel"><p class="fine">尚未读取。</p></div>
         <h2 class="section-title">配对</h2>
@@ -292,7 +304,7 @@
           <div id="remote-pairing" class="hidden"><code id="remote-pair-code"></code><p id="remote-pair-expiry" class="fine"></p><div class="work-row"><button id="remote-pair-check" type="button" class="btn">查询状态</button><button id="remote-pair-hide" type="button" class="btn">隐藏</button></div></div>
           <p id="remote-pair-status" class="fine" role="status"></p>
         </div>
-        <section id="settings-lan" class="local-only remote-lan-section"><h2 class="section-title">连接此电脑</h2><div id="lan-root"></div></section>
+        </details>
       </section>
       <section id="settings-skills" class="settings-section hidden"></section>
       <section id="settings-plugins" class="settings-section hidden"></section>

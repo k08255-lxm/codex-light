@@ -342,6 +342,19 @@ function cliStub({ items = false, turns = true, read = true, fixture = turnsFixt
 }
 const ids = items => items.map(item => item.id);
 
+test('an image-heavy first page shrinks on the same cursor and paints before fetching older items',async()=>{
+ const calls=[];
+ const pager=new HistoryPager(async(method,p)=>{
+   calls.push([p.limit,p.cursor]);
+   if(p.limit>15)throw Object.assign(new Error('large'),{code:'HISTORY_PAGE_TOO_LARGE'});
+   return {data:[{item:{id:p.cursor?'old':'new',type:'agentMessage'},turnId:'t'}],nextCursor:p.cursor?null:'older'};
+ },'s');
+ assert.deepEqual((await pager.next({max:60,firstPaint:true})).items.map(x=>x.id),['new']);
+ assert.deepEqual(calls,[[60,undefined],[30,undefined],[15,undefined]]);
+ assert.deepEqual((await pager.next({max:15})).items.map(x=>x.id),['old']);
+ assert.equal(calls.at(-1)[1],'older');
+});
+
 test('when thread/items/list is unsupported, history pages through thread/turns/list itemsView:full with its cursor', async () => {
   const { rpc, calls } = cliStub(); const caps = historyCapabilities();
   const pager = new HistoryPager(rpc, 'th', caps);

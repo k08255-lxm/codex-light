@@ -11,7 +11,7 @@ export function mountLanAccess(host, { api, notice = () => {} }) {
   const document = host.ownerDocument;
   let status = null, busy = false, reveal = false, generation = 0, poll = null, active = false;
   let consent = null, selectedAddress = '', selectedEndpoint = '', cancellation = null;
-  const intro = el(document, 'p', 'fine', '让同一网络中的手机连接此电脑。局域网使用未加密的 HTTP，请在可信网络中开启。');
+  const intro = el(document, 'p', 'fine access-description', '同一网络内直接扫码连接。请在可信网络中开启 HTTP 访问。');
   const panel = el(document, 'div', 'panel lan-panel');
   const state = el(document, 'label', 'pref-row');
   const stateText = el(document, 'div'); const stateTitle = el(document, 'strong', '', '局域网访问'); const stateSub = el(document, 'small', 'fine');
@@ -29,9 +29,9 @@ export function mountLanAccess(host, { api, notice = () => {} }) {
   const link = el(document, 'code', 'lan-url');
   const linkActions = el(document, 'div', 'work-row');
   const show = el(document, 'button', 'btn', '显示链接'); show.type = 'button';
-  const copy = el(document, 'button', 'btn primary', '复制链接'); copy.type = 'button';
+  const copy = el(document, 'button', 'btn', '复制链接'); copy.type = 'button';
   const rotate = el(document, 'button', 'btn', '轮换令牌'); rotate.type = 'button'; rotate.title = '生成新链接并让旧链接与已连接的手机立即失效';
-  const qrButton = el(document, 'button', 'btn', '二维码配对');
+  const qrButton = el(document, 'button', 'btn primary', '二维码配对');
   qrButton.type = 'button';
   let pairingPending = false;
   const pairing = createAccessPairing(document, {
@@ -57,11 +57,15 @@ export function mountLanAccess(host, { api, notice = () => {} }) {
       render();
     }
   });
-  linkActions.append(qrButton, show, copy, rotate);
-  linkRow.append(link, linkActions, pairing.element);
+  linkActions.append(show, copy, rotate);
+  linkRow.append(qrButton, pairing.element);
+  const options = el(document,'details','access-options');
+  const linkDetails=el(document,'div','lan-link-settings');
+  linkDetails.append(link, linkActions);
+  options.append(el(document,'summary','','网卡与访问链接'),addressRow,linkDetails);
   const retry=el(document,'button','btn','立即重试');retry.type='button';retry.classList.add('hidden');retry.addEventListener('click',async()=>{try{await call('/api/lan/restore',{});}catch{}});
   const message = el(document, 'p', 'fine'); message.setAttribute('role', 'status');
-  panel.append(state, addressRow, linkRow, retry);
+  panel.append(state, intro, linkRow, retry, options, message);
 
   const identityPanel = el(document, 'section', 'panel lan-identity hidden');
   const identityName = el(document, 'h3');
@@ -94,7 +98,7 @@ export function mountLanAccess(host, { api, notice = () => {} }) {
     }
     identityPanel.classList.remove('hidden');
   } });
-  host.replaceChildren(identityPanel, intro, panel, message, tunnelHost);
+  host.replaceChildren(panel, tunnelHost, identityPanel);
 
   const say = (text, error = false) => { message.textContent = text; message.classList.toggle('inline-error', error); };
   function masked(url) { return url.replace(/#token=.*/, '#token=••••••••'); }
@@ -169,6 +173,7 @@ export function mountLanAccess(host, { api, notice = () => {} }) {
     select.disabled = !!consent || busy || !rows.length || (enabled && endpoints.length < 2);
     toggle.disabled = !!consent || busy || !!status?.restoring || !status || (!desired && !select.value);
     linkRow.classList.toggle('hidden', !endpoint?.url);
+    linkDetails.hidden=!endpoint?.url;
     link.textContent = endpoint?.url ? (reveal ? endpoint.url : masked(endpoint.url)) : '';
     show.textContent = reveal ? '隐藏链接' : '显示链接';
     for (const button of [show, copy, rotate]) button.disabled = busy;

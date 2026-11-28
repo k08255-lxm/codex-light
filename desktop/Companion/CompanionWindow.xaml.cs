@@ -18,23 +18,25 @@ namespace CodexLight.Desktop;
 
 internal partial class CompanionWindow : Window {
  readonly Action<string> open;
+ readonly Func<int,bool> requestSize;
  readonly Stopwatch clock = Stopwatch.StartNew();
  readonly DispatcherTimer timer = new(DispatcherPriority.Background);
  CompanionState state;
  CompanionAnimation animation;
  Point? pressedAt;
- double activityStart,greetUntil;
- bool dragged,alternateGreeting;
- internal CompanionWindow(CompanionState initial,Action<string> open) {
-  this.open=open; state=initial;
+ double waveAt,greetUntil,cheerUntil;
+ bool dragged,openOnRelease,alternateGreeting;
+ int? pendingSize;
+ internal CompanionWindow(CompanionState initial,Action<string> open,Func<int,bool> requestSize) {
+  this.open=open;this.requestSize=requestSize;state=initial;
   InitializeComponent();
-  animation=new(initial.Character=="lulu",Art,Figure,PreviousFigure);
+  animation=new(initial.Character,Art,Figure);
   SourceInitialized+=(_,_)=>HwndSource.FromHwnd(new WindowInteropHelper(this).Handle).AddHook(WindowMessage);
   IsVisibleChanged+=(_,_)=>Schedule();
   timer.Tick+=(_,_)=>Render();
   Closed+=(_,_)=>{timer.Stop();Overview.IsOpen=false;SystemEvents.DisplaySettingsChanged-=DisplayChanged;};
   SystemEvents.DisplaySettingsChanged+=DisplayChanged;
-  RefreshColors();Update(initial);
+  ApplySize(initial.SizePercent);RefreshColors();Update(initial);
  }
  static nint WindowMessage(nint hwnd,int message,nint wParam,nint lParam,ref bool handled) {
   // Petting the character should leave the insertion point in the app the user was typing in.
@@ -64,17 +66,21 @@ internal partial class CompanionWindow : Window {
  void DisplayChanged(object? sender,EventArgs e) => Dispatcher.BeginInvoke(()=>{
   if (IsVisible) MoveInto(Screen.FromHandle(new WindowInteropHelper(this).Handle).WorkingArea,Position);
  });
- internal void Disconnected() => Update(state.Offline());
+ internal void Disconnected() {
+  if(pendingSize is {} size)SizeResult(size,false);
+  Update(state.Offline());
+ }
  internal void Update(CompanionState next) {
   bool changed=state.Character!=next.Character, theme=state.Dark!=next.Dark;
-  if (changed || state.Activity!=next.Activity) {
-   activityStart=clock.Elapsed.TotalSeconds;
-   greetUntil=0;
-  }
+  if (changed || state.Activity!=next.Activity) greetUntil=0;
+  if (changed || next.Pose!=CompanionPose.Idle || next.Stale || next.ReducedMotion || next.Limiting?.Remaining is not >30) cheerUntil=0;
+  else if(next.RecoveredFrom(state)) cheerUntil=clock.Elapsed.TotalSeconds+1.1;
+  if(next.SizePercent!=state.SizePercent)ApplySize(next.SizePercent);
   state=next;
-  if (changed) animation=new(next.Character=="lulu",Art,Figure,PreviousFigure);
+  if (changed) animation=new(next.Character,Art,Figure);
   if (theme) RefreshColors();
   Heading.Text=state.Name;
+  RefreshSizeControls();
   Activity.Text=state.Status;
   string tone=state.Activity switch {
    CompanionPose.Offline => "Muted",CompanionPose.Question or CompanionPose.Approval => "Notice",
@@ -82,14 +88,50 @@ internal partial class CompanionWindow : Window {
   };
   StatusDot.Fill=Activity.Foreground=Ink(tone);
   Running.Text=Count(state.Running);Questions.Text=Count(state.Questions);Approvals.Text=Count(state.Approvals);
+  Agents.Text=Count(state.Agents);
+  TaskList.Visibility=state.TaskNames.Length>0?Visibility.Visible:Visibility.Collapsed;
+  var titles=state.TaskNames.AsEnumerable();
+  if(state.Running>state.TaskNames.Length)titles=titles.Append($"另有 {state.Running-state.TaskNames.Length} 个任务");
+  TaskNames.Text=string.Join("\n",titles);
   OpenApp.Content=state.Questions>0?"查看提问":state.Approvals>0?"查看审批":"打开码舱";
   QuotaRows.Children.Clear();
   QuotaNote.Text=state.Stale?"上次读取":state.Limiting?.Remaining<=10?"额度见底":state.Limiting?.Remaining>30?"额度充足":"";
   if (state.Quota.Length==0) QuotaRows.Children.Add(new TextBlock { Text=state.Connected?"暂无额度数据":"等待重新连接",Foreground=Ink("Muted"),Margin=new Thickness(0,4,0,0) });
   foreach (var window in state.Quota) AddQuota(window);
-  AutomationProperties.SetName(CharacterButton,$"{state.Name}，{state.Summary}。右击查看桌面概览");
+  AutomationProperties.SetName(CharacterButton,$"{state.Name}，{state.Summary}。双击打开码舱，右击查看概览");
   Render();Schedule();
   string Count(int value)=>state.Connected?value.ToString():"—";
+ }
+ void ApplySize(int percent) {
+  double factor=percent/100d,oldWidth=Width,oldHeight=Height;
+  var topLeft=IsVisible ? Position : (System.Drawing.Point?)null;
+  // Anchor at the feet, and keep the status label readable at the smallest size.
+  Width=Math.Max(156,Math.Round(172*factor));
+  Height=Math.Round(158*factor)+28;
+  Art.Width=Math.Round(166*factor);
+  FootShadow.Width=97*factor;FootShadow.Height=13*factor;
+  if(topLeft is {} point){
+   var dpi=VisualTreeHelper.GetDpi(this);
+   var area=Screen.FromPoint(new System.Drawing.Point(point.X+(int)(oldWidth*dpi.DpiScaleX/2),point.Y+(int)(oldHeight*dpi.DpiScaleY/2))).WorkingArea;
+   point.Offset((int)Math.Round((oldWidth-Width)*dpi.DpiScaleX/2),(int)Math.Round((oldHeight-Height)*dpi.DpiScaleY));
+   MoveInto(area,point);
+  }
+ }
+ void RefreshSizeControls() {
+  SizeLabel.Text=$"{state.SizePercent}%";
+  Smaller.IsEnabled=pendingSize==null && state.SizePercent>CompanionState.MinSize;
+  Larger.IsEnabled=pendingSize==null && state.SizePercent<CompanionState.MaxSize;
+ }
+ void ChangeSize(object sender,RoutedEventArgs e) {
+  if(pendingSize!=null)return;
+  int size=state.SizePercent+(sender==Larger?CompanionState.SizeStep:-CompanionState.SizeStep);
+  if(size<CompanionState.MinSize || size>CompanionState.MaxSize)return;
+  pendingSize=size;SizeError.Visibility=Visibility.Collapsed;RefreshSizeControls();
+  if(!requestSize(size))SizeResult(size,false);
+ }
+ internal void SizeResult(int size,bool saved) {
+  if(pendingSize!=size)return;
+  pendingSize=null;SizeError.Visibility=saved?Visibility.Collapsed:Visibility.Visible;RefreshSizeControls();
  }
  Brush Ink(string key)=>(Brush)FindResource(key);
  void RefreshColors() {
@@ -111,38 +153,52 @@ internal partial class CompanionWindow : Window {
   QuotaRows.Children.Add(row);QuotaRows.Children.Add(meter);
  }
  void Schedule() {
-  if (!IsVisible || (state.ReducedMotion && greetUntil==0)) {timer.Stop();return;}
-  timer.Interval=TimeSpan.FromMilliseconds(state.ReducedMotion?200:state.Activity==CompanionPose.Idle && greetUntil==0?66:50);
+  if (!IsVisible || ((state.ReducedMotion || !state.Connected) && greetUntil==0)) {timer.Stop();return;}
+  timer.Interval=TimeSpan.FromMilliseconds(state.ReducedMotion?200:1000d/30);
   timer.Start();
  }
  void Render() {
-  double now=clock.Elapsed.TotalSeconds,elapsed=now-activityStart;
+  double now=clock.Elapsed.TotalSeconds;
   bool greeting=greetUntil>now;
   if (!greeting && greetUntil!=0) {greetUntil=0;Schedule();}
-  var pose=greeting ? CompanionPose.Greet : state.Pose(state.ReducedMotion?0:elapsed);
-  animation.Draw(pose,now,state.ReducedMotion);
+  var pose=greeting ? CompanionPose.Greet : now<cheerUntil ? CompanionPose.Cheer : state.Pose;
+  // A layered window is hit-tested against its painted pixels. Keep the sofa, paws
+  // and badge under the pointer until Windows can distinguish a double click.
+  bool holdTarget=greeting && (now<waveAt || openOnRelease);
+  Art.Opacity=holdTarget ? .88 : 1;
+  if(!holdTarget){StatusBadge.MinWidth=0;animation.Draw(pose,now,state.ReducedMotion);}
   string text=greeting ? state.Character=="lulu" ? alternateGreeting?"嗯，在呢。":"给你留了一颗。" : alternateGreeting?"我在！":"碰个爪！" : state.Summary;
   if (Summary.Text!=text) Summary.Text=text;
  }
  void Greet(object sender,RoutedEventArgs e) {
   if (dragged) { dragged=false;return; }
+  bool pointer=pressedAt.HasValue;pressedAt=null;
+  if(openOnRelease){
+   openOnRelease=false;greetUntil=0;cheerUntil=0;Overview.IsOpen=false;Render();Schedule();open("main");return;
+  }
   alternateGreeting=!alternateGreeting;
-  greetUntil=clock.Elapsed.TotalSeconds+1.15;
+  waveAt=clock.Elapsed.TotalSeconds+(pointer?SystemInformation.DoubleClickTime/1000d:0);
+  greetUntil=waveAt+1.15;
+  if(pointer)StatusBadge.MinWidth=StatusBadge.ActualWidth;
   Render();Schedule();
  }
- void Press(object sender,MouseButtonEventArgs e) {pressedAt=e.GetPosition(this);dragged=false;}
+ void Press(object sender,MouseButtonEventArgs e) {
+  pressedAt=e.GetPosition(this);dragged=false;
+  openOnRelease=e.ClickCount==2;
+ }
  void MoveCharacter(object sender,MouseEventArgs e) {
   if (e.LeftButton!=MouseButtonState.Pressed) {pressedAt=null;return;}
   if (pressedAt is not {} start) return;
   var current=e.GetPosition(this);
   if (Math.Abs(current.X-start.X)<SystemParameters.MinimumHorizontalDragDistance && Math.Abs(current.Y-start.Y)<SystemParameters.MinimumVerticalDragDistance) return;
-  pressedAt=null;dragged=true;CharacterButton.ReleaseMouseCapture();
+  pressedAt=null;dragged=true;openOnRelease=false;CharacterButton.ReleaseMouseCapture();
   if (Mouse.LeftButton==MouseButtonState.Pressed) DragMove();
   MoveInto(Screen.FromHandle(new WindowInteropHelper(this).Handle).WorkingArea,Position);
  }
  void RightClick(object sender,MouseButtonEventArgs e) {e.Handled=true;Overview.IsOpen=true;}
  void ShowContext(object sender,ContextMenuEventArgs e) {e.Handled=true;Overview.IsOpen=true;}
  void CharacterKey(object sender,KeyEventArgs e) {
+  if(e.Key is Key.Space or Key.Enter){openOnRelease=false;dragged=false;pressedAt=null;}
   if (e.Key==Key.Apps || e.Key==Key.F10 && Keyboard.Modifiers==ModifierKeys.Shift) {e.Handled=true;Overview.IsOpen=true;}
  }
  void PanelKey(object sender,KeyEventArgs e) {if(e.Key==Key.Escape){e.Handled=true;Overview.IsOpen=false;CharacterButton.Focus();}}

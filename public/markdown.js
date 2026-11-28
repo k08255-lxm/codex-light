@@ -127,7 +127,10 @@ function inline(source, context, depth = 0) {
       const image = match[0].startsWith('!');
       const href = safeLink(target);
       const ref = image ? localImageRef(target, context) : href ? null : localPathRef(target, context);
-      if (image && ref) push({ type: 'file', ref, children: [{type: 'text', text: match[6] || ref.name}] });
+      if (image && ref) {
+        push({ type: 'file', ref, imageAlt: match[6], children: [{type: 'text', text: match[6] || ref.name}] });
+        context.imageRefs?.push({ path: ref.path, alt: match[6] });
+      }
       else if (image || !match[6]) push({ type: 'text', text: match[0] });
       else if (href) push({ type: 'link', href, children: inline(match[6], context, depth + 1) });
       else if (ref) push({ type: 'file', ref, children: inline(match[6], context, depth + 1) });
@@ -207,8 +210,9 @@ function blocks(lines, context, depth = 0, onBoundary) {
 function parseContext(cwd) {
   return { inlineLeft: MARKDOWN_LIMITS.inlineTokens, astLeft: MARKDOWN_LIMITS.nodes, blockLeft: MARKDOWN_LIMITS.blocks, truncated: false, cwd };
 }
-function parse(value, cwd) {
+function parse(value, cwd, imageRefs) {
   const original = safeText(value); const context = parseContext(cwd);
+  context.imageRefs = imageRefs;
   context.truncated = original.length > MARKDOWN_LIMITS.chars;
   const ast = blocks(original.slice(0, MARKDOWN_LIMITS.chars).replace(/\r\n?/g, '\n').split('\n'), context);
   return { ast, truncated: context.truncated };
@@ -217,6 +221,13 @@ export function parseMarkdown(value, { cwd = '' } = {}) {
   const { ast, truncated } = parse(value, cwd);
   if (truncated) ast.push({ type: 'paragraph', children: [{ type: 'text', text: TRUNCATED }] });
   return ast;
+}
+
+// Use the same Markdown grammar as the message, including inline code and fenced blocks.
+export function markdownImageRefs(source, cwd = '') {
+  if (!source?.includes('![')) return [];
+  const refs = [];
+  return parse(source, cwd, refs).truncated ? [] : refs;
 }
 
 async function copyText(document, value, onCopy) {
@@ -307,6 +318,14 @@ function renderAst(document, ast, { onCopy, onLocalLink }, remaining = MARKDOWN_
       }
       try { await copyText(document, ref.fullPath, onCopy); node.setAttribute('data-copied', 'true'); } catch { node.setAttribute('data-copied', 'false'); }
     });
+    if (token.imageAlt !== undefined) {
+      const slot = create('span', 'md-image-source');
+      if (!slot) return null;
+      slot.setAttribute('data-path', ref.path);
+      slot.setAttribute('data-alt', token.imageAlt);
+      slot.append(node);
+      return slot;
+    }
     return node;
   }
   function appendInline(parent, tokens) {

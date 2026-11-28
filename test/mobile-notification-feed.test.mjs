@@ -15,6 +15,27 @@ function feedWithRoots(...ids){
   return feed;
 }
 
+test('companion counts confirmed root turns, lists titles, and counts a working child once across parent and child events',()=>{
+  const feed=feedWithRoots('parent','loaded');
+  feed.rememberThread({id:'parent',source:'vscode',name:'改角色'});
+  feed.rememberThread({id:'loaded',source:'vscode',status:{type:'active'}});
+  const snapshot=()=>feed.snapshot({connected:true,companion:true,threads:[],requests:new Map()}).running;
+  const notify=(method,threadId,turnId,extra={})=>feed.observe({method,params:{threadId,turnId,...extra}});
+  assert.deepEqual(snapshot(),[]);
+  notify('turn/started','parent','p',{turn:{id:'p'}});
+  for(const id of ['c1','c2']){
+    notify('item/completed','parent','p',{item:{type:'subAgentActivity',id:'a'+id,kind:'started',agentThreadId:id}});
+    notify('turn/started',id,'t'+id,{turn:{id:'t'+id}});
+  }
+  assert.deepEqual(snapshot(),[{threadId:'parent',turnId:'p',name:'改角色',phase:'work',agents:2}]);
+  notify('turn/completed','c1','tc1',{turn:{id:'tc1',status:'completed'}});
+  assert.equal(snapshot()[0].agents,1);
+  notify('thread/status/changed','c2',null,{status:{type:'idle'}});
+  assert.equal(snapshot()[0].agents,0);
+  notify('thread/status/changed','parent',null,{status:{type:'idle'}});
+  assert.deepEqual(snapshot(),[]);
+});
+
 test('paired HTTP notification feed includes only active, terminal and pending routes',async t=>{
   const root=await mkdtemp(join(tmpdir(),'codecang-mobile-notifications-'));
   const client=new DemoClient();

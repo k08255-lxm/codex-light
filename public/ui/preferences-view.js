@@ -1,7 +1,7 @@
 // Appearance and notification preferences.
 // Desktop host: preferences are read/written through the local desktop API; the browser build
 // uses its own local storage.
-import { readPreferences, savePreferences, effectiveAppearance, validatePreferences, DEFAULT_PREFERENCES } from '../preferences.js';
+import { readPreferences, savePreferences, effectiveAppearance, validatePreferences, DEFAULT_PREFERENCES, COMPANION_SIZES } from '../preferences.js';
 
 export function createPreferences({ document, window, state, $, el, api, notice, confirm, onChange=()=>{} }) {
   let preferenceStorage;try{preferenceStorage=window.localStorage;}catch{preferenceStorage={getItem(){throw new Error('unavailable');},setItem(){throw new Error('unavailable');}};}
@@ -16,11 +16,17 @@ export function createPreferences({ document, window, state, $, el, api, notice,
     $('desktop-power-preferences').hidden=!state.desktop;
     for(const [control,key] of powerControls)control.checked=preferences[key];
   }
-  const companion=$('preference-companion');
+  const companionChoices=$('preference-companion').querySelectorAll('input');
+  const companionSize=$('preference-companion-size');
+  for(const size of COMPANION_SIZES){
+    const option=document.createElement('option');
+    option.value=String(size);option.textContent=size+'%';companionSize.append(option);
+  }
   function applyCompanionPreference(){
     const supported=state.desktop&&typeof window.chrome?.webview?.postMessage==='function';
     $('desktop-companion-preference').hidden=!supported;
-    companion.value=preferences.desktopCompanion;
+    for(const choice of companionChoices)choice.checked=choice.value===preferences.desktopCompanion;
+    companionSize.value=String(preferences.desktopCompanionSize);
   }
   async function syncNativeTheme(theme,visualStyle,force=false){
    if(!state.desktop)return;
@@ -65,12 +71,19 @@ export function createPreferences({ document, window, state, $, el, api, notice,
   for(const button of document.querySelectorAll('[data-theme-choice]'))button.addEventListener('click',()=>changePreferences({theme:button.dataset.themeChoice}));for(const button of document.querySelectorAll('[data-style-choice]'))button.addEventListener('click',()=>changePreferences({visualStyle:button.dataset.styleChoice}));
   $('preference-font').addEventListener('change',()=>changePreferences({fontScale:Number($('preference-font').value)}));$('preference-motion').addEventListener('change',()=>changePreferences({motion:$('preference-motion').value}));$('preference-completion').addEventListener('change',()=>changePreferences({completionNotice:$('preference-completion').checked}));$('preference-approval').addEventListener('change',()=>changePreferences({approvalNotice:$('preference-approval').checked}));
   for(const [control,key] of powerControls)control.addEventListener('change',()=>{if(state.desktop)void changePreferences({[key]:control.checked});});
-  companion.addEventListener('change',()=>{if(state.desktop)void changePreferences({desktopCompanion:companion.value});});
+  for(const choice of companionChoices)choice.addEventListener('change',()=>{
+    if(state.desktop&&choice.checked)void changePreferences({desktopCompanion:choice.value});
+  });
+  function setCompanionSize(size){
+    if(!state.desktop||!COMPANION_SIZES.includes(size))return false;
+    return changePreferences({desktopCompanionSize:size});
+  }
+  companionSize.addEventListener('change',()=>setCompanionSize(Number(companionSize.value)));
   colorMedia.addEventListener('change',applyPreferences);motionMedia.addEventListener('change',applyPreferences);applyPreferences();if(loadedPreferences.error)$('preference-status').textContent=loadedPreferences.error;
 
   /** Current preferences (read-only snapshot for other controllers). */
   function current() { return { ...preferences }; }
   /** Pushes the effective theme to the native caption after a (re)connection. */
   function syncHostTheme() { const appearance = effectiveAppearance(preferences, { dark: colorMedia.matches, reduced: motionMedia.matches }); syncNativeTheme(appearance.theme, appearance.visualStyle, true); }
-  return { loadDesktopState, applyPreferences, syncHostTheme, offerFirstTheme, current };
+  return { loadDesktopState, applyPreferences, syncHostTheme, offerFirstTheme, current, setCompanionSize };
 }

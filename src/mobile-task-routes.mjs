@@ -13,14 +13,15 @@ export class MobileTaskRoutes {
     this.changed = changed;
   }
 
-  #set(id, root, parent = null) {
+  #set(id, root, parent = null, name = '') {
     if (!validTaskId(id)) return;
     const previous = this.#routes.get(id);
     // Spawn evidence remains valid even if an older engine omits its lineage on read.
     if (root && previous?.root === false) return;
     parent = validTaskId(parent) ? parent : previous?.parent || null;
-    if (previous?.root === root && previous.parent === parent) return;
-    this.#routes.set(id, {root, parent});
+    name ||= previous?.name || '';
+    if (previous?.root === root && previous.parent === parent && previous.name === name) return;
+    this.#routes.set(id, {root, parent, name});
     if (this.#routes.size > 4096) this.#routes.delete(this.#routes.keys().next().value);
     this.#retryAfter.delete(id);
     this.changed();
@@ -34,8 +35,9 @@ export class MobileTaskRoutes {
     const hidden = parent || subAgent || thread.ephemeral
       || ['subagent', 'guardian_review'].includes(thread.threadSource);
     if (!hidden && !listed && !thread.source && thread.threadSource !== 'user') return;
-    this.#set(thread.id, !hidden, parent);
+    this.#set(thread.id, !hidden, parent, typeof thread.name==='string'?thread.name.trim().slice(0,64):'');
   }
+  nameOf(id) { return this.#routes.get(id)?.name || ''; }
 
   observe({method, params = {}}) {
     const id = params.threadId || params.thread?.id;

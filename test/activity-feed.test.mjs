@@ -368,7 +368,8 @@ test('streaming preserves closed Markdown blocks, updates the projected turn and
   assert.equal(turns[0].segments[0].answers[0],updated);
   view.render(turns); // A scroll-driven viewport render must not bring back the old text.
   assert.match(visibleText(host),/end/);
-  assert.equal(view.updateStreamingAnswer({...updated,text:updated.text+' ![image](C:/tmp/img.png)'}),false);
+  assert.equal(view.updateStreamingAnswer({...updated,text:updated.text+' ![image](C:/tmp/img.png)'}),true);
+  assert.equal(host.querySelector('.md-image-source').getAttribute('data-path'),'C:/tmp/img.png');
   assert.equal(view.updateStreamingAnswer({...updated,delivery:'async',questions:[{title:'Proceed?'}]}),false);
 });
 

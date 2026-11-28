@@ -5,13 +5,13 @@ import {createTurnActions,createTurnUsageSource} from './ui/turn-actions.js';
 // Messages and compaction stay visible; consecutive operations form collapsible groups.
 import { boundedText, itemText } from './store.js';
 import { icon } from './icons.js';
-import { renderMarkdown, updateMarkdownSegment } from './markdown.js';
+import { localImageRef, markdownImageRefs, renderMarkdown, updateMarkdownSegment } from './markdown.js';
 import { createConsoleCode, updateConsoleCode } from './code-format.js';
 import { formatDuration } from './state.js';
 import {absolutePath} from './delegated-changes.js';
 import { reasoningTimeLabel } from './reasoning-timing.js';
 import { dshToolResultAgentId, dshLifecycleEvent, dshStatusSnapshot } from './dsh.js';
-import { artifactCandidates, markdownImageRefs } from './ui/artifacts.js';
+import { artifactCandidates } from './ui/artifacts.js';
 import { asyncInputDefinition, asyncInputBodyText, createAsyncInputCard, asyncAnswerHistory } from './ui/async-input.js';
 import { changeEvidence } from './change-stats.js';
 import { createAgentAvatar } from './ui/agent-avatar.js';
@@ -327,7 +327,7 @@ export function retentionOf(item, keys) {
   for (const key of keys) { omitted += item?._omitted?.[key] || 0; released += item?._released?.[key] || 0; }
   return { complete: !omitted && !released, omitted, released };
 }
-function longTextView(document, { render, label = '正文', onCopy, scrollController, initialWindow = null }) {
+function longTextView(document, { render, label = '正文', onCopy, scrollController, initialWindow = null, onPaint }) {
   const node = el(document, 'div', 'long-text');
   const bar = el(document, 'div', 'long-text-bar'); bar.setAttribute('role', 'group'); bar.setAttribute('aria-label', label + '分段浏览');
   const position = el(document, 'span', 'long-text-position'); position.setAttribute('aria-live', 'polite');
@@ -403,7 +403,7 @@ function longTextView(document, { render, label = '正文', onCopy, scrollContro
     // An incomplete body always shows its status and the accurately labelled copy action.
     if (!windowed && retention.complete) {
       if (body.childNodes.length !== nodes.length || nodes.some((child,index)=>body.childNodes[index] !== child)) body.replaceChildren(...nodes);
-      bar.remove(); more.remove(); node.dataset.long = 'false'; return;
+      bar.remove(); more.remove(); node.dataset.long = 'false'; onPaint?.(body); return;
     }
     node.dataset.long = String(windowed);
     if (bar.parentElement !== node) node.insertBefore(bar, body);
@@ -415,6 +415,7 @@ function longTextView(document, { render, label = '正文', onCopy, scrollContro
     next.disabled = end >= count; last.disabled = end >= count && (!streaming || follow);
     last.textContent = streaming && !follow ? '跟随最新' : '最新';
     if (end < count) { if (more.parentElement !== node) node.append(more); } else more.remove();
+    onPaint?.(body);
   }
   function update(text, { streaming: live = false, retention: kept = null, followTail = true } = {}) {
     const source = typeof text === 'string' ? text : '';
@@ -455,7 +456,7 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
   const agentExpanded = new Map();
   const agentDetails = new Map();
   const fileState = new Map(); // Expanded paths survive viewport unmounts.
-  const imageRefs = new Map(); // answer id -> {text, refs}
+  const galleryKey = Symbol('completed turn images');
   const longPositions = new Map(); // Reading position survives viewport-only unmounts.
   const asyncInputs = new Map(); // thread/item identity keeps unsubmitted drafts across history refreshes.
   let runningClocks = [];
@@ -495,11 +496,58 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     else box.replaceChildren(renderMarkdown(document, source, options));
     return box;
   };
-  const answerRefs = answer => {
-    const cached = imageRefs.get(answer.id);
-    if (cached && cached.text === answer.text) return cached.refs;
-    const refs = markdownImageRefs(answer.text); imageRefs.set(answer.id, { text: answer.text, refs }); return refs;
-  };
+  function imageStrip(cache, key, candidates, inline = false) {
+    const signature = JSON.stringify(candidates);
+    let entry = cache.get(key);
+    if (entry?.signature !== signature) {
+      entry?.node.release();
+      entry?.node.remove();
+      entry = { signature, node: artifacts.strip(candidates, { inline }) };
+      cache.set(key, entry);
+    }
+    return entry.node;
+  }
+  function releaseImageStrips(cache, keep) {
+    for (const [key, entry] of cache || []) {
+      if (keep?.has(key)) continue;
+      entry.node.release();
+      entry.node.remove();
+      cache.delete(key);
+    }
+  }
+  function referencedImage(id, path, alt) {
+    return { key: id + ':' + path, kind: 'referenced', path, status: 'done', caption: alt, reason: '' };
+  }
+  function syncMessageImages(view, body) {
+    if (!artifacts || (!view.inlineImages?.size && (!view.showImages || !view.text?.includes('![')))) return;
+    const keys = new Set(), occurrences = new Map();
+    for (const slot of view.showImages ? body.querySelectorAll('.md-image-source') : []) {
+      const path = slot.getAttribute('data-path'), alt = slot.getAttribute('data-alt');
+      const index = occurrences.get(path) || 0;
+      occurrences.set(path, index + 1);
+      const key = JSON.stringify([path, index]);
+      keys.add(key);
+      view.inlineImages ??= new Map();
+      const card = imageStrip(view.inlineImages, key, [referencedImage(view.node.dataset.itemId, path, alt)], true);
+      if (card.parentElement !== slot) slot.append(card);
+    }
+    releaseImageStrips(view.inlineImages, keys);
+  }
+  function showMessageImages(view, show) {
+    if (view.showImages === show) return;
+    view.showImages = show;
+    syncMessageImages(view, view.body);
+  }
+  function messageGalleryImages(view) {
+    if (!view.text?.includes('![')) return [];
+    if (view.galleryText !== view.text) {
+      const split = splitSegments(view.text);
+      view.galleryImages = split.segments.flatMap((_, index) =>
+        markdownImageRefs(segmentSource(split, index), getCwd()).map(ref => referencedImage(view.node.dataset.itemId, ref.path, ref.alt)));
+      view.galleryText = view.text;
+    }
+    return view.galleryImages;
+  }
 
   function messageView(item) {
     const isUser = item.type === 'userMessage';
@@ -507,7 +555,7 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     node.dataset.itemId = item.id;
     const body = el(document, 'div', 'message-text');
     node.append(body);
-    return { node, body, item: null, steer: null, text: null, complete: null, content: null, kept: null, long: null };
+    return { node, body, item: null, steer: null, text: null, complete: null, content: null, kept: null, long: null, showImages: true };
   }
   function updateMessage(view, item, { steer = false, confirmedAnswers } = {}) {
     if (item.type === 'userMessage') {
@@ -555,7 +603,7 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     view.item = item; view.text = text; view.complete = item._complete; view.kept = kept;
     view.body.classList.add('markdown-body');
     view.node.classList.toggle('streaming', item._complete === false);
-    if (!view.long) { view.long = longTextView(document, { render: markdownSegment, label: '答复', onCopy, scrollController, initialWindow: longPositions.get(item.id) }); view.body.replaceChildren(view.long.node); }
+    if (!view.long) { view.long = longTextView(document, { render: markdownSegment, label: '答复', onCopy, scrollController, initialWindow: longPositions.get(item.id), onPaint: body => syncMessageImages(view, body) }); view.body.replaceChildren(view.long.node); }
     view.long.update(text, { streaming: item._complete === false, retention, followTail: scrollController?.following !== false });
   }
 
@@ -583,7 +631,7 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
   }
   function renderRowDetail(view) {
     if (!view.node.open) return;
-    const candidates=artifacts?artifactCandidates(view.item):[];
+    const candidates=artifacts && view.item.type!=='imageGeneration'?artifactCandidates(view.item):[];
     if(candidates.length){
       const signature=JSON.stringify(candidates);
       if(view.imageSignature!==signature){view.images?.release?.();view.images?.remove();view.images=artifacts.strip(candidates);view.imageSignature=signature;view.node.append(view.images);}
@@ -789,7 +837,12 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
       summary.focus({preventScroll: true});
       if(!scrollController)summary.scrollIntoView({block: 'nearest'});
     });
-    return { node, footer, work, workLabel, workBody, segments: new Map(), messages: new Map(), compactions: new Map(), events: new Map(), agentReplies: new Map(), files: null, agents: null, agentsSig: null, art: null, artSig: null };
+    const view = { node, footer, work, workLabel, workBody, segments: new Map(), messages: new Map(), compactions: new Map(), events: new Map(), agentReplies: new Map(), files: null, images: new Map() };
+    work.addEventListener('toggle', () => {
+      const finalMessage = view.messages.get(view.finalAnswerId);
+      if (finalMessage) showMessageImages(finalMessage, work.open);
+    });
+    return view;
   }
 
   function replyNode(view, item, {agentId, name, source, text, cwd = ''}) {
@@ -815,7 +868,31 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     return reply.node;
   }
   function releaseSegment(view){for(const row of view.rows.values())row.images?.release?.();}
-  function releaseTurn(view){view.actions?.release();view.art?.release?.();for(const segment of view.segments.values())releaseSegment(segment);for(const message of view.messages.values()){if(message.long)longPositions.set(message.node.dataset.itemId,{start:message.long.window.start,follow:message.long.window.follow});message.asyncInput?.pause();message.media?.release?.();}}
+  function releaseMessage(message) {
+    message.asyncInput?.pause();
+    message.media?.release?.();
+    releaseImageStrips(message.inlineImages);
+  }
+  function releaseTurn(view){view.actions?.release();releaseImageStrips(view.images);for(const segment of view.segments.values())releaseSegment(segment);for(const message of view.messages.values()){if(message.long)longPositions.set(message.node.dataset.itemId,{start:message.long.window.start,follow:message.long.window.follow});releaseMessage(message);}}
+
+  function turnGallery(candidates) {
+    // A later answer may link the same generated file. Keep distinct generation events,
+    // but give each file only one reference card in the summary.
+    const cwd = getCwd();
+    const fileKey = candidate => {
+      const path = candidate.path && localImageRef(candidate.path, { cwd })?.fullPath.replaceAll('\\', '/');
+      const drive = path && /^\/?([a-z]:\/.*)$/i.exec(path);
+      return drive ? drive[1].toLowerCase() : path;
+    };
+    const paths = new Set(candidates.filter(row => row.kind === 'generated' && row.status === 'done').map(fileKey));
+    return candidates.filter(row => {
+      if (row.kind !== 'referenced') return true;
+      const path = fileKey(row);
+      if (paths.has(path)) return false;
+      paths.add(path);
+      return true;
+    });
+  }
 
   function timingLabel(turn, now) {
     const t = turn.timing;
@@ -875,6 +952,10 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
       const children = []; const segmentKeys = new Set(); const messageIds = new Set();
       const chronological=turn.items||turn.segments.flatMap(segment=>[segment.user,...segment.process,...segment.answers].filter(Boolean));
       const steerIds=new Set(turn.segments.filter(segment=>segment.steer&&segment.user).map(segment=>segment.user.id));
+      const finalAnswer = turn.finished ? turn.segments.flatMap(segment => segment.answers)
+        .filter(answer => answer.phase !== 'partial_answer' && !asyncInputDefinition(answer)).at(-1) : null;
+      view.finalAnswerId = finalAnswer?.id;
+      const imageKeys = new Set(), completedImages = [];
       let operations=[];
       const flushOperations=tail=>{
         if(!operations.length)return;
@@ -940,32 +1021,43 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
           if(!compaction){compaction=renderCompactionRecord(document,item);view.compactions.set(item.id,compaction);}
           updateCompactionRecord(compaction,item);children.push(compaction);continue;
         }
+        if (artifacts && item.type === 'imageGeneration') {
+          operations.push(item);
+          flushOperations(item === chronological.at(-1));
+          const candidates = artifactCandidates(item);
+          for (const candidate of candidates) if (candidate.status==='running' && ['completed','failed','interrupted'].includes(turn.status)) {
+            candidate.status = candidate.path || candidate.inline || candidate.historyImage ? 'done' : 'failed';
+            if (candidate.status==='failed') candidate.reason = turn.status==='interrupted'?'图片生成已停止':'没有收到图片生成结果';
+          }
+          imageKeys.add(item.id);
+          children.push(imageStrip(view.images, item.id, candidates));
+          if (turn.finished) completedImages.push(...candidates);
+          continue;
+        }
         if(item.type!=='userMessage'&&item.type!=='agentMessage'){operations.push(item);continue;}
         if(echoes.has(item.id))continue;
         flushOperations(false);
         let message=view.messages.get(item.id);
         if(!message){message=messageView(item);view.messages.set(item.id,message);}
+        if (item.type === 'agentMessage') showMessageImages(message, item.id !== view.finalAnswerId || view.work.open);
         messageIds.add(item.id);updateMessage(message,item,{steer:steerIds.has(item.id),confirmedAnswers:answered.get(item.id)});children.push(message.node);
+        if (artifacts && turn.finished && item.type === 'agentMessage') completedImages.push(...messageGalleryImages(message));
       }
       flushOperations(true);
       for (const key of view.segments.keys()) if (!segmentKeys.has(key)) {releaseSegment(view.segments.get(key));view.segments.delete(key);}
-      for (const [id,message] of view.messages) if (!messageIds.has(id)) {message.asyncInput?.pause();message.media?.release?.();view.messages.delete(id);}
-      const turnItems=chronological.filter(item=>item.type!=='userMessage');
-      // Generated / referenced images: only explicit native paths and markdown image refs in answers.
-      if (artifacts) {
-        const candidates = turnItems.filter(item=>item.type==='imageGeneration').flatMap(artifactCandidates);
-        for (const answer of turn.segments.flatMap(segment => segment.answers)) for (const ref of answerRefs(answer)) candidates.push({ key: answer.id + ':' + ref.path, kind: 'referenced', path: ref.path, status: answer._complete === false ? 'running' : 'done', caption: ref.alt, reason: '' });
-        const unique = [...new Map(candidates.map(row => [row.key, row])).values()].slice(0, 12);
-        if (unique.length) {
-          const sig = JSON.stringify(unique);
-          if (view.artSig !== sig) { view.art?.release?.(); view.art = artifacts.strip(unique); view.artSig = sig; }
-          children.push(view.art);
-        }
-      }
+      for (const [id,message] of view.messages) if (!messageIds.has(id)) {releaseMessage(message);view.messages.delete(id);}
       if (turn.files.count && ['completed','interrupted','failed','error'].includes(turn.status)) {
         if (!view.files) view.files = filesView(turn.id);
         updateFiles(view.files, turn.files); children.push(view.files.node);
       }
+      let gallery = null;
+      if (completedImages.length) {
+        imageKeys.add(galleryKey);
+        gallery = imageStrip(view.images, galleryKey, turnGallery(completedImages));
+        gallery.classList.add('turn-image-gallery');
+        children.push(gallery);
+      }
+      releaseImageStrips(view.images, imageKeys);
       const working = turn.status === 'running';
       const footer = working ? timingLabel(turn, now) : turn.status === 'interrupted' ? '已停止' : turn.status === 'failed' ? `任务失败${turn.error ? '：' + turn.error : ''}` : turn.finished&&turn.timing.durationMs!==null?timingLabel(turn,now):'';
       setText(view.footer, footer);
@@ -977,12 +1069,11 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
         // Keep the prompt and final answer outside; completed intermediate work is one disclosure
         // above the answer. Its DOM survives re-renders, preserving an explicit expansion.
         // A mid-turn partial answer or question stays where it occurred, beside its reply.
-        const finalAnswer = turn.segments.flatMap(segment => segment.answers)
-          .filter(answer => answer.phase !== 'partial_answer' && !asyncInputDefinition(answer)).at(-1);
         const firstUser = view.messages.get(turn.segments[0]?.user?.id)?.node;
         const finalNode = finalAnswer && view.messages.get(finalAnswer.id)?.node;
-        const intermediates = children.filter(child => child !== firstUser && child !== finalNode && child !== view.files?.node && child !== view.art);
-        const rest = children.filter(child => !intermediates.includes(child));
+        const outside = new Set([firstUser, finalNode, view.files?.node, gallery]);
+        const intermediates = children.filter(child => !outside.has(child));
+        const rest = children.filter(child => outside.has(child));
         const insertion = firstUser ? rest.indexOf(firstUser) + 1 : 0;
         if (intermediates.length) {
           setText(view.workLabel, footer || ('已处理 ' + turn.processCount + ' 步'));
@@ -1004,10 +1095,6 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
       nodes.push(view.node);
     }
     for (const [id, view] of turns) if (!keep.has(id)) { releaseTurn(view); turns.delete(id); }
-    if(!viewportOnly && imageRefs.size){
-      const liveAnswers = new Set(list.flatMap(turn => turn.segments.flatMap(segment => segment.answers.map(answer => answer.id))));
-      for (const id of imageRefs.keys()) if (!liveAnswers.has(id)) imageRefs.delete(id);
-    }
     const focused = document.activeElement; const keepFocus = focused && host.contains(focused);
     reconcile(host, nodes);
     firstEdge=firstVisible>0?nodes[firstVisible]:null;
@@ -1039,7 +1126,7 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     const message = view?.messages.get(item?.id);
     if (!turn || turn.id !== item?._turnId || turn.finished || (view && !message) ||
         item.type !== 'agentMessage' || item._complete !== false ||
-        item.delivery === 'async' || typeof item.text !== 'string' || item.text.includes('![')) return false;
+        item.delivery === 'async' || typeof item.text !== 'string') return false;
     // The virtual viewport can remount from the last projection before a structural event arrives.
     // Keep both of its item references current without mutating a store snapshot held by a history read.
     const index = turn.items.findIndex(row => row.id === item.id);
@@ -1069,7 +1156,7 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     for(const item of items)if(item.type==='reasoning'&&itemState(item)==='running'){const row=process.rows.get(item.id);if(row)updateRow(row,item,now);}
     const info=describeItem(items.at(-1),now);setText(process.latest,`${info.verb}${!info.code&&info.target?' · '+info.target.slice(0,90):''}`);
   } }
-  function clear() { timeline?.clear();usageSource?.clear();longPositions.clear(); lastList=[];heights.clear();placeholders.clear(); for(const view of turns.values())releaseTurn(view);turns.clear(); longPositions.clear(); userOpen.clear(); agentExpanded.clear(); agentDetails.clear(); fileState.clear(); imageRefs.clear(); runningClocks = []; host.replaceChildren(); artifacts?.clear(); }
+  function clear() { timeline?.clear();usageSource?.clear();longPositions.clear(); lastList=[];heights.clear();placeholders.clear(); for(const view of turns.values())releaseTurn(view);turns.clear(); longPositions.clear(); userOpen.clear(); agentExpanded.clear(); agentDetails.clear(); fileState.clear(); runningClocks = []; host.replaceChildren(); artifacts?.clear(); }
   function revealItem(itemId) {
     const turn = lastList.find(row => row.items?.some(item => item.id === itemId));
     if (!turn) return null;

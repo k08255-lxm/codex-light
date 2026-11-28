@@ -92,7 +92,7 @@ test('native agent lifecycle uses typed agent state; a completed tool call is no
 test('conversation renders native agents and artifacts outside the collapsed process', async () => {
   const { mountConversation } = await import('../public/activity-feed.js');
   const document = createDocument(); const host = document.createElement('div');
-  const artifacts = mountArtifacts({ document, fetchPreview: async () => ({ blob: {}, width: 1, height: 1 }), onOpen() {} });
+  const artifacts = mountArtifacts({ document, fetchPreview: async () => ({ blob: new Blob(), width: 1, height: 1 }), onOpen() {} });
   const opened=[];const view = mountConversation(host, { artifacts,onOpenAgent:(...args)=>opened.push(args) });
   const ledger = new TurnLedger(); ledger.merge({ id: 't', status: 'completed', durationMs: 5000 });
   const items = [{ id: 'u', type: 'userMessage', content: [{ type: 'text', text: 'x' }], _turnId: 't' },
@@ -102,7 +102,7 @@ test('conversation renders native agents and artifacts outside the collapsed pro
   view.render(buildTurns(items, ledger));
   const process = host.querySelector('.turn-process'); assert.equal(process.open, false);
   const agentStep=process.querySelector('.step');agentStep.querySelector('summary').click();assert.deepEqual(opened,[['a','native']]);
-  const strip = host.querySelector('.artifact-strip');
+  const strip = host.querySelector('.turn-image-gallery');
   assert.equal(host.querySelector('.agent-list'),null,'no duplicate agent cards outside operation group');assert.ok(strip && !process.contains(strip));
   assert.equal(strip.querySelectorAll('.artifact').length, 2);
 });

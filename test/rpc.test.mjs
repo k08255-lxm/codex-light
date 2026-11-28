@@ -1,6 +1,14 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {RpcClient} from '../src/rpc.mjs';import {fileURLToPath} from 'node:url';
 import {EventEmitter} from 'node:events';
 const make=opts=>new RpcClient({command:process.execPath,args:[fileURLToPath(new URL('./fake-app-server.mjs',import.meta.url))],...opts});
+test('an oversized history reply releases only its request and the next protocol line remains readable',()=>{
+ const client=make();let rejected,delivered;
+ client.pending.set(11,{method:'thread/items/list',reject:error=>{rejected=error;client.pending.delete(11);}});
+ client.pending.set(12,{method:'thread/read',resolve:value=>{delivered=value;}});
+ client.consume('{"id"');client.consume(':11,"result":"');client.consume('x'.repeat(32*1024*1024));client.consume('tail');
+ assert.equal(rejected.code,'HISTORY_PAGE_TOO_LARGE');assert.equal(client.closed,false);
+ client.consume('"}\n{"id":12,"result":{"ok":true}}\n');assert.deepEqual(delivered,{ok:true});
+});
 test('stdio handshake, request correlation, server error',async t=>{
  const c=make();t.after(()=>c.close());await c.start();assert.equal(c.connected,true);assert.match(c.version,/fake/);
  const results=await Promise.all([c.call('a',{v:1}),c.call('b',{v:2})]);assert.equal(results[0].echo.v,1);assert.equal(results[1].echo.v,2);

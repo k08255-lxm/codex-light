@@ -424,11 +424,20 @@ export class HistoryPager {
     if (cursor) this.cursors.add(cursor);
     this.cursor = cursor || null;
   }
-  async call(method, params) { this.requests.push(method); return this.rpc(method, params); }
-  async next({ max = HISTORY_PAGE.items } = {}) {
+  async call(method, params) {
+    for (;;) {
+      this.requests.push(method);
+      try { return await this.rpc(method, params); }
+      catch (error) {
+        if (error.code !== 'HISTORY_PAGE_TOO_LARGE' || !(params.limit > 1)) throw error;
+        params = {...params, limit: Math.ceil(params.limit / 2)};
+      }
+    }
+  }
+  async next({ max = HISTORY_PAGE.items, firstPaint = false } = {}) {
     const turns = []; let activeTurnId = null; let fetches = 0; this.didRead = false;
-    while (this.buffer.length < max && (!this.started || this.cursor !== null) && fetches < HISTORY_PAGE.fetchesPerPage) {
-      const rows=await this.fetch(Math.min(HISTORY_PAGE.itemsPerRequest, max - this.buffer.length));
+    while (this.buffer.length < max && (!this.started || this.cursor !== null) && fetches < (firstPaint ? 1 : HISTORY_PAGE.fetchesPerPage)) {
+      const rows=await this.fetch(Math.min(HISTORY_PAGE.itemsPerRequest, max - this.buffer.length), firstPaint ? 1 : HISTORY_PAGE.turns);
       if(!this.started && rows.at(-1)?.status==='inProgress')activeTurnId=rows.at(-1).id;
       turns.push(...rows);fetches++;this.started=true;
       // A display page can span bounded API pages; read stays one full transfer per explicit request.
@@ -437,7 +446,7 @@ export class HistoryPager {
     const items = this.buffer.splice(Math.max(0, this.buffer.length - max));
     return { mode: this.mode, items, turns, activeTurnId, hasMore: this.hasMore, fullRead: this.didRead };
   }
-  async fetch(itemLimit = HISTORY_PAGE.itemsPerRequest) {
+  async fetch(itemLimit = HISTORY_PAGE.itemsPerRequest, turnLimit = HISTORY_PAGE.turns) {
     const { unsupported } = this.capabilities;
     if (!this.mode || this.mode === 'items') {
       if (!unsupported.has('items')) {
@@ -454,7 +463,7 @@ export class HistoryPager {
     if (!this.mode || this.mode === 'turns') {
       if (!unsupported.has('turns')) {
         try {
-          const params = { threadId: this.threadId, limit: HISTORY_PAGE.turns, sortDirection: 'desc', itemsView: 'full' }; if (this.cursor) params.cursor = this.cursor;
+          const params = { threadId: this.threadId, limit: turnLimit, sortDirection: 'desc', itemsView: 'full' }; if (this.cursor) params.cursor = this.cursor;
           const result = await this.call('thread/turns/list', params);
           const rows = Array.isArray(result?.data) ? result.data : [];
           // A CLI that ignores itemsView returns turns without items: it cannot page items this way.
