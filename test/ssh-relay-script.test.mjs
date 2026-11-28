@@ -16,7 +16,7 @@ function publicKey(byte) {
   return 'ssh-ed25519 ' + wire.toString('base64');
 }
 
-const first = { hostname: 'one.example.com', publicKey: publicKey(1), hostId: 'a'.repeat(32), sshPort: 49323 };
+const first = { hostname: 'one.example.com', publicKey: publicKey(1), hostId: 'a'.repeat(32) };
 const second = { ...first, hostname: 'two.example.com', publicKey: publicKey(2), hostId: 'b'.repeat(32) };
 const script = buildRelaySetupScript(first);
 const bash = process.platform === 'win32' ? path.join(process.env.ProgramFiles || 'C:/Program Files', 'Git/bin/bash.exe') : 'bash';
@@ -76,7 +76,9 @@ test('script accepts only a canonical DNS host, a fixed-size device ID and a com
   for (const hostId of ['x'.repeat(32), '0'.repeat(31), first.hostId + '\n', 'a;exit']) {
     assert.throws(() => buildRelaySetupScript({ ...first, hostId }));
   }
-  assert.throws(() => buildRelaySetupScript({ ...first, sshPort: 22 }));
+  assert.throws(() => buildRelaySetupScript({ ...first, httpsPort: 65536 }));
+  assert.match(buildRelayInstaller({...first,randomPorts:true}).command, /'auto' \)$/);
+  assert.match(buildRelayInstaller({...first,httpsPort:28443}).command, /'28443' \)$/);
   assert.match(script, /AddressFamily any/);
   for (const directive of ['AuthenticationMethods publickey', 'AllowUsers codecang-tunnel', 'AllowTcpForwarding remote',
     'PermitListen 127.0.0.1:*', 'GatewayPorts no', 'MaxSessions 0', 'AllowStreamLocalForwarding no', 'PermitOpen none',
@@ -260,5 +262,48 @@ test('actual registry and renderer allocate exclusive durable ports, publish per
   assert.ok(site.includes('reverse_proxy 127.0.0.1:49324'));
   assert.ok((await read('frontends/'+second.hostname+'.caddy')).includes('reverse_proxy 127.0.0.1:49168'));
   const nginx=await read('frontends/'+second.hostname+'.nginx.conf');
-  assert.ok(nginx.includes('proxy_set_header Host $host;'));assert.ok(nginx.includes('proxy_buffering off;'));
+  assert.ok(nginx.includes('proxy_set_header Host $http_host;'));assert.ok(nginx.includes('proxy_buffering off;'));
+  await mkdir(path.join(root,'public-ports'));
+  await writeFile(path.join(root,'public-ports',second.hostId),'24000 no\n');
+  await writeFile(path.join(root,'ssh-port'),'24001\n');
+  await rm(path.join(root,'web-entry'));
+  const custom=run('render_routes dedicated; host=$1; write_frontend_examples 49168 24000',[second.hostname]);
+  assert.equal(custom.status,0,custom.stderr);
+  assert.match(await read('dedicated/sites/'+second.hostId+'.caddy'),/^https:\/\/two\.example\.com:24000 \{/);
+  assert.equal(JSON.parse(await read('dedicated/metadata/'+second.hostId+'.json')).sshPort,24001);
+  assert.ok((await read('frontends/'+second.hostname+'-24000.caddy')).startsWith('https://'+second.hostname+':24000 {'));
+});
+
+test('server selects unused ports, keeps installed SSH and rechecks saved HTTPS allocations', {skip:!bashAvailable}, async t => {
+  const root=await mkdtemp(path.join(tmpdir(),'codecang-port-selection-'));
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  for(const dir of ['ssh','devices','public-ports']) await mkdir(path.join(root,dir));
+  const preflight=script.slice(script.indexOf('unused_port() {'),script.indexOf('if ! systemctl is-active --quiet "$web"; then\n  if [[ "$entry" == direct'));
+  function run(request,services='') {
+    return spawnSync(bash,['-c',[
+      'set -eu; base=.; id=test; host=desk.example.test; entry=49152; sshd=sshd; port_request=$1',
+      'fail(){ echo "$*" >&2; exit 1; }; valid_port(){ [[ "$1" =~ ^[1-9][0-9]{0,4}$ && "$1" -le 65535 ]]; }',
+      'ss(){ :; }; systemctl(){ return 1; }; check_port(){ [[ -z $(ss "$2" "sport = :$1") ]] || fail busy; }',
+      services,preflight,'echo "$ssh_port $public_port $keep_standard"',
+    ].join('\n'),'test',request],{cwd:root,encoding:'utf8'});
+  }
+  const fresh=run('auto');
+  assert.equal(fresh.status,0,fresh.stderr);
+  const [ssh,https]=fresh.stdout.trim().split(' ');
+  assert.match(ssh,/^2\d{4}$/);assert.match(https,/^2\d{4}$/);assert.notEqual(ssh,https);
+  const skipped=run('auto','ss(){ if [[ ! -e occupied ]]; then echo "${2##*:}" > occupied; fi; if [[ "${2##*:}" == "$(<occupied)" ]]; then echo LISTEN; fi; }');
+  assert.equal(skipped.status,0,skipped.stderr);
+  assert.ok(!skipped.stdout.trim().split(' ').includes((await readFile(path.join(root,'occupied'),'utf8')).trim()));
+  assert.notEqual(run('28000','ss(){ [[ "$2" != "sport = :28000" ]] || echo LISTEN; }').status,0);
+  await writeFile(path.join(root,'ssh','sshd_config'),'Port 49323\n');
+  await writeFile(path.join(root,'devices','test'),'legacy');
+  assert.match(run('auto').stdout,/^49323 2\d{4} yes/);
+  await writeFile(path.join(root,'public-ports','test'),'28000 yes\n');
+  assert.match(run('auto').stdout,/^49323 28000 yes/);
+  await mkdir(path.join(root,'http','gen.saved','metadata'),{recursive:true});
+  await writeFile(path.join(root,'http','Caddyfile'),'import /relay/gen.saved/sites/*.caddy\n');
+  await writeFile(path.join(root,'http','gen.saved','metadata','test.json'),'{"hostId":"test"}\n');
+  const occupied='ss(){ [[ "$2" != "sport = :28000" ]] || echo LISTEN; };';
+  assert.notEqual(run('auto',occupied+' curl(){ echo wrong; }').status,0);
+  assert.equal(run('auto',occupied+' curl(){ echo \'{"hostId":"test"}\'; }').status,0);
 });

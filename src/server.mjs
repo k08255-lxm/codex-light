@@ -627,18 +627,25 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      if(!input||typeof input!=='object'||Array.isArray(input))throw new Error('远程访问参数无效');
      if(isTunnel){
       if(action==='enable'){json(res,200,await queueTunnel(()=>tunnel.enable(input)));return;}
-      if(Object.keys(input).length)throw new Error('公网入口操作参数无效');
-      if(action==='status'){json(res,200,await tunnelStatus());return;}
-      if(action==='ssh/prepare'||action==='ssh/installer'){
+      if(action==='status'&&!Object.keys(input).length){json(res,200,await tunnelStatus());return;}
+      if(['ssh/connect','ssh/prepare','ssh/installer'].includes(action)){
+       const fields=Object.keys(input).sort().join(',');
+       const draft=action==='ssh/installer' && fields==='port,publicOrigin,randomPorts';
+       const connecting=action==='ssh/connect';
+       if(connecting ? fields!=='port,previousOrigin,publicOrigin' :
+         fields && !draft && !(action==='ssh/installer' && fields==='randomPorts'))throw new Error('公网入口操作参数无效');
+       if('randomPorts' in input && typeof input.randomPorts!=='boolean')throw new Error('随机端口选项无效');
        const result=await queueTunnel(async()=>{
-        const endpoint=tunnel.status();
-        if(!endpoint.enabled)throw Object.assign(new Error('请先开启这台电脑的公网入口。'),{status:409});
+        const settings={publicOrigin:input.publicOrigin,port:input.port};
         const id=await hostId();
-        if(stopping||!tunnel.status().enabled)throw Object.assign(new Error('公网入口已关闭。'),{status:409});
+        if(stopping)throw Object.assign(new Error('公网入口已关闭。'),{status:409});
+        const endpoint=connecting?await tunnel.configureTunnel(settings,input.previousOrigin):tunnel.status();
+        if(!draft&&!endpoint.enabled)throw Object.assign(new Error('请先开启这台电脑的公网入口。'),{status:409});
         sshRelay??=new SshRelay({keyDir:path.join(remoteDirectory,'ssh')});
-        const target={publicOrigin:endpoint.origin,port:endpoint.port,hostId:id};
-        if(action==='ssh/installer')return sshRelay.installer(target);
-        return sshRelay.prepare({...target,verifyRelayProof:(nonce,proof)=>tunnel.verifyRelayProof(nonce,proof)});
+        const target={...(draft?settings:{publicOrigin:endpoint.origin,port:endpoint.port}),hostId:id};
+        if(action==='ssh/installer')return sshRelay.installer({...target,randomPorts:input.randomPorts});
+        const prepared=await sshRelay.prepare({...target,verifyRelayProof:(nonce,proof)=>tunnel.verifyRelayProof(nonce,proof)});
+        return connecting?tunnelStatus():prepared;
        });
        if(action==='ssh/installer'){
         const online=await relaySourceAvailable();
@@ -646,6 +653,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
        }else json(res,200,result);
        return;
       }
+      if(Object.keys(input).length)throw new Error('公网入口操作参数无效');
       if(action==='ssh/stop'){await queueTunnel(()=>sshRelay?.stop());json(res,200,relayStatus());return;}
       if(action==='disable'){json(res,200,await queueTunnel(()=>tunnel.disable()));return;}
      }

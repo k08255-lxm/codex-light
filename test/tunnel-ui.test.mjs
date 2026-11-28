@@ -242,16 +242,17 @@ test('a selected single address can be remembered after confirmation', async t =
 
 test('SSH setup downloads the device script, copies its verified command and connects independently', async t => {
   let status = { enabled: false, remoteHostId: 'e'.repeat(32), remoteHostName: '书房电脑', sshRelay: { state: 'off' } };
-  const origin = 'https://office.example.test';
+  const origin = 'https://office.example.test:24861';
   const script = 'test installation script';
   const installCommand='verified installer command';
   const { document, host, view, panel, calls } = fixture(t, {
     '/api/lan/tunnel/status': () => status,
     '/api/lan/tunnel/enable': () => (status = { ...status, enabled: true, port: 49321, origin }),
     '/api/lan/tunnel/ssh/installer':()=>({script,command:installCommand,online:true,...status.sshRelay}),
-    '/api/lan/tunnel/ssh/prepare': () => {
+    '/api/lan/tunnel/ssh/connect': ({publicOrigin,port}) => {
+      status = {...status,enabled:true,origin:publicOrigin,port};
       status.sshRelay = { state: 'waiting', message: '等待 VPS 注册' };
-      return { script, ...status.sshRelay };
+      return status;
     },
     '/api/lan/tunnel/ssh/stop': () => (status.sshRelay = { state: 'off', message: '已停止' }),
   });
@@ -267,30 +268,30 @@ test('SSH setup downloads the device script, copies its verified command and con
   provider.dispatch('change');
   assert.equal(install.hidden, false);
   assert.equal(install.disabled, true);
-  field.value = sameOrigin;
+  field.value = origin;
   field.dispatch('input');
-  form.dispatch('submit');
-  assert.match(panel.querySelector('.tunnel-message').textContent, /443/);
-  assert.ok(!calls.some(call => call.path.endsWith('/enable')));
-  field.value = origin + ':443';
-  field.dispatch('input');
-  form.dispatch('submit');
-  await settled();
   assert.equal(install.disabled, false);
+  const random=panel.querySelector('.relay-port-option').querySelector('input');
+  random.checked=true;random.dispatch('change');
   install.click();
   await settled();
-  assert.ok(!calls.some(call=>call.path.endsWith('/ssh/prepare')));
+  assert.deepEqual(calls.find(call=>call.path.endsWith('/ssh/installer')).body,{publicOrigin:origin,port:49321,randomPorts:true});
+  assert.match(panel.querySelector('.tunnel-state').textContent,/已关闭/);
+  assert.ok(!calls.some(call=>call.path.endsWith('/enable')||call.path.endsWith('/ssh/connect')));
   button(panel,'复制安装命令').click();await settled();
   assert.equal(panel.querySelector('.relay-command').value,installCommand);
   assert.equal(panel.querySelector('textarea').parentElement.open,false);
-  button(panel,'连接已配置的服务器').click();await settled();
-  assert.deepEqual(calls.find(call => call.path.endsWith('/ssh/prepare')), { path: '/api/lan/tunnel/ssh/prepare', body: {} });
+  const assigned='https://office.example.test:24560';
+  field.value=assigned;field.dispatch('input');form.dispatch('submit');await settled();
+  assert.deepEqual(calls.find(call => call.path.endsWith('/ssh/connect')).body,{publicOrigin:assigned,port:49321,previousOrigin:null});
+  assert.equal(button(panel,'二维码配对').hidden,true);
   assert.deepEqual(copied, [status.remoteHostId, installCommand]);
-  assert.match(panel.querySelector('.tunnel-ssh-guide').textContent, /等待 VPS 注册/);
-  button(panel, '停止服务器中继').click();
+  assert.match(panel.querySelector('.tunnel-state').textContent, /正在读取服务器配置/);
+  assert.match(panel.querySelector('.tunnel-ssh-message').textContent, /等待 VPS 注册/);
+  button(panel, '取消连接').click();
   await settled();
   assert.deepEqual(calls.find(call => call.path.endsWith('/ssh/stop')), { path: '/api/lan/tunnel/ssh/stop', body: {} });
-  assert.equal(button(panel, '停止服务器中继').hidden, true);
+  assert.equal(button(panel, '取消连接').hidden, true);
   assert.equal(button(panel, '关闭公网入口').hidden, false);
 });
 
@@ -302,7 +303,7 @@ test('reopening a waiting relay shows its configuration, with manual copy if the
   });
   await view.activate();
   assert.equal(panel.querySelector('select').value, 'ssh');
-  assert.equal(panel.querySelector('.tunnel-guide').open, true);
+  assert.equal(panel.querySelector('.tunnel-configuration').hidden,false);
   button(panel, '获取安装命令').click();
   await settled();
   const fallback = panel.querySelector('.relay-command');
@@ -312,4 +313,23 @@ test('reopening a waiting relay shows its configuration, with manual copy if the
   assert.equal(panel.querySelector('textarea').parentElement.open,false);
   view.deactivate();
   assert.equal(fallback.value, '');
+});
+
+test('relay polling preserves an edited address and reveals pairing only for a verified connection', async t=>{
+  t.mock.timers.enable({apis:['setInterval']});
+  const origin='https://office.example.test:24005';
+  let relay={state:'connecting',message:'正在验证公网回源'};
+  const {view,panel}=fixture(t,{'/api/lan/tunnel/status':()=>({...tunnelEnabled,origin,sshRelay:relay})});
+  await view.activate();
+  const field=panel.querySelector('#tunnel-public-origin');
+  assert.equal(button(panel,'二维码配对').hidden,true);
+  field.value='https://office.example.test:24006';field.dispatch('input');
+  relay={state:'connected'};
+  t.mock.timers.tick(3000);await settled();
+  assert.equal(field.value,'https://office.example.test:24006');
+  assert.equal(button(panel,'更换地址并连接').disabled,false);
+  assert.equal(button(panel,'二维码配对').hidden,true);
+  field.value=origin;field.dispatch('input');
+  assert.equal(button(panel,'二维码配对').hidden,false);
+  assert.match(panel.querySelector('.tunnel-state').textContent,/公网已连接/);
 });

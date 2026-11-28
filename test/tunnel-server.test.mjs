@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { createServer } from '../src/server.mjs';
+import { LanAccess } from '../src/lan-access.mjs';
 
 const loopback = '127.0.0.1';
 const publicOrigin = 'https://phone.example.com';
@@ -164,6 +165,23 @@ test('only the desktop owner can enable a dedicated, explicitly configured HTTPS
   assert.equal((await manage(app, 'tunnel/status')).json().url, first.url);
   await manage(app, 'tunnel/disable');
   await enable(app, publicOrigin + ':8443');
+});
+
+test('changing a relay address keeps its listener, revokes the previous pairing, and rejects stale edits', async t => {
+  const tunnel=new LanAccess({tunnel:true,handler:(_req,res)=>res.end('ready')});
+  t.after(()=>tunnel.close());
+  const port=await availablePort();
+  const first=await tunnel.configureTunnel({publicOrigin,port},null);
+  const ticket=fragment(tunnel.pairing().url,'pair');
+  const target=publicOrigin+':25443';
+  const next=await tunnel.configureTunnel({publicOrigin:target,port},first.origin);
+  assert.equal(next.port,first.port);
+  assert.notEqual(fragment(next.url,'token'),fragment(first.url,'token'));
+  assert.equal((await request(port,first.origin,'/api/status',{token:fragment(first.url,'token')})).status,403);
+  assert.equal((await request(port,next.origin,'/api/pairing/redeem',{body:{ticket}})).status,401);
+  assert.equal((await request(port,next.origin,'/api/status',{token:fragment(next.url,'token')})).status,200);
+  await assert.rejects(tunnel.configureTunnel({publicOrigin,port},first.origin),/已变更/);
+  assert.equal((await tunnel.configureTunnel({publicOrigin:target,port},next.origin)).url,next.url);
 });
 
 test('proxy preserves remote restrictions and requires the correct host, origin and listener credential', async t => {

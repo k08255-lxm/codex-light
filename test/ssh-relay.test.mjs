@@ -43,6 +43,7 @@ async function fixture(t, response, timing = {}) {
           const reply = response(url.pathname, body);
           const stream = Readable.from([Buffer.from(reply.raw ?? JSON.stringify(reply.json))]);
           stream.statusCode = reply.status ?? 200;
+          stream.headers = reply.headers || {};
           cb(stream);
         });
       };
@@ -139,6 +140,23 @@ test('relay never claims connection when the public endpoint returns the wrong p
   await relay.prepare(inputs);
   await waitFor(() => relay.status.state === 'error');
   assert.ok(children[0].killed);
+});
+
+test('a web page at the metadata address reports the error while retrying, then uses the advertised SSH port', async t => {
+  let fixed=false;
+  const {relay,children,calls,keyDir}=await fixture(t,(route,body)=>{
+    if(route!==metadataPath) return {json:{proof:sign(JSON.parse(body).nonce)}};
+    return fixed ? {json:{...meta,sshPort:23456}} : {headers:{'content-type':'text/html; charset=utf-8'},raw:'<html></html>'};
+  },{maxAttempts:4,retryDelayMs:120});
+  await relay.prepare({...inputs,publicOrigin:'https://relay.example.org:25443'});
+  await waitFor(()=>relay.status.state==='retrying');
+  assert.match(relay.status.message,/网页/);assert.equal(children.length,0);
+  fixed=true;
+  await waitFor(()=>relay.status.state==='connected');
+  assert.ok(calls.every(call=>call.url.port==='25443'));
+  assert.equal(children[0].args[children[0].args.indexOf('-p')+1],'23456');
+  const dir=(await readdir(keyDir)).find(name=>name.startsWith('connection-'));
+  assert.match(await readFile(path.join(keyDir,dir,'known_hosts'),'utf8'),/^\[relay\.example\.org\]:23456 /);
 });
 
 test('native OpenSSH connection closes after abrupt desktop process exit', async t => {

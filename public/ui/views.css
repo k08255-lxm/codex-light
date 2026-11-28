@@ -673,6 +673,10 @@
 .tunnel-frp-config { overflow: auto; border-radius: var(--r-md); padding: 10px 12px; background: var(--canvas); font-size: .75rem; }
 .tunnel-guide-link { color: var(--accent); font-size: .8125rem; }
 .tunnel-ssh-message:empty { display: none; }
+.tunnel-panel > .tunnel-ssh-message:not(:empty) { margin: 6px 0 0; overflow-wrap: anywhere; }
+.relay-port-option { display: flex; align-items: center; gap: 6px; margin: 8px 0; }
+.access-heading .tunnel-state[data-connection=connected] { color:var(--accent); font-weight:600; }
+.access-heading .tunnel-state[data-connection=error], .access-heading .tunnel-state[data-connection=retrying] { color:var(--text); font-weight:600; }
 .tunnel-guide .tunnel-script { width: 100%; margin-block-start: 6px; font: .75rem/1.55 ui-monospace, monospace; }
 .remote-lan-section .access-intro { margin:0 0 16px; }
 #lan-root { display:grid; gap:12px; }

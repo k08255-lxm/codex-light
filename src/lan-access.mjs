@@ -107,6 +107,25 @@ export class LanAccess {
   if(failed)throw failed.reason;
  }
  enable(input={}){const stopRevision=this.#stopRevision;this.#revision++;return this.#serial(()=>this.#enable(input,null,this.#revision,stopRevision));}
+ configureTunnel(input,previousOrigin){
+  const stopRevision=this.#stopRevision;
+  return this.#serial(async()=>{
+   if(!this.#tunnel||this.#closed||stopRevision!==this.#stopRevision)throw failure('公网入口已关闭','TUNNEL_CLOSED',409);
+   const {publicOrigin,port}=tunnelEndpoint(input);
+   const current=this.status();
+   if(current.origin!==previousOrigin)throw failure('公网地址已变更，请核对后重新连接','TUNNEL_CHANGED',409);
+   if(!current.enabled)return this.#enable(input,null,this.#revision,stopRevision);
+   if(port!==current.port)throw failure('请先关闭公网入口，再更改本机端口','TUNNEL_CHANGED',409);
+   if(current.origin===publicOrigin)return current;
+   await this.#beforeListenerClose?.();
+   if(this.#closed||stopRevision!==this.#stopRevision)throw failure('公网入口已关闭','TUNNEL_CLOSED',409);
+   // Credentials and existing streams belong to the old public origin.
+   this.#invalidate();
+   this.#session.listeners[0].origin=publicOrigin;
+   this.#session.token=randomBytes(32).toString('hex');
+   return this.status();
+  });
+ }
  async #autoNetworks(candidates){
   if(!this.#networkSnapshot&&!this.#networkIdentity)return null;
   const names=[...new Set(candidates.flatMap(row=>[...row.adapters.keys()]))];

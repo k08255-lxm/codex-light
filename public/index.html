@@ -292,7 +292,7 @@
       <section id="settings-archived" class="settings-section hidden"><div class="section-head"><h1>已归档</h1><button id="refresh-archived" class="btn small">刷新</button></div><div id="archived-list" class="panel list-panel"><p class="fine">尚未读取。</p></div><button id="more-archived" class="btn hidden">加载更多</button></section>
       <section id="settings-remote" class="settings-section hidden">
         <h1>远程控制</h1>
-        <section id="settings-lan" class="local-only remote-lan-section"><p class="fine access-intro">局域网和公网可以同时开启。手机分别扫码配对后，会优先通过局域网连接这台电脑。</p><div id="lan-root"></div></section>
+        <section id="settings-lan" class="local-only remote-lan-section"><p class="fine access-intro">手机分别配对两个入口后，会先试局域网，连不上时自动尝试这台电脑的公网地址。</p><div id="lan-root"></div></section>
         <details id="official-remote" class="official-remote"><summary>Codex 官方远控</summary>
         <p class="fine">管理通过 Codex 官方协议连接的设备和配对码。连接或配对成功不等于手机端已验证可用。</p>
         <div class="panel remote-panel"><div class="work-row"><button id="remote-refresh" type="button" class="btn">刷新</button><button id="remote-enable" type="button" class="btn">本次会话启用</button><button id="remote-disable" type="button" class="btn">持久停用</button></div><div id="remote-status" role="status">尚未读取。</div></div>

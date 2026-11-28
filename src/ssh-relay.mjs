@@ -11,7 +11,7 @@ import { setTimeout as pause } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { buildRelayInstaller } from './ssh-relay-script.mjs';
 
-const SSH_PORT = 49323;
+const LEGACY_SSH_PORT = 49323;
 const HOST_KEY_PATH = '/.well-known/codecang-relay';
 const JSON_LIMIT = 1024;
 const ed25519Header = Buffer.from('0000000b7373682d6564323535313900000020', 'hex');
@@ -52,14 +52,14 @@ function relayTarget(publicOrigin, port, hostId) {
   try { url = new URL(publicOrigin); } catch { throw new TypeError('SSH 中继需要 HTTPS 域名。'); }
   const { hostname, origin } = url;
   const labels = hostname.split('.');
-  if (url.protocol !== 'https:' || url.port || url.username || url.password || url.pathname !== '/' || url.search || url.hash ||
+  if (url.protocol !== 'https:' || url.port === '0' || url.username || url.password || url.pathname !== '/' || url.search || url.hash ||
       isIP(hostname) || hostname.length > 253 || labels.length < 2 || labels.at(-1) === 'localhost' ||
       !labels.every(label => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label))) {
-    throw new TypeError('SSH 中继需要使用标准 443 端口的 HTTPS 域名。');
+    throw new TypeError('SSH 中继需要有效的公网 HTTPS 地址。');
   }
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new TypeError('本机转发端口无效。');
   if (typeof hostId !== 'string' || hostId.length !== 32 || !/^[0-9a-f]+$/.test(hostId)) throw new TypeError('主机标识无效。');
-  return { hostname, origin, port, hostId };
+  return { hostname, origin, httpsPort: Number(url.port || 443), port, hostId };
 }
 
 function ed25519Key(text) {
@@ -71,6 +71,8 @@ function ed25519Key(text) {
   return `ssh-ed25519 ${line[1]}`;
 }
 
+class RelayResponseError extends Error {}
+
 function readRelayJson(url, { signal, request, body }) {
   const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(5000)]);
   return new Promise((resolve, reject) => {
@@ -79,7 +81,12 @@ function readRelayJson(url, { signal, request, body }) {
     const req = request(url, options, response => {
       if (response.statusCode !== 200) {
         response.destroy();
-        reject(new Error('HTTPS 入口未返回中继数据。'));
+        reject(new RelayResponseError(`HTTPS 入口返回 HTTP ${response.statusCode}。请检查该站点的中继转发配置。`));
+        return;
+      }
+      if (/^text\/html\b/i.test(response.headers?.['content-type'] || '')) {
+        response.destroy();
+        reject(new RelayResponseError('HTTPS 地址返回了网页。请检查该域名和端口是否转发到了码舱中继。'));
         return;
       }
       const chunks = [];
@@ -88,7 +95,7 @@ function readRelayJson(url, { signal, request, body }) {
         bytes += chunk.length;
         if (bytes > JSON_LIMIT) {
           response.destroy();
-          reject(new Error('中继响应过大。'));
+          reject(new RelayResponseError('HTTPS 入口响应过大。请检查该站点是否转发到了码舱中继。'));
           return;
         }
         chunks.push(chunk);
@@ -96,7 +103,8 @@ function readRelayJson(url, { signal, request, body }) {
       response.once('error', reject);
       response.once('aborted', () => reject(new Error('中继响应提前结束。')));
       response.once('end', () => {
-        try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); } catch (error) { reject(error); }
+        try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
+        catch { reject(new RelayResponseError('HTTPS 入口没有返回中继 JSON 配置。请检查站点转发。')); }
       });
     });
     req.once('error', reject);
@@ -173,7 +181,7 @@ function sshConfigPath(file) {
   return `"${pathname.replace(/%/g, '%%').replace(/[\\"]/g, '\\$&')}"`;
 }
 
-function sshArguments({ hostname, port, relayPort }, privateKey, knownHosts) {
+function sshArguments({ hostname, port, relayPort, sshPort }, privateKey, knownHosts) {
   const settings = [
     'BatchMode=yes', 'IdentitiesOnly=yes', 'IdentityAgent=none', 'CertificateFile=none',
     `IdentityFile=${sshConfigPath(privateKey)}`, 'PreferredAuthentications=publickey',
@@ -185,7 +193,7 @@ function sshArguments({ hostname, port, relayPort }, privateKey, knownHosts) {
     'StdinNull=yes', 'EscapeChar=none', 'PermitRemoteOpen=none', 'ConnectTimeout=8', 'ConnectionAttempts=1',
     'ServerAliveInterval=15', 'ServerAliveCountMax=3', 'LogLevel=ERROR', 'LogVerbose=*ssh_confirm_remote_forward():*',
   ];
-  return ['-F', 'none', '-N', '-T', ...settings.flatMap(option => ['-o', option]), '-p', String(SSH_PORT),
+  return ['-F', 'none', '-N', '-T', ...settings.flatMap(option => ['-o', option]), '-p', String(sshPort),
     '-R', `127.0.0.1:${relayPort}:127.0.0.1:${port}`, `codecang-tunnel@${hostname}`];
 }
 
@@ -197,7 +205,7 @@ async function forwardConnection(spawnProcess, target, privateKey, knownHosts, {
     : fork(modulePath, ['--own-ssh', ...args], { ...options, stdio: [...options.stdio, 'ipc'], execArgv: [] });
   const lifetime = new AbortController();
   const proofSignal = AbortSignal.any([signal, lifetime.signal, AbortSignal.timeout(timeout)]);
-  let launchError, killTimer, ready = false;
+  let launchError, killTimer, ready = false, confirmed = false;
   function terminate() {
     if (lifetime.signal.aborted || killTimer) return;
     if (!spawnProcess) {
@@ -229,7 +237,7 @@ async function forwardConnection(spawnProcess, target, privateKey, knownHosts, {
   try {
     // LogLevel=ERROR suppresses server auth banners. Only the selected OpenSSH
     // callback emits the verbose diagnostic with this exact forwarding tuple.
-    const confirmed = await new Promise(resolve => {
+    confirmed = await new Promise(resolve => {
       const cancel = () => resolve(false);
       proofSignal.addEventListener('abort', cancel, { once: true });
       diagnostics.on('line', line => {
@@ -257,7 +265,7 @@ async function forwardConnection(spawnProcess, target, privateKey, knownHosts, {
     clearTimeout(killTimer);
     signal.removeEventListener('abort', terminate);
   }
-  return { ready, launchError, proofTimedOut: !ready && proofSignal.reason?.name === 'TimeoutError' };
+  return { ready, launchError, confirmed };
 }
 
 export class SshRelay {
@@ -289,17 +297,17 @@ export class SshRelay {
     if (this.#session === session && !session.signal.aborted) this.#status = { state, message };
   }
 
-  async #credentials(target, signal) {
+  async #credentials(target, signal, randomPorts = false) {
     signal.throwIfAborted();
     const key = await prepareClientKey(this.#keyDir, this.#keygen, signal);
     signal.throwIfAborted();
-    const installer = buildRelayInstaller({hostname:target.hostname, publicKey:key.publicKey, sshPort:SSH_PORT, hostId:target.hostId});
+    const installer = buildRelayInstaller({...target, publicKey:key.publicKey, randomPorts});
     return {installer, privateKey:key.privateKey};
   }
 
-  async installer({publicOrigin, port, hostId}) {
+  async installer({publicOrigin, port, hostId, randomPorts = false}) {
     if(this.#closed)throw new Error('SSH 中继控制器已关闭。');
-    const {installer}=await this.#credentials(relayTarget(publicOrigin,port,hostId),AbortSignal.timeout(15000));
+    const {installer}=await this.#credentials(relayTarget(publicOrigin,port,hostId),AbortSignal.timeout(15000),randomPorts);
     return {...installer,...this.status};
   }
 
@@ -345,21 +353,32 @@ export class SshRelay {
     let failure;
     try {
       while (!signal.aborted && remaining-- > 0 && Date.now() < (reconnectDeadline ?? deadline)) {
-        this.#update(session, 'waiting', reconnectDeadline ? 'SSH 中继已断开，正在重连。' : '正在等待服务器提供 SSH 主机公钥。');
-        let hostKey, relayPort;
+        if (!failure) this.#update(session, 'waiting', '正在通过公网 HTTPS 读取服务器的中继配置。');
+        let hostKey, relayPort, sshPort;
         try {
           const metadata = await this.#readJson(keyUrl, signal);
+          if (!metadata?.hostId) throw new RelayResponseError('HTTPS 入口缺少码舱中继配置。请检查域名和端口的转发规则。');
+          if (metadata.hostId !== target.hostId) throw new RelayResponseError('该地址注册的是另一台电脑。请核对公网地址和安装命令。');
           relayPort = metadata.relayPort;
-          if (metadata.hostId !== target.hostId || !Number.isInteger(relayPort) || relayPort < 49322 || relayPort > 49999 || relayPort === SSH_PORT) {
-            throw new Error('中继元数据与此主机不匹配。');
+          sshPort = metadata.sshPort === undefined ? LEGACY_SSH_PORT : metadata.sshPort;
+          if (!Number.isInteger(sshPort) || sshPort < 1 || sshPort > 65535 || sshPort === target.httpsPort ||
+              !Number.isInteger(relayPort) || relayPort < 49322 || relayPort > 49999 || relayPort === sshPort || relayPort === LEGACY_SSH_PORT) {
+            throw new RelayResponseError('服务器返回的中继端口无效。请核对服务器安装配置。');
           }
           hostKey = ed25519Key(metadata.hostKey);
         }
-        catch { failure = '未能通过 HTTPS 获取与本机匹配的中继配置，请检查域名、证书和部署脚本。'; }
+        catch (error) {
+          if (error instanceof RelayResponseError) failure = error.message;
+          else if (error.code === 'ENOTFOUND' || error.code === 'EAI_AGAIN') failure = '无法解析中继域名。请检查 DNS。';
+          else if (error.code === 'ABORT_ERR' || error.code === 'ETIMEDOUT') failure = '读取公网 HTTPS 配置超时。请检查端口和防火墙。';
+          else if (error.code === 'ECONNREFUSED') failure = '公网 HTTPS 端口拒绝连接。请检查该端口是否已启动监听。';
+          else if (/CERT|SELF_SIGNED|VERIFY_LEAF/i.test(error.code || '')) failure = '公网 HTTPS 证书验证失败。请核对域名和证书链。';
+          else failure = '读取公网 HTTPS 中继配置失败。请检查域名、证书及服务器配置。';
+        }
         if (hostKey && !signal.aborted) {
-          await writeFile(knownHosts, `[${target.hostname}]:${SSH_PORT} ${hostKey}\n`, { mode: 0o600, signal });
-          this.#update(session, 'connecting', '正在验证 SSH 主机并建立反向转发。');
-          const result = await forwardConnection(this.#spawn, { ...target, relayPort }, privateKey, knownHosts, { signal, timeout: connectTimeoutMs,
+          await writeFile(knownHosts, `[${target.hostname}]:${sshPort} ${hostKey}\n`, { mode: 0o600, signal });
+          this.#update(session, 'connecting', `正在连接 SSH 端口 ${sshPort} 并验证公网回源。`);
+          const result = await forwardConnection(this.#spawn, { ...target, relayPort, sshPort }, privateKey, knownHosts, { signal, timeout: connectTimeoutMs,
             prove: async proofSignal => {
               const nonce = randomBytes(16).toString('hex');
               try {
@@ -373,15 +392,17 @@ export class SshRelay {
             this.#update(session, 'error', '无法启动 OpenSSH 客户端。');
             return;
           }
-          failure = result.proofTimedOut ? '公网 HTTPS 地址未通过本机回源验证，请检查服务器域名和反向转发。'
-            : 'SSH 未能保持反向转发，请检查服务器安装和 SSH 端口。';
+          failure = result.ready ? 'SSH 连接已断开。' : result.confirmed ? 'SSH 转发已建立，但公网 HTTPS 未能验证到这台电脑。请检查代理转发的 Host 和端口。'
+            : `SSH 端口 ${sshPort} 未能建立转发。请检查端口放行和服务器注册。`;
           if (result.ready) {
             reconnectDeadline = Date.now() + 30000;
             remaining = Math.min(maxAttempts, 3);
           }
-          this.#update(session, 'waiting', failure);
         }
-        if (!signal.aborted && remaining > 0) await pause(retryDelayMs, undefined, { signal });
+        if (!signal.aborted && remaining > 0) {
+          this.#update(session, 'retrying', failure);
+          await pause(retryDelayMs, undefined, { signal });
+        }
       }
       this.#update(session, 'error', failure || '等待 SSH 中继连接超时。');
     } finally {
