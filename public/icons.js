@@ -24,6 +24,8 @@ const ICONS = {
   more: [['circle', { cx: '6', cy: '12', r: '1.3', fill: DOT }], ['circle', { cx: '12', cy: '12', r: '1.3', fill: DOT }], ['circle', { cx: '18', cy: '12', r: '1.3', fill: DOT }]],
   search: [['circle', { cx: '10.5', cy: '10.5', r: '6' }], ['path', { d: 'M15 15l4.5 4.5' }]],
   // Content
+  calendar: [['rect',{x:3.5,y:5.5,width:17,height:15,rx:2}],['path',{d:'M7.5 3.5v4m9-4v4M4 10.5h16'}]],
+  edit: [['path', { d: 'M4 20l4.5-1 12-12a2 2 0 0 0-3-3l-12 12L4 20zM15.5 6.5l3 3' }]],
   file: [['path', { d: 'M6.5 5a1.5 1.5 0 0 1 1.5-1.5h5.5l4 4V19a1.5 1.5 0 0 1-1.5 1.5H8A1.5 1.5 0 0 1 6.5 19z' }], ['path', { d: 'M13.5 3.5V7.5h4' }]],
   review: [['path', { d: 'M6.5 5a1.5 1.5 0 0 1 1.5-1.5h5.5l4 4V19a1.5 1.5 0 0 1-1.5 1.5H8A1.5 1.5 0 0 1 6.5 19z' }], ['path', { d: 'M9.5 13.5l2 2 3.5-3.5' }]],
   folder: [['path', { d: 'M3.5 7.5a2 2 0 0 1 2-2h3.8l2 2.5h7.2a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z' }]],

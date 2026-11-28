@@ -21,8 +21,8 @@ function setup(){
   const view=name=>({activate(){calls.push([name,'activate']);},deactivate(){calls.push([name,'deactivate']);},setActive(){},reset(){}});
   const noop=()=>{};
   const state={cwd:'/project',lan:false,connected:false};
-  const dependencies={document,$,state,createNavigationHistory,renderThreads:noop,configPanel:view('config'),closeWindowMenu:noop,closeThreadMenu:noop,
-    contextDetails:{close:noop},sessionSpeed:{close:noop},sidebarController:{setRoute:value=>calls.push(['sidebar',value]),open:()=>calls.push(['sidebar','open']),closeForNavigation:noop},
+  const dependencies={document,$,state,createNavigationHistory,conversationScroll:{capture:()=>null,restore:noop},renderThreads:noop,configPanel:view('config'),closeWindowMenu:noop,closeThreadMenu:noop,
+    contextDetails:{close:noop},sessionUsage:{close:noop},sessionSpeed:{close:noop},sidebarController:{setRoute:value=>calls.push(['sidebar',value]),open:()=>calls.push(['sidebar','open']),closeForNavigation:noop},
     statsView:view('stats'),accountView:view('account'),accountLoginPanel:view('login'),pluginPanel:view('plugins'),skillsView:view('skills'),aboutView:view('about'),storageView:view('storage'),
     slashMenu:{close:()=>calls.push(['slash','close'])},
     runtimePanel:null,wslRuntimePanel:view('wsl'),prReviewPanel:null,dshConnectionView:view('dsh'),dshConfigView:view('dsh-config'),lanView:view('lan'),
@@ -58,13 +58,12 @@ test('paired settings can navigate to About without falling back to General',()=
   assert.ok(h.calls.some(([view,action])=>view==='about'&&action==='activate'));
 });
 
-test('leaving the conversation closes Activity without forgetting its selected tab',()=>{
-  const h=setup();h.state.detailsTab='dsh';
+test('leaving the conversation closes the agent inspector',()=>{
+  const h=setup();
   h.$('details').classList.remove('hidden');h.$('toggle-details').setAttribute('aria-pressed','true');
   h.route('usage');
   assert.equal(h.$('details').classList.contains('hidden'),true);
   assert.equal(h.$('toggle-details').getAttribute('aria-pressed'),'false');
-  assert.equal(h.state.detailsTab,'dsh');
 });
 
 test('storage settings is local-only and activates its own view',()=>{const x=setup();x.selectSettingsSection('storage');assert.equal(x.state.settingsPage,'storage');assert.ok(x.calls.some(c=>c[0]==='storage'&&c[1]==='activate'));x.state.lan=true;x.selectSettingsSection('storage');assert.equal(x.state.settingsPage,'general');assert.equal(x.$('settings-storage').classList.contains('hidden'),true);});

@@ -22,9 +22,6 @@
 <link rel="stylesheet" href="/ui/select.css">
 </head>
 <body>
-<!-- Native host bridges (MainWindow.cs clicks these ids); hidden, the host owns its caption menu. -->
-<div class="window-bar hidden" aria-hidden="true"><button id="menu-file" title="本地文件菜单" aria-haspopup="menu" aria-expanded="false">文件</button><button id="menu-view" title="本地视图菜单" aria-haspopup="menu" aria-expanded="false">视图</button><button id="menu-help" title="查看 码舱 CodeCang 功能说明">帮助</button></div>
-<div id="window-menu" class="menu app-menu hidden" role="menu" aria-label="应用菜单"></div>
 <header class="app-titlebar" aria-label="窗口导航">
   <nav class="history-navigation" aria-label="页面历史">
     <button id="navigate-back" class="btn icon-only ghost" type="button" aria-label="后退" title="后退 (Alt+Left)" disabled><span data-icon="left"></span></button>
@@ -46,7 +43,6 @@
 <div id="app" class="app" data-view="chat">
   <!-- Rail: brand + primary destinations. One persistent control toggles the thread list. -->
   <nav class="rail" aria-label="主导航">
-    <button id="menu-app" class="rail-btn app-menu-trigger" type="button" title="应用菜单 (Alt+M)" aria-label="应用菜单" aria-controls="window-menu" aria-haspopup="menu" aria-expanded="false"><span data-icon="menu"></span></button>
     <span class="rail-brand" aria-hidden="true"><span data-icon="brand"></span></span>
     <button id="rail-sidebar" class="rail-btn" title="收起侧栏" aria-label="收起侧栏" aria-controls="sidebar" aria-expanded="true"><span data-icon="panel"></span></button>
     <div class="rail-group">
@@ -103,7 +99,7 @@
     <header class="stage-bar">
       <div class="crumbs"><span id="project-name" class="crumb-project">工作区</span><span class="crumb-sep" aria-hidden="true">/</span><strong id="thread-title">新对话</strong><span id="thread-load-indicator" aria-hidden="true"></span><span id="thread-open-status" class="sr-only" role="status"></span></div>
       <div class="stage-actions">
-        <button id="toggle-details" class="btn ghost small" aria-pressed="false" aria-controls="details" aria-label="工具活动" title="工具活动"><span data-icon="activity"></span><span class="label">活动</span></button>
+        <button id="toggle-details" class="btn ghost small" aria-pressed="false" aria-controls="details" aria-label="子代理" title="子代理"><span data-icon="branch"></span><span class="label">子代理</span></button>
         <button id="thread-menu-button" class="btn icon-only ghost" aria-label="对话操作" aria-haspopup="menu" aria-expanded="false" title="对话操作"><span data-icon="more"></span></button>
       </div>
       <div id="thread-menu" class="menu hidden" role="menu" aria-label="对话操作"><button id="rename-thread" role="menuitem">重命名</button><button id="fork-thread" role="menuitem">创建分支</button><button id="archive-thread" role="menuitem">归档</button></div>
@@ -119,7 +115,7 @@
     </section>
     <nav id="turn-timeline" class="turn-timeline" aria-label="对话轮次" hidden>
       <div class="turn-marks"></div>
-      <div class="turn-preview" aria-hidden="true" hidden></div>
+      <div id="turn-preview" class="turn-preview" role="tooltip" hidden><div class="turn-preview-prompt"></div><div class="turn-preview-response" hidden></div></div>
     </nav>
     </div>
     <section id="pending-submissions" class="tray pending-submissions hidden" aria-label="待确认的任务请求" aria-live="polite"></section>
@@ -166,6 +162,7 @@
       <div class="composer-foot">
         <button id="cwd-button" type="button" class="foot-btn" title="设置工作目录"><span data-icon="folder"></span><span id="cwd-label">设置工作目录</span><span data-icon="down"></span></button>
         <span class="foot-chip" title="任务在此计算机的工作目录中运行，可能直接修改项目文件"><span data-icon="computer"></span>本地</span>
+        <button id="session-usage" type="button" class="foot-btn hidden" aria-haspopup="dialog" aria-controls="session-usage-details" aria-expanded="false" aria-label="查看本次对话用量与费用"><span data-icon="storage"></span><span id="session-token-label">Token 用量</span><span id="session-hit-label"></span></button>
         <button id="session-speed" type="button" class="foot-btn speed-meter hidden" aria-haspopup="dialog" aria-controls="speed-details" aria-expanded="false" aria-label="查看会话速度"><span data-icon="usage"></span><span id="speed-label">会话速度</span></button>
         <span id="composer-hint" class="composer-hint">Enter 发送 · Shift Enter 换行 · / 命令</span>
       </div>
@@ -277,7 +274,7 @@
       </section>
       <section id="settings-shortcuts" class="settings-section hidden">
         <h1>快捷键</h1>
-        <div class="panel"><dl class="kv keys"><dt>新对话</dt><dd><kbd>Ctrl N</kbd></dd><dt>模型与思考强度</dt><dd><kbd>Ctrl Shift M</kbd></dd><dt>发送 / 运行中立即补充</dt><dd><kbd>Enter</kbd></dd><dt>运行中排队</dt><dd><kbd>Tab</kbd></dd><dt>换行</dt><dd><kbd>Shift Enter</kbd></dd><dt>命令与技能</dt><dd><kbd>/</kbd></dd><dt>关闭弹层</dt><dd><kbd>Esc</kbd></dd><dt>原生应用菜单</dt><dd><kbd>Alt M</kbd> / <kbd>F10</kbd></dd></dl></div>
+        <div class="panel"><dl class="kv keys"><dt>新对话</dt><dd><kbd>Ctrl N</kbd></dd><dt>模型与思考强度</dt><dd><kbd>Ctrl Shift M</kbd></dd><dt>发送 / 运行中立即补充</dt><dd><kbd>Enter</kbd></dd><dt>运行中排队</dt><dd><kbd>Tab</kbd></dd><dt>换行</dt><dd><kbd>Shift Enter</kbd></dd><dt>命令与技能</dt><dd><kbd>/</kbd></dd><dt>关闭弹层</dt><dd><kbd>Esc</kbd></dd></dl></div>
       </section>
       <section id="settings-configuration" class="settings-section hidden"><h1>配置</h1><div id="config-pending"></div><div id="config-panel"></div><div id="title-settings-root" class="local-only"></div></section>
       <section id="settings-archived" class="settings-section hidden"><div class="section-head"><h1>已归档</h1><button id="refresh-archived" class="btn small">刷新</button></div><div id="archived-list" class="panel list-panel"><p class="fine">尚未读取。</p></div><button id="more-archived" class="btn hidden">加载更多</button></section>
@@ -319,11 +316,9 @@
     </div>
   </main>
 
-  <!-- ===== Inspector: tool activity and DSH ===== -->
-  <aside id="details" class="inspector hidden" aria-label="活动" inert>
-    <div class="inspector-head"><div class="segmented" role="tablist"><button id="tab-tools" class="active" aria-pressed="true">工具活动</button><button id="tab-dsh" aria-pressed="false">子代理</button></div><strong id="details-title" class="sr-only">工具活动</strong><button id="close-details" class="btn icon-only ghost" aria-label="关闭"><span data-icon="close"></span></button></div>
-    <div id="tools-panel" class="inspector-body"><div id="tool-list"><p class="muted">暂无工具活动</p></div></div>
-    <div id="dsh-panel" class="inspector-body hidden">
+  <aside id="details" class="inspector hidden" aria-labelledby="details-title" inert>
+    <div class="inspector-head"><strong id="details-title">子代理</strong><button id="close-details" class="btn icon-only ghost" aria-label="关闭"><span data-icon="close"></span></button></div>
+    <div id="dsh-panel" class="inspector-body">
       <div hidden><strong id="dsh-status-label"></strong><button id="refresh-dsh" type="button">检查连接</button><p id="dsh-status-details"></p><span id="dsh-live-state"></span><p id="dsh-live-meta"></p></div>
       <section class="agent-inspector" aria-label="当前对话的子代理"><div class="agent-list-toolbar"><strong>当前对话</strong><button id="dsh-live-refresh" class="btn icon-only ghost" type="button" title="刷新子代理列表" aria-label="刷新子代理列表"><span data-icon="refresh"></span></button></div><p id="dsh-live-warning" class="dsh-live-warning dsh-error hidden" role="status"></p><div id="dsh-tasks" class="agent-inspector-content"><p class="muted">当前对话暂无子代理</p></div></section>
     </div>
@@ -348,11 +343,22 @@
     <div class="first-theme-footer"><span id="first-theme-status" role="status">以后可以在设置中更改。</span><button type="submit" class="btn primary">使用此主题</button></div>
   </form>
 </dialog>
+<section id="session-usage-details" class="turn-usage-popover dock-stat-popover" popover="auto" role="dialog" aria-labelledby="session-usage-title">
+  <div class="turn-usage-head"><strong id="session-usage-title">本次对话用量</strong><strong id="session-token-total">—</strong></div>
+  <dl class="speed-readings">
+    <div><dt>缓存命中</dt><dd id="session-cache-hit">—</dd></div>
+    <div><dt>未缓存输入</dt><dd id="session-input">—</dd></div>
+    <div><dt>缓存读取</dt><dd id="session-cached">—</dd></div>
+    <div><dt>输出</dt><dd id="session-output">—</dd></div>
+    <div><dt>预估费用（USD）</dt><dd id="session-cost">—</dd></div>
+  </dl>
+  <p id="session-cost-status" class="fine" role="status"></p>
+</section>
 <section id="speed-details" class="turn-usage-popover dock-stat-popover" popover="auto" role="dialog" aria-labelledby="speed-title">
   <div class="turn-usage-head"><strong id="speed-title">会话速度</strong></div>
   <dl class="speed-readings">
-    <div><dt>模型回复用时</dt><dd id="speed-reply">—</dd></div>
-    <div><dt>工具调用用时</dt><dd id="speed-tools">—</dd></div>
+    <div><dt>回复消息累计用时</dt><dd id="speed-reply">—</dd></div>
+    <div><dt>工具调用累计用时</dt><dd id="speed-tools">—</dd></div>
     <div><dt>首 token 平均（TTFT）</dt><dd id="speed-ttft">—</dd></div>
     <div><dt>输出速度（TPS）</dt><dd id="speed-tps">—</dd></div>
     <div id="speed-turn-row" hidden><dt>整轮平均输出</dt><dd id="speed-turn">—</dd></div>

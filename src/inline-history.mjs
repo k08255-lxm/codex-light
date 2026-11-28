@@ -3,10 +3,20 @@ import {constants} from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import {contextFields,contextSnapshot} from '../public/context-usage.js';
+import {parseLocalCodexUsage,MAX_RECOVERY_LOG_BYTES} from './local-usage.mjs';
 const same=(a,b)=>process.platform==='win32'?a.toLowerCase()===b.toLowerCase():a===b;
 export const defaultRolloutRoots=()=>['sessions','archived_sessions'].map(p=>path.join(process.env.CODEX_HOME||path.join(os.homedir(),'.codex'),p));
 const within=(root,file)=>{const r=path.relative(root,file);return r&&!path.isAbsolute(r)&&r!=='..'&&!r.startsWith('..'+path.sep);};
+// Codex on Windows can report the same file as C:\... or \\?\C:\....
+function rolloutPath(value){
+ if(process.platform!=='win32'||typeof value!=='string')return value;
+ if(/^\\\\\?\\[a-z]:\\/i.test(value))return value.slice(4);
+ if(/^\\\\\?\\UNC\\/i.test(value))return '\\\\'+value.slice(8);
+ return value;
+}
 async function openThreadRollout({rollout,threadId,roots=defaultRolloutRoots(),caseSensitive=false}){
+ rollout=rolloutPath(rollout);
+ roots=roots.map(rolloutPath);
  const samePath=caseSensitive?((a,b)=>a===b):same;
  if(typeof rollout!=='string'||!path.isAbsolute(rollout)||!roots.some(r=>within(path.resolve(r),rollout)&&(!caseSensitive||rollout.startsWith(path.resolve(r)+path.sep)))||!path.basename(rollout).endsWith('-'+threadId+'.jsonl'))return null;
  for(let p=rollout;;p=path.dirname(p)){const s=await fs.lstat(p);if(s.isSymbolicLink())throw Error('History link refused');if(path.dirname(p)===p)break;}
@@ -60,20 +70,33 @@ const fromLog = values => Object.fromEntries(contextFields.map(([key])=>[
  key,values?.[key.replace(/[A-Z]/g,letter=>'_'+letter.toLowerCase())],
 ]));
 
+// Price only attributable counter differences, grouped by their recorded model and provider.
+function historyCostGroups(bytes) {
+ const usage=parseLocalCodexUsage(bytes,{sourceId:'thread-history'});
+ if(usage.attribution!=='observed-differences-only')return [];
+ const groups=new Map();
+ for(const {model,provider,tokens} of usage.increments){
+  const key=JSON.stringify([model,provider]),group=groups.get(key);
+  if(!group){groups.set(key,{model,provider,tokens:{...tokens}});continue;}
+  for(const field of Object.keys(tokens))group.tokens[field]=group.tokens[field]===null||tokens[field]===null?null:group.tokens[field]+tokens[field];
+ }
+ return [...groups.values()];
+}
+
 /** Recover only the verified thread's latest recorded token counters. */
-export async function readInlineHistoryContext({rollout,threadId,roots,caseSensitive=false,onTimings}){
+export async function readInlineHistoryContext({rollout,threadId,roots,caseSensitive=false,onTimings,includeCost=false}){
  const opened=await openThreadRollout({rollout,threadId,roots,caseSensitive});
  if(!opened)return null;
  const {handle,info}=opened;
  try{
-  async function read(position,length){
+  async function read(position,length,asBytes=false){
    const bytes=Buffer.alloc(length);let offset=0;
    while(offset<length){
     const {bytesRead}=await handle.read(bytes,offset,length-offset,position+offset);
     if(!bytesRead)return null;
     offset+=bytesRead;
    }
-   return bytes.toString('utf8');
+   return asBytes ? bytes : bytes.toString('utf8');
   }
   const prefix=await read(0,Math.min(info.size,HISTORY_CONTEXT_HEAD));
   const firstEnd=prefix?.indexOf('\n')??-1;
@@ -86,28 +109,48 @@ export async function readInlineHistoryContext({rollout,threadId,roots,caseSensi
   const lines=tail.split('\n');
   let snapshot=null;
   const ttfts=new Map(),meta=header.payload;
-  const collect=onTimings&&!meta.parent_thread_id&&!meta.forked_from_id&&!meta.history_base&&!meta.source?.subagent;
-  // A tail window can start in a partially read JSONL record.
-  for(let index=lines.length-1;index>0;index--){
-   if(!lines[index].includes('"session_meta"')&&(snapshot||!lines[index].includes('"token_count"'))&&
-     !(collect&&lines[index].includes('"time_to_first_token_ms"')))continue;
-   let row;try{row=JSON.parse(lines[index]);}catch{continue;}
-   if(row.type==='session_meta')return null;
-   if(collect&&row.type==='event_msg'&&row.payload?.type==='task_complete'){
-    const {turn_id:id,time_to_first_token_ms:value,duration_ms:duration}=row.payload;
-    if(typeof id==='string'&&id.length<=256&&id.length&&Number.isSafeInteger(value)&&value>=0&&
-       (!Number.isFinite(duration)||value<=duration)&&!ttfts.has(id))ttfts.set(id,value);
+  const needsOwner=Boolean(meta.parent_thread_id||meta.forked_from_id||meta.history_base||meta.source?.subagent);
+  // Copied parent events can precede the child's first explicit settings event.
+  const ownerMarker=line=>{
+   if(!line.includes('"thread_settings_applied"'))return false;
+   try{const row=JSON.parse(line);return row.type==='event_msg'&&row.payload?.type==='thread_settings_applied'&&row.payload.thread_id===threadId;}catch{return false;}
+  };
+  const beforeTail=offset>0&&needsOwner ? (offset>=HISTORY_CONTEXT_HEAD?prefix:await read(0,offset)) : '';
+  let owns=!needsOwner||beforeTail?.split('\n').slice(1,-1).some(ownerMarker);
+  // Line zero is the header, or an incomplete record at the start of the tail.
+  for(const line of lines.slice(1)){
+   if(!owns&&ownerMarker(line)){owns=true;continue;}
+   if(!line.includes('"session_meta"')&&(!owns||!line.includes('"token_count"')&&!(onTimings&&line.includes('"time_to_first_token_ms"'))))continue;
+   let row;try{row=JSON.parse(line);}catch{continue;}
+   if(row.type==='session_meta'){
+    if(!needsOwner)return null;
+    owns=false;snapshot=null;ttfts.clear();continue;
    }
-   const info=row.type==='event_msg'&&row.payload?.type==='token_count'?row.payload.info:null;
-   if(snapshot||!info||typeof info!=='object')continue;
-   const candidate=contextSnapshot({threadId,turnId:row.payload.turn_id,tokenUsage:{
-    last:fromLog(info.last_token_usage),total:fromLog(info.total_token_usage),modelContextWindow:info.model_context_window,
+   if(!owns||row.type!=='event_msg')continue;
+   const event=row.payload;
+   if(onTimings&&(event?.type==='task_complete'||event?.type==='turn_complete')){
+    const {turn_id:id,time_to_first_token_ms:value,duration_ms:duration}=event;
+    if(typeof id==='string'&&id.length<=256&&id.length&&Number.isSafeInteger(value)&&value>=0&&
+       (!Number.isFinite(duration)||value<=duration))ttfts.set(id,value);
+   }
+   const usage=event?.type==='token_count'?event.info:null;
+   if(!usage||typeof usage!=='object')continue;
+   const candidate=contextSnapshot({threadId,turnId:event.turn_id,tokenUsage:{
+    last:fromLog(usage.last_token_usage),total:fromLog(usage.total_token_usage),modelContextWindow:usage.model_context_window,
    }});
    if(candidate&&(candidate.window!==null||[...Object.values(candidate.last),...Object.values(candidate.total)].some(value=>value!==null)))snapshot=candidate;
   }
+  let costGroups;
+  if(includeCost){
+   // Read the complete verified rollout on demand within the recovery parser's budget.
+   // For larger logs the first complete tail counter establishes a fresh baseline.
+   const bytes=offset===0 ? Buffer.from(tail) : info.size<=MAX_RECOVERY_LOG_BYTES
+    ? await read(0,info.size,true) : Buffer.from(prefix.slice(0,firstEnd+1)+lines.slice(1).join('\n'));
+   costGroups=bytes ? historyCostGroups(bytes) : [];
+  }
   const after=await handle.stat();
   if(after.size<info.size||after.nlink!==1)return null;
-  if(onTimings)onTimings({ttftMs:ttfts.size?[...ttfts.values()].reduce((a,b)=>a+b,0)/ttfts.size:null,partial:offset>0||!collect});
+  if(onTimings)onTimings({ttftMs:ttfts.size?[...ttfts.values()].reduce((a,b)=>a+b,0)/ttfts.size:null,partial:offset>0||!owns,...(costGroups?{costGroups,costThroughTokens:snapshot?.total?.totalTokens??null}:{})});
   return snapshot?{...snapshot,source:'history'}:null;
  }finally{await handle.close();}
 }

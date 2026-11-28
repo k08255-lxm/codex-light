@@ -95,7 +95,6 @@ h1,h2,h3 { text-wrap: balance; } p { text-wrap: pretty; }
 .fine { font-size: .8125rem; line-height: 1.55; margin: 0; }
 .inline-error, .dsh-error { color: var(--error); }
 .ui-icon { width: 18px; height: 18px; flex: none; display: inline-block; vertical-align: middle; overflow: visible; pointer-events: none; }
-.window-bar { display: none; }
 
 /* ---------- Buttons ---------- */
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--raised); color: var(--text); font-size: .8125rem; white-space: nowrap; }
@@ -146,8 +145,7 @@ h1,h2,h3 { text-wrap: balance; } p { text-wrap: pretty; }
 .side-head { display: flex; align-items: center; gap: 4px; min-height: 34px; padding: 0 2px 6px 8px; }
 .side-title { flex: 1; min-width: 0; font-size: .875rem; font-weight: 600; letter-spacing: .01em; }
 .side-close { display: none !important; }
-/* The native caption already owns app identity and its menu. Keep browser and
-   mobile branding intact, and retain actual navigation/close controls. */
+/* The native caption already displays the application name. */
 .native-caption-integrated .rail-brand,
 .native-caption-integrated #chat-sidebar .side-title { display: none; }
 @media (min-width:761px) {
@@ -199,6 +197,7 @@ main.stage { display: flex; flex: 1; flex-direction: column; min-width: 0; min-h
   border-radius: 50%;
 }
 #thread-load-indicator[data-visible] { visibility: visible; animation: thread-loading-spin 800ms linear infinite; }
+#conversation[aria-busy="true"]:has(#messages:empty)::after { content:"正在加载对话…"; display:block; padding:24px 0; text-align:center; color:var(--secondary); font-size:.875rem; }
 #refresh[aria-busy="true"] .ui-icon { animation: thread-loading-spin 900ms linear infinite; }
 :is(#earlier, #more-threads, .agent-history-older)[aria-busy="true"] { position: relative; cursor: progress; }
 :is(#earlier, #more-threads, .agent-history-older)[aria-busy="true"]::after {
@@ -235,9 +234,9 @@ main.stage { display: flex; flex: 1; flex-direction: column; min-width: 0; min-h
 .dsh-default-model > [role=status]:empty { display:none; }
 
 /* ---------- Menus & dialogs ---------- */
-.menu, .window-menu { position: fixed; z-index: 60; min-width: 200px; max-width: min(300px, calc(100vw - 16px)); padding: 4px; background: var(--raised); border-radius: var(--r-lg); box-shadow: var(--shadow-popover); }
-.menu button, .window-menu button { display: block; width: 100%; text-align: left; font-size: .875rem; padding: 7px 10px; border-radius: var(--r-sm); transition: none; }
-.menu small, .window-menu small { display: block; padding: 6px 10px 4px; margin-top: 4px; border-top: 1px solid var(--border); font-size: .75rem; color: var(--tertiary); }
+.menu { position: fixed; z-index: 60; min-width: 200px; max-width: min(300px, calc(100vw - 16px)); padding: 4px; background: var(--raised); border-radius: var(--r-lg); box-shadow: var(--shadow-popover); }
+.menu button { display: block; width: 100%; text-align: left; font-size: .875rem; padding: 7px 10px; border-radius: var(--r-sm); transition: none; }
+.menu small { display: block; padding: 6px 10px 4px; margin-top: 4px; border-top: 1px solid var(--border); font-size: .75rem; color: var(--tertiary); }
 #thread-menu { position: absolute; top: 42px; right: 12px; }
 dialog { background: var(--raised); color: var(--text); border: 0; border-radius: var(--r-lg); padding: 20px; width: min(460px, calc(100vw - 32px)); box-shadow: var(--shadow-popover); }
 dialog::backdrop { background: var(--overlay); }
@@ -667,7 +666,7 @@ input[type=checkbox]:disabled, .skills-switch[aria-disabled=true] { cursor: not-
   .rail-btn, .btn.icon-only, .tool, .send, .stop, #model-trigger, .foot-btn, .context-meter { min-width: 44px; min-height: 44px; }
   .btn, .btn.small, .queue-send, .segmented button, .queue-action, .changes-pill { min-height: 44px; }
   .stage-actions .btn { min-width: 44px; }
-  .new-chat, .side-search, .settings-nav-item, .project-navigation .project-group-thread, .project-navigation .project-group-select, .menu button, .window-menu button, .slash-option, .changes-file, .file-row-head, .data-table th .sort, .model-option, #model-options button { min-height: 44px; }
+  .new-chat, .side-search, .settings-nav-item, .project-navigation .project-group-thread, .project-navigation .project-group-select, .menu button, .slash-option, .changes-file, .file-row-head, .data-table th .sort, .model-option, #model-options button { min-height: 44px; }
   .project-navigation .project-group-toggle, .project-navigation .project-group-remove { width: 44px; min-height: 44px; }
   .step > summary, .turn-process > summary, .agent-more summary, .scope-note summary { min-height: 40px; }
   .md-file-link { padding: 2px 0; }
@@ -683,7 +682,7 @@ input[type=checkbox]:disabled, .skills-switch[aria-disabled=true] { cursor: not-
   .rail { width: var(--rail-width); }
   .data-table td, .data-table th { white-space: nowrap; }
   .table-scroll, .md-table-wrap, .diff-view { -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; }
-  .menu, .window-menu { max-width: calc(100vw - 16px); }
+  .menu { max-width: calc(100vw - 16px); }
   dialog { width: calc(100vw - 24px); max-height: calc(100dvh - 24px); overflow: auto; }
   .slash-menu, .changes-panel { max-height: min(50dvh, 360px); }
   .page-body { padding: 16px 14px calc(32px + env(safe-area-inset-bottom)); }
@@ -753,7 +752,7 @@ input[type=checkbox]:disabled, .skills-switch[aria-disabled=true] { cursor: not-
 
 
 
-#tools-panel, #dsh-panel { padding: 16px; }
+#dsh-panel { padding: 16px; }
 .detail-hint, .dsh-meta, #dsh-status-details { font-size: .8125rem; line-height: 1.5; color: var(--tertiary); overflow-wrap: anywhere; white-space: pre-wrap; }
 .detail-hint { margin: 0 0 20px; }
 
@@ -1162,26 +1161,6 @@ input[type=checkbox]:disabled, .skills-switch[aria-disabled=true] { cursor: not-
  .storage-settings .storage-recovery-controls > * { width: 100%; }
 }
 
-/* Client-area application menu: no native menu surface or duplicated brand. */
-.app-menu-trigger { flex-shrink: 0; }
-#menu-app[aria-expanded="true"] { background: var(--selected); color: var(--text); }
-#window-menu.app-menu { width: 236px; min-width: 0; padding: 6px; border: 1px solid var(--border); border-radius: 12px; max-height: calc(100dvh - 16px); overflow-y: auto; overscroll-behavior: contain; transform-origin: top left; }
-#window-menu .app-menu-item { display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 7px 9px; border-radius: 6px; font-size: 13px; line-height: 20px; color: var(--text); transition: background-color 120ms ease-out, color 120ms ease-out; }
-.app-menu-item .ui-icon { flex: 0 0 17px; color: var(--secondary); }
-.app-menu-label { flex: 1; }
-#window-menu .app-menu-item kbd { border: 0; padding: 0; font-size: 11px; color: var(--tertiary); }
-#window-menu .app-menu-item:focus-visible { outline: 2px solid var(--focus, #7187a5); outline-offset: -2px; background: var(--selected); }
-.app-menu-divider { height: 1px; margin: 5px 6px; background: var(--border); }
-@media (hover: hover) { #window-menu .app-menu-item:hover { background: var(--selected); } }
-@media (prefers-reduced-motion: no-preference) {
-  #window-menu.app-menu { transition: opacity 150ms ease-out, transform 150ms ease-out; }
-  @starting-style { :root:not([data-reduced-motion="true"]) #window-menu.app-menu:not(.hidden) { opacity: 0; transform: translateX(-4px) scale(.98); } }
-}
-@media (max-width: 760px) { #window-menu .app-menu-item { min-height: 44px; } }
-
-/* Only a host that implements clickable native branding opts into this.
-   Older hosts and browser/mobile retain the visible application-menu fallback. */
-.native-caption-brand-menu #menu-app { display: none; }
 
 .attachment-drop-hint { display: none; }
 .composer.is-file-drop { position: relative; outline: 2px dashed var(--focus); }

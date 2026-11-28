@@ -38,6 +38,7 @@ try{
  const page=await browser.newPage({viewport:{width:1440,height:900}}),errors=[];
  page.on('pageerror',error=>errors.push(error.message));
  await page.goto(app.url);
+ await page.getByRole('button',{name:'使用此主题'}).click();
  const group=(current,key)=>current.locator(`.project-group[data-project-key="${key}"]`);
  const aKey=projectPathKey(aPath),bKey=projectPathKey(bPath);
  const expectFirst=(current,key)=>current.waitForFunction(key=>document.querySelector('.project-group')?.dataset.projectKey===key,key,{timeout:5000}).catch(async error=>{
@@ -71,6 +72,11 @@ try{
  await send(page,'wrote in Beta');
  await expectFirst(page,bKey);
  await group(page,aKey).locator('.project-group-thread').first().click();
+ const boxes=await page.locator('.project-navigation-list > .project-group').evaluateAll(async nodes=>{
+  await Promise.all(nodes.flatMap(node=>node.getAnimations()).map(a=>a.finished.catch(()=>{})));
+  return nodes.map(node=>{const box=node.getBoundingClientRect();return {top:box.top,bottom:box.bottom};});
+ });
+ for(let i=1;i<boxes.length;i++)assert.ok(Math.abs(boxes[i].top-boxes[i-1].bottom)<8,'settled project groups must stay adjacent');
  await page.locator('#prompt').fill('queued in Alpha');
  await page.locator('#queue-send').click();
  await page.locator('#queue').getByText('queued in Alpha',{exact:true}).waitFor();
@@ -92,8 +98,7 @@ try{
  await browseGroup(bKey);
  await waitLabel(page,'Beta');await page.reload();await waitLabel(page,'Alpha');
  await browseGroup(bKey);await waitLabel(page,'Beta');
- await page.locator('#menu-app').click();
- await page.getByRole('menuitem',{name:/新对话/}).click();await waitLabel(page,'Alpha');
+ await page.keyboard.press('Control+n');await waitLabel(page,'Alpha');
  await browseGroup(bKey);await waitLabel(page,'Beta');
  await page.locator('#prompt').fill('/new');
  await page.locator('#slash-menu [role=option]').filter({hasText:'/new'}).first().click();
@@ -128,6 +133,7 @@ try{
  mobile.on('pageerror',error=>errors.push(error.message));
  await mobile.addInitScript(()=>{window.CodexLightNative={isNativeApp:()=>true,getAppVersion:()=> '0.4.9'};});
  await mobile.goto(app.url);
+ await mobile.getByRole('button',{name:'使用此主题'}).click();
  await waitLabel(mobile,'无项目');
  await choose(mobile,'无项目');
  await send(mobile,'Android shell no-project draft');
@@ -145,6 +151,7 @@ try{
    await restarted.started;
    const fresh=await browser.newPage();
    await fresh.goto(restarted.url);await waitLabel(fresh,'无项目');
+   await fresh.getByRole('button',{name:'使用此主题'}).click();
    await fresh.waitForFunction(()=>document.querySelector('#connection-text').textContent.includes('演示'));
    await fresh.locator('#new-thread').click();await waitLabel(fresh,'无项目');
    assert.equal((await restarted.projectStore.list()).selectedId,null);

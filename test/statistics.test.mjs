@@ -18,6 +18,41 @@ function fixture(options={}){
 }
 async function directory(t){const root=await fs.mkdtemp(path.join(os.tmpdir(),'statistics-fixture-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));return root;}
 
+test('subscription balance uses reference USD within the account and quota window',()=>{
+ const {service,start,event,time}=fixture();
+ const account={type:'chatgpt',email:'fixture@example.test',planType:'plus'};
+ service.setAccount(account);start();
+ const packet=total();time(1000);event('thread/tokenUsage/updated',{tokenUsage:{total:packet,last:packet}});
+ const now=EPOCH+2000,window={resetsAt:EPOCH/1000+3600,windowDurationMins:300,usedPercent:25};
+ const limits={rateLimits:{limitId:'codex',planType:'plus',primary:window,secondary:{...window,windowDurationMins:10080,usedPercent:50}}};
+ const [short,week]=service.quotaEstimate(account,limits,now).windows;
+ assert.equal(short.count,1);assert.ok(Math.abs(short.remainingUsd-short.spentUsd*3)<1e-12);
+ assert.equal(week.remainingUsd,week.spentUsd);assert.ok(week.spentUsd>0);
+ assert.equal(service.quotaEstimate({...account,email:'other@example.test'},limits,now).windows[0].remainingUsd,null);
+ limits.rateLimits.primary={...window,usedPercent:0};assert.equal(service.quotaEstimate(account,limits,now).windows[0].remainingUsd,null);
+ limits.rateLimits.primary={...window,resetsAt:now/1000};assert.equal(service.quotaEstimate(account,limits,now).windows.length,1);
+});
+
+test('two metered requests in one running turn update cost, survive restart and keep their own timestamps',async t=>{
+ const root=await directory(t),{service,start,event,time}=fixture({root});start();
+ const first=total(), second=total(200,40);
+ const cumulative=Object.fromEntries(Object.keys(first).map(k=>[k,first[k]+second[k]]));
+ const report=(last,total)=>event('thread/tokenUsage/updated',{tokenUsage:{last,total}});
+ time(1000);report(first,first);
+ const initial=service.sessionCost(THREAD);
+ time(2000);report(second,cumulative);report(second,cumulative);
+ const combined=service.sessionCost(THREAD,[{model:'m',provider:'openai',tokens:first}],120);
+ assert.ok(combined.usd>initial.usd);assert.equal(combined.coveredTokens,360);
+ const query={detailLevel:'request'};
+ const data=service.query(query);
+ assert.deepEqual(data.details.data.map(r=>[r.kind,r.tokens.totalTokens]),[['request',240],['request',120]]);
+ assert.equal(data.totals.turnCount,1);assert.equal(data.totals.requestCount,2);assert.equal(data.totals.totalTokens,360);
+ assert.equal(service.query({...query,from:new Date(EPOCH+1500).toISOString()}).totals.totalTokens,240);
+ assert.deepEqual(data.details.data.map(r=>r.estimatedCost.usd).reduce((a,b)=>a+b),combined.usd);
+ await service.close();const reopened=fixture({root}).service;await reopened.load();
+ assert.equal(reopened.query(query).details.total,2);await reopened.close();
+});
+
 test('live metrics use monotonic visible-text spans; tool gaps are excluded and deltas never retained',async()=>{
  const {service,event,start,time}=fixture();start();
  time(1000);event('item/agentMessage/delta',{itemId:'a',delta:'PRIVATE_FIRST_CHUNK'});

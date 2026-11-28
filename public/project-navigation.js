@@ -122,6 +122,7 @@ export function mountProjectNavigation(host, { onSelect, onOpenThread, onRemove,
   host.replaceChildren(errorNode, statusNode, list, empty);
   const reducedMotion = () => document.documentElement?.dataset?.reducedMotion === 'true';
   let previousOrder = '';
+  const reorderAnimations=new WeakMap();
 
   function setOpen(view, open, remember = true) {
     if (remember) openGroups.set(view.group.key, open);
@@ -254,6 +255,16 @@ export function mountProjectNavigation(host, { onSelect, onOpenThread, onRemove,
     const selectionChanged = selectedKey !== previousSelectedKey;
     previousSelectedKey = selectedKey;
     const groups = projectThreadGroups(projects, threads, { selectedPath, searching, runningThreadIds, recent, restoredOrder });
+    const order=groups.map(group=>group.key).join('\n');
+    const before=new Map();
+    if(previousOrder && order!==previousOrder){
+      // Take a single snapshot before row heights change. Interrupt any previous move
+      // before measuring the new layout, so its transform cannot displace the next group.
+      const animate=animateOrder&&!reducedMotion();
+      for(const node of list.children)if(animate){const top=node.getBoundingClientRect?.().top;if(Number.isFinite(top))before.set(node,top);}
+      for(const node of list.children){reorderAnimations.get(node)?.cancel?.();reorderAnimations.delete(node);}
+    }
+    previousOrder=order;
     const keys = new Set();
     const nodes = [];
     for (const group of groups) {
@@ -285,14 +296,17 @@ export function mountProjectNavigation(host, { onSelect, onOpenThread, onRemove,
       nodes.push(view.node);
     }
     // A newly used or pinned project moves to its new position with a short FLIP slide.
-    const order = groups.map(group => group.key).join('\n');
-    const before = new Map();
-    if (animateOrder && previousOrder && order !== previousOrder && !reducedMotion()) for (const node of nodes) if (node.isConnected) { const top = node.getBoundingClientRect?.().top; if (Number.isFinite(top)) before.set(node, top); }
-    previousOrder = order;
     reconcile(list, nodes);
-    for (const [node, top] of before) {
-      const delta = top - node.getBoundingClientRect().top;
-      if (Math.abs(delta) > 1) node.animate?.([{ transform: `translateY(${delta}px)` }, { transform: 'none' }], { duration: 260, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' });
+    const moves=[];
+    const limit=host.clientHeight||Infinity;
+    for(const node of nodes){
+      if(!before.has(node))continue;
+      const delta=before.get(node)-node.getBoundingClientRect().top;
+      if(Math.abs(delta)>1&&Math.abs(delta)<limit)moves.push([node,delta]);
+    }
+    for(const [node,delta] of moves){
+      const motion=node.animate?.([{transform:`translateY(${delta}px)`},{transform:'none'}],{duration:200,easing:'cubic-bezier(0.22,1,0.36,1)'});
+      if(motion)reorderAnimations.set(node,motion);
     }
     if (menuOwner && (!keys.has((menuOwner.view || menuOwner).group.key) || (menuOwner.view && (busy || !canManageThread(menuOwner.thread)) && !menu.querySelector('button')?.disabled))) closeMenu(true);
     for (const key of views.keys()) if (!keys.has(key)) views.delete(key);

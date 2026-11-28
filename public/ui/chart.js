@@ -47,17 +47,20 @@ export function barChart(document, points, { height = 200, format = compact, emp
   const values = points.map(point => point.value);
   const finite = values.filter(value => typeof value === 'number' && Number.isFinite(value));
   root.setAttribute('aria-label', points.length ? `${points.length} 个时间段，最高 ${format(Math.max(0, ...finite))}` : emptyText);
-  let selected = -1;
+  let selected = -1, layout;
   const show = index => {
     selected = index; const point = points[index];
     if (!point || typeof point.value !== 'number') { readout.hidden = true; return; }
     readout.hidden = false; readout.textContent = point.title || `${point.label} · ${format(point.value)}`;
+    const bar=layout.bars[index];
+    readout.style.left=Math.max(0,Math.min(bar.cx-readout.offsetWidth/2,wrap.clientWidth-readout.offsetWidth))+'px';
+    readout.style.top=(bar.y-readout.offsetHeight-6)+'px';
     for (const rect of root.querySelectorAll('rect.bar')) rect.classList.toggle('active', Number(rect.dataset.index) === index);
   };
   function draw(width) {
     if (!(width > 0)) return;
     root.replaceChildren(); root.setAttribute('width', String(width)); root.setAttribute('viewBox', `0 0 ${width} ${height}`);
-    const layout = chartLayout(values, width, height);
+    layout = chartLayout(values, width, height);
     for (const fraction of [0, .5, 1]) {
       const y = layout.top + layout.plotH * (1 - fraction);
       root.append(svg(document, 'line', { x1: layout.left, x2: width - 6, y1: y, y2: y, class: fraction ? 'grid' : 'axis' }));
@@ -70,18 +73,23 @@ export function barChart(document, points, { height = 200, format = compact, emp
         const hit = svg(document, 'rect', { x: (layout.left + layout.slot * index).toFixed(1), y: layout.top, width: Math.max(1, layout.slot).toFixed(1), height: layout.plotH, class: 'hit', 'data-index': index });
         const rect = svg(document, 'rect', { x: bar.x.toFixed(1), y: bar.y.toFixed(1), width: bar.w.toFixed(1), height: bar.h.toFixed(1), rx: Math.min(3, bar.w / 3), class: 'bar' + (index === selected ? ' active' : ''), 'data-index': index });
         const title = svg(document, 'title'); title.textContent = points[index].title || `${points[index].label} · ${format(points[index].value)}`; rect.append(title);
+        hit.setAttribute('tabindex','0');hit.setAttribute('aria-label',title.textContent);
         for (const node of [hit, rect]) { node.addEventListener('pointerenter', () => show(index)); node.addEventListener('click', () => show(index)); }
+        hit.addEventListener('focus',()=>show(index));
         root.append(rect, hit);
       }
       if (index % layout.step === 0) { const t = svg(document, 'text', { x: (layout.left + layout.slot * index + layout.slot / 2).toFixed(1), y: height - 6, class: 'tick', 'text-anchor': 'middle' }); t.textContent = points[index].label; root.append(t); }
     });
+    if(selected>=0)show(selected);
   }
   let observer = null, last = 0;
   const measure = () => { const width = Math.round(wrap.clientWidth || 0); if (width && width !== last) { last = width; draw(width); } };
   if (typeof ResizeObserver === 'function') { observer = new ResizeObserver(measure); observer.observe(wrap); }
   // First paint before layout is known (also used by non-browser tests).
   draw(Number(wrap.clientWidth) || 640);
-  wrap.addEventListener('pointerleave', () => { readout.hidden = selected < 0; });
+  function hide(){root.querySelector('.bar.active')?.classList.remove('active');selected=-1;readout.hidden=true;}
+  wrap.addEventListener('pointerleave',event=>{if(event.pointerType!=='touch'&&!wrap.contains(document.activeElement))hide();});
+  wrap.addEventListener('focusout',event=>{if(!wrap.contains(event.relatedTarget))hide();});
   wrap.dispose = () => observer?.disconnect();
   return wrap;
 }

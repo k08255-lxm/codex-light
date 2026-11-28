@@ -26,7 +26,8 @@ export function mountSessionSpeed(document,read){
     const known=value&&['replyMs','toolMs','ttftMs','tps','turnTps'].some(k=>value[k]!=null);
     get('speed-status').textContent=problem||(pending&&!known?'正在读取…':!known?'此对话暂无速度记录。':
       value.tps!=null?'TPS 按已报告的输出 token 和首段至消息结束的用时估算。':value.turnTps!=null?'整轮均速包含工具和等待时间。':'按有记录的时段统计。')+
-      (value?.partialHistory&&value.ttftMs!=null?' TTFT 取最近可读取的记录。':'');
+      (value?.partialHistory&&value.ttftMs!=null?' TTFT 取最近可读取的记录。':'')+
+      (value?.replyMs!=null||value?.toolMs!=null?' 用时只累计本会话已完成且有计时的步骤，并行步骤分别累计。本轮经过时间见「正在工作」。':'');
   }
   function refresh(history=true){
     if(!threadId)return;

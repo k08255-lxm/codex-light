@@ -3,7 +3,7 @@ import {dshStatusLabel} from '../dsh.js';
 import {renderMarkdown} from '../markdown.js';
 import {boundedText,ItemStore} from '../store.js';
 import {icon} from '../icons.js';
-import {renderActivityRecord,renderCompactionRecord,describeItem,itemState} from '../activity-feed.js';
+import {renderActivityRecord,activityItems,fileBatchLabel,createFileBatch,renderCompactionRecord,describeItem,itemState} from '../activity-feed.js';
 import {AgentHistory,mergeAgentTurns} from '../agent-history.js';
 import {asyncInputDefinition,asyncInputBodyText,createAsyncInputCard,asyncAnswerHistory} from './async-input.js';
 import {captureHistoryAnchor,restoreHistoryAnchor,mountHistoryAutoLoad} from './history-auto-load.js';
@@ -187,10 +187,18 @@ export function createAgentInspector({document,state,host,dshTasks,dshLive,rpc,r
    latest.hidden=!active;const verb=active?describeItem(batch.at(-1)).verb:'';
    if(latest.textContent!==verb)latest.textContent=verb;
    renderParts(group.children[1],emit=>{
-    for(const item of batch){
+    function record(emit,item){
      const itemKey=`${key}:item:${item.id}`;
      const record=emit(itemKey,()=>toolRecord(item,itemKey,artifacts),JSON.stringify(item));
      record.dataset.itemId=itemKey;record.dataset.running=String(active&&itemState(item)==='running');
+    }
+    for(const item of batch){
+     const label=fileBatchLabel(item,cwd);
+     const files=target=>{for(const row of activityItems([item]))record(target,row);};
+     if(!label){files(emit);continue;}
+     const group=emit(`${key}:files:${item.id}`,()=>createFileBatch(document));
+     const title=group.querySelector('.files-title');if(title.textContent!==label)title.textContent=label;
+     renderParts(group.children[1],files);
     }
    });
   };

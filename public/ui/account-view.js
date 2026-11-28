@@ -252,13 +252,13 @@ export function mountAccount(host, { rpc, loginPanelHost, pendingHost, demo = ()
         const chart = el(document, 'div', 'chart-host compact');
         const shown = buckets.slice(-30);
         chart.append(barChart(document, shown.map(row => ({ label: row.startDate.slice(5), value: row.tokens, title: `${row.startDate} · ${integer(row.tokens)} tokens` })), { height: 140 })); children.push(chart);
-        children.push(el(document, 'p', 'acct-usage-caption', `${shown[0].startDate} — ${shown[shown.length - 1].startDate} · ${integer(shown.reduce((sum, row) => sum + row.tokens, 0))} Tokens（返回日期合计）`));
+        children.push(el(document, 'p', 'acct-usage-caption', `${shown[0].startDate} — ${shown[shown.length - 1].startDate} · ${compact(shown.reduce((sum, row) => sum + row.tokens, 0))} Tokens（返回日期合计）`));
       }
       if (!strip.childNodes.length && !buckets.length && !result?.accountUsageError) children.push(el(document, 'p', 'empty-line', '服务没有返回账户用量统计。'));
     } else if (usageTab === 'daily') {
       const sum = buckets.reduce((total, row) => total + row.tokens, 0);
-      children.push(el(document, 'p', 'acct-usage-caption', `服务返回 ${integer(buckets.length)} 个日期 · 合计 ${integer(sum)} Tokens`));
-      children.push(dataTable(['日期', 'Tokens', '占返回日期合计'], buckets.slice().reverse().map(row => [row.startDate, integer(row.tokens), sum ? `${(row.tokens / sum * 100).toFixed(1)}%` : '0%'])));
+      children.push(el(document, 'p', 'acct-usage-caption', `服务返回 ${integer(buckets.length)} 个日期 · 合计 ${compact(sum)} Tokens`));
+      children.push(dataTable(['日期', 'Tokens', '占返回日期合计'], buckets.slice().reverse().map(row => [row.startDate, compact(row.tokens), sum ? `${(row.tokens / sum * 100).toFixed(1)}%` : '0%'])));
     } else if (usageTab === 'thread') {
       const facts = el(document, 'div', 'facts');
       if (finite(thread.estimatedUsageCreditsMicros)) facts.append(fact('Credits', decimal(micros(thread.estimatedUsageCreditsMicros))));
@@ -269,7 +269,7 @@ export function mountAccount(host, { rpc, loginPanelHost, pendingHost, demo = ()
       if (groups.length) {
         const columns = [
           ['model', '模型', String], ['reasoningEffort', '推理强度', String], ['speed', '速度档', String],
-          ['inputTokens', '输入', integer], ['cachedInputTokens', '缓存输入', integer], ['netNewInputTokens', '新增输入', integer], ['outputTokens', '输出', integer], ['totalTokens', '总 Tokens', integer],
+          ['inputTokens', '输入', compact], ['cachedInputTokens', '缓存输入', compact], ['netNewInputTokens', '新增输入', compact], ['outputTokens', '输出', compact], ['totalTokens', '总 Tokens', compact],
           ['estimatedUsageCreditsMicros', 'Credits', value => decimal(micros(value))],
         ].filter(([key]) => groups.some(group => group[key] != null));
         children.push(dataTable(columns.map(([, name]) => name), groups.map(group => columns.map(([key, , format]) => group[key] == null ? UNKNOWN : format(group[key])))));

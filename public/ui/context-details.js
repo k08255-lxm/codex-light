@@ -1,5 +1,6 @@
 import {contextFields,contextView} from '../context-usage.js';
 import {mountStatPopover} from './stat-popover.js';
+import {showTokens} from './format.js';
 
 export function mountContextDetails(document) {
   const meter = document.getElementById('context-meter');
@@ -7,7 +8,6 @@ export function mountContextDetails(document) {
   const dialog = document.getElementById('context-details');
   const closeButton = document.getElementById('context-details-close');
   const status = document.getElementById('context-details-status');
-  const format = new Intl.NumberFormat('zh-CN');
   let threadId = null, snapshot = null, loading = false;
   function addMetrics(id, fields) {
     const host = document.getElementById(id);
@@ -34,7 +34,7 @@ export function mountContextDetails(document) {
   function setRows(rows, values) {
     for(const [key,node] of rows){
       const value=values?.[key];
-      node.textContent=value==null?'未知':format.format(value);
+      showTokens(node,value,{unknown:'未知'});
       node.dataset.known=String(value!=null);
     }
   }

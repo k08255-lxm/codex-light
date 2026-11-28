@@ -24,9 +24,9 @@ Android 原生外壳通过 WebView 连接桌面码舱。可以在可信局域网
 ### 安装与升级
 
 - 最低系统版本为 Android 7.0（API 24），Manifest 的 target SDK 为 34。需要可用的 Android System WebView；不要把 target SDK 当作最低 Android 版本。
-- 本版同时更新了手机任务通知。可在应用中检查更新，也可从 [Releases](https://github.com/k08255-lxm/codex-light/releases) 下载 `codex-light-0.4.20.apk`，versionCode 为 420。
+- 已配对的手机更新电脑后即可使用新版对话和用量界面。首次安装可从 [Releases](https://github.com/k08255-lxm/codex-light/releases) 下载 `codex-light-android-0.4.21.apk`，versionCode 为 421。
 - 将 APK 传到手机，用系统安装器打开；如系统提示，仅为当前使用的文件管理器或浏览器允许安装该来源的应用。安装后即可关闭这项许可。
-- 若要核对下载文件，在 Windows 执行 `Get-FileHash .\codex-light-0.4.20.apk -Algorithm SHA256`，与同一发布的 `SHA256SUMS.txt` 中对应文件名的条目对比。哈希只校验文件一致性，不能代替对发布者和签名的信任。
+- 若要核对下载文件，在 Windows 执行 `Get-FileHash .\codex-light-android-0.4.21.apk -Algorithm SHA256`，与同一发布的 `SHA256SUMS.txt` 中对应文件名的条目对比。哈希只校验文件一致性，不能代替对发布者和签名的信任。
 - 覆盖升级需要相同应用 ID 和签名证书。作者发布包、自行构建包及其他机器生成的调试密钥不保证互相兼容；签名不匹配时不要直接卸载来强行升级，因为卸载会清除手机保存的连接地址和令牌。请优先使用同一来源、同一签名的更新包。
 
 ### 连接电脑

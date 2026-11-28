@@ -22,4 +22,4 @@ test('Android bridges committed system back and legacy back to the same guarded 
  assert.match(java,/if \("false"\.equals\(result\)\) finishBackNavigation/);
  const manifest=await readFile(new URL('../android/app/src/main/AndroidManifest.xml',import.meta.url),'utf8');assert.match(manifest,/enableOnBackInvokedCallback="true"/);
 });
-test('activity and sidebar buttons use distinct accessible icons',async()=>{const html=await readFile(new URL('../public/index.html',import.meta.url),'utf8');assert.match(html,/id="toggle-details"[^>]*aria-label="工具活动"[^>]*>\s*<span data-icon="activity"/);assert.match(html,/id="rail-sidebar"[^>]*>\s*<span data-icon="panel"/);});
+test('agent and sidebar buttons use distinct accessible icons',async()=>{const html=await readFile(new URL('../public/index.html',import.meta.url),'utf8');assert.match(html,/id="toggle-details"[^>]*aria-label="子代理"[^>]*>\s*<span data-icon="branch"/);assert.match(html,/id="rail-sidebar"[^>]*>\s*<span data-icon="panel"/);});

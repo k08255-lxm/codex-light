@@ -49,9 +49,13 @@ try{
  });
  const groups=page.locator('.turn-process');
  for(let index=0;index<2;index++){
-  const group=groups.nth(index);await group.locator(':scope > summary').click();await group.locator('.step > summary').click();
-   await group.locator('.diff-file').first().waitFor();assert.equal(await group.locator('.diff-file').count(),index?1:2);
-  await group.locator('.step > summary').click();
+  const group=groups.nth(index);await group.locator(':scope > summary').click();
+  const files=group.locator('.file-step');assert.equal(await files.count(),index?1:2);
+  if(index===0){await group.locator('.file-batch-head').click();assert.equal(await group.locator('.file-step[open]').count(),0);}
+  assert.equal(await group.locator('.diff-view').count(),0);
+  await files.first().locator('summary').click();await files.first().locator('.diff-view').waitFor();
+  assert.equal(await group.locator('.diff-view:visible').count(),1);
+  await files.first().locator('summary').click();
   // Deliberately render before queued native toggle events run, as scroll clamping does.
   await group.locator(':scope > summary').evaluate(node=>{node.click();window.repair.render();});
   assert.equal(await group.getAttribute('open'),null);await page.evaluate(()=>window.repair.render());assert.equal(await group.getAttribute('open'),null);
@@ -71,7 +75,7 @@ try{
  }
  await page.setViewportSize({width:1280,height:900});
  checks.push('live agent events fold with their completed turn and can collapse from the bottom');
- await groups.first().locator(':scope > summary').click();await groups.first().locator('.step > summary').click();
+ await groups.first().locator(':scope > summary').click();await groups.first().locator('.file-step > summary').first().click();
  await page.screenshot({path:path.join(output,'files-dark.png')});
  await page.evaluate(()=>document.documentElement.dataset.theme='light');await page.screenshot({path:path.join(output,'files-light.png')});
  await page.setViewportSize({width:700,height:740});

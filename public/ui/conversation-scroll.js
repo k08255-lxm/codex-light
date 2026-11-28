@@ -11,20 +11,33 @@ function visible(node, top, height) { const rect = node.getBoundingClientRect();
 // One authority for follow intent. Layout changes must never re-enable following.
 export function mountConversationScroll(container) {
   const document = container.ownerDocument, window = document.defaultView;
+  const transcript = container.querySelector('#messages');
   const originalAnchor = container.style.overflowAnchor; container.style.overflowAnchor = 'none';
   let following = true, saved = null, frame = null, writing = null, lastTop = container.scrollTop;
-  let disclosure = null;
+  let disclosure = null, sampleTimer = null;
   let userUntil = 0, userDirection = 0, touchY = null, layoutPending = false, smoothUntil = 0, destroyed = false;
   const gap = () => container.scrollHeight - container.scrollTop - container.clientHeight;
   function capture() {
-    const top = container.getBoundingClientRect().top;
+    const viewport = container.getBoundingClientRect(), top = viewport.top;
     if (disclosure && container.contains(disclosure.node)) {
       return {following:false, top:container.scrollTop, node:disclosure.node, offset:disclosure.offset};
     }
     disclosure = null;
-    const item = [...container.querySelectorAll('[data-item-id]')].find(node => visible(node, top, container.clientHeight));
-    const turn = item?.closest('[data-turn-id]') || [...container.querySelectorAll('[data-turn-id],[data-virtual-turn-id]')].find(node => visible(node, top, container.clientHeight));
-    const leaf = item && [...item.querySelectorAll(blocks)].find(node => visible(node, top, container.clientHeight));
+    const turnSelector = '[data-turn-id],[data-virtual-turn-id]';
+    const column = transcript?.getBoundingClientRect();
+    const x = column ? (Math.max(viewport.left,column.left)+Math.min(viewport.right,column.right))/2 : viewport.left+viewport.width/2;
+    const hit = document.elementsFromPoint?.(x,top+1).find(node=>transcript?.contains(node) && node.closest(turnSelector));
+    let turn = hit?.closest(turnSelector);
+    if (!turn && transcript?.children.length) {
+      // Gaps between messages have no hit target. Probe ordered turn boxes, including virtual ones.
+      const rows=transcript.children;
+      let first=0,end=rows.length;
+      while(first<end){const mid=(first+end)>>>1;if(rows[mid].getBoundingClientRect().bottom<=top)first=mid+1;else end=mid;}
+      if(first<rows.length && visible(rows[first],top,viewport.height))turn=rows[first];
+    }
+    const item = hit?.closest('[data-item-id]') || Array.from(turn?.querySelectorAll('[data-item-id]')||[]).find(node=>visible(node,top,viewport.height));
+    const hitBlock=hit?.closest(blocks);
+    const leaf = item && (item.contains(hitBlock) ? hitBlock : Array.from(item.querySelectorAll(blocks)).find(node=>visible(node,top,viewport.height)));
     const node = leaf || item || turn;
     return { following, top: container.scrollTop, node, itemId: item?.dataset.itemId,
       turnId: turn?.dataset.turnId || turn?.dataset.virtualTurnId, path: item && node ? pathFrom(item, node) : null,
@@ -32,14 +45,16 @@ export function mountConversationScroll(container) {
       itemOffset: item ? item.getBoundingClientRect().top - top : 0, turnOffset: turn ? turn.getBoundingClientRect().top - top : 0 };
   }
   function write(top) {
+    if (Math.abs(container.scrollTop - top) < 0.5) return;
     container.scrollTop = top; writing = container.scrollTop; lastTop = container.scrollTop;
   }
-  function restore(snapshot = saved, { follow = true } = {}) {
+  function restore(snapshot = saved, { follow = true, preserveMotion = false } = {}) {
     if (destroyed || !snapshot || !container.getClientRects().length) return;
     if (follow && following && snapshot.following) write(container.scrollHeight);
     else {
       const top = container.getBoundingClientRect().top;
-      const item = snapshot.itemId && [...container.querySelectorAll('[data-item-id]')].find(node => node.dataset.itemId === snapshot.itemId);
+      const item = snapshot.itemId && (!snapshot.node || !container.contains(snapshot.node) || !snapshot.node.getBoundingClientRect().height)
+        ? [...container.querySelectorAll('[data-item-id]')].find(node => node.dataset.itemId === snapshot.itemId) : null;
       let node = snapshot.node && container.contains(snapshot.node) ? snapshot.node : null, offset = snapshot.offset;
       if (!node && item && snapshot.path) {
         node = snapshot.path.reduce((parent, index) => parent?.children[index], item);
@@ -51,14 +66,18 @@ export function mountConversationScroll(container) {
         node = [...container.querySelectorAll('[data-turn-id],[data-virtual-turn-id]')].find(value => (value.dataset.turnId || value.dataset.virtualTurnId) === snapshot.turnId);
         offset = snapshot.turnOffset;
       }
-      write(node?.getBoundingClientRect().height ? container.scrollTop + node.getBoundingClientRect().top - top - offset : snapshot.top);
+      // A wheel or touch delta may have landed between observation and this frame.
+      // Compensate only for layout that moved the anchor in content coordinates.
+      const motion = preserveMotion && Date.now() < userUntil ? container.scrollTop - snapshot.top : 0;
+      if (node?.getBoundingClientRect().height) write(container.scrollTop + node.getBoundingClientRect().top - top - offset + motion);
+      else if (!preserveMotion) write(snapshot.top);
     }
     saved = capture(); layoutPending = false;
   }
   function schedule() {
     if (destroyed) return;
     layoutPending = true;
-    if (frame === null) frame = window.requestAnimationFrame(() => { frame = null; restore(saved); });
+    if (frame === null) frame = window.requestAnimationFrame(() => { frame = null; restore(saved, {preserveMotion:true}); });
   }
   function pause(control, { keepVisible = true } = {}) {
     if (smoothUntil > Date.now()) container.scrollTo({ top:container.scrollTop, behavior:'instant' });
@@ -74,7 +93,7 @@ export function mountConversationScroll(container) {
   }
   function intent(up) {
     disclosure = null;
-    if (up) pause();
+    if (up && following) pause();
     userUntil = Date.now() + 600; userDirection = up ? -1 : 1;
   }
   const wheel = event => { if (event.deltaY) intent(event.deltaY < 0); };
@@ -95,13 +114,23 @@ export function mountConversationScroll(container) {
   function scroll() {
     const top = container.scrollTop, user = Date.now() < userUntil;
     if (writing !== null && Math.abs(top - writing) < EPSILON) { writing = null; lastTop = top; return; }
-    if (!user && Date.now() < smoothUntil) { lastTop = top; if (gap() <= EPSILON) { smoothUntil = 0; saved = capture(); } return; }
+    if (!user && Date.now() < smoothUntil) { lastTop = top; if (gap() <= EPSILON) saved = capture(); return; }
     if (user || !layoutPending && Math.abs(top - lastTop) >= EPSILON) {
       if (user && userDirection >= 0 && gap() <= EPSILON && top >= lastTop) following = true;
       else if (gap() > EPSILON || user && userDirection < 0) following = false;
-      saved = capture(); writing = null;
+      if(user){
+        // The native scroll owns the gesture. Sample the reading anchor at most twice
+        // a second, then take the final sample when momentum actually stops.
+        sampleTimer ??= window.setTimeout(samplePosition,500);
+      }else saved = capture();
+      writing = null;
     }
     lastTop = top;
+  }
+  function samplePosition(){
+    if(sampleTimer===null)return;
+    window.clearTimeout(sampleTimer);sampleTimer=null;
+    if(!layoutPending)saved=capture();
   }
   function toBottom({ behavior = 'auto' } = {}) {
     disclosure = null; following = true; userUntil = 0; smoothUntil = behavior === 'smooth' ? Date.now() + 1200 : 0;
@@ -110,6 +139,7 @@ export function mountConversationScroll(container) {
     saved = capture();
   }
   container.addEventListener('scroll', scroll, { passive: true });
+  container.addEventListener('scrollend', samplePosition, {passive:true});
   container.addEventListener('wheel', wheel, { passive: true }); container.addEventListener('keydown', keydown);
   container.addEventListener('touchstart', touchstart, { passive: true }); container.addEventListener('touchmove', touchmove, { passive: true });
   container.addEventListener('pointerdown', pointerdown, { passive: true });
@@ -122,7 +152,7 @@ export function mountConversationScroll(container) {
   mutation.observe(container, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['open', 'class', 'style', 'hidden'] });
   observeChildren(); saved = capture();
   return { capture, restore, toBottom, pause, get following() { return following; }, get atBottom() { return gap() <= EPSILON; }, destroy() {
-    destroyed = true; if (frame !== null) window.cancelAnimationFrame(frame); resize.disconnect(); mutation.disconnect();
+    destroyed = true; if (frame !== null) window.cancelAnimationFrame(frame); window.clearTimeout(sampleTimer);container.removeEventListener('scrollend',samplePosition);resize.disconnect(); mutation.disconnect();
     for (const [name, listener] of [['scroll', scroll], ['wheel', wheel], ['keydown', keydown], ['touchstart', touchstart], ['touchmove', touchmove], ['pointerdown', pointerdown]]) container.removeEventListener(name, listener);
     container.style.overflowAnchor = originalAnchor;
   } };

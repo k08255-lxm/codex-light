@@ -44,6 +44,7 @@ test('answer actions copy the retained response and branch once through this tur
   const [copy,fork,usage]=view.node.children;
   copy.click();fork.click();fork.click();await settle();
   assert.deepEqual(copies,['final response']);assert.deepEqual(forks,[['thread','early']]);
-  assert.match(usage.textContent,/12,345 tokens/);
+  assert.match(usage.textContent,/12\.3k tokens/);
+  assert.equal(usage.children[1].title,'12,345 tokens');
   finish();view.release();
 });

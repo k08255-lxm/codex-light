@@ -4,16 +4,14 @@ const finite = value => typeof value === 'number' && Number.isFinite(value);
 
 export function compact(value) {
   if (!finite(value)) return UNKNOWN;
-  const abs = Math.abs(value);
-  if (abs >= 1e8) return trim(value / 1e8) + '亿';
-  if (abs >= 1e4) return trim(value / 1e4) + '万';
-  return Math.round(value).toLocaleString('zh-CN');
+  if (Math.abs(value)<1000) return String(Math.round(value));
+  const million=Math.abs(value)>=1_000_000;
+  const scaled=value/(million?1_000_000:1000);
+  return (Math.abs(scaled)>=100?Math.round(scaled):Math.round(scaled*10)/10)+(million?'M':'k');
 }
-// Strip trailing zeros only inside a fractional part; integer zeros (1200万) are significant.
-function trim(value) {
-  const abs = Math.abs(value);
-  const fixed = value.toFixed(abs >= 100 ? 0 : abs >= 10 ? 1 : 2);
-  return fixed.includes('.') ? fixed.replace(/\.?0+$/, '') : fixed;
+export function showTokens(node,value,{suffix='',unknown=UNKNOWN}={}) {
+  node.textContent=finite(value)?compact(value)+suffix:unknown;
+  node.title=finite(value)?integer(value)+' tokens':'';
 }
 export function integer(value) { return finite(value) ? Math.round(value).toLocaleString('zh-CN') : UNKNOWN; }
 export function percent(fraction, digits = 1) { return finite(fraction) ? (fraction * 100).toFixed(digits).replace(/\.0$/, '') + '%' : UNKNOWN; }
@@ -29,13 +27,13 @@ export function seconds(ms) {
   const m = Math.floor(s / 60); return `${m}m ${String(Math.round(s % 60)).padStart(2, '0')}s`;
 }
 export function rate(value, unit) { return finite(value) ? `${value >= 100 ? Math.round(value) : value.toFixed(1)} ${unit}` : UNKNOWN; }
-export function localTime(iso, { date = true, time = true } = {}) {
+export function localTime(iso, { date = true, time = true, seconds = false } = {}) {
   if (typeof iso !== 'string' && !finite(iso)) return UNKNOWN;
   const d = new Date(finite(iso) ? iso : Date.parse(iso)); if (Number.isNaN(d.getTime())) return UNKNOWN;
   const pad = n => String(n).padStart(2, '0');
   const parts = [];
   if (date) parts.push(`${d.getMonth() + 1}/${d.getDate()}`);
-  if (time) parts.push(`${pad(d.getHours())}:${pad(d.getMinutes())}`);
+  if (time) parts.push(`${pad(d.getHours())}:${pad(d.getMinutes())}`+(seconds?':'+pad(d.getSeconds()):''));
   return parts.join(' ');
 }
 export function relativeReset(unixSeconds, now = Date.now()) {

@@ -1,17 +1,25 @@
-/** User-driven upward paging. Never drains history in response to its own DOM/scroll changes. */
-export function mountHistoryAutoLoad({container, button, status, canLoad, load, getKey,label='加载更早的内容',endLabel='已到对话开头'}) {
+/** Serialize upward paging and optional background fill for the active conversation. */
+export function mountHistoryAutoLoad({container, button, status, canLoad, load, getKey,scrollController=null,autoFill=false,label='加载更早的内容',endLabel='已到对话开头'}) {
   let pending = null, failed = false, lastTop = container.scrollTop, touchY = null, epoch = 0;
+  let upwardUntil = 0, fillTimer = null;
+  function fill() {
+    if (!autoFill || fillTimer!==null || pending || failed || !canLoad()) return;
+    // Let the newest page paint and give input a turn between history batches.
+    fillTimer=setTimeout(()=>{fillTimer=null;void request(false,true);},80);
+  }
   // Loading/error text is inside the scroller. Preserve the reading position when
   // it enters/leaves flow, including at scrollTop=0 where native anchoring is off.
   function feedback(change) {
-    const anchor = captureHistoryAnchor(container);
+    const anchor = scrollController ? scrollController.capture() : captureHistoryAnchor(container);
     change();
-    restoreHistoryAnchor(container, anchor);
+    if (scrollController) scrollController.restore(anchor, {follow:false});
+    else restoreHistoryAnchor(container, anchor);
   }
-  function reset() { epoch++; pending = null; failed = false; button.disabled = false; button.ariaBusy = 'false'; button.textContent = label; status.textContent = ''; lastTop = container.scrollTop; }
-  async function request(manual = false) {
+  function reset() { epoch++; clearTimeout(fillTimer);fillTimer=null; upwardUntil = 0; pending = null; failed = false; button.disabled = false; button.ariaBusy = 'false'; button.textContent = label; status.textContent = ''; lastTop = container.scrollTop; }
+  async function request(manual = false, background = false) {
     if (pending || (!manual && failed) || !canLoad()) return;
     const key = getKey(), version = epoch;
+    if (!background) scrollController?.pause();
     const ticket = {}; pending = ticket; failed = false; button.disabled = true;
     feedback(() => { button.ariaBusy = 'true'; button.textContent = label; status.textContent = ''; });
     try {
@@ -22,18 +30,24 @@ export function mountHistoryAutoLoad({container, button, status, canLoad, load, 
       if (key !== getKey() || version !== epoch) return;
       failed = true; feedback(() => { button.textContent = '重试'+label; status.textContent = '加载失败：' + (error?.message || '请重试'); });
     } finally {
-      if (pending === ticket) { pending = null; button.disabled = false; button.ariaBusy = 'false'; lastTop = container.scrollTop; }
+      if (pending === ticket) { pending = null; button.disabled = false; button.ariaBusy = 'false'; lastTop = container.scrollTop;fill(); }
     }
   }
-  const nearTop = () => container.scrollTop <= 180;
-  container.addEventListener('scroll', () => { const top=container.scrollTop; const upward=top<lastTop;lastTop=top;if(upward&&nearTop())void request(); }, {passive:true});
-  // At scrollTop=0 a wheel/touch/keyboard attempt emits no scroll event.
-  container.addEventListener('wheel', e => {if(e.deltaY<0&&nearTop())void request();},{passive:true});
+  // Start the next page before a continuous gesture reaches the hard top.
+  const nearTop = () => container.scrollTop <= Math.max(180, container.clientHeight || 0);
+  function upward() { upwardUntil=Date.now()+700;if(nearTop())void request(); }
+  container.addEventListener('scroll', () => {
+    const top=container.scrollTop, movedUp=top<lastTop;lastTop=top;
+    if(movedUp && Date.now()<upwardUntil)upward();
+  }, {passive:true});
+  container.addEventListener('wheel', e => { if(e.deltaY<0)upward();else if(e.deltaY>0)upwardUntil=0; },{passive:true});
   container.addEventListener('touchstart',e=>{touchY=e.touches?.[0]?.clientY??null;},{passive:true});
-  container.addEventListener('touchmove',e=>{const y=e.touches?.[0]?.clientY;if(touchY!==null&&y>touchY+12&&nearTop()){touchY=y;void request();}},{passive:true});
-  container.addEventListener('keydown',e=>{if(['ArrowUp','PageUp','Home'].includes(e.key)&&nearTop()&&!e.target?.closest?.('input,textarea,[contenteditable="true"]'))void request();});
+  container.addEventListener('touchmove',e=>{const y=e.touches?.[0]?.clientY;if(touchY!==null&&Number.isFinite(y)){if(y>touchY)upward();else if(y<touchY)upwardUntil=0;}touchY=y;},{passive:true});
+  container.addEventListener('pointerdown',e=>{if(e.target===container&&e.offsetX>=container.clientWidth)upwardUntil=Infinity;});
+  container.addEventListener('pointerup',()=>{if(upwardUntil===Infinity)upwardUntil=Date.now()+700;});
+  container.addEventListener('keydown',e=>{if(['ArrowUp','PageUp','Home'].includes(e.key)&&!e.target?.closest?.('input,textarea,[contenteditable="true"]'))upward();});
   button.addEventListener('click',()=>void request(true));
-  return {reset, request};
+  return {reset, request, fill};
 }
 export function captureHistoryAnchor(container, selectors = ['[data-item-id]', '[data-turn-id]', '[data-virtual-turn-id]']) {
   const top=container.getBoundingClientRect().top;

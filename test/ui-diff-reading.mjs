@@ -20,6 +20,8 @@ client.turns.get(evidenceThread.id).push(evidenceTurn);
 client.items.get(evidenceThread.id).push(...evidenceTurn.items.map(item=>({turnId:evidenceTurn.id,item})));
 const source = '@@ -1 +1,120 @@\n-old\n' + Array.from({ length: 120 }, (_, i) => `+line ${i} ` + 'wide source '.repeat(15)).join('\n');
 const file = { id: 'live-file', type: 'fileChange', status: 'inProgress', changes: [{ path: 'src/fixture.js', kind: { type: 'update' }, diff: source }] };
+const secondFile={path:'src/created.js',kind:{type:'add'},diff:'created file\n'};
+file.changes.push(secondFile);
 const turn = { id: 'diff-turn', status: 'inProgress', items: [file] };
 client.turns.get(thread.id).push(turn); client.items.get(thread.id).push({ turnId: turn.id, item: file });
 const answer = { id: 'old-answer', type: 'agentMessage', text: Array.from({ length: 35 }, (_, i) => `Reading paragraph ${i}. ` + 'Stable old text for reviewing during a delayed send. '.repeat(6)).join('\n\n') };
@@ -38,9 +40,15 @@ try {
   page = await browser.newPage({ viewport: { width, height: 850 }, isMobile: mobile, hasTouch: mobile }); page.setDefaultTimeout(8000); page.on('pageerror', error => errors.push(error.message));
   if (mobile) await page.addInitScript(() => { window.CodexLightNative = { isNativeApp: () => true, setToolbarIntegrated() {} }; });
   const openThread = async name => { const sidebar=page.locator('#rail-sidebar');if(mobile&&await sidebar.getAttribute('aria-expanded')!=='true')await sidebar.click();await page.locator('.project-group-thread').filter({hasText:name}).click(); };
-  await page.goto(app.url); await openThread(thread.name);
-  await page.locator('.turn-process > summary').click(); await page.locator('[data-item-id="live-file"] > summary').click();
-  const running = page.locator('[data-item-id="live-file"] .diff-view'); await running.waitFor();
+  await page.goto(app.url); await page.getByRole('button',{name:'使用此主题'}).click(); await openThread(thread.name);
+  await page.locator('.turn-process > summary').click();
+  const batch=page.locator('.turn-process .file-batch');
+  assert.equal(await batch.getAttribute('open'),null);
+  await batch.locator('summary.file-batch-head').click();
+  assert.equal(await batch.locator('.file-step').count(),2);
+  assert.equal(await batch.locator('.file-step[open],.diff-view').count(),0);
+  await batch.locator('.file-step > summary').first().click();
+  const running = page.locator('.file-step .diff-view'); await running.waitFor();
   const mark = async locator => locator.evaluate(node => { node.scrollTop = 440; node.scrollLeft = 210; window.readingDiff = node; return { top: node.scrollTop, left: node.scrollLeft }; });
   const check = async (locator, saved, label) => {
     const value = await locator.evaluate(node => ({ same: node === window.readingDiff, top: node.scrollTop, left: node.scrollLeft }));
@@ -51,13 +59,15 @@ try {
   turn.items.push(progress); client.items.get(thread.id).push({ turnId: turn.id, item: progress }); emit('item/started', { item: progress });
   await page.waitForTimeout(220); await check(running, saved, 'unrelated progress');
   emit('item/started', { item: file }); await page.waitForTimeout(220); await check(running, saved, 'same file status refresh');
-  file.changes = [{ ...file.changes[0], diff: source + '\n+appended real diff' }]; emit('item/fileChange/patchUpdated', { itemId: file.id, changes: file.changes });
+  file.changes = [{ ...file.changes[0], diff: source + '\n+appended real diff' },secondFile]; emit('item/fileChange/patchUpdated', { itemId: file.id, changes: file.changes });
   await page.waitForTimeout(220); await check(running, saved, 'actual changed diff'); assert.ok((await running.textContent()).includes('appended real diff'), 'real patch update is rendered');
   checks.push('open operation diff retains node and both scroll axes through unrelated progress, status refresh and real diff updates');
 
   file.status = 'completed'; progress.status = 'completed'; turn.status = 'completed'; emit('item/completed', { item: file }); emit('item/completed', { item: progress }); emit('turn/completed', { turn });
-  await page.locator('.files-card .file-row-head').click(); const completed = page.locator('.files-card .diff-view'); await completed.waitFor();
-  const completedSaved = await mark(completed); file.changes = [{ ...file.changes[0], diff: file.changes[0].diff + '\n+corrected final diff' }]; emit('item/completed', { item: file });
+  await page.locator('.files-card .file-batch-head').filter({hasText:'已编辑 2 个文件'}).click();
+  assert.equal(await page.locator('.files-card .diff-view').count(),0);
+  await page.locator('.files-card .file-row-head').first().click(); const completed = page.locator('.files-card .diff-view'); await completed.waitFor();
+  const completedSaved = await mark(completed); file.changes = [{ ...file.changes[0], diff: file.changes[0].diff + '\n+corrected final diff' },secondFile]; emit('item/completed', { item: file });
   await page.waitForTimeout(220); await check(completed, completedSaved, 'corrected completed diff'); assert.ok((await completed.textContent()).includes('corrected final diff'), 'final correction is rendered');
   checks.push('completed file-summary diff retains node and both scroll axes after correction');
 

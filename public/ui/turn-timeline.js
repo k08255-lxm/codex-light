@@ -1,22 +1,62 @@
-import {itemText} from '../store.js';
+// Adapted from DeepSeek Harness TurnNavigator and turn-navigation (MIT).
+function excerpt(parts,limit){
+  let text='',clipped=false;
+  for(const part of parts){
+    if(typeof part!=='string'||!part)continue;
+    const room=limit*2-text.length;
+    if(room<=0){clipped=true;break;}
+    text+=(text?' ':'')+part.slice(0,room);
+    if(part.length>room){clipped=true;break;}
+  }
+  const clean=text.replace(/\s+/g,' ').trim();
+  if(clean.length>=limit)return clean.slice(0,limit-1).replace(/[\uD800-\uDBFF]$/,'').trimEnd()+'…';
+  return clipped&&clean?clean+'…':clean;
+}
+function responsePreview(turn){
+  const items=turn.items??turn.segments.flatMap(segment=>[...segment.process,...segment.answers]);
+  for(let i=items.length-1;i>=0;i--){
+    const item=items[i];
+    if(item.type!=='agentMessage')continue;
+    const parts=typeof item.text==='string'?[item.text]:Array.isArray(item.content)
+      ?item.content.filter(block=>block?.type==='text').map(block=>block.text):[item.content];
+    const text=excerpt(parts,120);
+    if(text)return text;
+  }
+  return '';
+}
 
 // Render marks for all loaded turns, including those currently represented by spacers.
-export function mountTurnTimeline(rail, scroller, host, {pause, reveal}) {
+export function mountTurnTimeline(rail, scroller, host, {jumpTo}) {
   const doc = rail.ownerDocument, win = doc.defaultView;
   const narrow=win.matchMedia?.('(max-width:760px), (pointer:coarse) and (max-height:600px)');
   const marks = rail.querySelector('.turn-marks'), preview = rail.querySelector('.turn-preview');
   const buttons = new Map();
-  let items = [], active = null, jumpFrame = null;
-  function cancelJump() {
-    if (jumpFrame !== null) win.cancelAnimationFrame(jumpFrame);
-    jumpFrame = null;
+  const prompt=preview.querySelector('.turn-preview-prompt'),reply=preview.querySelector('.turn-preview-response');
+  let items = [], active = null, selected = null;
+  function hidePreview() {
+    selected?.removeAttribute('aria-describedby');selected=null;preview.hidden=true;
   }
-  function hidePreview() { preview.hidden = true; }
+  function positionPreview(){
+    if(!selected)return;
+    const center=selected.offsetTop+selected.offsetHeight/2-marks.scrollTop;
+    preview.hidden=center<0||center>marks.clientHeight;
+    preview.style.setProperty('--turn-preview-center',center+'px');
+    if(preview.hidden)selected.removeAttribute('aria-describedby');else selected.setAttribute('aria-describedby',preview.id);
+  }
+  function refreshPreview(turnId){
+    if(!selected || (turnId!==undefined&&selected.dataset.turn!==turnId))return;
+    const turn=items[Number(selected.dataset.index)];
+    if(!turn || selected.dataset.turn!==turn.id){hidePreview();return;}
+    const question=selected.dataset.prompt||'第 '+(Number(selected.dataset.index)+1)+' 轮';
+    const answer=responsePreview(turn);
+    if(prompt.textContent!==question)prompt.textContent=question;
+    if(reply.textContent!==answer)reply.textContent=answer;
+    reply.hidden=!answer;
+  }
   function showPreview(button) {
-    preview.textContent = button.getAttribute('aria-label');
-    preview.hidden = false;
-    const top = button.getBoundingClientRect().top - rail.getBoundingClientRect().top;
-    preview.style.top = Math.max(0, Math.min(rail.clientHeight - preview.offsetHeight, top)) + 'px';
+    if(selected===button)return;
+    selected?.removeAttribute('aria-describedby');selected=button;
+    refreshPreview();positionPreview();
   }
   function updateActive() {
     if (rail.hidden || !host.children.length || !scroller.clientHeight) return;
@@ -42,34 +82,21 @@ export function mountTurnTimeline(rail, scroller, host, {pause, reveal}) {
     }
   }
   function jump(button) {
-    cancelJump(); hidePreview(); pause();
-    const index = Number(button.dataset.index), id = button.dataset.turn;
-    const motion = doc.documentElement.dataset.reducedMotion !== 'true';
-    const start = scroller.scrollTop, time = win.performance.now();
-    // Measured heights may change as spacers become real turns during the jump.
-    function step(now) {
-      if (items[index]?.id !== id || !host.children[index]) { cancelJump(); return; }
-      const t = motion ? Math.min(1, (now - time) / 210) : 1;
-      if (t === 1) reveal(id);
-      const target = scroller.scrollTop + host.children[index].getBoundingClientRect().top -
-        scroller.getBoundingClientRect().top - 8;
-      scroller.scrollTop = start + (target - start) * (1 - (1 - t) ** 3);
-      jumpFrame = t < 1 ? win.requestAnimationFrame(step) : null;
-      if (t === 1) { pause(); updateActive(); }
-    }
-    step(time);
+    hidePreview();
+    const index = Number(button.dataset.index);
+    if (items[index]?.id === button.dataset.turn) jumpTo(items[index].id, index);
   }
   marks.addEventListener('click', event => {
     const button = event.target.closest('button');
     if (button) jump(button);
   });
-  for (const type of ['pointerover','focusin']) marks.addEventListener(type, event => {
+  for (const type of ['pointermove','focusin']) marks.addEventListener(type, event => {
     const button = event.target.closest('button');
     if (button && event.pointerType !== 'touch') showPreview(button);
   });
   marks.addEventListener('pointerleave', hidePreview);
-  marks.addEventListener('focusout', hidePreview);
-  marks.addEventListener('scroll', hidePreview, {passive:true});
+  marks.addEventListener('focusout', event=>{if(!marks.contains(event.relatedTarget))hidePreview();});
+  marks.addEventListener('scroll', positionPreview, {passive:true});
   marks.addEventListener('keydown', event => {
     if ((event.key === 'Enter' || event.key === ' ') && event.target.matches('button')) {
       event.preventDefault(); if (!event.repeat) jump(event.target); return;
@@ -80,9 +107,8 @@ export function mountTurnTimeline(rail, scroller, host, {pause, reveal}) {
     event.preventDefault();
     marks.children[Math.max(0, Math.min(items.length-1,next))]?.focus();
   });
-  for (const type of ['wheel','touchstart','pointerdown','keydown']) scroller.addEventListener(type, cancelJump, {passive:true});
   function clear() {
-    cancelJump(); hidePreview(); buttons.clear(); items=[]; active=null;
+    hidePreview(); buttons.clear(); items=[]; active=null;
     marks.replaceChildren(); marks.scrollTop=0; rail.hidden=true;
   }
   function update(list) {
@@ -107,16 +133,17 @@ export function mountTurnTimeline(rail, scroller, host, {pause, reveal}) {
       const prompt = turn.segments[0]?.user;
       if (entry._prompt !== prompt || entry.dataset.index !== String(index)) {
         entry._prompt = prompt; entry.dataset.index = String(index);
-        const summary = prompt ? itemText(prompt).slice(0,100).replace(/\s+/g,' ').trim() : '';
-        entry.setAttribute('aria-label', '第 '+(index+1)+' 轮'+(summary?' · '+summary:''));
+        entry.dataset.prompt=excerpt((prompt?.content||[]).filter(part=>part?.type==='text').map(part=>part.text),50);
+        entry.setAttribute('aria-label','跳转到第 '+(index+1)+' 轮');
       }
       if (marks.children[index] !== entry) marks.insertBefore(entry, marks.children[index] || null);
     }
     for (const [id,button] of buttons) if (!keep.has(id)) {
-      hidePreview(); button.remove(); buttons.delete(id);
+      if(selected===button)hidePreview();
+      button.remove(); buttons.delete(id);
     }
-    updateActive();
+    updateActive();refreshPreview();positionPreview();
   }
   narrow?.addEventListener('change',()=>{const list=items;clear();update(list);});
-  return {update,clear};
+  return {update,clear,refreshPreview};
 }

@@ -144,16 +144,17 @@ try {
       raw:answer.textContent.includes('](C:'),anchors:[...answer.querySelectorAll('a')].map(a=>a.href)};
   });
   assert.equal(collapsed.open, false); assert.equal(collapsed.link, 'sample.md'); assert.equal(collapsed.raw, false); assert.deepEqual(collapsed.anchors, ['https://example.com/']);
-  assert.match(await page.locator('.files-title').first().textContent(), /已编辑 4 个文件/);
-  assert.equal(await page.locator('.files-card .file-row').first().locator('xpath=..').locator('.file-row').count(), 3);
+  assert.equal(await currentTurn.locator('.files-card .file-row').count(),4);
+  assert.equal(await currentTurn.locator('.files-card .diff-view').count(),0);
   ok('Completion: collapsed "用时 18s", final answer outside, local path link control, queue drained exactly once');
   await page.waitForFunction(() => !document.querySelector('#stop:not(.hidden)'));
   await page.locator('#conversation').evaluate(n => { n.scrollTop = 0; });
   await page.evaluate(() => { const done = [...document.querySelectorAll('.turn')].find(n => n.textContent.includes('用时 18s')); done.scrollIntoView({ block: 'start' }); });
   await shot('03-completed-wide-dark-codex');
-  await page.locator('.files-more').first().click(); await page.locator('.file-row-head').first().click();
+  await currentTurn.locator('.files-card .file-batch-head').click();
+  await currentTurn.locator('.file-row-head').first().click();
   await page.locator('.diff-view').first().waitFor(); await shot('04-files-expanded-dark-codex');
-  ok('Files card expands to all files and shows a real diff');
+  ok('Completed files are listed directly and open their diff individually');
 
   // Theme/style/layout matrix.
   for (const [theme, style] of [['light', 'codex'], ['dark', 'claude'], ['light', 'claude']]) { await setLook(theme, style); await shot(`05-completed-wide-${theme}-${style}`); }

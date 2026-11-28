@@ -131,7 +131,7 @@ test('static shell mounts one inspector scroll surface rather than nested event 
     assert.equal((html.match(new RegExp(`id="${id}"`, 'g')) || []).length, 1, `${id} mounted once`);
   }
   assert.doesNotMatch(html, /id="open-dsh"/, 'Activity is the single conversation panel entry');
-  assert.match(html,/id="dsh-panel" class="inspector-body hidden"/);
+  assert.match(html,/id="dsh-panel" class="inspector-body"/);
   assert.match(html,/id="dsh-tasks" class="agent-inspector-content"/);
   const rule=css.match(/\.inspector-body\s*\{([^}]+)\}/)?.[1]||'';
   assert.match(rule,/overflow:\s*auto/);

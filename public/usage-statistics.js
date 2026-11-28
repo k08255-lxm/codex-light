@@ -1,4 +1,5 @@
 // Codex-only projections. No persistence, network requests, price catalog or WB telemetry.
+import {showTokens} from './ui/format.js';
 export const USAGE_UNKNOWN = '—';
 export const safeUsageNumber = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 const label = value => typeof value === 'string' && value.length ? value.slice(0, 300) : null;
@@ -69,7 +70,7 @@ export function mountOfficialUsageStatistics(container) {
     const body = make('tbody');
     for (const row of rows) {
       const line = make('tr');
-      row.forEach((text, i) => { const cell = make(i === 0 ? 'th' : 'td', text); if (i === 0) cell.setAttribute('scope', 'row'); line.append(cell); });
+      row.forEach((text, i) => { const cell = make(i === 0 ? 'th' : 'td', text); if (typeof text==='number') showTokens(cell,text); if (i === 0) cell.setAttribute('scope', 'row'); line.append(cell); });
       body.append(line);
     }
     el.append(body); return el;
@@ -86,14 +87,14 @@ export function mountOfficialUsageStatistics(container) {
     container.append(make('p', '费用和积分来自官方接口估算，实际扣款以账单为准。', 'usage-statistics-note'));
     if (scope !== 'thread') {
     container.append(table('Codex 全局汇总', ['指标', '值'], [
-      ['累计 tokens', formatUsageNumber(data.summary.lifetimeTokens)], ['单日峰值 tokens', formatUsageNumber(data.summary.peakDailyTokens)],
+      ['累计 tokens', data.summary.lifetimeTokens ?? USAGE_UNKNOWN], ['单日峰值 tokens', data.summary.peakDailyTokens ?? USAGE_UNKNOWN],
       ['最长任务时长（秒）', formatUsageNumber(data.summary.longestRunningTurnSec)], ['当前连续天数', formatUsageNumber(data.summary.currentStreakDays)], ['最长连续天数', formatUsageNumber(data.summary.longestStreakDays)]
     ]));
     if (data.dailyUsageBuckets === null) container.append(make('p', '日趋势：服务未提供数据。'));
     else if (!data.dailyUsageBuckets.length) container.append(make('p', '日趋势：没有返回日桶。'));
     else {
       const max = Math.max(0, ...data.dailyUsageBuckets.map(row => row.tokens ?? 0));
-      const chart = table('日桶趋势（服务日期）', ['日期', 'Tokens', '相对趋势'], data.dailyUsageBuckets.map(row => [row.startDate ?? USAGE_UNKNOWN, formatUsageNumber(row.tokens), '']));
+      const chart = table('日桶趋势（服务日期）', ['日期', 'Tokens', '相对趋势'], data.dailyUsageBuckets.map(row => [row.startDate ?? USAGE_UNKNOWN, row.tokens ?? USAGE_UNKNOWN, '']));
       const body = chart.children[2];
       data.dailyUsageBuckets.forEach((row, i) => {
         const cell = body.children[i].children[2];
@@ -119,7 +120,7 @@ export function mountOfficialUsageStatistics(container) {
       else if (!thread.groups.length) container.append(make('p', '当前会话未返回模型分组。'));
       else container.append(table('当前会话模型分组', ['模型','思考强度','速度','输入','新增输入','缓存输入','输出','总 tokens','积分'], thread.groups.map(row => [
         row.model ?? USAGE_UNKNOWN, row.reasoningEffort ?? USAGE_UNKNOWN, row.speed ?? USAGE_UNKNOWN,
-        ...['inputTokens','netNewInputTokens','cachedInputTokens','outputTokens','totalTokens'].map(key => formatUsageNumber(row[key])), formatUsageMicros(row.estimatedUsageCreditsMicros,'积分')
+        ...['inputTokens','netNewInputTokens','cachedInputTokens','outputTokens','totalTokens'].map(key => row[key] ?? USAGE_UNKNOWN), formatUsageMicros(row.estimatedUsageCreditsMicros,'积分')
       ])));
       if (thread.groupsTruncated) container.append(make('p', '仅显示前 500 个会话模型分组。'));
     } else container.append(make('p', '暂无当前会话用量。'));
@@ -127,7 +128,7 @@ export function mountOfficialUsageStatistics(container) {
     if (tokenSnapshot?.threadId && (!thread?.threadId || tokenSnapshot.threadId === thread.threadId)) {
       container.append(table('当前会话实时累计', ['指标','值'], [
         ['会话 ID',label(tokenSnapshot.threadId) ?? USAGE_UNKNOWN],
-        ...[['totalTokens','总 tokens'],['inputTokens','输入'],['cachedInputTokens','缓存输入（已包含于输入）'],['outputTokens','输出'],['reasoningOutputTokens','推理输出（已包含于输出）']].map(([key,title]) => [title,formatUsageNumber(tokenSnapshot[key])])
+        ...[['totalTokens','总 tokens'],['inputTokens','输入'],['cachedInputTokens','缓存输入（已包含于输入）'],['outputTokens','输出'],['reasoningOutputTokens','推理输出（已包含于输出）']].map(([key,title]) => [title,tokenSnapshot[key] ?? USAGE_UNKNOWN])
       ]));
     }
     }

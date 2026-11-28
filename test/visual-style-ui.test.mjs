@@ -49,7 +49,6 @@ test('low-frequency settings motion is scoped; conversation scrolling remains im
   [':root .update-indicator:active:not(:focus-visible) .update-indicator-badge',/transform:\s*scale\(\.96\)/],
   [':root .sidebar',/transform:\s*translateX\(-100%\)/],
   ['.update-indicator:not([hidden])',/transform:\s*translateY\(-3px\)/],
-  [':root:not([data-reduced-motion="true"]) #window-menu.app-menu:not(.hidden)',/transform:\s*translateX\(-4px\) scale\(\.98\)/],
  ]);
  const seen=new Set();
  for(const [,raw,body] of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)){
@@ -80,10 +79,10 @@ test('PR surface wraps filters, keeps entries focusable and scrolls patches inde
  for(const pattern of [/\.pr-review-toolbar\s*\{[^}]*flex-wrap:\s*wrap/s,/\.pr-review-toolbar>label[^{}]*\{[^}]*min-width:\s*0/s,/\.pr-review-card:focus-within/,/@media\s*\(hover:hover\)[\s\S]*?\.pr-review-card:hover/,/\.pr-review-card>button\s*\{[^}]*overflow-wrap:\s*anywhere/s,/\.pr-review-patch\s*\{[^}]*white-space:\s*pre[^}]*overflow-x:\s*auto/s,/\.pr-review-list>p,\s*\.pr-review-section>p\s*\{[^}]*border:\s*1px dashed/s,/@media\s*\(forced-colors:\s*active\)/])assert.match(pr,pattern);
 });
 
-test('static shell: pressed-state style choices, hidden text menus with one named entry, CLI version slot',()=>{
+test('static shell: pressed-state style choices, no duplicate app menu, CLI version slot',()=>{
  assert.deepEqual([...html.matchAll(/data-style-choice="([^"]+)" aria-pressed="(true|false)"/g)].map(match=>[match[1],match[2]]),[['codex','true'],['claude','false'],['dsh','false']]);
  assert.match(html,/class="style-cards" role="group" aria-label="界面风格"/);
- assert.match(html,/class="window-bar hidden" aria-hidden="true"/);assert.match(css,/\.window-bar\s*\{\s*display:\s*none/);assert.match(html,/id="menu-app"[^>]*aria-label="应用菜单"/);
+ assert.doesNotMatch(html,/id="(?:window-menu|menu-app)"/);
  assert.match(html,/<dt>CLI 版本<\/dt><dd id="version-info">未知<\/dd>/);assert.match(app,/\$\('version-info'\)\.textContent=state\.cliVersion\|\|'未知'/);
  assert.doesNotMatch(app,/updateManifest|upgradeRuntime|运行时升级/);
 });
@@ -107,16 +106,4 @@ test('model catalog loading is bounded, generation-safe and preserves the last g
  const seeded=[{model:'seed'}];state.models=seeded;let page=0;rpc=async()=>({data:[{model:'m'+page}],nextCursor:'same'});await assert.rejects(()=>loadModels(),/分页游标未前进/);assert.equal(state.models,seeded);
  page=0;rpc=async()=>({data:[{model:'p'+page++}],nextCursor:'cursor-'+page});await assert.rejects(()=>loadModels(),/超过 5 页/);assert.equal(state.models,seeded);
  rpc=async()=>({data:Array.from({length:501},(_,i)=>({model:'bulk-'+i})),nextCursor:null});await assert.rejects(()=>loadModels(),/超过 500 项/);assert.equal(state.models,seeded);
-});
-
-
-test('application menu entrance is short, opt-in and isolated from conversation motion',()=>{
- // A small one-shot entrance connects this low-frequency overlay to its trigger.
- // Keep both system and application reduced-motion preferences authoritative.
- const start=css.indexOf('/* Client-area application menu:');
- assert.ok(start>=0);const menu=css.slice(start);
- assert.match(menu,/@media \(prefers-reduced-motion: no-preference\)\s*\{\s*#window-menu\.app-menu\s*\{\s*transition: opacity 150ms ease-out, transform 150ms ease-out;\s*\}\s*@starting-style\s*\{\s*:root:not\(\[data-reduced-motion="true"\]\) #window-menu\.app-menu:not\(\.hidden\)\s*\{\s*opacity: 0; transform: translateX\(-4px\) scale\(\.98\);\s*\}\s*\}\s*\}/);
- assert.doesNotMatch(block('#window-menu.app-menu {'),/transform:|animation:/);
- assert.match(menu,/transform-origin: top left/);
- assert.doesNotMatch(menu,/transition:\s*all|@keyframes/);
 });

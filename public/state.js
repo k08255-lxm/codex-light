@@ -400,7 +400,7 @@ export function isUnsupportedMethod(error) {
   if (error?.code === -32602 && /itemsView|unknown variant/i.test(message)) return true;
   return /method not found|is not supported|not supported yet|unknown method|unknown variant/i.test(message);
 }
-export const HISTORY_PAGE = Object.freeze({ items: 300, itemsPerRequest: 100, turns: 40, fetchesPerPage: 4, readKeepTurns: 40 });
+export const HISTORY_PAGE = Object.freeze({ items: 300, itemsPerRequest: 100, turns: 40, fetchesPerPage: 4 });
 /** Shared per server instance: which history methods the connected CLI lacks. */
 export function historyCapabilities() { return { unsupported: new Set() }; }
 
@@ -415,12 +415,15 @@ export class HistoryPager {
   constructor(rpc, threadId, capabilities = historyCapabilities()) {
     this.rpc = rpc; this.threadId = threadId; this.capabilities = capabilities;
     this.mode = null; this.cursor = null; this.started = false; this.buffer = []; this.requests = [];
-    this.read = null; // read mode: { totalTurns, shownTurns }
+    this.cursors = new Set();
   }
   /** More history exists, either buffered here or behind the server cursor. */
   get hasMore() { return this.buffer.length > 0 || this.cursor !== null; }
-  /** The next call has to transfer the complete thread again (read fallback only). */
-  get nextNeedsFullRead() { return this.mode === 'read' && !this.buffer.length && this.cursor !== null; }
+  advance(cursor) {
+    if (cursor && this.cursors.has(cursor)) throw new Error('历史分页游标未前进，请重试。');
+    if (cursor) this.cursors.add(cursor);
+    this.cursor = cursor || null;
+  }
   async call(method, params) { this.requests.push(method); return this.rpc(method, params); }
   async next({ max = HISTORY_PAGE.items } = {}) {
     const turns = []; let activeTurnId = null; let fetches = 0; this.didRead = false;
@@ -432,7 +435,7 @@ export class HistoryPager {
       if (this.mode === 'read') break;
     }
     const items = this.buffer.splice(Math.max(0, this.buffer.length - max));
-    return { mode: this.mode, items, turns, activeTurnId, hasMore: this.hasMore, fullRead: this.didRead, read: this.read && { ...this.read } };
+    return { mode: this.mode, items, turns, activeTurnId, hasMore: this.hasMore, fullRead: this.didRead };
   }
   async fetch(itemLimit = HISTORY_PAGE.itemsPerRequest) {
     const { unsupported } = this.capabilities;
@@ -441,7 +444,7 @@ export class HistoryPager {
         try {
           const params = { threadId: this.threadId, limit: itemLimit, sortDirection: 'desc' }; if (this.cursor) params.cursor = this.cursor;
           const result = await this.call('thread/items/list', params);
-          this.mode = 'items'; this.cursor = result?.nextCursor || null;
+          this.mode = 'items'; this.advance(result?.nextCursor);
           const rows = (Array.isArray(result?.data) ? result.data : []).map(historyEntry).filter(Boolean).reverse();
           this.buffer = [...rows, ...this.buffer];
           return [];
@@ -458,7 +461,7 @@ export class HistoryPager {
           const missing = rows.some(turn => !Array.isArray(turn?.items));
           if (missing) { if (this.mode === 'turns') throw new Error('Codex 返回的回合缺少条目，无法继续分页读取历史'); unsupported.add('turns'); }
           else {
-            this.mode = 'turns'; this.cursor = result?.nextCursor || null;
+            this.mode = 'turns'; this.advance(result?.nextCursor);
             const chronological = [...rows].reverse();
             this.buffer = [...chronological.flatMap(turnItems), ...this.buffer];
             return chronological;
@@ -466,17 +469,12 @@ export class HistoryPager {
         } catch (error) { if (this.mode === 'turns' || !isUnsupportedMethod(error)) throw error; unsupported.add('turns'); }
       }
     }
-    // Neither paging method exists: one full read; only the newest turns are kept, the rest is counted.
+    // Legacy engines transfer the whole thread once. Drain it in display-sized batches.
     const result = await this.call('thread/read', { threadId: this.threadId, includeTurns: true });
     this.mode = 'read'; this.didRead = true;
     const all = Array.isArray(result?.thread?.turns) ? result.thread.turns : [];
-    const shown = this.read ? Math.min(this.read.shownTurns, all.length) : 0;
-    const end = all.length - shown; const start = Math.max(0, end - HISTORY_PAGE.readKeepTurns);
-    const rows = all.slice(start, end);
-    this.read = { totalTurns: all.length, shownTurns: shown + rows.length };
-    this.cursor = start > 0 ? { readTurns: this.read.shownTurns } : null;
-    this.buffer = [...rows.flatMap(turnItems), ...this.buffer];
-    // Metadata for every turn is small; it keeps statuses/durations right without holding older items.
+    this.buffer = all.flatMap(turnItems);
+    this.cursor = null;
     return all.map(({ items, ...meta }) => meta);
   }
 }

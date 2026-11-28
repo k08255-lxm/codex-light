@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import { mountConversation, describeItem, itemState, renderActivityRecord } from '../public/activity-feed.js';
 import { TurnLedger, buildTurns } from '../public/state.js';
 import { createDocument, visibleText } from './mini-dom.mjs';
-import { mountToolActivity } from '../public/ui/tool-activity.js';
 import { createAgentInspector } from '../public/ui/agent-inspector.js';
 
 const user = (id, turnId, text) => ({ id, type: 'userMessage', content: [{ type: 'text', text }], _turnId: turnId, _complete: true });
@@ -115,7 +114,7 @@ test('a collapse is never undone by a render that runs before the queued toggle 
   const {host,view}=mount();view.render(buildTurns(items,ledger));
   const group=host.querySelector('.turn-process'),summary=group.querySelector('.turn-process-summary');
   summary.dispatch('click');group.open=true;assert.equal(group.open,true);
-  const row=group.querySelector('.step[data-item-id="f"]');row.open=true;row.open=false;
+  const row=group.querySelector('.file-step');row.open=true;row.open=false;
   // Browser order under scroll clamping: click → default action closes → render → toggle event.
   summary.dispatch('click');group._open=false;
   view.render(buildTurns(items,ledger));
@@ -196,19 +195,6 @@ test('running operation headers stop their feedback on terminal items and termin
   }
 });
 
-test('tool activity marks only the current running group and clears stopped operation feedback', () => {
-  const document=createDocument(),host=document.createElement('div'),view=mountToolActivity(host);
-  const running=cmd('c','t',{status:'inProgress',exitCode:null,_complete:false});
-  view.render([running],'thread');
-  assert.equal(host.querySelector('.tool-operation-group').dataset.running,'true');
-  assert.equal(host.querySelector('.step').dataset.running,'true');
-  view.render([running,agent('comment','t','已结束操作','commentary')],'thread');
-  assert.equal(host.querySelector('.tool-operation-group').dataset.running,'false');
-  assert.equal(host.querySelector('.step').dataset.running,'false');
-  view.render([{...running,status:'interrupted',_complete:true}],'thread');
-  assert.equal(host.querySelector('.tool-operation-group').dataset.running,'false');
-  assert.equal(host.querySelector('.step').dataset.running,'false');
-});
 
 test('native and DSH inspector operations stop feedback when the parent task settles', async () => {
   for (const native of [true,false]) {
@@ -283,19 +269,20 @@ test('interrupted and failed turns show their real status', () => {
   assert.deepEqual([...q(host, '.turn-work-label'), ...q(host, '.turn-footer')].map(node => node.textContent), ['已停止', '任务失败：quota']);
 });
 
-test('edited files card: count, +/- totals, first three then expand, real diff view', () => {
+test('completed edits list every path with its own collapsed diff', () => {
   const ledger = new TurnLedger(); ledger.merge({ id: 'd', status: 'completed', durationMs: 1000 });
   const items = [user('u', 'd', 'edit')];
   for (let i = 0; i < 5; i++) items.push(change('f' + i, 'd', `C:\\proj\\src\\file${i}.js`, `@@ -1 +1,2 @@\n-a\n+b\n+c\n`));
   items.push(change('dup', 'd', 'C:/proj/src/file0.js', '@@ -2 +2 @@\n-c\n+d\n'));
   const { host, view } = mount(); view.render(buildTurns(items, ledger, { cwd: 'C:\\proj' }));
   const card = q(host, '.files-card')[0];
-  assert.equal(card.querySelector('.files-title').textContent, '已编辑 5 个文件');
-  assert.equal(card.querySelector('.files-stats').textContent, '+11-6');
-  assert.equal(q(card, '.file-row').length, 3);
+  assert.equal(card.querySelector('.files-title').textContent,'已编辑 5 个文件');
+  const batch=card.querySelector('.file-batch');assert.equal(batch.open,false);batch.open=true;
+  assert.ok(q(card,'.file-row-head').every(button=>button.getAttribute('aria-expanded')==='false'));
+  assert.equal(q(card, '.diff-view').length, 0);
+  assert.equal(q(card, '.file-row').length, 5);
+  assert.equal(q(card, '.file-stats')[0].textContent, '+3-2');
   assert.equal(q(card, '.file-row')[0].querySelector('.file-name').textContent, 'src/file0.js');
-  const more = card.querySelector('.files-more'); assert.equal(more.hidden, false); assert.match(more.textContent, /再显示 2 个文件/);
-  more.click(); assert.equal(q(card, '.file-row').length, 5);
   q(card, '.file-row-head')[1].click();
   const diff = q(card, '.diff-view')[0]; assert.ok(diff); assert.equal(q(diff, '.diff-add').length, 2); assert.equal(q(diff, '.diff-del').length, 1);
   assert.equal(q(card, 'button').some(node => /撤销|Undo/.test(node.textContent)), false, 'no unsupported undo');
@@ -311,8 +298,7 @@ test('turn diff is authoritative and deduplicates; unknown per-file stats are sh
   assert.equal(turn.files.added, 1, 'known totals survive an unknown binary file');
   assert.equal(turn.files.unknownCount,1);assert.equal(turn.files.complete,false);
   const { host, view } = mount(); view.render([turn]);
-  assert.match(q(host, '.files-stats')[0].textContent, /行数未知/);
-  assert.match(q(host,'.files-stats')[0].textContent,/已知 \+1-1/);assert.match(q(host,'.files-stats')[0].textContent,/1 个二进制/);
+  assert.equal(q(host,'.file-stats')[0].textContent,'+1-1');
   assert.match(q(host,'.file-stats')[1].textContent,/二进制/);
 });
 
@@ -330,12 +316,22 @@ test('collapsed file steps show real added and removed counts in chat and agent 
  const {host,view}=mount();view.render(buildTurns([user('ask','stats','change'),item],ledger,{activeTurnId:'stats',cwd:'C:/proj'}));
  assert.match(q(host,'.step-change-stats')[0].textContent,/\+2-1/);
  const record=renderActivityRecord(host.ownerDocument,item);assert.match(record.querySelector('.step-change-stats').textContent,/\+2-1/);
- item.changes.push({path:'C:/proj/b.js',kind:'update',diff:'@@ -1 +1 @@\n-x\n+y\n'});
- view.render(buildTurns([user('ask','stats','change'),item],ledger,{activeTurnId:'stats',cwd:'C:/proj'}));
- assert.match(q(host,'.step-change-stats')[0].textContent,/\+3-2/);
- item.changes[1].diff=null;
- view.render(buildTurns([user('ask','stats','change'),item],ledger,{activeTurnId:'stats',cwd:'C:/proj'}));
- assert.match(q(host,'.step-change-stats')[0].textContent,/已知 \+2-1/);assert.match(q(host,'.step-change-stats')[0].textContent,/1 个文件行数未知/);
+ item.changes.push({path:'C:/proj/b.js',kind:'add',diff:'created\n'});
+ const render=()=>view.render(buildTurns([user('ask','stats','change'),cmd('before','stats'),item,cmd('after','stats')],ledger,{activeTurnId:'stats',cwd:'C:/proj'}));
+ render();
+ const group=host.querySelector('.turn-process'); group.open=true;
+ const batch=group.querySelector('.file-batch');assert.equal(batch.open,false);
+ assert.equal(batch.querySelector('.files-title').textContent,'已编辑 2 个文件');
+ batch.open=true;assert.ok(q(batch,'.file-step').every(record=>!record.open));
+ const rows=q(group,'.step'), file=rows[1], created=rows[2];
+ assert.deepEqual(rows.map(row=>row.querySelector('.step-verb').textContent),['已运行','已编辑','已创建','已运行']);
+ assert.equal(file.parentElement,created.parentElement);
+ assert.equal(q(group,'.diff-view').length,0);
+ assert.equal(created.querySelector('.step-change-stats').textContent,'+1-0');
+ created.open=true;assert.match(created.querySelector('.diff-view').textContent,/created/);
+ item.changes[0].diff=null;render();
+ assert.equal(q(group,'.file-step')[1],created);assert.equal(created.open,true);
+ assert.equal(file.open,false);assert.match(file.querySelector('.step-change-stats').textContent,/行数未知/);
 });
 
 test('streaming and completed agent text render the same safe Markdown with local file controls', () => {

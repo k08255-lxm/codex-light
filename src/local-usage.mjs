@@ -1,4 +1,5 @@
 // Original, pure parser. Reads no files, makes no requests, performs no price estimation.
+import {requestReceipt} from './request-usage.mjs';
 const fields = {inputTokens:'input_tokens',cachedInputTokens:'cached_input_tokens',cacheWriteInputTokens:'cache_write_input_tokens',outputTokens:'output_tokens',reasoningOutputTokens:'reasoning_output_tokens',totalTokens:'total_tokens'};
 const number = n => Number.isSafeInteger(n) && n >= 0 ? n : null;
 const string = s => typeof s === 'string' && s.length > 0 && s.length <= 300 ? s : null;
@@ -38,7 +39,7 @@ export function parseLocalCodexUsage(input, {sourceId} = {}) {
   const instant=value=>typeof value==='string'&&Number.isFinite(Date.parse(value))?new Date(value).toISOString():null;
   const turn=id=>{if(!string(id))return null;let row=turns.get(id);if(!row){row={turnId:id,model:null,provider,startedAt:null,completedAt:null,status:'unknown'};turns.set(id,row);}return row;};
   let firstTimestamp = null, lastTimestamp = null, tokenEvents = 0, duplicateEvents = 0;
-  const increments = [], seen = new Set();
+  const increments = [], requests=[], seen = new Set();
   let i=-1;
   for (let row of raw) {
     if(++i>=MAX_RECORDS){diagnose('record-limit',MAX_RECORDS);blocked=true;break;}
@@ -117,6 +118,11 @@ export function parseLocalCodexUsage(input, {sourceId} = {}) {
     if (seen.has(signature)) { diagnose('replayed-snapshot',i+1); blocked = true; baseline = current; continue; }
     seen.add(signature);
     if (current.totalTokens === null) { diagnose('unknown-cumulative-total',i+1);if(turnId)coverageGaps.add(turnId); baseline = null; continue; }
+    if(!blocked){
+      const receipt=requestReceipt({threadId,turnId,endTokens:current.totalTokens,timestamp,
+        tokens:usageCounters(payload.info?.last_token_usage),model:turns.get(turnId)?.model||model,provider});
+      if(receipt && (!baseline || receipt.tokens.totalTokens<=current.totalTokens-baseline.totalTokens))requests.push(receipt);
+    }
     // A fully observed first request can anchor zero only with an explicit turn start
     // and identical complete last/cumulative counters. Resumes/forks remain deferred.
     if(!baseline&&seen.size===1&&!blocked&&turnId&&turns.get(turnId)?.startedAt){
@@ -153,6 +159,7 @@ export function parseLocalCodexUsage(input, {sourceId} = {}) {
     }
   }
   return {source:'local-codex-jsonl',sourceId,threadId,declaredVersion,compatibilityNotice:counts.has('declared-version-cache-write-default')?'按会话声明的 0.157.1 协议，将缺失缓存写入字段按默认 0 兼容；恢复后的逐条写入版本未核实。':null,snapshot:counts.has('excluded-non-codex-source') ? null : snapshot,firstTimestamp,lastTimestamp,tokenEvents,duplicateEvents,increments,
+    requests:blocked||!threadId?[]:requests,
     provider,turns:identityBlocked||!threadId||counts.has('excluded-non-codex-source')?[]:[...turns.values()].map(t=>({...t,coverageComplete:!blocked&&coverageStarts.has(t.turnId)&&!coverageGaps.has(t.turnId)&&coveredTurns.has(t.turnId)})),turnAttribution:identityBlocked||!threadId?'deferred':'observed-turn-records',attribution:blocked || !threadId ? 'deferred' : 'observed-differences-only',
     diagnostics,diagnosticCounts:Object.fromEntries(counts),
     notice:'仅传入本地记录的观察值；不是官方全局统计或账单，不与其他来源相加。首个累计快照不分摊到模型；缓存与推理不另加到总量。'};

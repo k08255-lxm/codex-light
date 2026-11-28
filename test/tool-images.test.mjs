@@ -4,7 +4,6 @@ import { ItemStore } from '../public/store.js';
 import { artifactCandidates, mountArtifacts } from '../public/ui/artifacts.js';
 import { mountConversation, describeItem } from '../public/activity-feed.js';
 import { createAgentInspector } from '../public/ui/agent-inspector.js';
-import { mountToolActivity } from '../public/ui/tool-activity.js';
 import { TurnLedger, buildTurns } from '../public/state.js';
 import { createDocument } from './mini-dom.mjs';
 
@@ -73,16 +72,4 @@ test('subagent image previews use its own thread and image pool for tool output 
   assert.ok(host.querySelectorAll('.artifact-frame').every(frame => !frame.disabled));
   assert.deepEqual(scopes, [{ path: 'C:/child/local.png', scope: 'child' }]);
   host.querySelector('.artifact-frame').click(); assert.equal(opened.length, 1);
-});
-
-test('tool tab exposes function output images, keeps compaction standalone, and releases removed previews once', () => {
-  const document = createDocument(), host = document.createElement('div'); document.body.append(host); let releases = 0;
-  const artifacts = { strip(candidates) { assert.equal(candidates.length, 3); const node = document.createElement('div'); node.className = 'artifact-strip'; node.release = () => releases++; return node; } };
-  const view = mountToolActivity(host, { artifacts });
-  view.render([output(), { id: 'compact', type: 'contextCompaction' }], 'thread');
-  host.querySelector('.agent-tool-record').open = true;
-  assert.ok(host.querySelector('.artifact-strip'));
-  assert.equal(host.querySelector('.compaction-record').closest('details'), null);
-  view.render([], 'thread'); assert.equal(releases, 1);
-  view.render([], 'other-thread'); assert.equal(releases, 1);
 });

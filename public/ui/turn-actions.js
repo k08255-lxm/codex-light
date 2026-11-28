@@ -1,5 +1,6 @@
 import {icon} from '../icons.js';
 import {mountStatPopover} from './stat-popover.js';
+import {compact,showTokens} from './format.js';
 
 const count = value => Number.isSafeInteger(value) && value >= 0;
 const number = new Intl.NumberFormat('zh-CN',{maximumFractionDigits:9});
@@ -108,15 +109,18 @@ export function createTurnActions(document,{threadId,turnId,source,onCopy,onFork
     thead.append(tr);table.append(thead);
     const body=el('tbody');
     for(const part of breakdown(row)){
-      const line=el('tr');line.append(el('th','',part.label),el('td','',format(part.tokens)),el('td','',format(part.pricePerMillion)),el('td','',format(part.usd)));body.append(line);
+      const line=el('tr'),quantity=el('td');showTokens(quantity,part.tokens);
+      line.append(el('th','',part.label),quantity,el('td','',format(part.pricePerMillion)),el('td','',format(part.usd)));body.append(line);
     }
     table.append(body);panel.append(table,el('p','fine','¹ 美元，单价按每百万 tokens 计算。实际扣款以账单为准。'));
     if(priceError)panel.append(el('p','fine',priceError));
     else if(!cost?.complete)panel.append(el('p','fine',!row.model?'这轮未记录模型，可在用量页导入原始日志。':cost?.reason||'用量尚未完整记录。'));
     const latest=getContext?.();
     const context=row.context||(latest?.threadId===threadId&&latest.turnId===turnId?latest:null);
-    if(count(context?.used)&&context?.window>0)
-      panel.append(el('p','turn-usage-context','本轮结束时上下文占用 '+format(context.used)+' / '+format(context.window)+' tokens'));
+    if(count(context?.used)&&context?.window>0){
+      const note=el('p','turn-usage-context','本轮结束时上下文占用 '+compact(context.used)+' / '+compact(context.window)+' tokens');
+      note.title=format(context.used)+' / '+format(context.window)+' tokens';panel.append(note);
+    }
   }
   const popover=mountStatPopover(usage,panel,{onOpen(){
     details();pricesChecked=false;source.refresh(threadId,turnId);void loadPrices();
@@ -124,7 +128,7 @@ export function createTurnActions(document,{threadId,turnId,source,onCopy,onFork
   const unwatch=source.watch(threadId,turnId,next=>{
     status=next;
     const total=next.value?.tokens?.totalTokens;
-    amount.textContent=count(total)?format(total)+' tokens':'本轮用量';
+    showTokens(amount,total,{suffix:' tokens',unknown:'本轮用量'});
     if(popover.open){details();popover.position();void loadPrices();}
   });
   async function loadPrices(){

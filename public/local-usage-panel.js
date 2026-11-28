@@ -1,5 +1,6 @@
 import {estimateTokenCost} from './token-pricing.js';
-import {formatUsageNumber,USAGE_UNKNOWN} from './usage-statistics.js';
+import {showTokens} from './ui/format.js';
+import {formatUsageNumber,safeUsageNumber,USAGE_UNKNOWN} from './usage-statistics.js';
 const str=(v,max=300)=>typeof v==='string'?v.slice(0,max):'';
 const safeModel=v=>typeof v==='string'&&v.length>0&&v.length<=200&&!/^(unknown|未知)$/i.test(v)&&!/workbuddy|deepseek|(^|[^a-z])(wb|dsh)([^a-z]|$)/i.test(v);
 const codes={'access-denied':'无权读取','file-size-limit':'文件超过上限','total-size-limit':'总读取量超过上限','file-count-limit':'文件数量超过上限','depth-limit':'目录深度超过上限','directory-entry-limit':'目录条目超过上限','compressed-format-unsupported':'压缩文件未覆盖','file-changed-during-read':'读取时文件发生变化','symlink-refused':'已拒绝符号链接','symlink-root-refused':'所选路径含符号链接','parser-diagnostics':'记录解析存在限制','cancelled':'扫描已取消','read-failed':'部分内容读取失败','invalid-utf8':'不是有效 UTF-8','parent-baseline-unresolved':'分支父基线未解析','counter-reset-or-replay':'累计重置或重放','replayed-snapshot':'重复历史快照','continuation-baseline-unresolved':'续页基线未知','initial-baseline-unattributed':'首个累计值未分摊','model-unknown':'模型未知','usage-record-not-supported':'新用量记录格式暂不支持'};
@@ -46,7 +47,7 @@ export function mountLocalUsagePanel(container,{api}){
  const output=el('div',undefined,'local-usage-results'),pricing=el('div',undefined,'local-usage-pricing');
  container.replaceChildren(heading,notice,label,controls,status,output,pricing);container.classList.add('local-usage-panel');
  function state(value){busy=value;scan.disabled=value;prices.disabled=value||!result;stop.disabled=!value;container.setAttribute('aria-busy',String(value));}
- function table(caption,headers,rows){const t=el('table',undefined,'local-usage-table');t.append(el('caption',caption));const head=el('thead'),tr=el('tr');for(const h of headers){const th=el('th',h);th.setAttribute('scope','col');tr.append(th);}head.append(tr);t.append(head);const body=el('tbody');for(const row of rows){const tr=el('tr');row.forEach((v,i)=>{const td=el(i?'td':'th',v);if(!i)td.setAttribute('scope','row');tr.append(td);});body.append(tr);}t.append(body);return t;}
+ function table(caption,headers,rows){const t=el('table',undefined,'local-usage-table');t.append(el('caption',caption));const head=el('thead'),tr=el('tr');for(const h of headers){const th=el('th',h);th.setAttribute('scope','col');tr.append(th);}head.append(tr);t.append(head);const body=el('tbody');for(const row of rows){const tr=el('tr');row.forEach((v,i)=>{const td=el(i?'td':'th',v);if(typeof v==='number')showTokens(td,v);if(!i)td.setAttribute('scope','row');tr.append(td);});body.append(tr);}t.append(body);return t;}
  function render(data){
   output.replaceChildren();
   output.append(el('p',data.partial?'扫描覆盖不完整：存在跳过、限制或解析问题。':'所选目录扫描结束；这不代表完整账户历史。'),el('p',`成功读取 ${formatUsageNumber(data.filesRead)} 个文件，读取 ${formatUsageNumber(data.bytesRead)} 字节。仅未压缩 JSONL，不含官方接口数据。`));
@@ -57,11 +58,11 @@ export function mountLocalUsagePanel(container,{api}){
   for(const notice of new Set(sessions.map(s=>s.compatibilityNotice).filter(x=>typeof x==='string')))output.append(el('p',str(notice)));
   if(data.sessions.length>100)output.append(el('p','仅显示前 100 个来源快照，未据此合计。'));
   if(data.overlappingThreadIds?.length)output.append(el('p','存在同一线程的多个来源，以下分别展示，不相加。'));
-  output.append(table('线程 / 来源的最新观察快照（不是新增用量）',['线程','来源','累计 tokens','归属状态'],sessions.map(s=>[str(s.threadId)||USAGE_UNKNOWN,str(s.sourceId)||USAGE_UNKNOWN,formatUsageNumber(s.snapshot?.totalTokens),s.attribution==='deferred'?'不确定，暂不归属':'仅已观察的差值'])));
+  output.append(table('线程 / 来源的最新观察快照（不是新增用量）',['线程','来源','累计 tokens','归属状态'],sessions.map(s=>[str(s.threadId)||USAGE_UNKNOWN,str(s.sourceId)||USAGE_UNKNOWN,safeUsageNumber(s.snapshot?.totalTokens)??USAGE_UNKNOWN,s.attribution==='deferred'?'不确定，暂不归属':'仅已观察的差值'])));
   const rows=[];let deferred=false,totalRows=0;
   for(const s of sessions){
    if(s.attribution!=='observed-differences-only'){deferred=true;continue;}
-   for(const e of Array.isArray(s.increments)?s.increments:[]){if(e.kind!=='observed-cumulative-difference')continue;totalRows++;if(rows.length<100)rows.push([str(s.threadId),str(e.timestamp)||USAGE_UNKNOWN,safeModel(e.model)?e.model:'未知 / 不估价',formatUsageNumber(e.tokens?.inputTokens),formatUsageNumber(e.tokens?.cachedInputTokens),formatUsageNumber(e.tokens?.outputTokens),formatUsageNumber(e.tokens?.totalTokens)]);}
+   for(const e of Array.isArray(s.increments)?s.increments:[]){if(e.kind!=='observed-cumulative-difference')continue;totalRows++;if(rows.length<100)rows.push([str(s.threadId),str(e.timestamp)||USAGE_UNKNOWN,safeModel(e.model)?e.model:'未知 / 不估价',safeUsageNumber(e.tokens?.inputTokens)??USAGE_UNKNOWN,safeUsageNumber(e.tokens?.cachedInputTokens)??USAGE_UNKNOWN,safeUsageNumber(e.tokens?.outputTokens)??USAGE_UNKNOWN,safeUsageNumber(e.tokens?.totalTokens)??USAGE_UNKNOWN]);}
   }
   if(deferred)output.append(el('p','存在归属未确定的历史；未将其计作零，也未估算费用。'));
   if(rows.length)output.append(table('安全观察到的累计差值（模型仅依据当时上下文）',['线程','记录时间','模型','输入','缓存输入','输出','总 tokens'],rows));

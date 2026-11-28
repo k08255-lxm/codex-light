@@ -397,20 +397,19 @@ test('history stops after four API pages even when the server returns fewer item
   assert.equal(count, 4); assert.equal(page.items.length, 4); assert.equal(page.hasMore, true);
 });
 
-test('without any paging method, one explicit full read shows the newest turns and later pages state they re-read', async () => {
+test('legacy history buffers older items from a single full read', async () => {
   const { rpc, calls } = cliStub({ turns: false });
   const pager = new HistoryPager(rpc, 'th');
   const first = await pager.next({ max: 80 });
   assert.equal(first.mode, 'read'); assert.equal(first.fullRead, true);
-  assert.deepEqual(first.read, { totalTurns: 45, shownTurns: 40 });
   assert.equal(calls.filter(c => c[0] === 'thread/read').length, 1);
   assert.equal(first.items[0].id, 'u5'); assert.equal(first.items.at(-1).id, 'a44');
   assert.equal(first.turns.length, 45, 'all turn metadata'); assert.ok(first.turns.every(turn => turn.items === undefined), 'older items are not kept');
-  assert.equal(first.hasMore, true); assert.equal(pager.nextNeedsFullRead, true);
+  assert.equal(first.hasMore, true);
   const second = await pager.next({ max: 80 });
-  assert.equal(second.fullRead, true); assert.equal(second.items[0].id, 'u0'); assert.equal(second.items.at(-1).id, 'a4');
+  assert.equal(second.fullRead, false); assert.equal(second.items[0].id, 'u0'); assert.equal(second.items.at(-1).id, 'a4');
   assert.equal(second.hasMore, false);
-  assert.equal(calls.filter(c => c[0] === 'thread/read').length, 2, 'one full read per explicit request, never more');
+  assert.equal(calls.filter(c => c[0] === 'thread/read').length, 1);
 });
 
 test('other history errors are surfaced, not converted into a full read', async () => {

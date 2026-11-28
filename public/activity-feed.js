@@ -7,7 +7,8 @@ import { boundedText, itemText } from './store.js';
 import { icon } from './icons.js';
 import { renderMarkdown, updateMarkdownSegment } from './markdown.js';
 import { createConsoleCode, updateConsoleCode } from './code-format.js';
-import { formatDuration, fileSummary } from './state.js';
+import { formatDuration } from './state.js';
+import {absolutePath} from './delegated-changes.js';
 import { reasoningTimeLabel } from './reasoning-timing.js';
 import { dshToolResultAgentId, dshLifecycleEvent, dshStatusSnapshot } from './dsh.js';
 import { artifactCandidates, markdownImageRefs } from './ui/artifacts.js';
@@ -17,7 +18,6 @@ import { createAgentAvatar } from './ui/agent-avatar.js';
 
 const DETAIL_LIMIT = 16000;
 const DIFF_LINE_LIMIT = 1500;
-const FILE_PREVIEW = 3;
 
 function el(document, tag, className, text) {
   const node = document.createElement(tag);
@@ -51,6 +51,37 @@ export function itemState(item) {
 }
 const STATE_TEXT = { failed: '失败', declined: '已拒绝', stopped: '已停止', running: '进行中', done: '' };
 
+export function fileBatchLabel(item,cwd=''){
+  if(item.type!=='fileChange'||!Array.isArray(item.changes)||item.changes.length<2)return '';
+  const count=new Set(item.changes.filter(change=>change?.path).map(change=>absolutePath(change.path,cwd))).size;
+  if(count<2)return '';
+  const state=itemState(item);
+  if(state==='done')return `已编辑 ${count} 个文件`;
+  if(state==='running')return `正在编辑 ${count} 个文件`;
+  return `修改 ${count} 个文件 · ${STATE_TEXT[state]}`;
+}
+export function createFileBatch(document,listTag='div'){
+  const node=el(document,'details','file-batch');
+  const head=el(document,'summary','file-batch-head');
+  head.append(icon(document,'right',{size:14}),el(document,'span','files-title'));
+  node.append(head,el(document,listTag,'files-list'));
+  return node;
+}
+
+// Each changed path has its own disclosure, even when a tool edits several files at once.
+export function* activityItems(items) {
+  for (const item of items) {
+    if (item.type !== 'fileChange' || !Array.isArray(item.changes) || !item.changes.length) { yield item; continue; }
+    const occurrences = new Map();
+    for (const change of item.changes) {
+      const path = change?.path || '';
+      const occurrence = occurrences.get(path) || 0;
+      occurrences.set(path, occurrence + 1);
+      yield { ...item, id: JSON.stringify([item.id, path, occurrence]), changes: [change] };
+    }
+  }
+}
+
 export function describeItem(item,now=Date.now()) {
   const done = itemState(item) !== 'running';
   const images = artifactCandidates(item);
@@ -65,9 +96,11 @@ export function describeItem(item,now=Date.now()) {
       if(listing)return {icon:'folder',verb:done?'已查看':'查看',target:firstLine(listing.path||'文件列表')};
       return { icon: 'terminal', verb: done ? '已运行' : '运行', target: firstLine(item.command), code: true };
     case 'fileChange': {
-      const paths = (item.changes || []).map(change => change?.path).filter(Boolean);
-      const name = paths.length === 1 ? paths[0].split(/[\\/]/).at(-1) : paths.length ? `${paths.length} 个文件` : '';
-      return { icon: 'file', verb: done ? '已编辑' : '编辑', target: name };
+      const change = item.changes?.length === 1 ? item.changes[0] : null;
+      const kind = change?.kind?.type || change?.kind;
+      const verb = change?.kind?.move_path ? '重命名' : kind === 'add' ? '创建' : kind === 'delete' ? '删除' : '编辑';
+      const path = change?.path || '';
+      return {icon:'edit', verb:(itemState(item)==='done'?'已':'')+verb, target:path.split(/[\\/]/).at(-1), title:change?.kind?.move_path ? path+' → '+change.kind.move_path : path};
     }
     case 'mcpToolCall': return { icon: 'plug', verb: done ? '已调用' : '调用', target: [firstLine(item.server), firstLine(item.tool)].filter(Boolean).join(' / ') };
     case 'dynamicToolCall': return { icon: 'plug', verb: done ? '已调用' : '调用', target: firstLine(item.tool) || '工具' };
@@ -133,19 +166,23 @@ export function renderActivityRecord(document,item,{artifacts=null}={}){
  const info=describeItem(item),state=itemState(item),node=el(document,'details','step agent-tool-record');
  node.dataset.state=state;
  node.dataset.running=String(state==='running');
- const summary=el(document,'summary','step-summary');summary.title=item.command||info.target||info.verb;
+ const summary=el(document,'summary','step-summary');summary.title=item.command||info.title||info.target||info.verb;
  const symbol=el(document,'span','step-icon');symbol.append(icon(document,info.icon,{size:14}));
  const target=el(document,'span','step-target'+(info.code?' code':''),info.target);
  const status=el(document,'span','step-state',[STATE_TEXT[state],Number.isFinite(item.durationMs)?formatDuration(item.durationMs):''].filter(Boolean).join(' · '));
  summary.append(symbol,el(document,'span','step-verb',info.verb),target);
- if(item.type==='fileChange'){const totals=fileSummary([item],null);if(totals.count){const counts=el(document,'span','step-change-stats');counts.append(statsNode(document,totals.added,totals.removed,totals));summary.append(counts);}}
+ if(item.type==='fileChange') {
+  node.classList.add('file-step');
+  const counts=el(document,'span','step-change-stats');summary.append(counts);
+  updateFileStats(counts,item);
+ }
  summary.append(status);node.append(summary);
  node.addEventListener('toggle',()=>{
   if(!node.open||node.childElementCount>1)return;
   const body=el(document,'div','step-detail');
   const candidates=artifacts?artifactCandidates(item):[];
   if(candidates.length)body.append(artifacts.strip(candidates));
-  if(item.type==='fileChange'){body.classList.add('step-files');body.append(renderFileDiffs(document,item.changes,item));}
+  if(item.type==='fileChange'){updateFileDetail(node,item.changes?.[0]);return;}
   else if(item.type==='commandExecution'){
    const heading=commandHeading(item);
    if(heading)body.append(createConsoleCode(document,'step-output-head',boundedText(heading,DETAIL_LIMIT),'sh'));
@@ -159,7 +196,7 @@ export function renderActivityRecord(document,item,{artifacts=null}={}){
 
 // ---------- Diff rendering ----------
 
-const diffSources = new WeakMap(), fileDiffRows = new WeakMap();
+const diffSources = new WeakMap();
 export function renderDiff(document, source) {
   const pre = el(document, 'pre', 'diff-view');
   const text = String(source || '').replace(/\r\n?/g, '\n'); diffSources.set(pre, text);
@@ -181,43 +218,25 @@ function updateDiff(pre, source) {
   pre.scrollTop = top; pre.scrollLeft = left;
 }
 
-const CHANGE_KIND = { add: '新建', delete: '删除', update: '修改' };
-/** One separated block per file (header: path · kind · +/-), so several edited files never run together. */
-export function renderFileDiffs(document, changes, item) {
-  const box = el(document, 'div', 'diff-files');
-  updateFileDiffs(box, changes, item);
-  return box;
+function updateFileStats(counts, item) {
+  const change = item.changes?.[0];
+  counts.hidden = !change || ['failed','declined','stopped'].includes(itemState(item));
+  if (counts.hidden) return;
+  const {added, removed, reason} = changeEvidence(change,item);
+  const key = [added, removed, reason].join('/');
+  if (counts.dataset.stats === key) return;
+  counts.dataset.stats = key;
+  counts.replaceChildren(statsNode(counts.ownerDocument, added, removed, {statsBasis:'edits', statsReasons:reason?[reason]:[]}));
 }
-function updateFileDiffs(box, changes, item) {
-  const document = box.ownerDocument, rows = fileDiffRows.get(box) || new Map(), wanted = new Set(), nodes = [], occurrences = new Map();
-  fileDiffRows.set(box, rows);
-  for (const change of Array.isArray(changes) ? changes : []) {
-    const path = typeof change?.path === 'string' ? change.path : '';
-    const occurrence = occurrences.get(path) || 0; occurrences.set(path, occurrence + 1);
-    const key = path + '\0' + occurrence;
-    const signature = JSON.stringify([change,item?.type,item?.status,item?._complete,item?._fileChangeSource]); wanted.add(key);
-    let row = rows.get(key);
-    if (!row) { row = { node: el(document, 'section', 'diff-file'), body: null, signature: null }; rows.set(key, row); }
-    nodes.push(row.node); if (row.signature === signature) continue;
-    const head = el(document, 'div', 'diff-file-head');
-    const slash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
-    const name = el(document, 'span', 'file-name'); name.title = path;
-    name.append(el(document, 'span', 'file-dir', slash >= 0 ? path.slice(0, slash + 1) : ''), el(document, 'span', 'file-base', slash >= 0 ? path.slice(slash + 1) : path || '未命名文件'));
-    head.append(icon(document, 'file', { size: 14 }), name);
-    const kind = change?.kind?.type || change?.kind;
-    const tag = change?.kind?.move_path ? '重命名' : CHANGE_KIND[kind] || '';
-    if (tag) head.append(el(document, 'span', 'diff-file-kind', tag));
-    const evidence = changeEvidence(change,item);
-    if (evidence.added !== null) { const stats = el(document, 'span', 'diff-stats'); stats.append(el(document, 'span', 'diff-added', `+${evidence.added}`), el(document, 'span', 'diff-removed', `-${evidence.removed}`)); head.append(stats); }
-    else if (evidence.reason === 'binary') head.append(el(document, 'span', 'diff-unknown', '二进制'));
-    if (typeof change?.diff === 'string' && change.diff) {
-      if (row.body?.classList.contains('diff-view')) updateDiff(row.body, change.diff);
-      else row.body = renderDiff(document, change.diff);
-    } else if (!row.body?.classList.contains('diff-empty')) row.body = el(document, 'p', 'diff-empty', '没有可显示的差异内容。');
-    reconcile(row.node, [head, row.body]); row.signature = signature;
-  }
-  for (const key of rows.keys()) if (!wanted.has(key)) rows.delete(key);
-  reconcile(box, nodes);
+
+function updateFileDetail(node, change) {
+  const previous = node.children[1];
+  const source = change?.diff;
+  if (source && previous?.classList.contains('diff-view')) { updateDiff(previous,source); return; }
+  if (!source && previous?.classList.contains('diff-empty')) return;
+  const next = source ? renderDiff(node.ownerDocument,source) : el(node.ownerDocument,'p','diff-empty','没有可显示的差异内容。');
+  if (previous) previous.replaceWith(next);
+  else node.append(next);
 }
 
 export function statsNode(document, added, removed, evidence = {}) {
@@ -434,7 +453,7 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
   const userOpen = new Map(); // process key -> boolean chosen by the user
   const agentExpanded = new Map();
   const agentDetails = new Map();
-  const fileState = new Map(); // turn id -> {expanded, openPaths:Set, all:boolean}
+  const fileState = new Map(); // Expanded paths survive viewport unmounts.
   const imageRefs = new Map(); // answer id -> {text, refs}
   const longPositions = new Map(); // Reading position survives viewport-only unmounts.
   const asyncInputs = new Map(); // thread/item identity keeps unsubmitted drafts across history refreshes.
@@ -442,17 +461,30 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
   const scroller = host.closest?.('#conversation');
   const rail = scroller && document.getElementById?.('turn-timeline');
   const timeline = rail ? mountTurnTimeline(rail, scroller, host, {
-    pause: () => scrollController?.pause(),
-    reveal: id => { if (!turns.has(id)) render(lastList, {follow:false, revealTurnId:id}); },
+    jumpTo(id, index) {
+      scrollController?.pause();
+      render(lastList, {follow:false, jumpIndex:index, revealTurnId:id});
+    },
   }) : null;
   const heights = new Map(), placeholders = new Map();
+  let answerHistory;
+  let firstEdge=null,lastEdge=null;
   let lastList = [], virtualFrame = null, rendering = false;
   function scheduleViewport() {
     if (!scroller || virtualFrame !== null) return;
-    virtualFrame = document.defaultView.requestAnimationFrame(() => { virtualFrame = null; if (lastList.length) render(lastList); });
+    virtualFrame = document.defaultView.requestAnimationFrame(() => {
+      virtualFrame = null;
+      if (!lastList.length || !scroller.clientHeight) return;
+      const viewport=scroller.getBoundingClientRect();
+      // Render a full overscan window only when the reader approaches its edge.
+      // Most native scroll frames require no history traversal or DOM reconciliation.
+      if (firstEdge && firstEdge.getBoundingClientRect().top>viewport.top-300 ||
+          lastEdge && lastEdge.getBoundingClientRect().bottom<viewport.bottom+300) render(lastList,{viewportOnly:true});
+      else timeline?.update(lastList);
+    });
   }
   scroller?.addEventListener('scroll', scheduleViewport, {passive:true});
-  document.defaultView?.addEventListener('resize', () => { heights.clear(); scheduleViewport(); });
+  document.defaultView?.addEventListener('resize', () => { heights.clear();if(scroller?.clientHeight&&lastList.length)render(lastList,{viewportOnly:true}); });
 
 
   const markdownSegment = (source, index, previous, streaming) => {
@@ -559,11 +591,7 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
       view.images.release?.();view.images.remove();view.images=null;view.imageSignature=null;
     }
     if (view.item.type === 'fileChange') {
-      if (!view.fileDiffs) {
-        const box = el(document, 'div', 'step-detail step-files');
-        view.fileDiffs = renderFileDiffs(document, view.item.changes, view.item); box.append(view.fileDiffs);
-        if (view.pre) view.pre.remove(); view.pre = box; view.node.append(box);
-      } else updateFileDiffs(view.fileDiffs, view.item.changes, view.item);
+      updateFileDetail(view.node, view.item.changes?.[0]);
       return;
     }
     if (view.item.type === 'commandExecution') {
@@ -594,9 +622,9 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     setText(view.target, info.target);
     view.target.classList.toggle('code', !!info.code);
     if(item.type==='fileChange'){
-      const totals=fileSummary([item],null),key=JSON.stringify([totals.added,totals.removed,totals.complete,totals.knownEdits,totals.knownAdded,totals.knownRemoved,totals.unknownCount,totals.binaryCount,totals.statsReasons]);
-      view.counts.hidden=!totals.count;
-      if(view.countsKey!==key){view.countsKey=key;view.counts.replaceChildren(statsNode(document,totals.added,totals.removed,totals));}
+      view.node.classList.add('file-step');
+      view.target.title = info.title || info.target;
+      updateFileStats(view.counts, item);
     }else view.counts.hidden=true;
     setText(view.state, STATE_TEXT[state]);
     view.state.hidden = !STATE_TEXT[state];
@@ -617,7 +645,7 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     // The DOM node owns its open state after the first render. `toggle` is queued, so a render that runs
     // between the click and that event must never re-apply an older choice (that undid a collapse whenever
     // the shorter content clamped the scroll position and re-rendered). The click records the intent first.
-    const view = { key, node, summary, label, latest, list, rows: new Map(), notes: new Map(), applied: false };
+    const view = { key, node, summary, label, latest, list, rows: new Map(), notes: new Map(), batches:new Map(), applied: false };
     summary.addEventListener('click', event => {
       if (event.defaultPrevented) return;
       scrollController?.pause(summary);
@@ -629,20 +657,32 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     });
     return view;
   }
-  function updateProcess(view, items, { running, label, first }) {
-    const nodes = [];
-    for (const item of items) {
+  function updateProcess(view, items, { running, first }) {
+    const nodes = [], ids = new Set(), batchIds=new Set();
+    function record(item) {
+      ids.add(item.id);
       if (item.type === 'agentMessage') {
         let note = view.notes.get(item.id);
         if (!note) { note = messageView(item); note.node.classList.add('process-note'); view.notes.set(item.id, note); }
-        updateMessage(note, item); nodes.push(note.node);
+        updateMessage(note, item); return note.node;
       } else {
         let row = view.rows.get(item.id);
         if (!row) { row = rowView(item); view.rows.set(item.id, row); }
-        updateRow(row, item, Date.now(), running); nodes.push(row.node);
+        updateRow(row, item, Date.now(), running); return row.node;
       }
     }
-    const ids = new Set(items.map(item => item.id));
+    for(const item of items){
+      const rows=Array.from(activityItems([item]),record),label=fileBatchLabel(item,getCwd());
+      if(!label){nodes.push(...rows);continue;}
+      batchIds.add(item.id);
+      let batch=view.batches.get(item.id);
+      if(!batch){
+        batch=createFileBatch(document);view.batches.set(item.id,batch);
+        const head=batch.children[0];head.addEventListener('click',()=>scrollController?.pause(head));
+      }
+      setText(batch.querySelector('.files-title'),label);reconcile(batch.children[1],rows);nodes.push(batch);
+    }
+    for(const id of view.batches.keys())if(!batchIds.has(id))view.batches.delete(id);
     for (const id of view.rows.keys()) if (!ids.has(id)) {view.rows.get(id).images?.release?.();view.rows.delete(id);}
     for (const id of view.notes.keys()) if (!ids.has(id)) view.notes.delete(id);
     reconcile(view.list, nodes);
@@ -664,34 +704,12 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
 
   function filesView(turnId) {
     const node = el(document, 'section', 'files-card');
-    const head = el(document, 'div', 'files-head');
-    const symbol = el(document, 'span', 'files-icon'); symbol.append(icon(document, 'file', { size: 16 }));
-    const titles = el(document, 'div', 'files-titles');
-    const title = el(document, 'strong', 'files-title');
-    const stats = el(document, 'span', 'files-stats');
-    titles.append(title, stats);
-    const toggleAll = el(document, 'button', 'files-view', '查看变更'); toggleAll.type = 'button';
-    head.append(symbol, titles, toggleAll);
-    const list = el(document, 'ul', 'files-list');
-    const more = el(document, 'button', 'files-more'); more.type = 'button';
-    node.append(head, list, more);
-    const view = { node, title, stats, toggleAll, list, more, rows: new Map(), summary: null };
-    const ui = () => { if (!fileState.has(turnId)) fileState.set(turnId, { expanded: false, all: false, open: new Set() }); return fileState.get(turnId); };
-    toggleAll.addEventListener('click', () => {
-      scrollController?.pause(toggleAll);
-      const s = ui(); s.all = !s.all; s.open = new Set(s.all ? view.summary.rows.map(row => row.path) : []);
-      if (s.all) s.expanded = true;
-      updateFiles(view, view.summary, turnId);
-    });
-    more.addEventListener('click', () => {
-      const s = ui();
-      // New rows appear above this button. Keep the end of the existing preview in view.
-      if (s.expanded) scrollController?.pause(more);
-      else scrollController?.pause(list, {keepVisible:false});
-      s.expanded = !s.expanded; updateFiles(view, view.summary, turnId);
-    });
-    view.ui = ui;
-    return view;
+    node.setAttribute('aria-label','本轮文件变更');
+    const batch=createFileBatch(document,'ul'),list=batch.children[1],head=batch.children[0];
+    head.addEventListener('click',()=>scrollController?.pause(head));
+    const totals=el(document,'span','files-stats');head.append(totals);
+    if (!fileState.has(turnId)) fileState.set(turnId, new Set());
+    return {node,batch,list,totals,rows:new Map(),open:fileState.get(turnId)};
   }
   function fileRow(path) {
     const node = el(document, 'li', 'file-row');
@@ -702,30 +720,35 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     button.append(chevron, name, stats); node.append(button);
     return { node, button, name, stats, path, diffNode: null, signature: null };
   }
-  function updateFiles(view, summary, turnId) {
+  function updateFiles(view, summary) {
     view.summary = summary;
-    const s = view.ui();
-    setText(view.title, summary.running ? `正在编辑 ${summary.count} 个文件` : `已编辑 ${summary.count} 个文件`);
-    view.stats.replaceChildren(statsNode(document, summary.added, summary.removed, summary));
-    setText(view.toggleAll, s.all ? '收起变更' : '查看变更');
-    view.toggleAll.setAttribute('aria-expanded', String(s.all));
-    const visible = s.expanded ? summary.rows : summary.rows.slice(0, FILE_PREVIEW);
+    if(summary.count>1){
+      setText(view.batch.querySelector('.files-title'),`已编辑 ${summary.count} 个文件`);
+      const signature=JSON.stringify([summary.added,summary.removed,summary.complete,summary.unknownCount,summary.binaryCount,summary.statsBasis]);
+      if(view.statsKey!==signature){view.totals.replaceChildren(statsNode(document,summary.added,summary.removed,summary));view.statsKey=signature;}
+      if(view.list.parentElement!==view.batch)view.batch.append(view.list);
+      reconcile(view.node,[view.batch]);
+    }else reconcile(view.node,[view.list]);
     const nodes = [];
-    for (const file of visible) {
+    for (const file of summary.rows) {
       let row = view.rows.get(file.path);
       if (!row) {
         row = fileRow(file.path); view.rows.set(file.path, row);
         row.button.addEventListener('click', () => {
           scrollController?.pause(row.button);
-          const st = view.ui(); if (st.open.has(row.path)) st.open.delete(row.path); else st.open.add(row.path);
-          updateFiles(view, view.summary, turnId);
+          if (view.open.has(row.path)) view.open.delete(row.path); else view.open.add(row.path);
+          updateFiles(view, view.summary);
         });
       }
-      const slash = file.path.lastIndexOf('/');
-      row.name.replaceChildren(el(document, 'span', 'file-dir', slash >= 0 ? file.path.slice(0, slash + 1) : ''), el(document, 'span', 'file-base', slash >= 0 ? file.path.slice(slash + 1) : file.path));
-      row.button.title = file.fullPath;
-      row.stats.replaceChildren(statsNode(document, file.added, file.removed, file));
-      const open = s.open.has(file.path);
+      const header=JSON.stringify([file.fullPath,file.added,file.removed,file.known,file.knownEdits,file.knownAdded,file.knownRemoved,file.statsBasis,file.statsReasons]);
+      if(row.header!==header){
+        const slash = file.path.lastIndexOf('/');
+        row.name.replaceChildren(el(document, 'span', 'file-dir', slash >= 0 ? file.path.slice(0, slash + 1) : ''), el(document, 'span', 'file-base', slash >= 0 ? file.path.slice(slash + 1) : file.path));
+        row.button.title = file.fullPath;
+        row.stats.replaceChildren(statsNode(document, file.added, file.removed, file));
+        row.header=header;
+      }
+      const open = view.open.has(file.path);
       row.button.setAttribute('aria-expanded', String(open));
       row.node.classList.toggle('open', open);
       const signature = open ? file.diffs.join('\n\u0000') : null;
@@ -739,13 +762,9 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
       }
       nodes.push(row.node);
     }
-    const shownPaths = new Set(visible.map(file => file.path));
+    const shownPaths = new Set(summary.rows.map(file => file.path));
     for (const path of view.rows.keys()) if (!shownPaths.has(path)) view.rows.delete(path);
     reconcile(view.list, nodes);
-    const hidden = summary.rows.length - FILE_PREVIEW;
-    view.more.hidden = hidden <= 0;
-    view.more.replaceChildren(el(document, 'span', '', s.expanded ? '收起' : `再显示 ${hidden} 个文件`), icon(document, s.expanded ? 'up' : 'down', { size: 14 }));
-    view.more.setAttribute('aria-expanded', String(s.expanded));
   }
 
   function turnView(id) {
@@ -802,19 +821,20 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
     return turn.processCount ? `已处理 ${turn.processCount} 步` : '';
   }
 
-  function render(list, { now = Date.now(), follow = true, revealTurnId = null } = {}) {
+  function render(list, { now = Date.now(), follow = true, revealTurnId = null, jumpIndex = null, scrollSnapshot = null, restoreScroll = true, viewportOnly = false } = {}) {
     if (rendering) return;
     rendering = true;
     try {
+    const prepended = lastList.length && lastList[0].id !== list[0]?.id && list.some(turn => turn.id === lastList[0].id);
     lastList = list;
-    const scrollSnapshot = scrollController?.capture();
+    if (jumpIndex === null) scrollSnapshot ??= scrollController?.capture();
     const scrollerTop = scroller?.getBoundingClientRect().top || 0;
     const atBottom = scroller && scroller.scrollHeight-scroller.scrollTop-scroller.clientHeight < 2;
     // Prefer the visible message; earlier siblings within its turn may change height.
-    const anchorItem = scroller && [...host.querySelectorAll('[data-item-id]')].find(node => {
+    const anchorItem = !scrollController && scroller && [...host.querySelectorAll('[data-item-id]')].find(node => {
       const rect=node.getBoundingClientRect();return rect.height>0&&rect.bottom>scrollerTop&&rect.top<scrollerTop+scroller.clientHeight;
     });
-    const anchor = anchorItem?.closest('[data-turn-id]') || (scroller && [...host.children].find(node => node.getBoundingClientRect().bottom > scrollerTop));
+    const anchor = scrollSnapshot?.node?.closest?.('[data-turn-id],[data-virtual-turn-id]') || anchorItem?.closest?.('[data-turn-id]') || (scroller && [...host.children].find(node => node.getBoundingClientRect().bottom > scrollerTop));
     const anchorId = anchor?.dataset.turnId || anchor?.dataset.virtualTurnId;
     const anchorOffset = anchor ? anchor.getBoundingClientRect().top-scrollerTop : 0;
     const itemOffset = anchorItem ? anchorItem.getBoundingClientRect().top-scrollerTop : 0;
@@ -822,18 +842,30 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
       const height = view.node.getBoundingClientRect?.().height;
       if (height > 0) heights.set(id, height);
     }
-    const layout = scroller ? historyViewport(list, heights, scrollerTop-host.getBoundingClientRect().top, scroller.clientHeight) : null;
+    let viewportTop = scroller ? scrollerTop - host.getBoundingClientRect().top : 0;
+    const targetIndex = jumpIndex ?? (prepended && anchorId ? list.findIndex(turn => turn.id === anchorId) : -1);
+    if (targetIndex >= 0) {
+      viewportTop = jumpIndex === null ? -anchorOffset : -8;
+      for (let i = 0; i < targetIndex; i++) viewportTop += heights.get(list[i].id) || 320;
+    }
+    const layout = scroller ? historyViewport(list, heights, viewportTop, scroller.clientHeight) : null;
+    let firstVisible=-1,lastVisible=-1;
     const keep = new Set(); const nodes = []; runningClocks = [];
-    const {answered, echoes} = asyncAnswerHistory(list,getThreadId());
+    if(!viewportOnly || !answerHistory)answerHistory=asyncAnswerHistory(list,getThreadId());
+    const {answered, echoes} = answerHistory;
     for (const [index, turn] of list.entries()) {
+      if(layout?.[index].visible){if(firstVisible<0)firstVisible=index;lastVisible=index;}
       const focused = turns.get(turn.id)?.node.contains(document.activeElement);
       if (layout && !layout[index].visible && !focused && turn.id !== anchorId && turn.id !== revealTurnId) {
         let spacer = placeholders.get(turn.id);
         if (!spacer) { spacer=el(document,'div','history-turn-placeholder');spacer.dataset.virtualTurnId=turn.id;spacer.setAttribute('aria-hidden','true');placeholders.set(turn.id,spacer); }
-        spacer.style.height=layout[index].size+'px'; nodes.push(spacer); continue;
+        const height=layout[index].size+'px';
+        if(spacer.style.height!==height)spacer.style.height=height;
+        nodes.push(spacer); continue;
       }
       keep.add(turn.id);
       let view = turns.get(turn.id);
+      if(viewportOnly && view?.turn===turn && turn.finished){nodes.push(view.node);continue;}
       if (!view) { view = turnView(turn.id); turns.set(turn.id, view); }
       view.turn = turn;
       view.node.dataset.state = turn.status;
@@ -929,7 +961,7 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
       }
       if (turn.files.count && ['completed','interrupted','failed','error'].includes(turn.status)) {
         if (!view.files) view.files = filesView(turn.id);
-        updateFiles(view.files, turn.files, turn.id); children.push(view.files.node);
+        updateFiles(view.files, turn.files); children.push(view.files.node);
       }
       const working = turn.status === 'running';
       const footer = working ? timingLabel(turn, now) : turn.status === 'interrupted' ? '已停止' : turn.status === 'failed' ? `任务失败${turn.error ? '：' + turn.error : ''}` : turn.finished&&turn.timing.durationMs!==null?timingLabel(turn,now):'';
@@ -969,16 +1001,25 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
       nodes.push(view.node);
     }
     for (const [id, view] of turns) if (!keep.has(id)) { releaseTurn(view); turns.delete(id); }
-    const liveAnswers = new Set(list.flatMap(turn => turn.segments.flatMap(segment => segment.answers.map(answer => answer.id))));
-    for (const id of imageRefs.keys()) if (!liveAnswers.has(id)) imageRefs.delete(id);
+    if(!viewportOnly && imageRefs.size){
+      const liveAnswers = new Set(list.flatMap(turn => turn.segments.flatMap(segment => segment.answers.map(answer => answer.id))));
+      for (const id of imageRefs.keys()) if (!liveAnswers.has(id)) imageRefs.delete(id);
+    }
     const focused = document.activeElement; const keepFocus = focused && host.contains(focused);
     reconcile(host, nodes);
+    firstEdge=firstVisible>0?nodes[firstVisible]:null;
+    lastEdge=lastVisible>=0&&lastVisible<list.length-1?nodes[lastVisible]:null;
     if (keepFocus && host.contains(focused) && document.activeElement !== focused) focused.focus?.({ preventScroll: true });
     const ids=new Set(list.map(turn=>turn.id));
     for(const id of placeholders.keys())if(!ids.has(id)){placeholders.delete(id);heights.delete(id);}
     for(const [id,view] of turns){const size=view.node.getBoundingClientRect?.().height;if(size>0)heights.set(id,size);}
-    if(scrollController)scrollController.restore(scrollSnapshot,{follow});
-    else if(scroller){
+    if (jumpIndex !== null) {
+      const target = turns.get(revealTurnId).node;
+      scroller.scrollTop += target.getBoundingClientRect().top - scrollerTop - 8;
+      scrollController?.pause(target, {keepVisible:false});
+    } else if (scrollController) {
+      if (restoreScroll) scrollController.restore(scrollSnapshot,{follow});
+    } else if(scroller){
       const retained=nodes.find(node=>(node.dataset.turnId||node.dataset.virtualTurnId)===anchorId);
       const retainedItem=anchorItem && [...host.querySelectorAll('[data-item-id]')].find(node=>node.dataset.itemId===anchorItem.dataset.itemId);
       if(atBottom)scroller.scrollTop=scroller.scrollHeight;
@@ -1007,6 +1048,7 @@ export function mountConversation(host, { onLocalLink, getCwd = () => '', getThr
         if (position < 0) continue;
         turn.items[index] = item;
         group[position] = item;
+        timeline?.refreshPreview(turn.id);
         if (message) {
           const snapshot = scrollController?.capture();
           updateMessage(message, item);

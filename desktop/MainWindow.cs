@@ -25,7 +25,7 @@ internal sealed class MainWindow : CaptionWindow {
  Task? stopTask;
  string startupStage="检测运行环境";
  readonly WindowPlacementController placement;
- public MainWindow(bool demo){this.demo=demo;taskbarBadge=new(this);Text="码舱 CodeCang";Icon=Icon.ExtractAssociatedIcon(Application.ExecutablePath);Size=new Size(1257,945);MinimumSize=new Size(800,600);Controls.Add(view);Controls.Add(loading);BuildCaptionMenu();CaptionBrandInvoked+=async(_,_)=>await ClickWebAsync("menu-app");placement=new WindowPlacementController(this,WindowPlacementStore.ForCurrentUser());Shown+=async(_,_)=>await StartAsync();FormClosing+=OnClosing;}
+ public MainWindow(bool demo){this.demo=demo;taskbarBadge=new(this);Text="码舱 CodeCang";Icon=Icon.ExtractAssociatedIcon(Application.ExecutablePath);Size=new Size(1257,945);MinimumSize=new Size(800,600);Controls.Add(view);Controls.Add(loading);placement=new WindowPlacementController(this,WindowPlacementStore.ForCurrentUser());Shown+=async(_,_)=>await StartAsync();FormClosing+=OnClosing;}
  protected override void OnLoad(EventArgs e){base.OnLoad(e);placement.Restore();try{ShowTray();}catch{DisposeTray();ShowTrayFailure();}}
  protected override void OnMove(EventArgs e){base.OnMove(e);placement?.Capture();}
  FormWindowState previousWindowState;bool restorePaintQueued;
@@ -217,7 +217,6 @@ internal sealed class MainWindow : CaptionWindow {
    if(!closing&&!IsDisposed&&!updateShutdownAttempted){ShowFailure("本地界面通信已中断。请关闭并重新打开应用；未自动重发任务。");await StopBackendAsync();}
   }finally{systemSleep.Set(false);}
  }
- ToolStripMenuItem? fileMenu,viewMenu;
  bool HandleWindowCommand(string json){
   try{
    using var parsed=JsonDocument.Parse(json);var message=parsed.RootElement;
@@ -231,30 +230,10 @@ internal sealed class MainWindow : CaptionWindow {
    return true;
   }catch(JsonException){return false;}
  }
- void BuildCaptionMenu(){
-  var file=new ToolStripMenuItem("文件(&F)"){AccessibleName="文件"};
-  file.DropDownItems.Add("新聊天",null,async(_,_)=>await ClickWebAsync("new-thread"));
-  file.DropDownItems.Add("打开项目…",null,async(_,_)=>await ClickWebAsync("add-project"));
-  file.DropDownItems.Add("设置…",null,async(_,_)=>await ClickWebAsync("settings"));
-  file.DropDownItems.Add(new ToolStripSeparator());file.DropDownItems.Add("退出",null,(_,_)=>Close());
-
-  var display=new ToolStripMenuItem("视图(&V)"){AccessibleName="视图"};
-  // Stable element IDs keep the native menu independent of translated web labels.
-  foreach(var (label,target) in new[]{("对话","rail-home"),("用量与性能","rail-usage"),("账户","rail-account"),("工具活动","toggle-details"),("DSH 子代理","rail-dsh"),("设置","rail-settings")}){var id=target;display.DropDownItems.Add(label,null,async(_,_)=>await ClickWebAsync(id));}
-  var help=new ToolStripMenuItem("帮助(&H)"){AccessibleName="帮助"};help.Click+=async(_,_)=>await ClickWebAsync("menu-help");
-  fileMenu=file;viewMenu=display;
-  CaptionMenu.Items.AddRange(new ToolStripItem[]{file,display,help});
-  CaptionMenu.MenuDeactivate+=(_,_)=>{if(!IsDisposed&&IsHandleCreated)BeginInvoke((Action)(()=>{if(!closing&&Form.ActiveForm==this&&!file.DropDown.Visible&&!display.DropDown.Visible)view.Focus();}));};
-  SetCaptionTheme(false);RefreshCaptionLayout();
- }
  protected override bool ProcessCmdKey(ref Message msg,Keys keyData){
-  // The application menu belongs to the styled WebUI, never a GDI popup on glass.
-  if(keyData==Keys.F10||keyData==(Keys.Alt|Keys.M)||keyData==(Keys.Alt|Keys.F)||keyData==(Keys.Alt|Keys.V)){_ = ClickWebAsync("menu-app");return true;}
-  if(keyData==(Keys.Alt|Keys.H)){_ = ClickWebAsync("menu-help");return true;}
   if(keyData==(Keys.Alt|Keys.E)){view.Focus();return true;} // Editing uses the focused WebView's normal Ctrl shortcuts.
   return base.ProcessCmdKey(ref msg,keyData);
  }
- async Task ClickWebAsync(string id){if(closing||view.CoreWebView2==null)return;try{if(id=="menu-app")view.Focus();await view.CoreWebView2.ExecuteScriptAsync($"document.getElementById({JsonSerializer.Serialize(id)})?.click()");}catch{}}
  bool IsOwn(string value)=>Uri.TryCreate(value,UriKind.Absolute,out var uri)&&origin!=null&&uri.Scheme==origin.Scheme&&uri.Host==origin.Host&&uri.Port==origin.Port&&uri.UserInfo=="";
  void QueueExternal(string value){
   if(closing||IsDisposed||!IsHandleCreated)return;

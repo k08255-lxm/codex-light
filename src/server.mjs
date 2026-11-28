@@ -102,7 +102,7 @@ const types={'.mjs':'text/javascript; charset=utf-8','.html':'text/html; charset
 publicFiles['/session-controls.js']='session-controls.js';publicFiles['/session-controls.css']='session-controls.css';
 publicFiles['/ui/agent-inspector.js']='ui/agent-inspector.js';
 publicFiles['/account-quota.js']='account-quota.js';publicFiles['/ui/account-view.css']='ui/account-view.css';
-publicFiles['/delegated-changes.js']='delegated-changes.js';publicFiles['/agent-changes.js']='agent-changes.js';publicFiles['/ui/tool-activity.js']='ui/tool-activity.js';
+publicFiles['/delegated-changes.js']='delegated-changes.js';publicFiles['/agent-changes.js']='agent-changes.js';
 publicFiles['/change-stats.js']='change-stats.js';
 publicFiles['/delegation-monitor.js']='delegation-monitor.js';
 publicFiles['/agent-history.js']='agent-history.js';
@@ -118,7 +118,7 @@ publicFiles['/ui/update-indicator.js']='ui/update-indicator.js';
 publicFiles['/ui/optimistic-messages.js']='ui/optimistic-messages.js';
 for(const file of ['about-view.js','about-view.css','notifications.js'])publicFiles['/ui/'+file]='ui/'+file;
 publicFiles['/ui/storage-view.js']='ui/storage-view.js';
-for(const file of ['stat-popover.js','session-speed.js','mobile-about.js','question-ignores.js'])publicFiles['/ui/'+file]='ui/'+file;
+for(const file of ['stat-popover.js','session-speed.js','session-usage.js','usage-range.js','mobile-about.js','question-ignores.js'])publicFiles['/ui/'+file]='ui/'+file;
 publicFiles['/ui/panel-resize.js']='ui/panel-resize.js';publicFiles['/ui/panel-resize.css']='ui/panel-resize.css';publicFiles['/project-name-dialog.js']='project-name-dialog.js';
 for(const file of ['history-auto-load.js','format.js','chart.js','stats-view.js','account-view.js','live-changes.js','views.css','paste.js','artifacts.js','agents.js','access.js','lan-view.js','tunnel-view.js','access-pairing-view.js','viewport.js','approvals-view.js','composer.js','dsh-view.js','preferences-view.js','remote-view.js','slash-menu.js','dsh-config-view.js','dsh-connection-view.js'])publicFiles['/ui/'+file]='ui/'+file;
 for(const file of ['app-confirm-dialog.js','lan-confirm-dialog.js','history-viewport.js','engine-onboarding.js','engine-onboarding.css','activity-feed.js','activity-feed.css','projects.js','project-navigation.js','project-navigation.css'])publicFiles['/'+file]=file;
@@ -267,24 +267,32 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
  const contextLive=new Map(),contextFiles=new Map(),contextReads=new Map(),timingCache=new Map();
  const contextRoots=wslActive?(wslCandidate?['sessions','archived_sessions'].map(dir=>wslPathToHost(wslCandidate.codexHome+'/'+dir,wslCandidate.distribution)):[]):defaultRolloutRoots();
  function rememberContext(map,id,value){map.delete(id);map.set(id,value);if(map.size>512)map.delete(map.keys().next().value);}
- async function readThreadContext(threadId,needTiming=false){
+ async function readThreadContext(threadId,needTiming=false,includeCost=false){
   if(!contextFiles.has(threadId))return null;
   const live=contextLive.get(threadId);
   const timing=timingCache.get(threadId);
-  if(needTiming?timing?.file===contextFiles.get(threadId)&&Date.now()-timing.at<5000:live)return live;
-  if(contextReads.has(threadId))return contextReads.get(threadId);
+  const fresh=timing?.file===contextFiles.get(threadId)&&Date.now()-timing.at<5000;
+  if(needTiming?fresh&&(!includeCost||timing.timings?.costGroups):live)return live;
+  const pending=contextReads.get(threadId);
+  if(pending){
+   const generation=accountIdentityGeneration;
+   const result=await pending;
+   if(includeCost&&!pending.includeCost&&generation===accountIdentityGeneration)return readThreadContext(threadId,true,true);
+   return result;
+  }
   const generation=accountIdentityGeneration,wirePath=contextFiles.get(threadId);
   if(typeof wirePath!=='string'||contextReads.size>=4)return null;
   const reading=Promise.resolve().then(async()=>{
    let saved=null,timings=null;
    try{
     const rollout=wslCandidate?wslPathToHost(hostPathToWsl(wirePath,wslCandidate.distribution),wslCandidate.distribution):wirePath;
-    saved=await contextHistoryReader({rollout,threadId,roots:contextRoots,caseSensitive:wslActive,onTimings:value=>{timings=value;}});
+    saved=await contextHistoryReader({rollout,threadId,roots:contextRoots,caseSensitive:wslActive,includeCost,onTimings:value=>{timings=value;}});
    }catch{/* An unavailable source leaves the thread's context metrics unknown. */}
    if(generation!==accountIdentityGeneration||contextFiles.get(threadId)!==wirePath)return null;
    if(contextReads.get(threadId)===reading)rememberContext(timingCache,threadId,{file:wirePath,at:Date.now(),timings});
    return contextLive.get(threadId)||saved;
   });
+  reading.includeCost=includeCost;
   contextReads.set(threadId,reading);
   try{return await reading;}finally{if(contextReads.get(threadId)===reading)contextReads.delete(threadId);}
  }
@@ -292,6 +300,20 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
   codexHome:wslCandidate.codexHome,scratchRoot:wslPathToHost('/tmp',wslCandidate.distribution),toHost:value=>wslPathToHost(value,wslCandidate.distribution),
  }:{ }),onEvent:message=>broadcast(message)});await titleSummary.load();
  let accountIdentityGeneration=0,accountIdentityPending=null;
+ let quotaEstimateRead=null;
+ async function readQuotaEstimate(){
+  const generation=accountIdentityGeneration;
+  if(quotaEstimateRead?.generation!==generation||Date.now()-quotaEstimateRead.at>=30000){
+   const promise=Promise.all([rpc.call('account/read',{refreshToken:false}),rpc.call('account/rateLimits/read',{excludeResetCreditDetails:true})]).then(([account,limits])=>({account,limits,at:Date.now()}));
+   quotaEstimateRead={generation,at:Date.now(),promise};
+  }
+  const pending=quotaEstimateRead;
+  try{
+   const {account,limits,at}=await pending.promise;
+   if(generation!==accountIdentityGeneration)throw new Error('账户已改变，请刷新用量。');
+   return statistics.quotaEstimate(account,limits,at);
+  }catch(error){if(quotaEstimateRead===pending)quotaEstimateRead=null;throw error;}
+ }
  function clearStatisticsAccount(){accountIdentityGeneration++;statistics.setAccount(null);accountIdentityPending=null;observedPermissionIdentity=undefined;sessionPermissions.resetAnonymous();contextLive.clear();contextFiles.clear();contextReads.clear();timingCache.clear();}
  async function readStatisticsAccount(){
   if(demo||!rpc.connected)return;
@@ -327,7 +349,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
    if(controller.signal.aborted)throw new Error('扫描已取消，请重试');
    if(!scan.filesRead&&(scan.partial||scan.candidates))throw new Error(scan.diagnosticCounts?.['access-denied']?'无法读取 Codex 日志目录':scan.diagnosticCounts?.cancelled?'扫描已取消，请重试':'目录中没有可读取的 Codex 日志');
    const {recovered}=statistics.importLocal(scan,{publishLocal:publishLocalScan});modelRecoveryError=null;
-   if(recovered.updatedRows||recovered.tokenRows)broadcast({method:'bridge/statisticsRecovered',params:{}},{localOnly:true});
+   if(recovered.updatedRows||recovered.tokenRows||recovered.requestRows)broadcast({method:'bridge/statisticsRecovered',params:{}},{localOnly:true});
    return scan;
   })().finally(()=>{clearTimeout(timeout);usageScan=null;usageScanPromise=null;usageScanDirectory=null;});
   return usageScanPromise;
@@ -767,12 +789,24 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      res.setHeader('Content-Security-Policy',"sandbox; default-src 'none'; script-src 'none'; object-src 'none'; frame-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'");
      res.writeHead(200,{'Content-Type':image.mime,'Content-Length':image.bytes.length,'Content-Disposition':'attachment; filename="artifact.'+({'image/png':'png','image/jpeg':'jpg','image/webp':'webp','image/gif':'gif','image/vnd.microsoft.icon':'ico','image/svg+xml':'svg'})[image.mime]+'"','X-Artifact-Width':String(image.width),'X-Artifact-Height':String(image.height)});res.end(image.bytes);return;
     }
+    if(url.pathname==='/api/statistics/quota-estimate'){
+     if(!input||Object.keys(input).length)throw new Error('额度估算参数无效');
+     json(res,200,await readQuotaEstimate());return;
+    }
     if(url.pathname==='/api/statistics/session-speed'){
      if(!input || Object.keys(input).some(key=>key!=='threadId'&&key!=='liveOnly') || typeof input.threadId!=='string' || !input.threadId || input.threadId.length>256 || /[\x00-\x20\x7f]/.test(input.threadId) || (input.liveOnly!==undefined&&typeof input.liveOnly!=='boolean'))throw new Error('对话速度查询参数无效');
      const generation=accountIdentityGeneration;
      if(!input.liveOnly)await readThreadContext(input.threadId,true);
      if(generation!==accountIdentityGeneration)throw new Error('账户已改变，请重新打开对话。');
      json(res,200,statistics.sessionSpeed(input.threadId,timingCache.get(input.threadId)?.timings));return;
+    }
+    if(url.pathname==='/api/statistics/session-cost'){
+     if(!input||Object.keys(input).join(',')!=='threadId'||typeof input.threadId!=='string'||!input.threadId||input.threadId.length>256)throw new Error('会话费用参数无效');
+     const generation=accountIdentityGeneration;
+     await Promise.all([readThreadContext(input.threadId,true,true),demo?null:pricing.ensureFresh()]);
+     if(generation!==accountIdentityGeneration)throw new Error('账户已改变，请重新打开对话。');
+     const timing=timingCache.get(input.threadId)?.timings;
+     json(res,200,statistics.sessionCost(input.threadId,timing?.costGroups,timing?.costThroughTokens));return;
     }
     if(url.pathname==='/api/statistics/turns'){
      const result=statistics.turnUsage(input);
@@ -783,7 +817,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
      // Account RPC must not stall local usage rendering while the engine is slow.
      await Promise.race([readStatisticsAccount(),new Promise(resolve=>{const timer=setTimeout(resolve,200);timer.unref?.();})]);
      const result=statistics.query(input);
-     if(!demo&&!stopping&&requestAccess==='local'&&!input.cursor&&input.scope!=='local'&&(result.coverage?.unknownModelRows>0||result.coverage?.completeTokenRows<result.coverage?.observedTurns)){
+     if(!demo&&!stopping&&requestAccess==='local'&&!input.cursor&&input.scope!=='local'&&(input.detailLevel==='request'||result.coverage?.unknownModelRows>0||result.coverage?.completeTokenRows<result.coverage?.observedTurns)){
       // Serve committed observations immediately. A completed reconciliation notifies the visible first page.
       void recoverUsage();
       if(modelRecoveryError)result.coverage.modelRecoveryError=modelRecoveryError;
@@ -1044,6 +1078,7 @@ export async function createServer({client,cwd='',command='codex',demo=false,por
   if(titleSummary.observe(message))return;
   if(message.method==='account/updated'||(message.method==='bridge/status'&&message.params?.connected===false))clearStatisticsAccount();
   const threadId=message.params?.threadId||message.params?.thread?.id;
+  if(message.method==='account/rateLimits/updated')quotaEstimateRead=null;
   if(threadId&&message.method==='turn/completed'){timingCache.delete(threadId);contextReads.delete(threadId);}
   if(threadId&&dsh.isReaderThread(threadId))return;
   if(message.method==='account/login/completed'&&message.params?.success===true){resetThreadReads();pluginActions.clear();}

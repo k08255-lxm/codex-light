@@ -168,12 +168,12 @@ test('late automatic price sync does not reset a newer page or its frozen time r
 });
 test('statistics query anchors time, and cost coverage is honest', () => {
   const q = statisticsQuery({ scope: 'local', range: '24h', anchor: Date.parse('2026-11-12T00:00:00Z'), model: 'm', cursor: 'x' });
-  assert.deepEqual(q, { scope: 'local', bucket: 'hour', limit: 30, from: '2026-11-11T00:00:00.000Z', to: '2026-11-12T00:01:00.000Z', model: 'm', cursor: 'x' });
+  assert.deepEqual(q, { scope: 'local', bucket: 'hour', limit: 30, from: '2026-11-11T00:00:00.000Z', to: '2026-11-12T00:00:00.001Z', model: 'm', cursor: 'x' });
   assert.equal(statisticsQuery({ range: 'all' }).from, undefined);
   const midnight = new Date(2026, 2, 8), nextMidnight = new Date(2026, 2, 9);
   for (const anchor of [+midnight, +nextMidnight - 1]) {
     const today = statisticsQuery({range:'today',anchor,scope:'local'});
-    assert.deepEqual([today.from,today.to,today.bucket], [midnight.toISOString(),nextMidnight.toISOString(),'hour']);
+    assert.deepEqual([today.from,today.to,today.bucket], [midnight.toISOString(),new Date(anchor+1).toISOString(),'hour']);
   }
   assert.equal(costCoverage({pricedRows:3,totalRows:3,complete:true}),'');assert.equal(costCoverage(null),'');assert.match(costCoverage({totalRows:3,pricedRows:1}),/1 \/ 3/);
 });
@@ -202,7 +202,7 @@ test('account page renders identity, quota and usage without inventing balance',
   const rpc = async method => ({ 'account/read': { account: { type: 'chatgpt', email: 'me@example.com', planType: 'pro' } }, 'account/rateLimits/read': { rateLimitsByLimitId: { codex: { limitName: 'Codex', primary: { usedPercent: 20, windowDurationMins: 300, resetsAt: null }, credits: { hasCredits: true, unlimited: false, balance: null } } } }, 'account/usage/read': { summary: { lifetimeTokens: 123456 }, dailyUsageBuckets: [{ startDate: '2026-11-10', tokens: 10 }] } })[method];
   const view = mountAccount(host, { rpc }); view.activate(); await settle(); await settle();
   const text = host.textContent;
-  assert.match(text, /me@example.com/); assert.match(text, /Pro/); assert.match(text, /剩余 80%/); assert.match(text, /余额未提供/); assert.match(text, /12.3万/);
+  assert.match(text, /me@example.com/); assert.match(text, /Pro/); assert.match(text, /剩余 80%/); assert.match(text, /余额未提供/); assert.match(text, /123k/);
   const facts = host.querySelector('.acct-grid').textContent;
   assert.doesNotMatch(facts, /\$\d|到期|账单/, 'no invented balance, bill or expiry in identity/quota');
 });

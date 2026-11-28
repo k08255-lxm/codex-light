@@ -33,6 +33,19 @@ test('restore saved and history-only groups before history arrives and animate o
  assert.ok(animation.length>0);
 });
 
+test('a second reorder cancels the earlier group movement before measuring its destination',()=>{
+ const view=setup(),rows=[...threads,{id:'b1',cwd:'/work/b',createdAt:2}];
+ view.render({projects,threads:rows});
+ let cancelled=0;
+ for(const node of groups(view.host)){
+  node.getBoundingClientRect=()=>({top:groups(view.host).indexOf(node)*70});
+  node.animate=()=>({cancel(){cancelled++;}});
+ }
+ const submit=(id,time)=>view.render({projects,threads:rows.map(t=>t.id===id?{...t,submittedAt:time}:t)});
+ submit('a1',100);submit('b1',200);
+ assert.ok(cancelled>0);assert.equal(groups(view.host).length,4);
+});
+
 test('saved projects lead historical directories; unknown cwd cannot select a project', () => {
   const view = setup();
   view.render({ projects, threads, selectedPath: 'c:/WORK/a/', activeThreadId: 'a1' });

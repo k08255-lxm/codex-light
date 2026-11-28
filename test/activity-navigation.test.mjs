@@ -8,46 +8,33 @@ const html=await readFile(new URL('../public/index.html',import.meta.url),'utf8'
 const source=app.slice(app.indexOf('function showDetails('),app.indexOf("$('refresh-dsh').addEventListener"));
 function setup(currentRoute='chat') {
   const document=createDocument(),nodes=new Map(),calls=[];
-  for(const id of ['details','toggle-details','tools-panel','dsh-panel','details-title','tab-tools','tab-dsh','close-details','rail-dsh']) {
+  for(const id of ['details','toggle-details','close-details']) {
     const node=document.createElement('button');node.id=id;document.body.append(node);nodes.set(id,node);
   }
   const $=id=>{assert.ok(nodes.has(id),`unexpected element: ${id}`);return nodes.get(id);};
   $('details').classList.add('hidden');
-  const state={detailsTab:'tools'};
-  const dependencies={state,$,route:name=>calls.push(['route',name]),syncDshLiveContext:()=>calls.push(['sync']),renderDshConnection:()=>calls.push(['connection']),renderDshTasks:()=>calls.push(['agents']),renderTools:()=>calls.push(['tools']),currentRoute};
+  const state={};
+  const dependencies={state,$,route:name=>calls.push(['route',name]),syncDshLiveContext:()=>calls.push(['sync']),renderDshConnection:()=>calls.push(['connection']),renderDshTasks:()=>calls.push(['agents']),currentRoute};
   const keys=Object.keys(dependencies);
   const api=new Function(...keys,source+'\nreturn {showDetails};')(...keys.map(key=>dependencies[key]));
   return {state,$,calls,...api};
 }
 
-test('chat toolbar has one Activity entry and retains the tool and agent tabs without the removed rail shortcut',()=>{
-  const toolbar=html.match(/<div class="stage-actions">[\s\S]*?<\/div>/)[0];
-  assert.match(toolbar,/id="toggle-details"[\s\S]*?data-icon="activity"[\s\S]*?>活动<\/span>/);
-  assert.doesNotMatch(html,/id="open-dsh"/);assert.doesNotMatch(app,/\$\('open-dsh'\)/);
-  for(const id of ['tab-tools','tab-dsh'])assert.match(html,new RegExp(`id="${id}"`));
-});
-
-test('Activity toggles the remembered tab, tabs stay open, and closing preserves the choice',()=>{
+test('conversation toolbar opens the agent inspector directly',()=>{
+  assert.match(html,/id="toggle-details"[^>]*aria-label="子代理"/);
+  assert.doesNotMatch(html,/id="(?:tools-panel|tool-list|tab-tools|tab-dsh|window-menu|menu-app)"/);
   const h=setup();h.$('toggle-details').click();
-  assert.equal(h.$('details').classList.contains('hidden'),false);assert.equal(h.$('toggle-details').getAttribute('aria-pressed'),'true');
-  assert.equal(h.state.detailsTab,'tools');assert.ok(h.calls.some(([kind])=>kind==='tools'));
-  h.$('tab-dsh').click();
-  assert.equal(h.state.detailsTab,'dsh');assert.equal(h.$('details').classList.contains('hidden'),false);
-  assert.equal(h.$('tools-panel').classList.contains('hidden'),true);assert.equal(h.$('dsh-panel').classList.contains('hidden'),false);
-  assert.equal(h.$('toggle-details').getAttribute('aria-pressed'),'true');
-  h.$('toggle-details').click();assert.equal(h.$('details').classList.contains('hidden'),true);assert.equal(h.$('toggle-details').getAttribute('aria-pressed'),'false');
-  h.$('toggle-details').click();assert.equal(h.state.detailsTab,'dsh');assert.equal(h.$('details').classList.contains('hidden'),false);
-  h.$('close-details').click();assert.equal(h.state.detailsTab,'dsh');assert.equal(h.$('toggle-details').getAttribute('aria-pressed'),'false');
-  h.$('toggle-details').click();h.$('tab-tools').click();h.$('close-details').click();h.$('toggle-details').click();
-  assert.equal(h.state.detailsTab,'tools');assert.equal(h.$('tools-panel').classList.contains('hidden'),false);
+  assert.equal(h.$('details').classList.contains('hidden'),false);
+  assert.ok(h.calls.some(([kind])=>kind==='agents'));
+  h.$('toggle-details').click();assert.equal(h.$('details').classList.contains('hidden'),true);
 });
 
-test('conversation agent records still open agents directly while Activity reflects either tab',()=>{
+test('conversation agent records open their inspector from another route',()=>{
   const h=setup('settings'),opened=[];
-  const callback=app.match(/onOpenAgent:(\(id,kind\)=>\{showDetails\('dsh',true\);dshView.openAgent\(id,kind\);\})/)[1];
+  const callback=app.match(/onOpenAgent:(\(id,kind\)=>\{showDetails\(true\);dshView.openAgent\(id,kind\);\})/)[1];
   const open=new Function('showDetails','dshView','return '+callback)(h.showDetails,{openAgent:(...args)=>opened.push(args)});
   open('child-thread','native');
-  assert.deepEqual(opened,[['child-thread','native']]);assert.equal(h.state.detailsTab,'dsh');assert.equal(h.$('details').classList.contains('hidden'),false);
+  assert.deepEqual(opened,[['child-thread','native']]);assert.equal(h.$('details').classList.contains('hidden'),false);
   assert.equal(h.$('toggle-details').getAttribute('aria-pressed'),'true');assert.ok(h.calls.some(([kind,name])=>kind==='route'&&name==='chat'));
   h.$('close-details').click();
   assert.doesNotMatch(html,/id="rail-dsh"/);assert.doesNotMatch(app,/\$\('rail-dsh'\)/);

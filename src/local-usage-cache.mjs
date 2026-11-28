@@ -5,7 +5,7 @@ import path from 'node:path';
 import {MAX_RECOVERY_LOG_BYTES} from './local-usage.mjs';
 
 // Bump the version whenever the parser changes the meaning or shape of its projection.
-const header = 'CodeCang local usage index v2 ';
+const header = 'CodeCang local usage index v3 ';
 const indexName = 'local-usage-index.cache';
 const maxBytes = 16 * 1024 * 1024;
 const maxEntries = 1000;
@@ -57,7 +57,7 @@ async function load(directory, file) {
     if (!sameFile(before, await regularFile(file)) || !sameFile(before, await handle.stat({bigint:true}))) throw unsafe();
   } finally { await handle.close(); }
   const body = data.subarray(header.length + 65);
-  if(data.subarray(0,header.length).toString('ascii')==='CodeCang local usage index v1 ')return [];
+  if(/^CodeCang local usage index v[12] $/.test(data.subarray(0,header.length).toString('ascii')))return [];
   if (data.subarray(0, header.length + 65).toString('ascii') !== header + digest(body) + '\n') throw invalid();
   let entries;
   try { entries = JSON.parse(body.toString('utf8')); } catch { throw invalid(); }

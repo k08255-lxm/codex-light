@@ -32,6 +32,19 @@ test('history token reader selects the latest numeric snapshot without exposing 
  assert.equal(await readInlineHistoryContext({rollout,threadId:id,roots:[root]}),null);
 });
 
+test('derived threads report only their own context and first-token samples',async t=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),'child-context-'));
+ t.after(()=>rm(root,{recursive:true,force:true}));
+ const id='child',rollout=path.join(root,'rollout-child.jsonl');
+ const completion=(turn_id,ms)=>({type:'event_msg',payload:{type:'task_complete',turn_id,time_to_first_token_ms:ms}});
+ const rows=[{type:'session_meta',payload:{id,parent_thread_id:'parent',forked_from_id:'parent'}},meta('parent'),count(700),completion('parent-turn',1800)];
+ let timings;const read=()=>readInlineHistoryContext({rollout,threadId:id,roots:[root],onTimings:value=>{timings=value;}});
+ await writeFile(rollout,encode(...rows));
+ assert.equal(await read(),null);assert.equal(timings.ttftMs,null);
+ rows.push({type:'event_msg',payload:{type:'thread_settings_applied',thread_id:id}},count(320),completion('own-turn',1200),completion('own-turn',1200),completion('second',800));
+ await writeFile(rollout,encode(...rows));assert.equal((await read()).used,320);assert.equal(timings.ttftMs,1000);
+});
+
 test('authenticated local and LAN clients recover only the bound thread, with live updates superseding history',async t=>{
  const root=await mkdtemp(path.join(os.tmpdir(),'context-http-'));
  const client=new DemoClient();

@@ -1,8 +1,9 @@
 // Usage & performance analytics. Strictly follows STATISTICS-CONTRACT: POST /api/statistics/query|import.
 // Light (observed by this app) and Local (imported Codex logs) are separate scopes and never summed.
-import { el, compact, integer, percent, usd, seconds, rate, localTime, UNKNOWN } from './format.js';
+import { el, compact, integer, percent, usd, seconds, rate, localTime, windowLabel, UNKNOWN } from './format.js';
 import { barChart } from './chart.js';
 import { icon } from '../icons.js';
+import {initialRange,mountUsageRange,usageBounds} from './usage-range.js';
 
 const METRICS = {
   tokens: { label: 'Tokens', value: row => row.totalTokens, format: compact },
@@ -10,7 +11,6 @@ const METRICS = {
   turns: { label: '回合', value: row => row.turnCount, format: integer },
   cost: { label: '费用', value: row => row.estimatedCost?.usd ?? null, format: usd },
 };
-const RANGES = [['today', '今天', null, 'hour'], ['24h', '24 小时', 24 * 3600e3, 'hour'], ['7d', '7 天', 7 * 86400e3, 'day'], ['30d', '30 天', 30 * 86400e3, 'day'], ['all', '全部', null, 'day']];
 const STATUS = { completed: '完成', failed: '失败', interrupted: '已停止', inProgress: '进行中', unknown: '未知' };
 
 /**
@@ -19,16 +19,11 @@ const STATUS = { completed: '完成', failed: '失败', interrupted: '已停止'
  * are bound to the exact filters: every page of one query must send identical from/to.
  */
 export function statisticsQuery(ui, now = ui.anchor ?? Date.now()) {
-  const range = RANGES.find(row => row[0] === ui.range) || RANGES.find(row => row[0] === '30d');
-  const body = { scope: ui.scope === 'local' ? 'local' : 'light', bucket: range[3], limit: 30 };
-  if (range[0] === 'today') {
-    const start = new Date(now);
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(start);
-    end.setDate(end.getDate() + 1);
-    body.from = start.toISOString();
-    body.to = end.toISOString();
-  } else if (range[2]) { body.from = new Date(now - range[2]).toISOString(); body.to = new Date(now + 60e3).toISOString(); }
+  const {start,end,bucket}=usageBounds(ui,now);
+  const body = { scope: ui.scope === 'local' ? 'local' : 'light', bucket, limit: 30 };
+  if(start!==null)body.from=new Date(start).toISOString();
+  // Our query uses an exclusive upper bound. Include the selected instant.
+  body.to=new Date(end+1).toISOString();
   if (ui.model) body.model = ui.model;
   if (ui.account) body.account = ui.account;
   if (ui.cursor) body.cursor = ui.cursor;
@@ -46,10 +41,28 @@ export function costCoverage(cost) {
 const COST_PARTS={input:'未缓存输入',inputIncludingCacheWrite:'输入（含缓存写入）',cacheRead:'缓存读取',cacheWrite:'缓存写入',output:'输出',reasoning:'推理输出'};
 export function costCompletenessReason(cost){const missing=(cost?.components||[]).filter(p=>p.usd==null).map(p=>`${COST_PARTS[p.kind]||p.kind}${p.tokens==null?'计数缺失':p.pricePerMillion==null?'单价缺失':'无法计价'}`);return missing.length?missing.join('、'):(cost?.reason||(cost?.pricingComplete?'计价分项已齐全，但观察记录未确认覆盖整个回合。':'部分计数或参考单价尚未取得，当前仅显示已知分项小计。'));}
 
-export function mountStatistics(host, { api, notice = () => {}, onPickFolder = null }) {
+export function mountStatistics(host, { api, notice = () => {}, onPickFolder = null, readQuota = null }) {
   const document = host.ownerDocument;
-  const ui = { scope: 'light', range: '30d', metric: 'tokens', tab: 'details', model: '', account: '', cursor: null, history: [], sort: null, anchor: null };
+  const ui = { scope: 'light', range: initialRange(document.defaultView?.localStorage), metric: 'tokens', tab: 'details', model: '', account: '', cursor: null, history: [], sort: null, anchor: null };
   let data = null, dataBucket='day', loading = false, generation = 0, active = false, importing = false, discovered = false, localImported = false, importingPrices=false;
+  let rangeClock=null;
+  let liveRefresh=null;
+  let quotaGeneration=0;
+  function usageUpdated(){
+    if(!active||ui.scope!=='light'||ui.cursor||liveRefresh!==null)return;
+    liveRefresh=setTimeout(()=>{
+      liveRefresh=null;
+      if(!active||ui.scope!=='light'||ui.cursor||importing)return;
+      if(loading){usageUpdated();return;}
+      ui.anchor=null;void load('',true);
+    },120);
+  }
+  function syncRangeClock(){
+    clearInterval(rangeClock);rangeClock=null;
+    if(active&&ui.range==='custom'&&ui.liveEnd)rangeClock=setInterval(()=>{
+      if(!ui.cursor&&!loading&&!importing&&document.visibilityState!=='hidden'){ui.anchor=null;void load();}
+    },60000);
+  }
 
   host.classList.add('stats');
   const header = el(document, 'header', 'page-head');
@@ -60,9 +73,9 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
     ui.scope = value; ui.model = ''; ui.account=''; resetPaging();
     if (value === 'local' && !localImported) discoverAndImport(); else load();
   });
-  const range = segmented(RANGES.map(row => [row[0], row[1]]), ui.range, value => { ui.range = value; resetPaging(); load(); });
+  const range = mountUsageRange(document,ui,value=>{Object.assign(ui,value);resetPaging();syncRangeClock();load();});
   const refresh = el(document, 'button', 'btn icon-only'); refresh.type = 'button'; refresh.title = '刷新'; refresh.setAttribute('aria-label', '刷新统计'); refresh.append(icon(document, 'refresh', { size: 16 }));
-  refresh.addEventListener('click', () => { resetPaging(); if (ui.scope === 'local' && importInput.value.trim()) importDirectory(); else load(); });
+  refresh.addEventListener('click', () => { resetPaging(); void refreshBalance(); if (ui.scope === 'local' && importInput.value.trim()) importDirectory(); else load(); });
   const priceImport=el(document,'button','btn small','导入 models.dev 价格');priceImport.type='button';priceImport.title='显式获取公共参考单价，不发送对话或账户信息';
   priceImport.addEventListener('click',async()=>{
     if(importingPrices)return;importingPrices=true;priceImport.disabled=true;priceImport.setAttribute('aria-busy','true');
@@ -72,7 +85,7 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
   });
   const priceSettings=el(document,'button','btn small','价格设置');priceSettings.type='button';
   priceSettings.addEventListener('click',()=>{pricePanel.open=!pricePanel.open;if(pricePanel.open)priceModel.focus();});
-  controls.append(scope.node, range.node, priceImport, priceSettings, refresh);
+  controls.append(scope.node, range.trigger, range.panel, priceImport, priceSettings, refresh);
   header.append(titles, controls);
 
   const importBar = el(document, 'form', 'import-bar hidden');
@@ -100,24 +113,23 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
   async function importDirectory() {
     const directory = importInput.value.trim(); if (!directory || importing) return;
     const mine = ++generation;
+    let importedStatus='';
     importing = true; loading = true; importGo.disabled = true; importPick.disabled = true; importInput.disabled = true; refresh.disabled = true;
     host.setAttribute('aria-busy', 'true');setWaiting(true,'正在读取本地日志并整理用量…');
     try {
       const result = await api('/api/statistics/import', { directory });
       localImported = true;
       if (mine !== generation || !active) return;
-      ui.scope = 'local'; ui.range = 'all'; ui.model = ''; ui.account=''; ui.sort = null;
-      scope.set('local'); range.set('all'); resetPaging();
-      // Show the actual imported snapshot, without stale filters hiding the result.
-      data = result.statistics;dataBucket='day'; render();
-      const total = data?.details?.total || 0;
-      setStatus(total ? `已读取 ${integer(result.scan?.filesRead)} 份日志，导入 ${integer(total)} 条记录${result.scan?.partial?'；部分日志未计入':''}。` : '日志中没有可确认的回合或用量记录。');
+      resetPaging();
+      const total = result.statistics?.details?.total || 0;
+      importedStatus=total ? `已读取 ${integer(result.scan?.filesRead)} 份日志，导入 ${integer(total)} 条记录${result.scan?.partial?'；部分日志未计入':''}。` : '日志中没有可确认的回合或用量记录。';
     }
     catch (error) { if (mine === generation && active) setStatus('导入失败：' + error.message, true); }
     finally {
       importing = false; importGo.disabled = false; importPick.disabled = false; importInput.disabled = false;
       if (mine === generation) { loading = false; refresh.disabled = false; host.removeAttribute('aria-busy');setWaiting(false); renderPager(); }
     }
+    if(importedStatus)await load(ui.scope==='local'?importedStatus:'');
   }
 
   const status = el(document, 'p', 'page-status'); status.setAttribute('role', 'status');status.style.minHeight='1.5em';
@@ -134,6 +146,27 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
   overview.append(kpis, chartBox);
 
   const perf = el(document, 'section', 'perf-strip'); perf.setAttribute('aria-label', '性能');
+  const balance=el(document,'section','subscription-balance');balance.hidden=!readQuota;
+  const balanceTitle=el(document,'h2','','预估订阅余额'),balanceRows=el(document,'div','balance-windows'),balanceNote=el(document,'p','page-sub');
+  balance.append(balanceTitle,balanceRows,balanceNote);
+  async function refreshBalance(){
+    if(!active||!readQuota)return;
+    const generation=++quotaGeneration;
+    try{
+      const result=await readQuota();
+      if(generation!==quotaGeneration||!active)return;
+      const windows=result.windows||[];
+      balanceRows.replaceChildren(...windows.map(w=>{
+        const row=el(document,'div','balance-window');
+        const reason=!w.usedPercent?'额度消耗尚为 0%':!w.count?'本周期没有已计量请求':w.unpriced?'有请求缺少单价':'';
+        row.append(el(document,'span','',windowLabel(w.windowDurationMins)),el(document,'strong','',w.remainingUsd==null?'待估算':usd(w.remainingUsd)),
+          el(document,'small','',w.remainingUsd==null?reason:`已用 ${w.usedPercent}% · 已记录 ${usd(w.spentUsd)}`));
+        row.title='下次额度重置 '+localTime(w.resetsAt*1000);
+        return row;
+      }));
+      balanceNote.textContent=windows.length?'按当前账户在各自周期内已记录的参考花费和官方额度消耗比例推算。'+(windows.some(w=>w.customProvider)?'含自定义提供方，只有计入该订阅的请求才与额度对应。':''):(result.reason||'尚无当前订阅的额度数据。');
+    }catch{if(active&&generation===quotaGeneration){balanceRows.replaceChildren();balanceNote.textContent='订阅额度暂时无法读取。';}}
+  }
 
   const table = el(document, 'section', 'stats-table');
   const tabs = el(document, 'div', 'table-tabs'); tabs.setAttribute('role', 'tablist');
@@ -191,7 +224,7 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
     }catch(error){priceState.textContent=error.message;}finally{savePrice.disabled=false;}
   });
   function openPrice(row){pricePanel.open=true;legacyProvider=row.estimatedCost?.reference?.scope==='provider'?row.provider:null;priceModel.value=row.model||'';mode.value='automatic';updateMode();priceModel.focus();lookupPrices();}
-  host.replaceChildren(header, importBar, status, pricePanel, wait, overview, perf, table, scopeNote);
+  host.replaceChildren(header, importBar, status, pricePanel, wait, overview, balance, perf, table, scopeNote);
 
   function segmented(options, value, onChange) {
     const node = el(document, 'div', 'segmented'); node.setAttribute('role', 'radiogroup');
@@ -208,17 +241,17 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
   // A fresh query: new time anchor, first page. Paging keeps both.
   function resetPaging() { ui.cursor = null; ui.history = []; ui.anchor = null; }
 
-  async function load() {
+  async function load(successStatus='',quiet=false) {
     if (!active || importing) return;
     const mine = ++generation; loading = true; refresh.disabled = true; host.setAttribute('aria-busy', 'true');
     if (ui.anchor === null) ui.anchor = Date.now();
     renderPager();
     importBar.classList.toggle('hidden', ui.scope !== 'local');
-    refresh.setAttribute('aria-label','正在更新统计');setWaiting(true,data?'正在刷新，先显示已有数据…':'正在读取统计…');
+    refresh.setAttribute('aria-label','正在更新统计');if(!quiet)setWaiting(true,data?'正在刷新，先显示已有数据…':'正在读取统计…');
     try {
-      const query=statisticsQuery(ui);const result = await api('/api/statistics/query', query);
+      const query={...statisticsQuery(ui),detailLevel:'request'};const result = await api('/api/statistics/query', query);
       if (mine !== generation) return;
-      loading = false; data = result;dataBucket=query.bucket; setStatus(''); render();
+      loading = false; data = result;dataBucket=query.bucket; setStatus(successStatus); render();
     } catch (error) {
       if (mine !== generation) return;
       loading = false; setStatus('统计读取失败：' + error.message, true); render();
@@ -245,8 +278,8 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
     if (!t) { kpis.replaceChildren(kpi('tokens', 'Tokens', UNKNOWN), kpi('turns', '回合', UNKNOWN), kpi('cost', '费用', UNKNOWN), kpi('cache', '缓存命中', UNKNOWN)); return; }
     const io = `输入 ${compact(t.inputTokens)} · 输出 ${compact(t.outputTokens)}`;
     kpis.replaceChildren(
-      kpi('tokens', 'Tokens', compact(t.totalTokens), io, '总 tokens（输入含缓存 + 输出）'),
-      kpi('turns', '回合', integer(t.turnCount), `${integer(t.submissionCount)} 次提交 · 成功 ${percent(t.successRate)}`, '观测到的回合与提交（包括立即补充）；上游 API 请求次数不公开'),
+      kpi('tokens', 'Tokens', compact(t.totalTokens), io, `总计 ${integer(t.totalTokens)} tokens · 输入 ${integer(t.inputTokens)}（含缓存）· 输出 ${integer(t.outputTokens)}`),
+      kpi('turns', '回合', integer(t.turnCount), `${integer(t.requestCount)} 次已计量请求 · ${integer(t.submissionCount)} 次提交`, '每次模型请求返回用量后计入；同一回合可以有多次请求。'),
       kpi('cost', '费用', usd(t.estimatedCost?.usd), t.estimatedCost?.usd!=null&&!t.estimatedCost.complete?'部分记录小计':'USD', '按模型单价计算，展开明细可查看用量与小计'),
       kpi('cache', '缓存命中', percent(t.cacheHitRate), `缓存 ${compact(t.cachedInputTokens)} / 输入 ${compact(t.inputTokens)}`, '缓存输入 ÷ 输入'),
     );
@@ -287,11 +320,11 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
   }
 
   const DETAIL_COLUMNS = [
-    ['time', '时间', row => localTime(row.timestamp || row.completedAt || row.startedAt), row => Date.parse(row.timestamp || row.completedAt || row.startedAt || '') || 0],
+    ['time', '时间', row => localTime(row.timestamp || row.completedAt || row.startedAt,{seconds:true}), row => Date.parse(row.timestamp || row.completedAt || row.startedAt || '') || 0],
     ['model', '模型', row => row.model || UNKNOWN, row => row.model || ''],
     ['account', '登录账户', row => row.account?.email || (row.account?.type==='apiKey'?'API Key':UNKNOWN), row => row.account?.label || ''],
 
-    ['status', '结果', row => STATUS[row.status] || row.status, row => row.status || ''],
+    ['status', '记录', row => row.kind==='request'?'模型请求':row.kind==='turn'?'回合汇总':row.kind==='remainder'?'未分项用量':'用量记录', row => row.kind || ''],
     ['input', '输入', row => compact(row.tokens?.inputTokens), row => row.tokens?.inputTokens ?? -1, 'num'],
     ['cached', '缓存', row => compact(row.tokens?.cachedInputTokens), row => row.tokens?.cachedInputTokens ?? -1, 'num'],
     ['output', '输出', row => compact(row.tokens?.outputTokens), row => row.tokens?.outputTokens ?? -1, 'num'],
@@ -331,6 +364,7 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
     accountFilter.replaceChildren(option('全部账户',''),...(data?.accounts||[]).map(row=>option(row.label,row.account)));accountFilter.value=ui.account;
   }
   function renderTable() {
+    const openCosts=new Set(Array.from(scroller.querySelectorAll('details.stats-cost[open]'),node=>node.dataset.record));
     renderTabs();
     const detail = ui.tab === 'details';
     const groupKey=ui.tab==='models'?'model':'label';
@@ -354,10 +388,21 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
       if (row.status) line.dataset.status = row.status;
       for (const [key, , text, , kind] of columns) {
         const td = el(document, 'td', [kind, key === 'model' ? 'mono' : ''].filter(Boolean).join(' '), text(row));
+        const tokenKey={tokens:'totalTokens',input:'inputTokens',cached:'cachedInputTokens',output:'outputTokens'}[key];
+        if(tokenKey&&Number.isFinite((row.tokens||row)[tokenKey]))td.title=integer((row.tokens||row)[tokenKey])+' tokens';
         if(detail&&key==='cost'){
           const cost=row.estimatedCost,details=el(document,'details','stats-cost'),summary=el(document,'summary','',usd(cost?.usd));
+          details.dataset.record=row.id;details.open=openCosts.has(row.id);
           summary.title='展开费用明细';summary.setAttribute('aria-label','展开费用明细 · '+(cost?.usd==null?'暂无金额':usd(cost.usd)));details.append(summary);
-          for(const part of cost?.components||[]){if(part.tokens==null&&part.usd==null)continue;details.append(el(document,'p','',`${COST_PARTS[part.kind]||part.kind}：${integer(part.tokens)} tokens × ${usd(part.pricePerMillion)} / 百万 = ${usd(part.usd)}`));}
+          const parts=el(document,'dl','cost-parts');
+          for(const part of cost?.components||[]){
+            if(part.tokens==null&&part.usd==null)continue;
+            const label=el(document,'dt','',COST_PARTS[part.kind]||part.kind);
+            label.append(el(document,'small','',`${compact(part.tokens)} tok × ${usd(part.pricePerMillion)} / M`));
+            if(part.tokens!=null)label.title=integer(part.tokens)+' tokens';
+            parts.append(label,el(document,'dd','',usd(part.usd)));
+          }
+          if(parts.children.length)details.append(parts);
           if(cost?.tokenSource==='verified-local-turn')details.append(el(document,'p','','已按同一回合原始日志校准用量；未与本应用观察值重复相加。'));
           if(!cost?.complete){
             const reason=!row.model?'此轮尚未记录模型，无法匹配单价。':costCompletenessReason(cost);
@@ -411,9 +456,14 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
 
   render();
   return {
-    recovered() { if (active && ui.scope === 'light' && !ui.cursor && !importing) return load(); },
+    usageUpdated,
+    refreshBalance,
+    recovered() { if (active && ui.scope === 'light' && !ui.cursor && !importing) {ui.anchor=null;void refreshBalance();return load();} },
     activate() {
       active = true;
+      void refreshBalance();
+      syncRangeClock();
+      if(!ui.cursor)ui.anchor=null;
       const initial = ui.scope === 'local' && !localImported ? discoverAndImport() : load();
       const started = generation;
       api('/api/pricing/ensure',{}).then(async info=>{
@@ -425,7 +475,7 @@ export function mountStatistics(host, { api, notice = () => {}, onPickFolder = n
         else if(info?.available&&info.fetchedAt!==data?.pricing?.fetchedAt)load();
       }).catch(()=>{});
     },
-    deactivate() { active = false; generation++; loading = false;setWaiting(false);host.removeAttribute('aria-busy'); },
-    reset() { data = null; resetPaging(); render(); },
+    deactivate() { range.close();active = false;clearTimeout(liveRefresh);liveRefresh=null;syncRangeClock();generation++; loading = false;setWaiting(false);host.removeAttribute('aria-busy'); },
+    reset() { data = null;quotaGeneration++;balanceRows.replaceChildren();balanceNote.textContent=''; resetPaging(); render(); },
   };
 }

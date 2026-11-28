@@ -14,6 +14,7 @@ import { redeemPairing } from './ui/pairing.js';
 import { mountUpdateIndicator, mountAndroidUpdateIndicator } from './ui/update-indicator.js';
 import { mountContextDetails } from './ui/context-details.js';
 import {mountSessionSpeed} from './ui/session-speed.js';
+import {mountSessionUsage} from './ui/session-usage.js';
 import {mountMobileAbout} from './ui/mobile-about.js';
 import {createQuestionIgnores} from './ui/question-ignores.js';
 import { bootstrapToken } from './ui/access.js';
@@ -63,7 +64,6 @@ import { createSessionControls } from './session-controls.js';
 import { mountProjectNavigation } from './project-navigation.js';
 import { editProjectName } from './project-name-dialog.js';
 import { mountPanelResize } from './ui/panel-resize.js';
-import { mountToolActivity } from './ui/tool-activity.js';
 import { mountLiveChanges, pillChanges, mountScrollToBottom } from './ui/live-changes.js';
 import { createDelegationMonitor } from './delegation-monitor.js';
 if(new URL(location.href).searchParams.get('preview')==='source')document.title='码舱 CodeCang · 源码预览';
@@ -75,6 +75,7 @@ const $ = id => document.getElementById(id);
 hydrateIcons(document);
 const contextDetails=mountContextDetails(document);
 const sessionSpeed=mountSessionSpeed(document,(threadId,history)=>api('/api/statistics/session-speed',history?{threadId}:{threadId,liveOnly:true}));
+const sessionUsage=mountSessionUsage(document,threadId=>api('/api/statistics/session-cost',{threadId}));
 mountWelcomeGreeting(document.querySelector('#welcome h1'));
 let localSession; try { localSession = sessionStorage; } catch { localSession = {getItem(){throw new Error('会话存储不可用');},setItem(){throw new Error('会话存储不可用');},removeItem(){throw new Error('会话存储不可用');}}; }
 const readSession = key => { try { return localSession.getItem(key); } catch { return null; } };
@@ -98,7 +99,7 @@ const pendingMutations = new PendingMutations(localSession);
 let draftModelChoice = readDraftModelChoice();
 let modelCatalogLoading = true;
 const sessionDefaults = new SessionDefaultsBridge(body => api('/api/session/defaults', body), {onChange:snapshot=>{populateEfforts();updateControls();if(snapshot.error)notice('无法读取 Codex 配置默认模型/强度：'+snapshot.error+'。没有改用模型目录默认值；可打开模型列表显式重试，发送时不会强行写入默认值。',true);}});
-const state = { connected: false, demo: false, desktop: false, reasoning: restoredReasoning(null), cwd: '', thread: null, threads: [], nextThreads: null, nextItems: null, models: [], modelGeneration: 0, turnId: null, sending: false, busy: false, openGeneration: 0, searchGeneration: 0, requests: new Map(), store: new ItemStore(Infinity, { preserveBodies: true }), nodes: new Map(), rendering: false, historyFallback: false, activeTurns: new Map(), terminalTurns: new Set(), shuttingDown: false, eventController: null, detailsTab: 'tools', dshConnection: null, dshRefreshing: false, serverInstance: null, pendingQueries: new Set(), interruptingTurns: new Set(), uploadingImages: false, loadingThread: false, dshReads: new Map(), dshReadErrors: new Map(), dshReadSequence: 0, dshReadGeneration: 0, dshOpenDetails: new Set(), settingsPage: 'general', archivedThreads: [], archivedCursor: null, archivedGeneration: 0, accountLoading: false, usageLoading: false, renameTarget: null, cliVersion: null, ledger: new TurnLedger(), nextTurns: null, contexts: new Map(), threadSessions: [] };
+const state = { connected: false, demo: false, desktop: false, reasoning: restoredReasoning(null), cwd: '', thread: null, threads: [], nextThreads: null, nextItems: null, models: [], modelGeneration: 0, turnId: null, sending: false, busy: false, openGeneration: 0, searchGeneration: 0, requests: new Map(), store: new ItemStore(Infinity, { preserveBodies: true }), nodes: new Map(), rendering: false, historyFallback: false, activeTurns: new Map(), terminalTurns: new Set(), shuttingDown: false, eventController: null, dshConnection: null, dshRefreshing: false, serverInstance: null, pendingQueries: new Set(), interruptingTurns: new Set(), uploadingImages: false, loadingThread: false, dshReads: new Map(), dshReadErrors: new Map(), dshReadSequence: 0, dshReadGeneration: 0, dshOpenDetails: new Set(), settingsPage: 'general', archivedThreads: [], archivedCursor: null, archivedGeneration: 0, accountLoading: false, usageLoading: false, renameTarget: null, cliVersion: null, ledger: new TurnLedger(), nextTurns: null, contexts: new Map(), threadSessions: [] };
 // Follow-up messages typed while a task runs. Per thread, survives navigation, never persisted.
 const followUps = new FollowUpQueue();
 const reasoningWrites = new Map();
@@ -235,7 +236,6 @@ const dshLive = new DshLiveMonitor({
     if (dshTasks.ingestLiveStatus(threadId, agentId, status, { checkedAt, source: 'DSH 自动状态' })) scheduleDshRender();
   },
 });
-const toolTypes = new Set(['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'webSearch', 'collabAgentToolCall', 'fileDiff']);
 function el(tag, className, text) { const e = document.createElement(tag); if (className) e.className = className; if (text != null) e.textContent = text; return e; }
 const filePreview=createFilePreview({document,openImage:view=>lightbox.open(view),downloadFile:async({path,...scope},name,{signal})=>{
   const bridge=window.CodexLightNative;
@@ -296,7 +296,7 @@ const questionIgnores=createQuestionIgnores({scope:()=>state.serverInstance,
 const conversation = mountConversation($('messages'), { scrollController:conversationScroll,questionIgnores,
   onFork:(threadId,lastTurnId)=>forkCurrentThread(lastTurnId,threadId),
   readTurnUsage:(threadId,turnIds)=>api('/api/statistics/turns',{threadId,turnIds}),
-  ensurePrices:()=>api('/api/pricing/ensure',{}),getContext:()=>state.contexts.get(state.thread?.id), onLocalLink: previewLocalFile, getCwd: () => state.thread?.cwd || state.cwd, getThreadId:()=>state.thread?.id, onAnswerAsync:payload=>answerAsync(payload), artifacts: artifactView, onOpenAgent:(id,kind)=>{showDetails('dsh',true);dshView.openAgent(id,kind);} });
+  ensurePrices:()=>api('/api/pricing/ensure',{}),getContext:()=>state.contexts.get(state.thread?.id), onLocalLink: previewLocalFile, getCwd: () => state.thread?.cwd || state.cwd, getThreadId:()=>state.thread?.id, onAnswerAsync:payload=>answerAsync(payload), artifacts: artifactView, onOpenAgent:(id,kind)=>{showDetails(true);dshView.openAgent(id,kind);} });
 setInterval(() => { if (conversation.hasRunningClock() && document.visibilityState === 'visible') conversation.tick(); }, 1000);
 /** Leaves a thread's subscription. Active work is retained by the bridge; that is not an error. */
 function releaseThread(threadId) {
@@ -531,7 +531,7 @@ pendingReconciler.setActive(false);
 // Activation also reads the login-operation snapshot. Only authoritative account events
 // invalidate account-scoped views; a read-only snapshot merely refreshes this page.
 const accountLoginPanel=mountAccountLoginPanel($('account-login-controls'),{api:accountApi,readOnly:access.lan,onAccountChanged:async()=>{if(currentRoute==='account')await refreshAccount();}});
-const statsView = mountStatistics($('stats-root'), { api, notice, onPickFolder: async () => { if (!projectsState.canPickFolder) return null; const result = await api('/api/desktop/pick-folder', {}, { timeoutMs: 310000 }); return result.path || null; } });
+const statsView = mountStatistics($('stats-root'), { api, notice, readQuota:()=>api('/api/statistics/quota-estimate',{}), onPickFolder: async () => { if (!projectsState.canPickFolder) return null; const result = await api('/api/desktop/pick-folder', {}, { timeoutMs: 310000 }); return result.path || null; } });
 const accountQuota = mountAccountQuota($('account-quota'), { rpc, onOpen: () => route('account') });
 const accountIdentity = createAccountIdentityController({
   rpc,
@@ -646,7 +646,7 @@ function currentSendAvailability(){
 function updateControls() { syncSettingsFolderPicker();const availability=currentSendAvailability();const running=!!availability.running;const canSteer=running&&runningInputAvailable();
  $('send').disabled=availability.disabled||(running&&!canSteer);$('send').title=running?'立即补充到当前任务 (Enter)':availability.reason||'发送 (Enter)';$('send').setAttribute('aria-label',running?'立即补充到当前任务':'发送消息');$('send').dataset.mode=running?'steer':'send';
  $('queue-send').classList.toggle('hidden',!running);$('queue-send').disabled=!running||!hasDraft();
- $('composer-hint').textContent=running?(canSteer?'Enter 立即补充 · Tab 排队到下一轮 · Shift Enter 换行':'该任务不在本窗口运行，结束后自动刷新 · Tab 排队'):'Enter 发送 · Shift Enter 换行 · / 命令';
+ $('composer-hint').textContent=running?(canSteer?'Tab 排队 · Shift Enter 换行':'该任务不在本窗口运行，结束后自动刷新 · Tab 排队'):'Enter 发送 · Shift Enter 换行 · / 命令';
  $('prompt').placeholder=running?'补充说明，或排队下一条消息':state.thread?'继续对话':'描述要完成的任务';
  const reason=running||availability.quiet?'':availability.reason;$('send-state-text').textContent=reason;$('send-state').classList.toggle('hidden',!reason||(!availability.action&&reason==='输入消息，或添加图片 / 文件。'));const action=$('send-state-action');action.classList.toggle('hidden',running||!availability.action||availability.action==='stop');action.dataset.action=availability.action||'';action.textContent=({reconnect:'重新检查连接',cwd:'选择工作目录',pending:'查看消息状态'})[availability.action]||'';
  $('stop').classList.toggle('hidden', !state.busy); $('stop').disabled = state.loadingThread || !state.turnId || !state.connected || !state.serverInstance || state.interruptingTurns.has(state.turnId) || pendingMutations.has('turn/interrupt', state.thread?.id, state.turnId); $('new-thread').disabled = state.sending; $('add-project').disabled=state.sending||projectsState.busy; $('model').disabled = state.sending || state.loadingThread; $('effort').disabled = $('model').disabled; $('model-trigger').disabled = $('effort').disabled; if ($('effort').disabled) closeReasoning(false); $('add-attachment').disabled = state.sending || state.uploadingImages || !state.connected; $('add-file').disabled = $('add-attachment').disabled; $('thread-menu-button').disabled = !state.thread || state.sending || state.loadingThread || state.busy || !!pendingMutations.storageError || threadPendingRecords().length>0;
@@ -658,6 +658,7 @@ function setCwd(cwd) { if(state.cwd !== (cwd || '')){pluginPanel.reset();configP
 // ---------- Router: exactly one stage is visible; every page transition goes through here ----------
 const STAGES = { chat: 'chat-page', usage: 'usage-page', account: 'account-page', settings: 'settings-dialog' };
 let currentRoute = 'chat';
+let awayPosition=null,chatNeedsRender=false;
 const navigationHistory = createNavigationHistory({name:'chat',threadId:null,cwd:state.cwd});
 let navigatingHistory=false;
 function recordNavigation(){
@@ -685,11 +686,13 @@ $('navigate-forward').addEventListener('click',()=>travelHistory(1));
 document.addEventListener('keydown',event=>{if(event.altKey&&!event.ctrlKey&&!event.metaKey&&['ArrowLeft','ArrowRight'].includes(event.key)){event.preventDefault();void travelHistory(event.key==='ArrowLeft'?-1:1);}});
 for(const button of document.querySelectorAll('[data-window-command]'))button.addEventListener('click',()=>window.chrome?.webview?.postMessage({type:'windowCommand',command:button.dataset.windowCommand}));
 function route(name, { section, back = false } = {}) {
-  if(name!=='chat'){contextDetails.close();sessionSpeed.close();}
+  if(name!=='chat'){contextDetails.close();sessionSpeed.close();sessionUsage.close();}
   if (!Object.hasOwn(STAGES, name)) name = 'chat';
   const previous = currentRoute;
+  if(previous==='chat'&&name!=='chat')awayPosition={id:state.thread?.id,snapshot:conversationScroll.capture()};
   currentRoute = name;
-  closeWindowMenu(); closeThreadMenu();
+  if (name==='chat' && state.thread && state.connected) historyAutoLoad.fill();
+  closeThreadMenu();
   for (const [key, id] of Object.entries(STAGES)) $(id).classList.toggle('hidden', key !== name);
   $('app').dataset.view = name;
   // Settings owns a dedicated navigator; every other page keeps access to project history.
@@ -709,7 +712,13 @@ function route(name, { section, back = false } = {}) {
   syncDshLiveContext(); syncDelegationMonitor(); syncRuntimePanelActivity();
   if (name === 'settings') sidebarController.open({desktopOnly:document.documentElement.dataset.mobileShell==='android'||!!section&&section!=='general'});
   else sidebarController.closeForNavigation();
-  if (name === 'chat') { if (previous !== 'chat') $('prompt').focus(); }
+  if (name === 'chat') { if (previous !== 'chat') {
+    const saved=awayPosition?.id===state.thread?.id?awayPosition?.snapshot:null;
+    awayPosition=null;
+    if(chatNeedsRender){chatNeedsRender=false;renderMessages(true,saved);}
+    else if(saved)conversationScroll.restore(saved);
+    $('prompt').focus({preventScroll:true});
+  } }
   else (document.querySelector(`#${STAGES[name]} h1, #${STAGES[name]} .stage-bar button`) || $(STAGES[name]))?.focus?.({ preventScroll: true });
   if(!back)recordNavigation();
   renderThreads();
@@ -721,7 +730,7 @@ function newThread(cwd = projectsState.draftCwd) {
   route('chat',{back:true}); sidebarController.closeForNavigation();
   const previous = state.thread?.id || null;
   // A new chat is only a draft; thread/start happens on first send.
-  state.openGeneration++; setThreadLoading(null); state.thread = null; dshTasks.reset(); state.dshReadErrors.clear(); state.dshOpenDetails.clear(); state.dshConnection = null; renderDshConnection(); syncDshLiveContext(); renderDshTasks(); state.turnId = null; state.busy = false; resetThreadView(); $('tool-list').replaceChildren(el('p', 'muted', '暂无工具活动')); $('thread-title').textContent = '新对话'; $('welcome').classList.remove('hidden'); $('earlier').classList.add('hidden'); activity(''); renderContext(); renderQueue(); updateControls(); renderThreads(); renderRequests(); $('prompt').focus();
+  state.openGeneration++; setThreadLoading(null); state.thread = null; dshTasks.reset(); state.dshReadErrors.clear(); state.dshOpenDetails.clear(); state.dshConnection = null; renderDshConnection(); syncDshLiveContext(); renderDshTasks(); state.turnId = null; state.busy = false; resetThreadView(); $('thread-title').textContent = '新对话'; $('welcome').classList.remove('hidden'); $('earlier').classList.add('hidden'); activity(''); renderContext(); renderQueue(); updateControls(); renderThreads(); renderRequests(); $('prompt').focus();
   setCwd(cwd); populateEfforts(); releaseThread(previous);
   recordNavigation();
 }
@@ -982,7 +991,9 @@ function setThreadLoading(thread) {
 }
 async function openThread(thread) {
   const wasOverlay = sidebarController.isOverlayOpen();
+  const returning=currentRoute!=='chat'&&state.thread?.id===thread.id&&state.pager?.threadId===thread.id&&!state.loadingThread;
   route('chat',{back:true});
+  if(returning){recordNavigation();return;}
   const generation = ++state.openGeneration; setThreadLoading(thread); updateControls();
   const previous = state.thread?.id || null;
   const changing={threadId:thread.id,events:[]};
@@ -1003,20 +1014,22 @@ async function openThread(thread) {
     state.busy = false; state.turnId = null; renderRequests();
     void loadSavedContext(state.thread.id,generation);
     setCwd(threadProjectPath(state.thread)); $('thread-title').textContent = state.thread.name || state.thread.preview || '对话'; $('welcome').classList.add('hidden'); renderThreads(); renderContext(); renderQueue();
-    let running = null;
-    try { running = await loadTurns(false, generation); } catch (e) { if (generation===state.openGeneration&&!/method|not found|unsupported|unknown|32601/i.test(e.message)) notice('无法读取任务状态：' + e.message, true); }
+    const [running]=await Promise.all([loadTurns(false,generation).catch(e=>{
+      if(generation===state.openGeneration&&!/method|not found|unsupported|unknown|32601/i.test(e.message))notice('无法读取任务状态：'+e.message,true);
+      return null;
+    }),loadItems(false,generation)]);
     if (generation !== state.openGeneration) return;
-    await loadItems(false, generation);
-    if (generation !== state.openGeneration) return;
+    $('earlier').classList.toggle('hidden',!hasEarlierHistory());
     if (fileApprovalPending()) renderRequests();
     const activeId = state.activeTurns.get(thread.id) || sessionFor(thread.id)?.activeTurnId || running?.id;
     if (activeId && !state.terminalTurns.has(activeId)) { state.activeTurns.set(thread.id,activeId);state.busy = true; state.turnId = activeId; state.ledger.activate(activeId); renderMessages(false); watchExternalTurn(); }
+    else renderMessages(false);
     activity(''); sidebarController.closeForNavigation(); if(wasOverlay)$('conversation').focus({preventScroll:true});recordNavigation();
   } catch (error) {
     if (generation === state.openGeneration) throw error;
   } finally {
     if(openingReasoning===changing)openingReasoning=null;
-    if (generation === state.openGeneration) { setThreadLoading(null); updateControls(); renderThreads(); offlineSnapshot?.ready(); }
+    if (generation === state.openGeneration) { setThreadLoading(null); updateControls(); renderThreads(); offlineSnapshot?.ready();historyAutoLoad.fill(); }
     if (previous && previous !== state.thread?.id) releaseThread(previous);
   }
 }
@@ -1066,12 +1079,17 @@ function watchExternalTurn() {
   }
 }
 /** Turn metadata (status, duration) without items. Returns the in-progress turn, if any. */
-async function loadTurns(earlier, generation) {
+const turnPageCursors = new Set();
+async function loadTurns(earlier, generation, pager = null) {
   const id = state.thread?.id; if (!id) return null;
   const params = { threadId: id, limit: 30, sortDirection: 'desc', itemsView: 'notLoaded' };
   if (earlier) { if (!state.nextTurns) return null; params.cursor = state.nextTurns; }
   const result = await rpc('thread/turns/list', params);
   if (generation !== state.openGeneration || id !== state.thread?.id) return null;
+  if (pager && pager!==state.pager) return null;
+  if (!earlier) turnPageCursors.clear();
+  if (result.nextCursor && turnPageCursors.has(result.nextCursor)) throw new Error('回合分页游标未前进，请重试。');
+  if (result.nextCursor) turnPageCursors.add(result.nextCursor);
   const rows = Array.isArray(result.data) ? result.data : [];
   for (const turn of rows) {
     state.ledger.merge(turn);
@@ -1086,47 +1104,51 @@ async function loadItems(earlier = false, generation = state.openGeneration, cur
   const id = state.thread?.id; if (!id) return;
   // Read-only paging: thread/items/list, else thread/turns/list(itemsView:'full') + cursor, else one
   // explicit thread/read. A fresh (non-earlier) load restarts from the newest page.
-  if (earlier && (!state.pager || state.pager.threadId !== id || !state.pager.hasMore)) return;
+  if (earlier && (!state.pager || state.pager.threadId !== id)) return;
+  if (earlier && !state.pager.hasMore) {
+    const pager=state.pager;
+    if(pager.mode==='items'&&state.nextTurns)await loadTurns(true,generation,pager);
+    if(current()&&generation===state.openGeneration&&pager===state.pager){
+      $('earlier').classList.toggle('hidden',!hasEarlierHistory());
+      renderMessages(false);
+    }
+    return;
+  }
   const refresh = !earlier && !!state.pager;
   const before = refresh ? new Map(state.store.items) : null;
-  const pager = earlier ? state.pager : new HistoryPager(rpc, id, historyCaps);
+  const pager = earlier ? state.pager : new HistoryPager((method,params)=>{
+    if (generation!==state.openGeneration || id!==state.thread?.id) throw new Error('对话已切换');
+    return rpc(method,params);
+  },id,historyCaps);
   const page = await pager.next({ max: CONVERSATION_ITEMS });
   if (!current() || generation !== state.openGeneration || id !== state.thread?.id) return;
   if (!earlier) state.pager = pager; else if (state.pager !== pager) return;
   const items = page.items;
   for (const turn of page.turns) state.ledger.merge(turn);
   if (!earlier && page.activeTurnId && !state.activeTurns.has(id) && !state.terminalTurns.has(page.activeTurnId)) state.activeTurns.set(id, page.activeTurnId);
-  // Turn metadata of older pages: items/list mode only (turns/read modes carry it in the page).
-  if (earlier && page.mode === 'items' && state.nextTurns) await loadTurns(true, generation).catch(() => {});
-  if (!current() || generation !== state.openGeneration || id !== state.thread?.id) return;
   state.historyFallback = page.mode !== 'items';
-  if (page.fullRead && page.read) notice(earlier
-    ? `此 Codex CLI 不支持分页读取，已再次完整读取对话并显示更早的 ${page.read.shownTurns} / ${page.read.totalTurns} 个回合。`
-    : `此 Codex CLI 不支持分页读取，已一次完整读取对话（共 ${page.read.totalTurns} 个回合），先显示最近 ${page.read.shownTurns} 个回合${page.hasMore ? '；“加载更早的内容”需要再次完整读取' : ''}。`);
   for (const item of items.slice(-CONVERSATION_ITEMS)) dshTasks.ingest(id, item, { older: earlier, source: '已加载的 Codex 对话记录' });
-  const anchor = earlier ? captureHistoryAnchor($('conversation')) : null;
+  const anchor = earlier ? conversationScroll.capture() : null;
   state.store.mergeHistory(items, {before, refresh});
   state.nextItems = pager.hasMore ? pager.mode : null;
-  $('earlier').classList.toggle('hidden', !pager.hasMore);
-  $('earlier').title = pager.nextNeedsFullRead ? '此 Codex CLI 不支持分页读取：加载更早内容需要再次完整读取对话' : '';
-  renderMessages(!earlier);
-  if (earlier) restoreHistoryAnchor($('conversation'), anchor);
+  $('earlier').classList.toggle('hidden', !hasEarlierHistory());
+  renderMessages(!earlier, anchor);
+  if(!earlier)historyAutoLoad.fill();
 }
 function scrollBottom() { conversationScroll.toBottom(); }
-function titleFor(item) { return { commandExecution: '运行命令', fileChange: '文件改动', mcpToolCall: 'MCP 工具', dynamicToolCall: '工具调用', webSearch: '网页搜索', reasoning: '思考摘要', plan: '任务计划', collabAgentToolCall: '子代理' }[item.type] || item.type || '活动'; }
-function toolDescription(item) { return boundedText(item.command || (item.server ? `${item.server} / ${item.tool || ''}` : '') || item.tool || item.query || item.changes?.map(c => c.path).join('\n') || titleFor(item), 6000); }
-function renderMessages(follow = true) {
-  const scrollSnapshot=conversationScroll.capture();
+function renderMessages(follow = true, scrollSnapshot = null) {
+  if(currentRoute!=='chat'){chatNeedsRender=true;return;}
+  scrollSnapshot ??= conversationScroll.capture();
   const items = composer.timelineItems(state.store.values());
   syncDelegationMonitor();
   const delegatedChanges=[...dshTasks.delegatedChanges({turns:[...state.ledger.turns.values()],activeTurnId:state.busy?state.turnId:null}),...delegationMonitor.changes()];
   const turns = buildTurns(items, state.ledger, { activeTurnId: state.busy ? state.turnId : null, cwd: state.thread?.cwd || state.cwd,delegatedChanges });
   if(state.thread?.id)questionNotifications?.hydrateQuiet(turns,state.thread.id);
-  conversation.render(turns,{follow});
+  conversation.render(turns,{follow,scrollSnapshot,restoreScroll:false});
   composer.renderOptimistic();
   liveChanges.update(pillChanges(turns),state.thread?.id||null);scrollToBottom.update();
   state.store.dirty.clear(); $('welcome').classList.toggle('hidden', !!state.thread || items.length > 0 || Boolean($('optimistic-messages') && !$('optimistic-messages').hidden));
-  if (!$('details').classList.contains('hidden')) { if (state.detailsTab === 'dsh') renderDshTasks(); else renderTools(); }
+  if (!$('details').classList.contains('hidden')) renderDshTasks();
   conversationScroll.restore(scrollSnapshot,{follow});
   if (state.lan && state.thread?.id) {
     renderedThreadReads = {threadId: state.thread.id, turnIds: turns.filter(turn => !turn.local && turn.status === 'completed').map(turn => turn.id)};
@@ -1145,7 +1167,7 @@ function scheduleRender(answerId = null) {
     state.rendering = false;
     const id = pendingAnswer;
     pendingAnswer = null;
-    if (id && state.store.dirty.size === 1 && state.store.dirty.has(id) &&
+    if (currentRoute==='chat' && id && state.store.dirty.size === 1 && state.store.dirty.has(id) &&
         conversation.updateStreamingAnswer(state.store.items.get(id))) {
       state.store.dirty.delete(id);
       scrollToBottom.update();
@@ -1154,10 +1176,6 @@ function scheduleRender(answerId = null) {
     }
   }), 32);
 }
-function renderTools() {
-  toolActivity.render(state.store.values(),state.thread?.id);
-}
-const toolActivity=mountToolActivity($('tool-list'),{artifacts:artifactView});
 const liveChanges=mountLiveChanges($('live-changes'),{renderDiff});
 const scrollToBottom=mountScrollToBottom($('conversation'),{onBottom:behavior=>conversationScroll.toBottom({behavior})});
 const dshView = createDshView({ document, state, $, dshLive, dshTasks, api, rpc, el, questionIgnores,onAnswerAsync:payload=>answerAsync(payload), onLocalLink:previewLocalFile, artifactFactory:({threadId,resolveImage})=>mountArtifacts({document,fetchPreview:fetchArtifactPreview,getScope:()=>threadId,onOpen:view=>lightbox.open(view),resolveImage}) });
@@ -1346,6 +1364,7 @@ function renderContext() {
   const id=state.thread?.id||null;
   contextDetails.update(id,state.contexts.get(id)||null,pendingContextRead?.id===id);
   sessionSpeed.select(state.connected?id:null);
+  sessionUsage.update(state.connected?id:null,state.contexts.get(id)?.total);
 }
 function cacheContext(snapshot,source) {
   if(snapshot.turnId)conversation.refreshTurnUsage(snapshot.threadId,snapshot.turnId);
@@ -1697,6 +1716,7 @@ function onEvent(message) {
   }
   questionNotifications?.observe(message);
   accountQuota.handleEvent(message);
+  if(message.method==='account/rateLimits/updated')void statsView.refreshBalance();
   if(message.method==='thread/name/updated'){
     const {threadId,threadName}=message.params||{};
     if(typeof threadId!=='string'||(threadName!==null&&typeof threadName!=='string'))return;
@@ -1719,9 +1739,9 @@ function onEvent(message) {
     renderThreads();updateControls();return;
   }
   if(message.method==='account/updated')return accountIdentity.verify();
-  if(message.method==='bridge/statisticsRecovered'){statsView.recovered();conversation.recoverTurnUsage();sessionSpeed.refresh();return;}
+  if(message.method==='bridge/statisticsRecovered'){statsView.recovered();conversation.recoverTurnUsage();sessionSpeed.refresh();sessionUsage.refresh();return;}
   if(message.method==='bridge/accountLogin'){accountLoginPanel.update(message.params);if(['completed','loggedOut'].includes(message.params?.state)){accountIdentity.reset();resetAccountScopedViews('账户已改变');}return;}
-  if(message.method==='thread/tokenUsage/updated'){if(!state.connected)return;const snapshot=contextSnapshot(message.params);if(snapshot){cacheContext(snapshot,'live');if(snapshot.threadId===state.thread?.id)renderContext();}return;}
+  if(message.method==='thread/tokenUsage/updated'){if(!state.connected)return;const snapshot=contextSnapshot(message.params);if(snapshot){cacheContext(snapshot,'live');if(snapshot.threadId===state.thread?.id)renderContext();statsView.usageUpdated();}return;}
   if(message.method==='bridge/threadReads'){
     const {scope, reads} = message.params;
     const changedScope = threadReadReporter.connect(scope);
@@ -1740,7 +1760,7 @@ function onEvent(message) {
   if (message.method === 'bridge/appUpdate') { if(aboutView===desktopAbout)applyAutomaticUpdate(message.params); return; }
   if (message.method === 'bridge/dshSnapshot') { ingestDshSnapshot(message.params); return; }
   if (message.method === 'bridge/threadSubmission') { const {threadId,submittedAt}=message.params||{};recordThreadSubmission(threadId,submittedAt);return; }
-  if (message.method === 'bridge/status') { const connected=!!message.params?.connected;if(!connected)dropRequests(()=>true);const reconnected=connected&&!state.connected;setConnected(connected);if(reconnected&&state.thread?.id)void loadSavedContext(state.thread.id,state.openGeneration,true);if(connected&&(!state.serverInstance||!state.cliVersion))syncStatus().catch(error=>notice('连接已建立，但本地服务状态读取失败：'+error.message,true)); if (message.params?.error) notice(message.params.error, true); return; }
+  if (message.method === 'bridge/status') { const connected=!!message.params?.connected;if(!connected)dropRequests(()=>true);const reconnected=connected&&!state.connected;setConnected(connected);if(reconnected&&state.thread?.id){void loadSavedContext(state.thread.id,state.openGeneration,true);historyAutoLoad.fill();}if(connected&&(!state.serverInstance||!state.cliVersion))syncStatus().catch(error=>notice('连接已建立，但本地服务状态读取失败：'+error.message,true)); if (message.params?.error) notice(message.params.error, true); return; }
   if (message.method === 'bridge/warning') { notice(message.params?.message || '本地桥接警告'); return; }
   if (message.method === 'bridge/titleSummary') { titleSettings.reset(); if(message.params?.state==='failed')notice(message.params.error||'标题总结未完成，保留原名称。',true); return; }
   if (message.id !== undefined && message.method) { if (trackRequest(message)) renderRequests({notify:true}); return; }
@@ -1914,25 +1934,26 @@ const threadAutoLoad = mountThreadAutoLoad({
   canLoad: () => !!state.nextThreads && state.connected,
   load: () => loadThreads(true),
 });
+function hasEarlierHistory(){
+  return Boolean(state.pager&&(state.pager.hasMore||state.pager.mode==='items'&&state.nextTurns));
+}
 const historyAutoLoad = mountHistoryAutoLoad({
+  autoFill:true,
+  scrollController:conversationScroll,
   container: $('conversation'), button: $('earlier'), status: $('history-load-status'),
   getKey: () => state.thread?.id + ':' + state.openGeneration,
-  canLoad: () => currentRoute === 'chat' && !state.loadingThread && !!state.pager?.hasMore,
+  canLoad: () => state.connected && currentRoute==='chat' && !state.loadingThread && hasEarlierHistory(),
   load: () => loadItems(true),
 });
 $('shutdown').addEventListener('click', async () => { if (!await confirm(state.desktop ? '停止本窗口的 Codex app-server？Codex 任务可能中断，独立 DSH 任务可能继续。再次启动会重新连接官方历史，不会无缝恢复当前连接。' : '停止 GUI 本地服务？通过此 GUI 运行的任务可能会中断，独立 DSH 任务可能继续。')) return; state.shuttingDown = true; try { const result = await api('/api/shutdown', {}); if (result?.engineStopped !== true || result?.shutdownAccepted !== true) throw new Error('服务未确认引擎已停止，状态未知；请稍后检查连接状态。'); state.eventController?.abort(); setConnected(false, 'GUI 服务已停止'); activity(state.desktop ? '已停止服务。请关闭本窗口后重新启动应用；新连接会读取官方历史。' : '已停止服务。重新运行启动器即可打开。'); closeSettings(); } catch (e) { state.shuttingDown = false; notice(e.message, true); } });
 $('model').addEventListener('change', () => chooseModel($('model').value)); $('dismiss-notice').addEventListener('click', () => notifications.dismiss());
 $('rail-sidebar').addEventListener('click', () => sidebarController.toggle()); $('sidebar-overlay').addEventListener('click', () => sidebarController.close()); for(const id of ['close-sidebar','settings-sidebar-close']) $(id).addEventListener('click', () => sidebarController.close());
-function showDetails(tab = state.detailsTab, force = false) {
+function showDetails(force = false) {
   if (currentRoute !== 'chat') route('chat');
-  const sameOpen = !$('details').classList.contains('hidden') && state.detailsTab === tab;
-  const visible = force || !sameOpen; state.detailsTab = tab;
+  const visible = force || $('details').classList.contains('hidden');
   setDetailsVisible(visible);
-  $('tools-panel').classList.toggle('hidden', tab !== 'tools'); $('dsh-panel').classList.toggle('hidden', tab !== 'dsh');
-  $('details-title').textContent = tab === 'dsh' ? '子代理' : '工具活动';
-  for (const name of ['tools', 'dsh']) { $('tab-' + name).classList.toggle('active', name === tab); $('tab-' + name).setAttribute('aria-pressed', String(name === tab)); }
   syncDshLiveContext();
-  if (visible) { if (tab === 'dsh') { renderDshConnection(); renderDshTasks(); } else renderTools(); }
+  if (visible) { renderDshConnection(); renderDshTasks(); }
 }
 function setDetailsVisible(visible) {
   const panel = $('details');
@@ -1941,7 +1962,6 @@ function setDetailsVisible(visible) {
   $('toggle-details').setAttribute('aria-pressed', String(visible));
 }
 $('toggle-details').addEventListener('click', () => showDetails());
-$('tab-tools').addEventListener('click', () => showDetails('tools', true)); $('tab-dsh').addEventListener('click', () => showDetails('dsh', true));
 $('close-details').addEventListener('click', () => { setDetailsVisible(false); $('toggle-details').focus(); syncDshLiveContext(); });
 $('refresh-dsh').addEventListener('click', refreshDsh); $('refresh-dsh-settings').addEventListener('click', refreshDsh);
 for (const button of document.querySelectorAll('[data-prompt]')) button.addEventListener('click', () => { $('prompt').value = button.dataset.prompt; $('prompt').focus(); updateControls(); });
@@ -1958,8 +1978,8 @@ let searchTimer; $('search').addEventListener('input', () => {
 const backLayers = [
     { isOpen: () => contextDetails.open, close: () => contextDetails.close(true) },
     { isOpen: () => sessionSpeed.open, close: () => sessionSpeed.close(true) },
+    { isOpen: () => sessionUsage.open, close: () => sessionUsage.close(true) },
     { isOpen: () => !$('thread-menu').classList.contains('hidden'), close: () => closeThreadMenu(true) },
-    { isOpen: () => !!activeMenu, close: () => { closeWindowMenu(); focusAfterWindowMenu(); } },
     { isOpen: () => !$('reasoning-popover').classList.contains('hidden'), close: () => closeReasoning() },
     { isOpen: () => slashMenu.isOpen(), close: () => slashMenu.close() },
     { isOpen: () => sidebarController.isOverlayOpen(), close: () => sidebarController.close() },
@@ -1992,91 +2012,6 @@ $('settings-back').addEventListener('click', closeSettings); $('settings-cancel'
 $('rail-plugins').addEventListener('click',()=>openSettings('plugins'));
 $('rail-home').addEventListener('click', () => route('chat')); $('rail-settings').addEventListener('click', () => openSettings('general'));
 $('rail-usage').addEventListener('click', () => route('usage')); $('rail-account').addEventListener('click', () => route('account'));
-let activeMenu = null;
-let menuReturnFocus = null;
-function focusAfterWindowMenu() {
-  const trigger = $('menu-app');
-  const previous = menuReturnFocus;
-  const target = trigger.getClientRects().length ? trigger : previous?.isConnected && previous.getClientRects().length && !previous.closest('#window-menu') ? previous : $('rail-sidebar');
-  target?.focus({preventScroll: true});
-}
-
-function closeWindowMenu() {
-  $('window-menu').classList.add('hidden');
-  for (const id of ['menu-file', 'menu-view', 'menu-app']) $(id).setAttribute('aria-expanded', 'false');
-  activeMenu = null;
-}
-function positionWindowMenu() {
-  const menu = $('window-menu'), rect = $('menu-app').getBoundingClientRect();
-  const width = menu.offsetWidth, height = menu.offsetHeight;
-  // The host's native brand lives above the client, not in the rail. Its menu
-  // starts just below that title; browser/mobile still anchor to their button.
-  const nativeBrand = document.documentElement.classList.contains('native-caption-brand-menu');
-  menu.style.left = Math.max(8, Math.min(nativeBrand ? 8 : rect.right + 8, innerWidth - width - 8)) + 'px';
-  menu.style.top = Math.max(nativeBrand ? 4 : 8, Math.min(nativeBrand ? 4 : rect.top, innerHeight - height - 8)) + 'px';
-}
-function openWindowMenu(name) {
-  if (activeMenu === name) { closeWindowMenu(); focusAfterWindowMenu(); return; }
-  if (!activeMenu) menuReturnFocus = document.activeElement;
-  closeWindowMenu(); activeMenu = name;
-  const menu = $('window-menu'); menu.dataset.menu = name;
-  const entries = [
-    ['新对话', 'compose', newThread, 'Ctrl N'],
-    ['打开目录', 'folder', openProjectDialog],
-    null,
-    ['对话', 'home', () => route('chat')],
-    ['额度与用量', 'chart', () => route('usage')],
-    ['账户', 'user', () => route('account')],
-    ['工具活动', 'activity', () => showDetails('tools', true)],
-    ['DSH 子代理', 'branch', () => showDetails('dsh', true)],
-    null,
-    ['设置', 'settings', () => openSettings('general')],
-    ['帮助', 'info', () => $('menu-help').click()]
-  ];
-  const fragment = document.createDocumentFragment();
-  for (const entry of entries) {
-    if (!entry) { const divider = el('div', 'app-menu-divider'); divider.setAttribute('role', 'separator'); fragment.append(divider); continue; }
-    const [label, glyph, action, shortcut] = entry;
-    if(glyph==='settings'&&document.documentElement.dataset.mobileToolbar==='integrated')continue;
-    const item = el('button', 'app-menu-item'); item.type = 'button'; item.tabIndex = -1;
-    item.setAttribute('role', 'menuitem');
-    item.append(icon(document, glyph, {size: 17}), el('span', 'app-menu-label', label));
-    if (shortcut) { const key = el('kbd', '', shortcut); key.setAttribute('aria-hidden', 'true'); item.append(key); }
-    item.addEventListener('click', () => { closeWindowMenu(); focusAfterWindowMenu(); action(); });
-    fragment.append(item);
-  }
-  menu.replaceChildren(fragment); menu.classList.remove('hidden'); positionWindowMenu();
-  $('menu-app').setAttribute('aria-expanded', 'true');
-  $('menu-' + name).setAttribute('aria-expanded', 'true');
-  menu.querySelector('button')?.focus();
-}
-for (const name of ['app', 'file', 'view']) $('menu-' + name).addEventListener('click', () => openWindowMenu(name));
-$('menu-app').addEventListener('keydown', e => {
-  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-    e.preventDefault(); if (!activeMenu) openWindowMenu('app');
-    const items = $('window-menu').querySelectorAll('button');
-    items[e.key === 'ArrowUp' ? items.length - 1 : 0]?.focus();
-  }
-});
-document.addEventListener('keydown', e => {
-  if (!e.defaultPrevented && (e.key === 'F10' && !e.shiftKey || e.altKey && e.key.toLowerCase() === 'm')) {
-    if (document.querySelector('dialog[open]')) return;
-    e.preventDefault(); openWindowMenu('app');
-  }
-});
-document.addEventListener('pointerdown', e => {
-  if (!$('window-menu').contains(e.target) && !e.target.closest('#menu-file,#menu-view,#menu-app')) closeWindowMenu();
-});
-window.addEventListener('resize', () => { if (activeMenu) { closeWindowMenu(); focusAfterWindowMenu(); } });
-$('window-menu').addEventListener('keydown', e => {
-  const buttons = [...$('window-menu').querySelectorAll('button')], n = buttons.indexOf(document.activeElement);
-  if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) {
-    e.preventDefault();
-    const next = e.key === 'Home' ? 0 : e.key === 'End' ? buttons.length - 1 : (n + (e.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
-    buttons[next]?.focus();
-  } else if (e.key === 'Tab') { closeWindowMenu(); focusAfterWindowMenu(); }
-});
-$('menu-help').addEventListener('click', () => notice('码舱 CodeCang 支持本地聊天、历史、审批与 DSH 任务展示，通过本机 Codex CLI 工作。设置仅显示当前可用功能。'));
 mountSettingsSearch({ document, navigate(section) {
   const ready = state.settingsPage === section ? undefined : selectSettingsSection(section);
   if (sidebarController.isOverlayOpen()) sidebarController.closeForNavigation();
@@ -2252,7 +2187,7 @@ async function forkCurrentThread(lastTurnId=null, threadId=state.thread?.id) {
   catch (e) { showMutationFailure(e, '创建分支'); }
   finally { state.sending = false; updateControls(); }
 }
-$('thread-menu-button').addEventListener('click', () => { if ($('thread-menu').classList.contains('hidden')) { closeWindowMenu(); $('thread-menu').classList.remove('hidden'); $('thread-menu-button').setAttribute('aria-expanded','true'); $('rename-thread').focus(); } else closeThreadMenu(true); });
+$('thread-menu-button').addEventListener('click', () => { if ($('thread-menu').classList.contains('hidden')) { $('thread-menu').classList.remove('hidden'); $('thread-menu-button').setAttribute('aria-expanded','true'); $('rename-thread').focus(); } else closeThreadMenu(true); });
 $('rename-thread').addEventListener('click',()=>openRename()); $('fork-thread').addEventListener('click',()=>forkCurrentThread()); $('archive-thread').addEventListener('click',()=>{closeThreadMenu();removeThread(state.thread,'archive',$('thread-menu-button'));});
 $('rename-form').addEventListener('submit',renameThread); $('rename-input').addEventListener('input',()=>$('rename-input').setCustomValidity(''));
 for (const id of ['rename-close','rename-cancel']) $(id).addEventListener('click',()=>{if(!state.sending)$('rename-dialog').close();});

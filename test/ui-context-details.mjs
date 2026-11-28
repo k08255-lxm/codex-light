@@ -16,8 +16,11 @@ known.name='上下文已有记录';unknown.name='上下文暂无记录';
 const turns=[1,2,3].map(index=>({id:'turn-'+index,status:'completed',items:[{id:'user-'+index,type:'userMessage',content:[{type:'text',text:'测试消息 '+index}]},{id:'reply-'+index,type:'agentMessage',text:'测试回答 '+index}]}));
 client.turns.set(known.id,turns);client.items.set(known.id,turns.flatMap(turn=>turn.items.map(item=>({turnId:turn.id,item}))));
 known.path=path.join(dir,`rollout-${known.id}.jsonl`);
+if(process.platform==='win32')known.path=path.toNamespacedPath(known.path);
 await writeFile(known.path,[
- {type:'session_meta',payload:{id:known.id}},
+ {type:'session_meta',payload:{id:known.id,model_provider:'local'}},
+ {type:'turn_context',payload:{model:'usage-fixture',turn_id:'older'}},
+ {type:'event_msg',payload:{type:'token_count',info:{total_token_usage:{input_tokens:0,cached_input_tokens:0,cache_write_input_tokens:0,output_tokens:0,reasoning_output_tokens:0,total_tokens:0}}}},
  {type:'event_msg',payload:{type:'task_complete',turn_id:'older',time_to_first_token_ms:1250,duration_ms:3000}},
  {type:'event_msg',payload:{type:'token_count',info:{model_context_window:1000,
   last_token_usage:{input_tokens:230,cached_input_tokens:80,cache_write_input_tokens:0,output_tokens:20,reasoning_output_tokens:5,total_tokens:250},
@@ -29,6 +32,7 @@ const app=await createServer({client,cwd:root,demo:true,desktop:true,desktopStat
  contextHistoryReader:options=>readInlineHistoryContext({...options,roots:[dir]})});
 await app.started;
 const headers={Authorization:'Bearer '+app.token,'Content-Type':'application/json'};
+assert.equal((await fetch(app.origin+'/api/pricing/configure',{method:'POST',headers,body:JSON.stringify({mode:'manual',provider:'local',model:'usage-fixture',input:2,cacheRead:1,cacheWrite:2,output:4})})).status,200);
 const preferences=await (await fetch(app.origin+'/api/desktop/preferences',{headers})).json();
 assert.equal((await fetch(app.origin+'/api/desktop/preferences',{method:'POST',headers,body:JSON.stringify({preferences:preferences.preferences})})).status,200);
 let browser;
@@ -56,7 +60,7 @@ try{
   assert.equal(await dialog.locator('#context-window-metrics [data-metric="remaining"]').textContent(),'750');
   assert.equal(await dialog.locator('[data-scope="last"][data-metric="cacheWriteInputTokens"]').textContent(),'0');
   assert.equal(await dialog.locator('[data-scope="total"][data-metric="cacheWriteInputTokens"]').textContent(),'未知');
-  assert.equal(await dialog.locator('[data-scope="total"][data-metric="totalTokens"]').textContent(),'8,000');
+  assert.equal(await dialog.locator('[data-scope="total"][data-metric="totalTokens"]').textContent(),'8k');
   assert.doesNotMatch(await dialog.textContent(),/PRIVATE_ROLLOUT_CONTENT/);
   assert.equal(await page.locator('#context-details-close').evaluate(el=>el===document.activeElement),true);
   const rect=await dialog.boundingBox();assert.ok(rect.x>=0&&rect.x+rect.width<=width&&rect.y>=0&&rect.y+rect.height<=height&&rect.height<=height*.56);
@@ -70,8 +74,22 @@ try{
   await page.locator('#speed-ttft').filter({hasText:'1.3 秒'}).waitFor();
   assert.doesNotMatch(await page.locator('#speed-details').innerText(), /\d+\s*[轮步]/);
   await page.locator('#thread-title').click();await page.locator('#speed-details').waitFor({state:'hidden'});
+  const usage=page.locator('#session-usage-details');
+  await page.locator('#session-usage').click();await usage.waitFor();
+  assert.equal(await usage.locator('#session-token-total').textContent(),'8k tok');
+  assert.equal(await usage.locator('#session-token-total').getAttribute('title'),'8,000 tokens');
+  assert.equal(await usage.locator('#session-cache-hit').textContent(),'25%');
+  assert.equal(await usage.locator('#session-input').textContent(),'5.9k tok');
+  assert.equal(await usage.locator('#session-output').textContent(),'100 tok');
+  await usage.locator('#session-cost').filter({hasText:'$0.0142'}).waitFor();
+  assert.equal(await usage.locator('#session-cost').textContent(),'$0.0142');
+  const bounds=await usage.boundingBox();assert.ok(bounds.x>=0&&bounds.x+bounds.width<=width&&bounds.y>=0&&bounds.y+bounds.height<=height);
+  const usageShot=await page.screenshot({path:path.join(output,`usage-${width}.png`)});
+  if(mobile)assert.deepEqual([usageShot.readUInt32BE(16),usageShot.readUInt32BE(20)],[1220,2656]);
+  await page.keyboard.press('Escape');await usage.waitFor({state:'hidden'});
   await openThread(unknown.name);await meter.click();await dialog.waitFor();
   assert.equal(await dialog.locator('[data-scope="last"][data-metric="totalTokens"]').textContent(),'未知');
+  assert.equal(await page.locator('#session-token-label').textContent(),'Token 用量');
   await page.keyboard.press('Escape');await openThread(known.name);await meter.filter({hasText:'25%'}).waitFor();await meter.click();
   pages.push({page,meter,dialog});
  }
@@ -87,6 +105,73 @@ try{
  }
  client.connected=true;client.emit('event',{method:'bridge/status',params:{connected:true}});
  for(const {meter} of pages)await meter.filter({hasText:'25%'}).waitFor();
+ const statsId='calendar-fixture';
+ const account={type:'chatgpt',email:'sample@example.test',planType:'plus'};
+ const originalCall=client.call.bind(client);
+ client.call=(method,params)=>{
+  if(method==='account/read')return Promise.resolve({account,requiresOpenaiAuth:true});
+  if(method==='account/rateLimits/read')return Promise.resolve({rateLimits:{limitId:'codex',planType:'plus',primary:{usedPercent:25,windowDurationMins:300,resetsAt:Math.floor(Date.now()/1000)+3600}}});
+  return originalCall(method,params);
+ };
+ app.statistics.setAccount(account);
+ app.statistics.acknowledge('thread/start',{}, {thread:{id:statsId,model:'usage-fixture',modelProvider:'local'}});
+ app.statistics.observe({method:'turn/started',params:{threadId:statsId,turn:{id:'one',status:'inProgress'}}});
+ const total={inputTokens:3200000,cachedInputTokens:3000000,cacheWriteInputTokens:0,outputTokens:13418,reasoningOutputTokens:0,totalTokens:3213418};
+ app.statistics.observe({method:'thread/tokenUsage/updated',params:{threadId:statsId,turnId:'one',tokenUsage:{last:total,total}}});
+ for(const {page} of pages){
+  await page.locator('#rail-usage').click();
+  const balance=page.locator('.balance-window').first();
+  await balance.locator('strong').filter({hasText:'$'}).waitFor();
+  assert.match(await balance.textContent(),/5 小时窗口.*已用 25%/);
+  const kpi=page.locator('.kpi').filter({has:page.locator('.kpi-label',{hasText:'Tokens'})});
+  await kpi.locator('.kpi-value').filter({hasText:'3.2M'}).waitFor();
+  assert.match(await kpi.getAttribute('title'),/3,213,418/);
+  assert.match(await kpi.locator('.kpi-sub').textContent(),/13\.4k/);
+  const bar=page.locator('.bar-chart .bar').first(), hit=page.locator('.bar-chart .hit').first();
+  await hit.focus();await page.locator('.chart-readout').waitFor();
+  const tip=await page.locator('.chart-readout').boundingBox(),column=await bar.boundingBox();
+  assert.ok(Math.abs(tip.x+tip.width/2-column.x-column.width/2)<2 && tip.y+tip.height<=column.y);
+  const details=page.locator('.stats-cost').first();await details.locator('summary').click();await details.locator('.cost-parts').waitFor();
+  assert.equal(parseFloat(await details.evaluate(n=>getComputedStyle(n,'::details-content').transitionDuration)),0);
+  await page.emulateMedia({reducedMotion:'no-preference'});
+  await page.waitForFunction(()=>document.documentElement.dataset.reducedMotion==='false');
+  const disclosure=await details.evaluate(n=>({duration:getComputedStyle(n,'::details-content').transitionDuration,preference:document.documentElement.dataset.reducedMotion,matched:n.matches('.stats details'),supported:CSS.supports('selector(details::details-content)')&&CSS.supports('interpolate-size:allow-keywords')}));
+  assert.ok(parseFloat(disclosure.duration)>0,JSON.stringify(disclosure));
+  await page.emulateMedia({reducedMotion:'reduce'});
+  await details.locator('summary').click();
+  const trigger=page.locator('[aria-controls="usage-range-panel"]'),picker=page.getByRole('dialog',{name:'统计时间范围'});
+  await trigger.click();await picker.waitFor();
+  await picker.getByRole('button',{name:'近 14 天',exact:true}).click();await picker.waitFor({state:'hidden'});
+  await trigger.filter({hasText:'近 14 天'}).click();
+  assert.equal(await picker.locator('.usage-calendar-day').count(),42);
+  const calendarMonth=await picker.locator('.usage-calendar-nav button').nth(1).textContent();
+  await picker.getByRole('button',{name:'上个月'}).click();
+  assert.notEqual(await picker.locator('.usage-calendar-nav button').nth(1).textContent(),calendarMonth);
+  await picker.locator('.usage-calendar-day:not(.outside)').first().click();
+  await picker.getByRole('checkbox').check();
+  assert.equal(await picker.getByLabel('结束时间日期').isDisabled(),true);
+  const box=await picker.boundingBox(),size=page.viewportSize();
+  assert.ok(box.x>=0&&box.y>=0&&box.x+box.width<=size.width&&box.y+box.height<=size.height);
+  await page.screenshot({path:path.join(output,`stats-range-${size.width}.png`)});
+  await picker.getByRole('button',{name:'确定'}).click();await trigger.filter({hasText:'现在'}).waitFor();
+  await trigger.click();await picker.getByRole('button',{name:'全部',exact:true}).click();
+  await trigger.click();await page.keyboard.press('Escape');await picker.waitFor({state:'hidden'});
+ }
+ for(const {page} of pages){
+  await page.locator('#rail-home').click();
+  await page.locator('#session-usage').click();
+  await page.locator('#session-cost').filter({hasText:'$0.0142'}).waitFor();
+ }
+ app.statistics.thread({id:known.id,model:'usage-fixture',modelProvider:'local'});
+ app.statistics.observe({method:'turn/started',params:{threadId:known.id,turn:{id:'live-meter',status:'inProgress'}}});
+ let lastAmount=0.0142;
+ const last={inputTokens:1000,cachedInputTokens:0,cacheWriteInputTokens:0,outputTokens:20,reasoningOutputTokens:0,totalTokens:1020};
+ for(let i=1;i<=2;i++){
+  const total={...last,inputTokens:7900+1000*i,cachedInputTokens:2000,outputTokens:100+20*i,reasoningOutputTokens:40,totalTokens:8000+1020*i};
+  client.emit('event',{method:'thread/tokenUsage/updated',params:{threadId:known.id,turnId:'live-meter',tokenUsage:{last,total}}});
+  for(const {page} of pages)await page.waitForFunction(previous=>Number(document.querySelector('#session-cost').textContent.split('$').at(-1))>previous,lastAmount);
+  lastAmount=Number((await pages[0].page.locator('#session-cost').textContent()).split('$').at(-1));
+ }
  assert.deepEqual(errors,[]);
  console.log('Desktop and 1220×2656 simulated phone: anchored context and speed, historical TTFT, focus, outside dismissal, live updates and reconnection passed.');
 }finally{await browser?.close();await app.close();await rm(dir,{recursive:true,force:true});}
